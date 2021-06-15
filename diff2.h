@@ -3,19 +3,18 @@
 
 #include <cmath>
 
-#include "vec.h"
 #include "mat_triangle.h"
+#include "vec.h"
 
-template<int K, class T>
+template <int K, class T>
 class Diff2 {
     T x;
     Vec<K, T> dx;
     MatTriangle<K, T> d2x;
 
-public:
-
+   public:
     Diff2(T x) : x(x) {}
-    
+
     static auto from_var(T x, int k) {
         Diff2 r(x);
         r.dx.get_(k) = 1;
@@ -26,8 +25,8 @@ public:
         return x;
     }
 
-    template<class T2>
-    inline auto operator+(const Diff2<K, T2> &v) const {
+    template <class T2>
+    inline auto operator+(const Diff2<K, T2>& v) const {
         auto xcp = *this;
         xcp.x += v.x;
         xcp.dx += v.dx;
@@ -35,29 +34,29 @@ public:
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator+=(const Diff2<K, T2> &v) {
+    template <class T2>
+    inline auto& operator+=(const Diff2<K, T2>& v) {
         x += v.x;
         dx += v.dx;
         d2x += v.d2x;
         return *this;
     }
 
-    template<class T2>
+    template <class T2>
     inline auto operator+(const T2 v) const {
         auto xcp = *this;
         xcp.x += v;
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator+=(const T2 v) {
+    template <class T2>
+    inline auto& operator+=(const T2 v) {
         x += v;
         return *this;
     }
 
-    template<class T2>
-    inline auto operator-(const Diff2<K, T2> &v) const {
+    template <class T2>
+    inline auto operator-(const Diff2<K, T2>& v) const {
         auto xcp = *this;
         xcp.x -= v.x;
         xcp.dx -= v.dx;
@@ -65,29 +64,29 @@ public:
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator-=(const Diff2<K, T2> &v) {
+    template <class T2>
+    inline auto& operator-=(const Diff2<K, T2>& v) {
         x -= v.x;
         dx -= v.dx;
         d2x -= v.d2x;
         return *this;
     }
 
-    template<class T2>
+    template <class T2>
     inline auto operator-(const T2 v) const {
         auto xcp = *this;
         xcp.x -= v;
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator-=(const T2 v) {
+    template <class T2>
+    inline auto& operator-=(const T2 v) {
         x -= v;
         return *this;
     }
 
-    template<class T2>
-    inline auto &operator*=(const Diff2<K, T2> &v) const {
+    template <class T2>
+    inline auto& operator*=(const Diff2<K, T2>& v) const {
         auto x_ = x;
         auto dx_ = dx;
         x *= v.x;
@@ -96,30 +95,30 @@ public:
         return *this;
     }
 
-    template<class T2>
-    inline auto operator*(const Diff2<K, T2> &v) const {
+    template <class T2>
+    inline auto operator*(const Diff2<K, T2>& v) const {
         auto xcp = *this;
         xcp *= v;
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator*=(const T2 v) {
+    template <class T2>
+    inline auto& operator*=(const T2 v) {
         x *= v;
         dx *= v;
         d2x *= v;
         return *this;
     }
 
-    template<class T2>
+    template <class T2>
     inline auto operator*(const T2 v) const {
         auto xcp = *this;
         xcp *= v;
         return xcp;
     }
 
-    template<class T2>
-    inline auto &operator^=(const T2 a) {
+    template <class T2>
+    inline auto& operator^=(const T2 a) {
         auto p = std::pow(x, a);
         auto p_1 = p / x;
         auto p_2 = p_1 / x;
@@ -127,16 +126,36 @@ public:
 
         x = p_1;
         dx = dx_ * (a * p_1);
-        d2x = d2x * (a * p_1) + MatTriangle<K, T>::from_1vec(dx_) * (a * (a-1) * p_2);
+        d2x = d2x * (a * p_1) +
+              MatTriangle<K, T>::from_1vec(dx_) * (a * (a - 1) * p_2);
 
         return *this;
     }
 
-    template<class T2>
+    template <class T2>
     inline auto operator^(const T2 v) const {
         auto xcp = *this;
         xcp ^= v;
         return xcp;
+    }
+
+    inline auto cossin() const {
+        class {
+            Diff2 cos, sin;
+        } sc;
+
+        auto sx = std::sin(x);
+        auto cx = std::cos(x);
+        auto dx_mul = MatTriangle<K, T>::from_1vec(dx);
+
+        sc.cos.x = cx;
+        sc.cos.dx = dx * (-sx);
+        sc.sin.d2x = d2x * (-sx) - dx_mul * cx;
+        sc.sin.x = sx;
+        sc.sin.dx = dx * cx;
+        sc.sin.d2x = d2x * cx - dx_mul * sx;
+
+        return sc;
     }
 };
 

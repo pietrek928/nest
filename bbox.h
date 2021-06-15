@@ -12,7 +12,8 @@ class BBox {
 
     BBox() {}
 
-    BBox(const Vec<K, T>& start, const Vec<K, T>& end) : start(start), end(end) {}
+    BBox(const Vec<K, T>& start, const Vec<K, T>& end)
+        : start(start), end(end) {}
 
     template <int Kmax = 1024>
     inline auto get_pos_start(int k) const {

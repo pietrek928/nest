@@ -80,7 +80,8 @@ class Mat {
     }
 
     template <int ITK1, int ITN1, int ITN2, int N2, class T2>
-    inline void accum_mul_n2(Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
+    inline void accum_mul_n2(
+        Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
         mout.get_(ITK1, ITN2) += get_(ITK1, ITN1) * m2.get_(ITN1, ITN2);
         if constexpr (ITN2 > 0) {
             accum_mul_n2<ITK1, ITN1, ITN2 - 1, N2, T2>(mout, m2);
@@ -88,7 +89,8 @@ class Mat {
     }
 
     template <int ITK1, int ITN1, int ITN2, int N2, class T2>
-    inline void accum_mul_n1(Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
+    inline void accum_mul_n1(
+        Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
         accum_mul_n2<ITK1, ITN1, ITN2, N2, T2>(mout, m2);
         if constexpr (ITN1 > 0) {
             accum_mul_n1<ITK1, ITN1 - 1, ITN2, N2, T2>(mout, m2);
@@ -96,7 +98,8 @@ class Mat {
     }
 
     template <int ITK1, int ITN1, int ITN2, int N2, class T2>
-    inline void accum_mul_k1(Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
+    inline void accum_mul_k1(
+        Mat<K, N2, T2>& mout, const Mat<N, N2, T2>& m2) const {
         accum_mul_n1<ITK1, ITN1, ITN2, N2, T2>(mout, m2);
         if constexpr (ITK1 > 0) {
             accum_mul_k1<ITK1 - 1, ITN1, ITN2, N2, T2>(mout, m2);

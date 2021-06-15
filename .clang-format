@@ -2,14 +2,21 @@
 # We'll use defaults from the LLVM style, but with 4 columns indentation.
 BasedOnStyle: Google
 IndentWidth: 4
-ColumnLimit: 100
+# ColumnLimit: 100
 ---
 Language: Cpp
-# Force pointers to the type for C++.
+# Standard: Cpp17
+AlwaysBreakTemplateDeclarations: Yes
 DerivePointerAlignment: false
 PointerAlignment: Left
-# BinPackParameters: false
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Empty
+BinPackParameters: false
 ExperimentalAutoDetectBinPacking: false
 AlignAfterOpenBracket: AlwaysBreak
 BreakConstructorInitializers: BeforeColon
-InsertTrailingCommas: Wrapped
+# InsertTrailingCommas: Wrapped
+IncludeBlocks: Regroup
+# SortIncludes: CaseSensitive
+IndentPPDirectives: AfterHash
+# ---
