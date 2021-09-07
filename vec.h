@@ -109,6 +109,8 @@ class Vec {
     }
 
    public:
+    using Tnum = T;
+
     Vec() : items{0} {}
 
     template <class... Targs>
@@ -246,6 +248,21 @@ class Vec {
         return os;
     }
 };
+
+template <class T>
+inline auto cross2d(const Vec<2, T>& v1, const Vec<2, T>& v2) {
+    return v1.get(0) * v2.get(1) - v1.get(1) * v2.get(0);
+}
+
+template <class T>
+inline bool turns_left(const Vec<2, T>& v1, const Vec<2, T>& v2) {
+    return v1.get(0) * v2.get(1) > v1.get(1) * v2.get(0);
+}
+
+template <class T>
+inline bool turns_right(const Vec<2, T>& v1, const Vec<2, T>& v2) {
+    return v1.get(0) * v2.get(1) < v1.get(1) * v2.get(0);
+}
 
 template <class Tstream, int K, class T>
 Tstream& operator<<(Tstream& os, const Vec<K, T>& v) {

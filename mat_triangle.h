@@ -9,9 +9,13 @@ class MatTriangle {
 
     T items[items_count];
 
-    inline T& get_(int k, int n) {
+    inline T& get_(int k, int n) const {
         // TODO: safety if?
-        return items[k * (k + 1) / 2 + n];
+        if (k >= n) {
+            return items[k * (k + 1) / 2 + n];
+        } else {
+            return items[n * (n + 1) / 2 + k];
+        }
     }
 
     template <int IT, class T2>
@@ -27,6 +31,24 @@ class MatTriangle {
         get_(IT, IT) = v;
         if constexpr (IT > 0) {
             set_diag_one<IT - 1>(v);
+        }
+    }
+
+    template <int ITK, int ITN, class Tm>
+    inline void add_to_mat_n(
+        const Tm& M, const Vec<K, int>& pos_mapping) const {
+        M[pos_mapping.get(ITK)][pos_mapping.get(ITN)] += get_(ITK, ITN);
+        if constexpr (ITN > 0) {
+            add_to_mat_n<ITK, ITN - 1, Tm>(pos_mapping);
+        }
+    }
+
+    template <int ITK, class Tm>
+    inline void add_to_mat_k(
+        const Tm& M, const Vec<K, int>& pos_mapping) const {
+        add_to_mat_n<ITK, K - 1, Tm>(M, pos_mapping);
+        if constexpr (ITK > 0) {
+            add_to_mat_k<ITK - 1, Tm>(pos_mapping);
         }
     }
 
@@ -126,6 +148,11 @@ class MatTriangle {
     // TODO: safety if?
     // items[k * (k+1) / 2 + n] = v;
     //}
+
+    template <class Tm>
+    inline void add_to_mat(const Tm& M, const Vec<K, int>& pos_mapping) const {
+        add_to_mat_k<K - 1, Tm>(M, pos_mapping);
+    }
 
     template <class T2>
     inline auto operator+(const MatTriangle<K, T2>& m2) const {
