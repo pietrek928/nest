@@ -264,6 +264,12 @@ inline bool turns_right(const Vec<2, T>& v1, const Vec<2, T>& v2) {
     return v1.get(0) * v2.get(1) < v1.get(1) * v2.get(0);
 }
 
+template <class T>
+inline bool turns_direction(
+    const Vec<2, T>& v1, const Vec<2, T>& v2, const bool direction = false) {
+    return direction ? turns_right(v1, v2) : turns_left(v1, v2);
+}
+
 template <class Tstream, int K, class T>
 Tstream& operator<<(Tstream& os, const Vec<K, T>& v) {
     return v.template put_to<Tstream>(os);

@@ -31,8 +31,8 @@ int main() {
     // Vec<2, double> v1 = {1, 0};
     // Vec<2, double> v2 = {0, 1};
     // cout << turns_left(v1, v2) << endl;
-    cout << convex_polygons_intersect_up(p1_it, p2_it) << endl;
-    cout << convex_polygons_intersect_down(p1_it, p2_it) << endl;
+    cout << convex_polygons_intersect(p1_it, p2_it) << endl;
+    cout << convex_polygons_intersect(p1_it, p2_it, true) << endl;
 
     return 0;
 }

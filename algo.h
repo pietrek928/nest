@@ -209,15 +209,17 @@ inline bool walk_to_nearest_edge(
 #endif
 
 template <class T>
-bool convex_polygons_intersect_up(
-    PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
+inline bool convex_polygons_intersect(
+    PolygonIterator<Vec<2, T>>& p1,
+    PolygonIterator<Vec<2, T>>& p2,
+    const bool direction = false) {
     int op_limit = p1.count() + p2.count() + 16;
     auto d = p1.pt_cur - p2.pt_cur;
     do {
         auto op_limit_old = op_limit;
         {
             auto d2 = p1.pt_next - p2.pt_cur;
-            while (turns_right(d, d2)) {
+            while (turns_direction(d, d2, direction)) {
                 p1.go_next();
                 d = d2;
                 d2 = p1.pt_next - p2.pt_cur;
@@ -226,7 +228,7 @@ bool convex_polygons_intersect_up(
                 }
             }
         }
-        while (turns_left(d, p2.pt_next - p2.pt_cur)) {
+        while (turns_direction(d, p2.pt_next - p2.pt_cur, !direction)) {
             p2.go_next();
             d = p1.pt_cur - p2.pt_cur;
             if (--op_limit <= 0) {
@@ -235,7 +237,7 @@ bool convex_polygons_intersect_up(
         }
         {
             auto d2 = p1.pt_prev - p2.pt_cur;
-            while (turns_right(d, d2)) {
+            while (turns_direction(d, d2, direction)) {
                 p1.go_prev();
                 d = d2;
                 d2 = p1.pt_prev - p2.pt_cur;
@@ -244,7 +246,7 @@ bool convex_polygons_intersect_up(
                 }
             }
         }
-        while (turns_left(d, p2.pt_prev - p2.pt_cur)) {
+        while (turns_direction(d, p2.pt_prev - p2.pt_cur, !direction)) {
             p2.go_prev();
             d = p1.pt_cur - p2.pt_cur;
             if (--op_limit <= 0) {
@@ -258,96 +260,6 @@ bool convex_polygons_intersect_up(
     } while (op_limit > 0);
     return true;
 }
-
-template <class T>
-bool convex_polygons_intersect_down(
-    PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
-    int op_limit = p1.count() + p2.count() + 16;
-    auto d = p1.pt_cur - p2.pt_cur;
-    do {
-        auto op_limit_old = op_limit;
-        {
-            auto d2 = p1.pt_next - p2.pt_cur;
-            while (turns_left(d, d2)) {
-                p1.go_next();
-                d = d2;
-                d2 = p1.pt_next - p2.pt_cur;
-                if (--op_limit <= 0) {
-                    break;
-                }
-            }
-        }
-        while (turns_right(d, p2.pt_next - p2.pt_cur)) {
-            p2.go_next();
-            d = p1.pt_cur - p2.pt_cur;
-            if (--op_limit <= 0) {
-                break;
-            }
-        }
-        {
-            auto d2 = p1.pt_prev - p2.pt_cur;
-            while (turns_left(d, d2)) {
-                p1.go_prev();
-                d = d2;
-                d2 = p1.pt_prev - p2.pt_cur;
-                if (--op_limit <= 0) {
-                    break;
-                }
-            }
-        }
-        while (turns_right(d, p2.pt_prev - p2.pt_cur)) {
-            p2.go_prev();
-            d = p1.pt_cur - p2.pt_cur;
-            if (--op_limit <= 0) {
-                break;
-            }
-        }
-        if (op_limit == op_limit_old) {
-            // all conditions met - polygons do not intersect
-            return false;
-        }
-    } while (op_limit > 0);
-    return true;
-}
-
-// template <class T>
-// bool convex_polygons_intersect_down(
-//     PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
-//     auto op_limit = p1.count() + p2.count();
-//     auto d = p1.pt_cur - p2.pt_cur;
-//     while (op_limit) {
-//         auto op_limit_old = op_limit;
-//         {
-//             auto d2 = p1.pt_next - p2.pt_cur;
-//             while (turns_right(d, d2) && --op_limit) {
-//                 p1.go_next();
-//                 d = d2;
-//                 d2 = p1.pt_next - p2.pt_cur;
-//             }
-//         }
-//         while (!turns_left(d, p2.pt_next - p2.pt_cur) && --op_limit) {
-//             p2.go_next();
-//             d = p1.pt_cur - p2.pt_cur;
-//         }
-//         {
-//             auto d2 = p1.pt_prev - p2.pt_cur;
-//             while (!turns_right(d, d2) && --op_limit) {
-//                 p1.go_prev();
-//                 d = d2;
-//                 d2 = p1.pt_prev - p2.pt_cur;
-//             }
-//         }
-//         while (!turns_left(d, p2.pt_prev - p2.pt_cur) && --op_limit) {
-//             p2.go_prev();
-//             d = p1.pt_cur - p2.pt_cur;
-//         }
-//         if (op_limit == op_limit_old) {
-//             // all conditions met - polygons do not intersect
-//             return false;
-//         }
-//     }
-//     return true;
-// }
 
 template <class T>
 auto convex_polygons_qdist(
