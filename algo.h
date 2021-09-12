@@ -156,6 +156,7 @@ inline void walk_to_nearest_points(
         auto p1_prev_dist = p1.pt_prev.qdist(p2.pt_cur);
         auto p1_next_dist = p1.pt_next.qdist(p2.pt_cur);
         auto cur_dist = p1.pt_cur.qdist(p2.pt_cur);
+        cout << "-" << endl;
         if (p1_prev_dist < p1_next_dist) {
             if (p1_prev_dist < cur_dist) {
                 p1.go_prev();
@@ -169,6 +170,7 @@ inline void walk_to_nearest_points(
         }
         auto p2_prev_dist = p2.pt_prev.qdist(p1.pt_cur);
         auto p2_next_dist = p2.pt_next.qdist(p1.pt_cur);
+        cout << "-" << endl;
         if (p2_prev_dist < p2_next_dist) {
             if (p2_prev_dist < cur_dist) {
                 p2.go_prev();
@@ -262,85 +264,69 @@ inline bool convex_polygons_intersect(
 }
 
 template <class T>
-auto convex_polygons_qdist(
-    PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
-    T qdist = 1e9;
-    auto start_pos = p1.get_pos();
+inline bool convex_polygons_local_qdist(
+    PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2, T& qdist) {
+    bool cont = false;
 
-    // TODO: consider edge condition, calc on start?
-    auto d = p1.pt_cur.qdist(p2.pt_cur);
-    auto d2 = p1.pt_cur.qdist(p2.pt_prev);
-    do {
-        if (d2 > d) {
-            auto d21 = p2.pt_cur - p1.pt_cur;
-            auto d21_qlen = d;
-            auto qdist_cur = d21_qlen;
+    auto d21 = p1.pt_cur - p2.pt_cur;
+    auto d21_qlen = d21.qlen();
+    if (d21_qlen < qdist) {
+        qdist = d21_qlen;
+        cont = true;
+    }
 
-            {
-                auto dprev = p2.pt_cur - p2.pt_prev;
-                auto mprev = d21.dp(dprev);
-                if (mprev > 0) {
-                    mprev *= mprev;
-                    auto qdist2 = mprev / d21_qlen;
-                    if (!(qdist2 > dprev.qlen())) {
-                        qdist_cur = qdist2;
-                    }
-                } else {
-                    auto dnext = p2.pt_cur - p2.pt_next;
-                    auto mnext = d21.dp(dnext);
-                    if (mnext > 0) {
-                        mnext *= mnext;
-                        auto qdist2 = mnext / d21_qlen;
-                        if (!(qdist_cur > dnext.qlen())) {
-                            qdist_cur = qdist2;
-                        }
-                    }
+    {
+        cout << "*" << endl;
+        auto dprev = p2.pt_prev - p2.pt_cur;
+        auto mprev = d21.dp(dprev);
+        if (mprev > 0) {
+            cout << "." << endl;
+            mprev *= mprev;
+            auto dprev_qlen = dprev.qlen();
+            auto qdist_p = mprev / dprev_qlen;
+            if (qdist_p < dprev_qlen) {
+                auto qdist2 = d21_qlen - qdist_p;
+                if (qdist2 < qdist) {
+                    qdist = qdist2;
+                    p2.go_prev();
+                    return true;
                 }
             }
-
-            if (qdist_cur < qdist) {
-                qdist = qdist_cur;
-            }
-
-            p1.go_next();
-            d = p1.pt_cur.qdist(p2.pt_cur);
-            d2 = p1.pt_cur.qdist(p2.pt_prev);
-        } else {
-            auto d12 = p1.pt_cur - p2.pt_cur;
-            auto d12_qlen = d;
-            auto qdist_cur = d12_qlen;
-
-            {
-                auto dprev = p1.pt_cur - p1.pt_prev;
-                auto mprev = d12.dp(dprev);
-                if (mprev > 0) {
-                    mprev *= mprev;
-                    auto qdist2 = mprev / d12_qlen;
-                    if (!(qdist2 > dprev.qlen())) {
-                        qdist_cur = qdist2;
-                    }
-                } else {
-                    auto dnext = p1.pt_cur - p1.pt_next;
-                    auto mnext = d12.dp(dnext);
-                    if (mnext > 0) {
-                        mnext *= mnext;
-                        auto qdist2 = mnext / d12_qlen;
-                        if (!(qdist_cur > dnext.qlen())) {
-                            qdist_cur = qdist2;
-                        }
-                    }
-                }
-            }
-
-            if (qdist_cur < qdist) {
-                qdist = qdist_cur;
-            }
-
-            p2.go_prev();
-            d = d2;
-            d2 = p1.pt_cur.qdist(p2.pt_prev);
         }
-    } while (start_pos);
+    }
+    {
+        cout << "*" << endl;
+        auto dnext = p2.pt_next - p2.pt_cur;
+        auto mnext = d21.dp(dnext);
+        if (mnext > 0) {
+            cout << "." << endl;
+            mnext *= mnext;
+            auto dnext_qlen = dnext.qlen();
+            auto qdist_p = mnext / dnext_qlen;
+            if (qdist_p < dnext_qlen) {
+                auto qdist2 = d21_qlen - qdist_p;
+                if (qdist2 < qdist) {
+                    qdist = qdist2;
+                    p2.go_next();
+                    return true;
+                }
+            }
+        }
+    }
+    return cont;
+}
+
+template <class T>
+inline auto convex_polygons_qdist(
+    PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
+    walk_to_nearest_points(p1, p2);
+
+    T qdist = 1e9;
+
+    while (convex_polygons_local_qdist(p1, p2, qdist) ||
+           convex_polygons_local_qdist(p2, p1, qdist))
+        ;
+    return qdist;
 }
 
 #endif /* __ALGO_H_ */
