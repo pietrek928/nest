@@ -9,7 +9,7 @@ class MatTriangle {
 
     T items[items_count];
 
-    inline T& get_(int k, int n) const {
+    inline T& get_(int k, int n) {
         // TODO: safety if?
         if (k >= n) {
             return items[k * (k + 1) / 2 + n];
@@ -36,19 +36,19 @@ class MatTriangle {
 
     template <int ITK, int ITN, class Tm>
     inline void add_to_mat_n(
-        const Tm& M, const Vec<K, int>& pos_mapping) const {
-        M[pos_mapping.get(ITK)][pos_mapping.get(ITN)] += get_(ITK, ITN);
+        Tm& M, const Vec<K, int>& pos_mapping) const {
+        M.template at<T>(pos_mapping.get(ITK), pos_mapping.get(ITN)) += get(ITK, ITN);
         if constexpr (ITN > 0) {
-            add_to_mat_n<ITK, ITN - 1, Tm>(pos_mapping);
+            add_to_mat_n<ITK, ITN - 1, Tm>(M, pos_mapping);
         }
     }
 
     template <int ITK, class Tm>
     inline void add_to_mat_k(
-        const Tm& M, const Vec<K, int>& pos_mapping) const {
+        Tm& M, const Vec<K, int>& pos_mapping) const {
         add_to_mat_n<ITK, K - 1, Tm>(M, pos_mapping);
         if constexpr (ITK > 0) {
-            add_to_mat_k<ITK - 1, Tm>(pos_mapping);
+            add_to_mat_k<ITK - 1, Tm>(M, pos_mapping);
         }
     }
 
@@ -114,6 +114,15 @@ class MatTriangle {
         }
     }
 
+    template <class Tstream, int IT_START, int IT_END>
+    inline void put_items_to(Tstream& os) const {
+        os << items[IT_START];
+        if constexpr (IT_START < IT_END - 1) {
+            os << ", ";
+            put_items_to<Tstream, IT_START + 1, IT_END>(os);
+        }
+    }
+
    public:
     MatTriangle() : items{0} {}
 
@@ -140,8 +149,11 @@ class MatTriangle {
     }
 
     inline T get(int k, int n) const {
-        // TODO: safety if?
-        return get_(k, n);
+        if (k >= n) {
+            return items[k * (k + 1) / 2 + n];
+        } else {
+            return items[n * (n + 1) / 2 + k];
+        }
     }
 
     // inline void set(int k, int n, T v) {
@@ -150,7 +162,7 @@ class MatTriangle {
     //}
 
     template <class Tm>
-    inline void add_to_mat(const Tm& M, const Vec<K, int>& pos_mapping) const {
+    inline void add_to_mat(Tm& M, const Vec<K, int>& pos_mapping) const {
         add_to_mat_k<K - 1, Tm>(M, pos_mapping);
     }
 
@@ -190,6 +202,31 @@ class MatTriangle {
         accum_mul_it<items_count - 1>(a);
         return *this;
     }
+
+    template <class Tstream, int IT>
+    Tstream& put_rows_to(Tstream& os) const {
+        os << "> ";
+        put_items_to<Tstream, (IT) * (IT + 1) / 2, (IT + 1) * (IT + 2) / 2>(os);
+        os << "\n";
+        if constexpr (IT + 1 < K) {
+            return put_rows_to<Tstream, IT + 1>(os);
+        } else {
+            return os;
+        }
+    }
+
+    template <class Tstream>
+    Tstream& put_to(Tstream& os) const {
+        os << ">>>>>>> TRIANGLE " << K << "x" << K << ":\n";
+        put_rows_to<Tstream, 0>(os);
+        os << "<<<<<<<<<<<<\n";
+        return os;
+    }
 };
+
+template <class Tstream, int K, class T>
+Tstream& operator<<(Tstream& os, const MatTriangle<K, T>& v) {
+    return v.template put_to<Tstream>(os);
+}
 
 #endif /* __MAT_TRIANGLE_H_ */

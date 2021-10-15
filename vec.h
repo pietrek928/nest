@@ -15,7 +15,7 @@ class Vec {
 
     template <int IT, class T2>
     inline T calc_dp(const Vec<K, T2>& v2) const {
-        T r = items[IT] * v2.items[IT];
+        T r = items[IT] * v2[IT];
         if constexpr (IT > 0) {
             r += calc_dp<IT - 1, T2>(v2);
         }
@@ -43,17 +43,17 @@ class Vec {
 
     template <int IT, class T2>
     inline T calc_qdist(const Vec<K, T2>& v2) const {
-        T diff = items[IT] - v2.items[IT];
+        T diff = items[IT] - v2[IT];
         T r = diff * diff;
         if constexpr (IT > 0) {
-            r += calc_qlen<IT - 1>();
+            r += calc_qdist<IT - 1, T2>(v2);
         }
         return r;
     }
 
     template <int IT, class T2>
     inline void accum_sum(const Vec<K, T2>& v2) {
-        items[IT] += v2.items[IT];
+        items[IT] += v2[IT];
         if constexpr (IT > 0) {
             accum_sum<IT - 1, T2>(v2);
         }
@@ -67,9 +67,17 @@ class Vec {
         }
     }
 
+    template <int IT>
+    inline void accum_neg() {
+        items[IT] = -items[IT];
+        if constexpr (IT > 0) {
+            accum_neg<IT - 1>();
+        }
+    }
+
     template <int IT, class T2>
     inline void accum_sub(const Vec<K, T2>& v2) {
-        items[IT] -= v2.items[IT];
+        items[IT] -= v2[IT];
         if constexpr (IT > 0) {
             accum_sub<IT - 1, T2>(v2);
         }
@@ -85,7 +93,7 @@ class Vec {
 
     template <int IT, class T2>
     inline void accum_mul(const Vec<K, T2>& v2) {
-        items[IT] *= v2.items[IT];
+        items[IT] *= v2[IT];
         if constexpr (IT > 0) {
             accum_mul<IT - 1, T2>(v2);
         }
@@ -96,6 +104,14 @@ class Vec {
         items[IT] *= v2;
         if constexpr (IT > 0) {
             accum_mul<IT - 1, T2>(v2);
+        }
+    }
+
+    template <int IT, class Tv>
+    inline void add_to_vec_it(Tv& V, const Vec<K, int>& pos_mapping) const {
+        V[pos_mapping[IT]] = items[IT];
+        if constexpr (IT > 0) {
+            add_to_vec_it<IT - 1, Tv>(V, pos_mapping);
         }
     }
 
@@ -132,6 +148,10 @@ class Vec {
             }
             return 0;
         }
+    }
+
+    inline T operator[](int k) const {
+        return get(k);
     }
 
     template <int Kmax = 1024>
@@ -174,6 +194,12 @@ class Vec {
     inline auto operator-(const Vec<K, T2>& v2) const {
         auto vcp = *this;
         vcp.template accum_sub<K - 1, T2>(v2);
+        return vcp;
+    }
+
+    inline auto operator-() const {
+        auto vcp = *this;
+        vcp.template accum_neg<K - 1>();
         return vcp;
     }
 
@@ -238,6 +264,11 @@ class Vec {
 
     inline T sum() const {
         return calc_sum<K - 1>();
+    }
+
+    template <class Tv>
+    inline void add_to_vec(Tv& V, const Vec<K, int>& pos_mapping) const {
+        add_to_vec_it<K - 1, Tv>(V, pos_mapping);
     }
 
     template <class Tstream>

@@ -45,11 +45,11 @@ bool vectors_intersect(
            (cross2d(ca, cd) * cross2d(cd, cb) < 0);
 }
 
-template <int K, class T>
-T triangle_height_qlen(
-    const Vec<K, T>& A, const Vec<K, T>& B, const Vec<K, T>& C) {
-    return triangle_height_vector(A, B, C).qlen();
-}
+// template <int K, class T>
+// T triangle_height_qlen(
+//     const Vec<K, T>& A, const Vec<K, T>& B, const Vec<K, T>& C) {
+//     return triangle_height_vector(A, B, C).qlen();
+// }
 
 template <class T>
 class PolygonTransformer {
@@ -266,13 +266,12 @@ inline bool convex_polygons_intersect(
 template <class T>
 inline bool convex_polygons_local_qdist(
     PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2, T& qdist) {
-    bool cont = false;
-
     auto d21 = p1.pt_cur - p2.pt_cur;
     auto d21_qlen = d21.qlen();
     if (d21_qlen < qdist) {
+        cout << p1.pt_cur << " " << p2.pt_cur << endl;
+        cout << "aaaaaaaaaaa " << d21_qlen << endl;
         qdist = d21_qlen;
-        cont = true;
     }
 
     {
@@ -288,7 +287,7 @@ inline bool convex_polygons_local_qdist(
                 auto qdist2 = d21_qlen - qdist_p;
                 if (qdist2 < qdist) {
                     qdist = qdist2;
-                    p2.go_prev();
+                    // p2.go_prev();
                     return true;
                 }
             }
@@ -307,26 +306,82 @@ inline bool convex_polygons_local_qdist(
                 auto qdist2 = d21_qlen - qdist_p;
                 if (qdist2 < qdist) {
                     qdist = qdist2;
-                    p2.go_next();
+                    // p2.go_next();
                     return true;
                 }
             }
         }
     }
-    return cont;
+    return false;
+}
+
+template <class T>
+inline auto segment_qdist(Vec<2, T>& d, Vec<2, T>& v) {
+    auto d_qlen = d.qlen();
+
+    auto m = d.dp(v);
+    if (m >= 0) {
+        return d_qlen;
+    }
+
+    auto v_qlen = v.qlen();
+    auto vp_qlen = m * m / v_qlen;
+    if (vp_qlen > v_qlen) {
+        return v.qdist(d);
+    }
+    cout << "aaaaaaaaa " << d_qlen << " " << vp_qlen << endl;
+
+    return d_qlen - vp_qlen;
 }
 
 template <class T>
 inline auto convex_polygons_qdist(
     PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
-    walk_to_nearest_points(p1, p2);
+    auto v1 = p1.pt_next - p1.pt_cur;
+    auto v2 = p2.pt_next - p2.pt_cur;
+    auto d12 = p2.pt_cur - p1.pt_cur;
+    T dir_qdist = 0;
+    while (true) {
+        if (turns_right(v1, v2)) {
+            auto m = cross2d(d12, v1);
+            auto d = m * m / v1.qlen();
+            if (d < dir_qdist) {
+                break;
+            }
 
-    T qdist = 1e9;
+            dir_qdist = d;
+            p1.go_next();
+            v1 = p1.pt_next - p1.pt_cur;
+            d12 = p2.pt_cur - p1.pt_cur;
+        } else {
+            auto m = cross2d(d12, v2);
+            auto d = m * m / v2.qlen();
+            if (d < dir_qdist) {
+                break;
+            }
 
-    while (convex_polygons_local_qdist(p1, p2, qdist) ||
-           convex_polygons_local_qdist(p2, p1, qdist))
-        ;
-    return qdist;
+            dir_qdist = d;
+            p2.go_prev();
+            v2 = p2.pt_next - p2.pt_cur;
+            d12 = p2.pt_cur - p1.pt_cur;
+        }
+    }
+
+    auto _d12 = -d12;
+    return std::min(segment_qdist(d12, v2), segment_qdist(_d12, v1));
+
+    // walk_to_nearest_points(p1, p2);
+
+    // T qdist = 1e9;
+    // convex_polygons_local_qdist(p2, p1, qdist);
+    // convex_polygons_local_qdist(p1, p2, qdist);
+
+    // while (convex_polygons_local_qdist(p1, p2, qdist) ||
+    //        convex_polygons_local_qdist(p2, p1, qdist))
+    //     ;
+    // return qdist;
+
+    // return dir_qdist;
 }
 
 #endif /* __ALGO_H_ */

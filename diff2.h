@@ -13,6 +13,7 @@ class Diff2 {
     MatTriangle<K, T> d2x;
 
    public:
+    Diff2() : x(0) {}
     Diff2(T x) : x(x) {}
 
     static auto from_var(T x, int k) {
@@ -23,6 +24,14 @@ class Diff2 {
 
     operator T() const {
         return x;
+    }
+
+    inline auto get_dx() const {
+        return dx;
+    }
+
+    inline auto get_d2x() const {
+        return d2x;
     }
 
     template <class T2>
@@ -86,7 +95,7 @@ class Diff2 {
     }
 
     template <class T2>
-    inline auto& operator*=(const Diff2<K, T2>& v) const {
+    inline auto& operator*=(const Diff2<K, T2>& v) {
         auto x_ = x;
         auto dx_ = dx;
         x *= v.x;
@@ -98,8 +107,13 @@ class Diff2 {
     template <class T2>
     inline auto operator*(const Diff2<K, T2>& v) const {
         auto xcp = *this;
+        // std::cout << xcp.d2x << std::endl;
         xcp *= v;
         return xcp;
+    }
+
+    inline auto square() {
+        return *this * *this;
     }
 
     template <class T2>
@@ -114,6 +128,22 @@ class Diff2 {
     inline auto operator*(const T2 v) const {
         auto xcp = *this;
         xcp *= v;
+        return xcp;
+    }
+
+    template <class T2>
+    inline auto& operator/=(const T2 v) {
+        auto a = T(1) / v;
+        x *= a;
+        dx *= a;
+        d2x *= a;
+        return *this;
+    }
+
+    template <class T2>
+    inline auto operator/(const T2 v) const {
+        auto xcp = *this;
+        xcp /= v;
         return xcp;
     }
 
@@ -158,5 +188,30 @@ class Diff2 {
         return sc;
     }
 };
+
+template <int K, class T>
+inline Diff2<K, T> operator-(T v1, Diff2<K, T> v2) {
+    return Diff2<K, T>(v1) - v2;
+}
+
+template <int K, class T>
+inline Diff2<K, T> operator+(T v1, Diff2<K, T> v2) {
+    return Diff2<K, T>(v1) + v2;
+}
+
+template <int K, class T>
+inline Diff2<K, T> operator*(T v1, Diff2<K, T> v2) {
+    return Diff2<K, T>(v1) * v2;
+}
+
+template <int K, class T>
+inline Diff2<K, T> operator/(T v1, Diff2<K, T> v2) {
+    return Diff2<K, T>(v1) / v2;
+}
+
+template <int K, class T>
+inline Diff2<K, T> operator^(T v1, Diff2<K, T> v2) {
+    return Diff2<K, T>(v1) ^ v2;
+}
 
 #endif /* __DIFF2_H_ */
