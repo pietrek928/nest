@@ -6,7 +6,7 @@
 using namespace std;
 
 int main() {
-    auto m = PlaneMatcher<double>({0, 0, 0}, 1.);
+    auto m = PlaneMatcher<double>({0, 0, 0}, .1, 1.);
 
     for (int i = 0; i < 40; i++) {
         Vec<3, double> pp[] = {
@@ -21,7 +21,7 @@ int main() {
         }
         cout << endl;
 
-        m.accum_fit(.25);
+        m.accum_fit(1.);
     }
 
     return 0;

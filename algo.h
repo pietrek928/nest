@@ -316,7 +316,7 @@ inline bool convex_polygons_local_qdist(
 }
 
 template <class T>
-inline auto segment_qdist(Vec<2, T>& d, Vec<2, T>& v) {
+inline T segment_qdist(const Vec<2, T> d, const Vec<2, T> v) {
     auto d_qlen = d.qlen();
 
     auto m = d.dp(v);
@@ -327,61 +327,77 @@ inline auto segment_qdist(Vec<2, T>& d, Vec<2, T>& v) {
     auto v_qlen = v.qlen();
     auto vp_qlen = m * m / v_qlen;
     if (vp_qlen > v_qlen) {
-        return v.qdist(d);
+        return (v + d).qlen();
     }
-    cout << "aaaaaaaaa " << d_qlen << " " << vp_qlen << endl;
 
-    return d_qlen - vp_qlen;
+    auto qlen = d_qlen - vp_qlen;
+    cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
+
+    return qlen;
 }
 
 template <class T>
-inline auto convex_polygons_qdist(
+inline T convex_polygons_qdist(
     PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
-    auto v1 = p1.pt_next - p1.pt_cur;
-    auto v2 = p2.pt_next - p2.pt_cur;
-    auto d12 = p2.pt_cur - p1.pt_cur;
-    T dir_qdist = 0;
-    while (true) {
-        if (turns_right(v1, v2)) {
-            auto m = cross2d(d12, v1);
-            auto d = m * m / v1.qlen();
-            if (d < dir_qdist) {
-                break;
+    T qdist = 1e18, tmp_qdist;
+    bool cont = false;
+
+    do {
+        cont = false;
+        auto d12 = p2.pt_cur - p1.pt_cur;
+
+        while (true) {
+            bool cont2 = false;
+
+            while ((tmp_qdist = segment_qdist(d12, p2.pt_next - p2.pt_cur)) <
+                   qdist) {
+                qdist = tmp_qdist;
+                p2.go_next();
+                d12 = p2.pt_cur - p1.pt_cur;
+                cont = true;
             }
 
-            dir_qdist = d;
-            p1.go_next();
-            v1 = p1.pt_next - p1.pt_cur;
-            d12 = p2.pt_cur - p1.pt_cur;
-        } else {
-            auto m = cross2d(d12, v2);
-            auto d = m * m / v2.qlen();
-            if (d < dir_qdist) {
-                break;
+            while ((tmp_qdist = segment_qdist(-d12, p1.pt_prev - p1.pt_cur)) <
+                   qdist) {
+                qdist = tmp_qdist;
+                p1.go_prev();
+                d12 = p2.pt_cur - p1.pt_cur;
+                cont = true;
             }
 
-            dir_qdist = d;
-            p2.go_prev();
-            v2 = p2.pt_next - p2.pt_cur;
-            d12 = p2.pt_cur - p1.pt_cur;
+            if (cont2) {
+                cont = true;
+            } else
+                break;
         }
-    }
 
-    auto _d12 = -d12;
-    return std::min(segment_qdist(d12, v2), segment_qdist(_d12, v1));
+        while (true) {
+            bool cont2 = false;
 
-    // walk_to_nearest_points(p1, p2);
+            while ((tmp_qdist = segment_qdist(-d12, p1.pt_next - p1.pt_cur)) <
+                   qdist) {
+                qdist = tmp_qdist;
+                p1.go_next();
+                d12 = p2.pt_cur - p1.pt_cur;
+                cont = true;
+            }
 
-    // T qdist = 1e9;
-    // convex_polygons_local_qdist(p2, p1, qdist);
-    // convex_polygons_local_qdist(p1, p2, qdist);
+            while ((tmp_qdist = segment_qdist(d12, p2.pt_prev - p2.pt_cur)) <
+                   qdist) {
+                qdist = tmp_qdist;
+                p2.go_prev();
+                d12 = p2.pt_cur - p1.pt_cur;
+                cont = true;
+            }
 
-    // while (convex_polygons_local_qdist(p1, p2, qdist) ||
-    //        convex_polygons_local_qdist(p2, p1, qdist))
-    //     ;
-    // return qdist;
+            if (cont2) {
+                cont = true;
+            } else
+                break;
+        }
+    } while (cont);
 
-    // return dir_qdist;
+    return qdist;
 }
 
 #endif /* __ALGO_H_ */

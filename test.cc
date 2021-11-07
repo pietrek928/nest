@@ -23,7 +23,7 @@ int main() {
     // cout << ((-1) % 5) << endl;
 
     Vec<2, double> p1_data[] = {{0, 1}, {1, 2}, {1, 1}, {0, 0}};
-    Vec<2, double> p2_data[] = {{3, 2}, {3, 0}, {1, 1.5}};
+    Vec<2, double> p2_data[] = {{3, 2}, {3, 0}, {1, 0}};
 
     auto p1_it = PolygonIterator(p1_data, sizeof(p1_data) / sizeof(p1_data[0]));
     auto p2_it = PolygonIterator(p2_data, sizeof(p2_data) / sizeof(p2_data[0]));
@@ -34,6 +34,13 @@ int main() {
     // cout << convex_polygons_intersect(p1_it, p2_it) << endl;
     // cout << convex_polygons_intersect(p1_it, p2_it, true) << endl;
     cout << convex_polygons_qdist(p1_it, p2_it) << endl;
+
+    // Vec<2, double> p1(0., 0.);
+    // Vec<2, double> p2(1., 0.);
+    // Vec<2, double> p3(0., 2.);
+    // auto d = p2 - p1;
+    // auto v = p3 - p2;
+    // cout << segment_qdist(d, v) << endl;
 
     return 0;
 }
