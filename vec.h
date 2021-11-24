@@ -41,6 +41,19 @@ class Vec {
         return r;
     }
 
+    template <int IT>
+    inline T calc_abssum() const {
+        auto& v = items[IT];
+        T r = v;
+        if (r < 0.) {
+            r = -r;
+        }
+        if constexpr (IT > 0) {
+            r += calc_abssum<IT - 1>();
+        }
+        return r;
+    }
+
     template <int IT, class T2>
     inline T calc_qdist(const Vec<K, T2>& v2) const {
         T diff = items[IT] - v2[IT];
@@ -255,6 +268,10 @@ class Vec {
 
     inline T qlen() const {
         return calc_qlen<K - 1>();
+    }
+
+    inline T abssum() const {
+        return calc_abssum<K - 1>();
     }
 
     template <class T2>

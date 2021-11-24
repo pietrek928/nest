@@ -11,6 +11,7 @@
 
 template <class T>
 class PlaneMatcher {
+   public:
     using Tdiff = Diff2<6, T>;
 
     Vec<3, T> orto, center;
@@ -40,7 +41,7 @@ class PlaneMatcher {
     };
 
     inline Vec<3, Tdiff> center_grad() {
-        return v3grad(orto, 3);
+        return v3grad(center, 3);
     };
 
    public:
@@ -48,7 +49,7 @@ class PlaneMatcher {
         : center(center),
           dist_weight(dist_weight),
           orto_weight(orto_weight),
-          orto({1, 1, 1}) {
+          orto({0, 0, 1}) {
         reset_score();
     }
 
@@ -62,7 +63,8 @@ class PlaneMatcher {
         p -= center;
         auto orto_dp = p.dp(orto);
         auto qdist = p.qlen();
-        return orto_dp * orto_dp + qdist * dist_weight;  // ?????????
+        return .4 + pow(qdist, .6) * dist_weight -
+               pow(orto_dp * orto_dp + .4, -1.85) * orto_weight;  // ?????????
     }
 
     void update_score(Vec<3, T> p_) {
@@ -71,25 +73,42 @@ class PlaneMatcher {
         auto p = v3nograd(p_) - center_grad();
         auto orto_dp = p.dp(orto_grad());
         auto qdist = p.qlen();
-        score += orto_dp * orto_dp + qdist * dist_weight;
+        score += ((qdist ^ .6) * dist_weight) -
+                 ((orto_dp * orto_dp + .4) ^ -1.85) * orto_weight;
+        // score += orto_dp * orto_dp + qdist * dist_weight;
+        // std::cout << (double)(orto_dp * orto_dp + qdist * dist_weight) << std::endl;
     }
 
     void accum_fit(double fit_speed) {
-        auto score_grad = score / n - orto_grad().qlen() * orto_weight;
-        // std::cout << "!!!!!!!!!! " << (double)score_grad << std::endl;
+        if (n) {
+            auto score_grad = score; // / n; // - (orto_grad().abssum() ^ .5) * orto_weight;
+            // std::cout << "!!!!!!!!!! " << (score_grad * score_grad).get_d2x() << std::endl;
+            // std::cout << "!!!!!!!!!! " << (score_grad ^ 2.).get_d2x()
+            //           << std::endl;
+            //   << score_grad << std::endl;
 
-        cv::Vec<double, 6> dx_cv = 0;
-        score_grad.get_dx().add_to_vec(dx_cv, {0, 1, 2, 3, 4, 5});
+            cv::Vec<double, 6> dx_cv = 0;
+            score_grad.get_dx().add_to_vec(dx_cv, {0, 1, 2, 3, 4, 5});
 
-        cv::Mat d2x_cv(6, 6, CV_64F, cv::Scalar(0));
-        score_grad.get_d2x().add_to_mat(d2x_cv, {0, 1, 2, 3, 4, 5});
+            cv::Mat d2x_cv(6, 6, CV_64F, cv::Scalar(0));
+            score_grad.get_d2x().add_to_mat(d2x_cv, {0, 1, 2, 3, 4, 5});
 
-        cv::Mat diff_cv = d2x_cv.inv() * (dx_cv * fit_speed);
+            cv::Mat diff_cv = d2x_cv.inv() * (dx_cv * fit_speed);
+            
+            auto orto_diff = Vec<3, T>(
+                diff_cv.at<T>(0, 0), diff_cv.at<T>(0, 1), diff_cv.at<T>(0, 2));
+            auto center_diff = Vec<3, T>(
+                diff_cv.at<T>(0, 3), diff_cv.at<T>(0, 4),
+                diff_cv.at<T>(0, 5));
+            auto center_diff_len = std::sqrt(center_diff.qlen());
+            if (center_diff_len > .5) {
+                center_diff *= .5 / center_diff_len;
+            }
 
-        orto -= Vec<3, T>(
-            diff_cv.at<T>(0, 0), diff_cv.at<T>(0, 1), diff_cv.at<T>(0, 2));
-        center -= Vec<3, T>(
-            diff_cv.at<T>(0, 3), diff_cv.at<T>(0, 4), diff_cv.at<T>(0, 5));
+            orto -= orto_diff;
+            orto *= (1. / std::sqrt(orto.qlen()));
+            center -= center_diff;
+        }
 
         reset_score();
     }

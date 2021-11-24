@@ -4,5 +4,6 @@
         "random": "cpp",
         "bitset": "cpp",
         "fstream": "cpp"
-    }
+    },
+    "python.pythonPath": "/home/pietrek/.virtualenvs/py39/bin/python"
 }

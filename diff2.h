@@ -154,7 +154,7 @@ class Diff2 {
         auto p_2 = p_1 / x;
         auto dx_ = dx;
 
-        x = p_1;
+        x = p;
         dx = dx_ * (a * p_1);
         d2x = d2x * (a * p_1) +
               MatTriangle<K, T>::from_1vec(dx_) * (a * (a - 1) * p_2);
