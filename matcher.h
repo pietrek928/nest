@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <opencv2/opencv.hpp>
+#include <ostream>
 
 #include "bbox.h"
 #include "diff2.h"
@@ -49,7 +50,7 @@ class PlaneMatcher {
         : center(center),
           dist_weight(dist_weight),
           orto_weight(orto_weight),
-          orto({0, 0, 1}) {
+          orto({1, 1, 1}) {
         reset_score();
     }
 
@@ -71,10 +72,12 @@ class PlaneMatcher {
         n++;
 
         auto p = v3nograd(p_) - center_grad();
-        auto orto_dp = p.dp(orto_grad());
         auto qdist = p.qlen();
+        auto o = orto_grad();
+        auto orto_dp = p.dp(o);
         score += ((qdist ^ .6) * dist_weight) -
-                 ((orto_dp * orto_dp + .4) ^ -1.85) * orto_weight;
+                 //  ((orto_dp * orto_dp + .4) ^ -1.85) * orto_weight;
+                 orto_dp * orto_dp * orto_weight;
         // score += orto_dp * orto_dp + qdist * dist_weight;
         // std::cout << (double)(orto_dp * orto_dp + qdist * dist_weight) << std::endl;
     }
