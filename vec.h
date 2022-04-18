@@ -128,6 +128,15 @@ class Vec {
         }
     }
 
+    template <int IT, int K2, class T2>
+    inline void add_vec_mapped_it(
+        const Vec<K2, T2>& V, const Vec<K2, int>& pos_mapping) {
+        get_(pos_mapping.get(IT)) += items[IT];
+        if constexpr (IT > 0) {
+            add_vec_mapped_it<IT - 1, K2, T2>(V, pos_mapping);
+        }
+    }
+
     template <class Tstream, int IT>
     inline void put_items_to(Tstream& os) const {
         os << items[IT];
@@ -286,6 +295,12 @@ class Vec {
     template <class Tv>
     inline void add_to_vec(Tv& V, const Vec<K, int>& pos_mapping) const {
         add_to_vec_it<K - 1, Tv>(V, pos_mapping);
+    }
+
+    template <int K2, class T2>
+    inline void add_vec_mapped(
+        const Vec<K2, T2>& V, const Vec<K2, int>& pos_mapping) {
+        add_vec_mapped_it<K - 1, K2, T2>(V, pos_mapping);
     }
 
     template <class Tstream>

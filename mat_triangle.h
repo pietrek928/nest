@@ -34,18 +34,35 @@ class MatTriangle {
         }
     }
 
+    template <int ITK, int ITN, int K2, class T2>
+    inline void add_mat_triangle_n(
+        const MatTriangle<K2, T2>& M, const Vec<K, int>& pos_mapping) {
+        get_(pos_mapping.get(ITK), pos_mapping.get(ITN)) += M.get(ITK, ITN);
+        if constexpr (ITN > 0) {
+            add_mat_triangle_n<ITK, ITN - 1, K2, T2>(M, pos_mapping);
+        }
+    }
+
+    template <int ITK, int K2, class T2>
+    inline void add_mat_triangle_k(
+        const MatTriangle<K2, T2>& M, const Vec<K, int>& pos_mapping) {
+        add_mat_triangle_n<ITK, K - 1, K2, T2>(M, pos_mapping);
+        if constexpr (ITK > 0) {
+            add_mat_triangle_k<ITK - 1, K2, T2>(M, pos_mapping);
+        }
+    }
+
     template <int ITK, int ITN, class Tm>
-    inline void add_to_mat_n(
-        Tm& M, const Vec<K, int>& pos_mapping) const {
-        M.template at<T>(pos_mapping.get(ITK), pos_mapping.get(ITN)) += get(ITK, ITN);
+    inline void add_to_mat_n(Tm& M, const Vec<K, int>& pos_mapping) const {
+        M.template at<T>(pos_mapping.get(ITK), pos_mapping.get(ITN)) +=
+            get(ITK, ITN);
         if constexpr (ITN > 0) {
             add_to_mat_n<ITK, ITN - 1, Tm>(M, pos_mapping);
         }
     }
 
     template <int ITK, class Tm>
-    inline void add_to_mat_k(
-        Tm& M, const Vec<K, int>& pos_mapping) const {
+    inline void add_to_mat_k(Tm& M, const Vec<K, int>& pos_mapping) const {
         add_to_mat_n<ITK, K - 1, Tm>(M, pos_mapping);
         if constexpr (ITK > 0) {
             add_to_mat_k<ITK - 1, Tm>(M, pos_mapping);
@@ -164,6 +181,12 @@ class MatTriangle {
     template <class Tm>
     inline void add_to_mat(Tm& M, const Vec<K, int>& pos_mapping) const {
         add_to_mat_k<K - 1, Tm>(M, pos_mapping);
+    }
+
+    template <int K2, class T2>
+    inline void add_mat_triangle(
+        const MatTriangle<K2, T2>& M, const Vec<K2, int>& pos_mapping) {
+        add_mat_triangle_k<K2 - 1, K2, T2>(M, pos_mapping);
     }
 
     template <class T2>

@@ -400,4 +400,106 @@ inline T convex_polygons_qdist(
     return qdist;
 }
 
+template <class T>
+auto approx_bounding_circle(Vec<2, T>* pts, int n) {
+    // TODO: improve
+
+    class {
+        Vec<2, T> center;
+        T qr = 0;
+    } ret;
+
+    for (int i = 0; i < n; i++) {
+        ret.p += pts[i];
+    }
+    ret.p *= ((T)1.) / n;
+
+    for (int i = 0; i < n; i++) {
+        auto d = ret.center.qdist(pts[i]);
+        if (d > ret.qr) {
+            ret.qr = d;
+        }
+    }
+    return ret;
+}
+
+template <class T>
+struct FragmentRange {
+    Vec<2, T> center;
+    T r;
+    int start_pos_offset;
+};
+
+template <class T>
+auto create_hierarchy(Vec<2, T>* pts, int n) {
+    std::vector<FragmentRange<T>> frags;
+    for (int i = 0; i < n; i++) {
+        frags.emplace_back({
+            .center = pts[i],
+            .r = 0.,
+            .start_pos = -1,
+        });
+    }
+}
+
+template <class T>
+inline Diff2<6, T> segment_grad(
+    Vec<2, Diff2<3, T>> p1_g3,
+    Vec<2, Diff2<3, T>> p2_g3,
+    Vec<2, Diff2<3, T>> p3_g3) {
+    //
+}
+
+template <class T>
+inline Diff2<6, T> pos_grad(
+    const Vec<2, Diff2<3, T>> p1_g3, const Vec<2, Diff2<3, T>> p2_g3) {
+    //
+}
+
+template <class T>
+auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
+    return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
+}
+
+template <class T>
+inline auto polygons_grad(
+    const FragmentRange<T>* f1,
+    const PolygonTransformerGrad<T>& t1,
+    const FragmentRange<T>* f2,
+    const PolygonTransformerGrad<T>& t2) {
+    auto p1_g3 = t1.transform_grad(f1->center);
+    auto p2_g3 = t2.transform_grad(f2->center);
+    auto r1 = f1->r;
+    auto r2 = f2->r;
+
+    if ((r1 + r2) * (r1 + r2) > v2_nograd(p1_g3).qdist(v2_nograd(p2_g3))) {
+        return pos_grad(p1_g3, p1_g3) * (r1 * r2);
+    }
+
+    if (r1 > r2) {
+        // TODO: end pos detect
+        auto p = f1->start_pos_offset;
+        auto g6 = polygons_grad(f1 + p, t1, f2, t2);
+        for (int i = p + 1; i < (f1 + 1)->start_pos_offset; i++) {
+            g6 += polygons_grad(f1 + p, t1, f2, t2);
+        }
+        return g6;
+    }
+
+    if (f1->start_pos_offset >= 0 && f2->start_pos_offset >= 0) {
+        // TODO: end pos detect
+        auto p = f2->start_pos_offset;
+        auto g6 = polygons_grad(f1, t1, f2 + p, t2);
+        for (int i = p + 1; i < (f2 + 1)->start_pos_offset; i++) {
+            g6 += polygons_grad(f1, t1, f2 + p, t2);
+        }
+        return g6;
+    }
+
+    // TODO: end vertex detect
+    // TODO: scale, length * length ?
+    return segment_grad(f1->center, f2->center, (f2 + 1)->center) +
+           segment_grad(f2->center, f1->center, (f1 + 1)->center);
+}
+
 #endif /* __ALGO_H_ */
