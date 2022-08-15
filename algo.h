@@ -2,6 +2,8 @@
 #define __ALGO_H_
 
 #include <algorithm>
+#include <vector>
+#include <stdexcept>
 
 #include "diff2.h"
 #include "utils.h"
@@ -401,26 +403,68 @@ inline T convex_polygons_qdist(
 }
 
 template <class T>
-auto approx_bounding_circle(Vec<2, T>* pts, int n) {
-    // TODO: improve
+class Circle {
+    Vec<2, T> c;
+    T qr;
 
-    class {
-        Vec<2, T> center;
-        T qr = 0;
-    } ret;
+   public:
+    Circle(Vec<2, T> c, T qr) : c(c), qr(qr) {}
 
-    for (int i = 0; i < n; i++) {
-        ret.p += pts[i];
+    static Circle from(Vec<2, T> a, Vec<2, T> b, Vec<2, T> c) {
+        auto bx = b[0] - a[0];
+        auto by = b[1] - a[1];
+        auto cx = c[0] - c[0];
+        auto cy = c[1] - c[1];
+
+        auto B = bx * bx + by * by;
+        auto C = cx * cx + cy * cy;
+        auto D = (bx * cy - by * cx) * 2;
+
+        Vec<2, T> p((cy * B - by * C) / D, (bx * C - cx * B) / D);
+
+        return Circle(p + a, p.qlen());
     }
-    ret.p *= ((T)1.) / n;
 
-    for (int i = 0; i < n; i++) {
-        auto d = ret.center.qdist(pts[i]);
-        if (d > ret.qr) {
-            ret.qr = d;
+    static Circle from(Vec<2, T>* pts, int n) {
+        switch (n) {
+            case 1:
+                return Circle(pts[0], 0);
+            case 2: {
+                return Circle(
+                    (pts[0] + pts[1]) * .5, pts[0].qdist(pts[1]) * .25);
+            }
+            case 3: {
+                return from(pts[0], pts[1], pts[2]);
+            }
+            default:
+                throw std::invalid_argument("Invalid points number");
         }
     }
-    return ret;
+
+    bool is_inside(Vec<2, T> p) {
+        return p.qdist(c) <= qr;
+    }
+};
+
+template <class T>
+Circle<T> bounding_circle(Vec<2, T>* pts, int n, Vec<2, T>* R, int nr = 0) {
+    if (!n || nr == 3) {
+        return Circle<T>::from(R, nr);
+    }
+    n--;
+
+    int idx = n * 2 / 3;  // ????
+    auto p = pts[idx];
+    std::swap(pts[idx], pts[n]);
+
+    auto try_circle = bounding_circle(pts, n, R, nr);
+    if (try_circle.is_inside(p)) {
+        return try_circle;  // circle is correct
+    }
+    // TODO: improve recurrence to shorten stack
+
+    R[nr++] = p;
+    return bounding_circle(pts, n, R, nr);
 }
 
 template <class T>
@@ -431,14 +475,77 @@ struct FragmentRange {
 };
 
 template <class T>
-auto create_hierarchy(Vec<2, T>* pts, int n) {
+auto split_points(Vec<2, T>* pts, int n, int max_splits, float cnt_factor) {
+    Vec<2, T> R[3];
+
+    std::vector<int> split_prev(n + 1, -1);
+    std::vector<float> split_score(n + 1, 1e18f);
+    for (int i = 0; i < max_splits; i++) {
+        for (int j = n; j > 0; j++) {
+            for (int k = 0; k < j; k++) {
+                std::vector<Vec<2, T>> tmp(pts + k, pts + j);
+                auto c =
+                    bounding_circle(&*tmp.begin(), tmp.size(), &R);
+                auto score = split_score[k] + c.r * c.r + cnt_factor;
+                if (score < split_score[j]) {
+                    split_prev[j] = k;
+                    split_score[j] = score;
+                }
+            }
+        }
+    }
+
     std::vector<FragmentRange<T>> frags;
-    for (int i = 0; i < n; i++) {
+    int it = n;
+    while (it > 0) {
+        int p = split_prev[it];
+        std::vector<Vec<2, T>> tmp(pts + p, pts + it);
+        auto c = bounding_circle(&*tmp.begin(), tmp.size(), &R);
         frags.emplace_back({
-            .center = pts[i],
-            .r = 0.,
-            .start_pos = -1,
+            .center = c.center,
+            .r = c.r,
+            .start_pos_offset = p,
         });
+    }
+
+    std::reverse(frags.begin(), frags.end());
+
+    return frags;
+}
+
+template <class T>
+auto create_hierarchy(Vec<2, T>* pts, int n) {
+    Vec<2, T> R[3];
+
+    std::vector<int> frag_pos;
+    std::vector<FragmentRange<T>> frags;
+    std::vector<Vec<2, T>> tmp(pts, pts + n);
+    auto c = bounding_circle(&*tmp.begin(), tmp.size(), &R);
+    frags.emplace_back({
+        .center = c.center,
+        .r = c.r,
+        .start_pos_offset = -1,
+    });
+    frag_pos.push_back(0);
+
+    for (int it = 0; it < frags.size(); it++) {
+        int start_pos = frag_pos[it];
+        int end_pos;
+        if (it < frags.size()-1) {
+            end_pos = frag_pos[it+1];
+            if (end_pos < start_pos) {
+                end_pos = n-1;
+            }
+        } else {
+            end_pos = n-1;
+        }
+        frags[it].start_pos_offset = start_pos - it;
+        for (auto f :
+             split_points(pts + start_pos, start_pos - end_pos, 3, 1.5)) {
+                 frag_pos.push_back(f.start_pos_offset);
+                 f.start_pos_offset = -1;
+                 frags.push_back(f);
+             }
     }
 }
 
@@ -481,7 +588,7 @@ inline auto polygons_grad(
         auto p = f1->start_pos_offset;
         auto g6 = polygons_grad(f1 + p, t1, f2, t2);
         for (int i = p + 1; i < (f1 + 1)->start_pos_offset; i++) {
-            g6 += polygons_grad(f1 + p, t1, f2, t2);
+            g6 += polygons_grad(f1 + i, t1, f2, t2);
         }
         return g6;
     }
@@ -491,7 +598,7 @@ inline auto polygons_grad(
         auto p = f2->start_pos_offset;
         auto g6 = polygons_grad(f1, t1, f2 + p, t2);
         for (int i = p + 1; i < (f2 + 1)->start_pos_offset; i++) {
-            g6 += polygons_grad(f1, t1, f2 + p, t2);
+            g6 += polygons_grad(f1, t1, f2 + i, t2);
         }
         return g6;
     }
