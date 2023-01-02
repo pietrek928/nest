@@ -472,6 +472,7 @@ struct FragmentRange {
     Vec<2, T> center;
     T r;
     int start_pos_offset;
+    int start_point;
 };
 
 template <class T>
@@ -516,6 +517,13 @@ auto split_points(Vec<2, T>* pts, int n, int max_splits, float cnt_factor) {
 template <class T>
 auto create_hierarchy(Vec<2, T>* pts, int n) {
     Vec<2, T> R[3];
+    std::vector<Circle<T>> part_circles(n * (n+1) / 2);
+    std::vector<Vec<2, T>> tmp(n);
+    for (int i=1; i<=n; i++)
+        for (int j=0; j<i; j++) {
+            std::copy(pts+j, pts+i, tmp.begin());
+            part_circles[i*(i-1)/2 + j] = bounding_circle(&*tmp.begin(), i-j, &R);
+        }
 
     std::vector<int> frag_pos;
     std::vector<FragmentRange<T>> frags;
@@ -525,6 +533,7 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
         .center = c.center,
         .r = c.r,
         .start_pos_offset = -1,
+        .start_point = 0,
     });
     frag_pos.push_back(0);
 
