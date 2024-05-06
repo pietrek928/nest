@@ -559,22 +559,51 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
 }
 
 template <class T>
-inline Diff2<6, T> segment_grad(
-    Vec<2, Diff2<3, T>> p1_g3,
-    Vec<2, Diff2<3, T>> p2_g3,
-    Vec<2, Diff2<3, T>> p3_g3) {
-    //
-}
-
-template <class T>
-inline Diff2<6, T> pos_grad(
-    const Vec<2, Diff2<3, T>> p1_g3, const Vec<2, Diff2<3, T>> p2_g3) {
-    //
-}
-
-template <class T>
 auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
     return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
+}
+
+template <class T>
+inline Diff2<6, T> segment_dist_grad(
+    Vec<2, Diff2<3, T>> p_g3,
+    Vec<2, Diff2<3, T>> s1_g3,
+    Vec<2, Diff2<3, T>> s2_g3) {
+    auto d_g3 = s1_g3 - s2_g3;
+
+    Vec<2, Diff2<6, T>> v_g6, d_g6;
+    v_g6[0].add_mapped(-p_g3[0], {0, 1, 2});
+    v_g6[0].add_mapped(s1_g3[0], {3, 4, 5});
+    v_g6[1].add_mapped(-p_g3[1], {0, 1, 2});
+    v_g6[1].add_mapped(s1_g3[1], {3, 4, 5});
+    d_g6[0].add_mapped(d_g3[0], {3, 4, 5});
+    d_g6[1].add_mapped(d_g3[1], {3, 4, 5});
+
+    auto m = d_g6.dp(v_g6);
+    if (m >= 0) {
+        return d_g6.qlen() ^ T(.5);
+    }
+
+    auto v_qlen = v_g6.qlen();
+    auto vp_qlen = m * m / v_qlen;
+    if (vp_qlen > v_qlen) {
+        return (v_g6 + d_g6).qlen() ^ T(.5);
+    }
+
+    auto qlen = d_g6.qlen() - vp_qlen;
+    cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
+
+    return qlen ^ T(.5);
+}
+
+template <class T>
+inline Diff2<6, T> pos_dist_grad(
+    const Vec<2, Diff2<3, T>> p1_g3, const Vec<2, Diff2<3, T>> p2_g3) {
+    Vec<2, Diff2<6, T>> v_g6;
+    v_g6[0].add_mapped(p1_g3[0], {0, 1, 2});
+    v_g6[1].add_mapped(p1_g3[1], {0, 1, 2});
+    v_g6[0].add_mapped(-p2_g3[0], {3, 4, 5});
+    v_g6[1].add_mapped(-p2_g3[1], {3, 4, 5});
+    return v_g6.qlen() ^ T(.5);
 }
 
 template <class T>
@@ -616,6 +645,59 @@ inline auto polygons_grad(
     // TODO: scale, length * length ?
     return segment_grad(f1->center, f2->center, (f2 + 1)->center) +
            segment_grad(f2->center, f1->center, (f1 + 1)->center);
+}
+
+template <class T>
+inline auto points_line_string_distance(
+    const Vec<2, Diff2<3, T>> *points, int npoints,
+    const Vec<2, Diff2<3, T>> *line_string, int nline,
+    T dist_offset,  // sum of width of both objects
+    Diff2<6, T>(*dist_transform)(Diff2<6, T>),
+) {
+    Diff2<3, T> ret_dist;
+
+    int line_pos = 0;
+    for (int i = 0; i < npoints; i++) {
+        T qdist = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos]));
+        T qdist_prev = 1e18, qdist_next = 1e18;
+        if (line_pos) {
+            qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+            while (qdist_prev < qdist) {
+                line_pos--;
+                if (line_pos) {
+                    qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+                } else {
+                    qdist_prev = 1e18;
+                    break;
+                }
+            }
+        } else {
+            qdist_prev = 1e18;
+        }
+
+        if (line_pos < nline - 1) {
+            qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
+            while (qdist_next < qdist) {
+                line_pos++;
+                if (line_pos < nline - 1) {
+                    qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
+                } else {
+                    qdist_next = 1e18;
+                    break;
+                }
+            }
+        } else {
+            qdist_next = 1e18;
+        }
+
+        auto pt3 = line_string[line_pos-1 if qdist_prev < qdist_next else line_pos+1];
+        auto pt_dist_grad = segment_dist_grad(points[i], line_string[line_pos], pt3) - dist_offset;
+        if (T(pt_dist_grad) > 0) {
+            ret_dist += dist_transform(pt_dist_grad);
+        }
+    }
+
+    return ret_dist;
 }
 
 #endif /* __ALGO_H_ */
