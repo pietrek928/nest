@@ -559,12 +559,7 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
 }
 
 template <class T>
-auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
-    return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
-}
-
-template <class T>
-inline Diff2<6, T> segment_dist_grad(
+inline Diff2<6, T> segment_qdist_grad(
     Vec<2, Diff2<3, T>> p_g3,
     Vec<2, Diff2<3, T>> s1_g3,
     Vec<2, Diff2<3, T>> s2_g3) {
@@ -580,19 +575,19 @@ inline Diff2<6, T> segment_dist_grad(
 
     auto m = d_g6.dp(v_g6);
     if (m >= 0) {
-        return d_g6.qlen() ^ T(.5);
+        return d_g6.qlen();
     }
 
     auto v_qlen = v_g6.qlen();
     auto vp_qlen = m * m / v_qlen;
     if (vp_qlen > v_qlen) {
-        return (v_g6 + d_g6).qlen() ^ T(.5);
+        return (v_g6 + d_g6).qlen();
     }
 
     auto qlen = d_g6.qlen() - vp_qlen;
     cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
 
-    return qlen ^ T(.5);
+    return qlen;
 }
 
 template <class T>
@@ -603,7 +598,12 @@ inline Diff2<6, T> pos_dist_grad(
     v_g6[1].add_mapped(p1_g3[1], {0, 1, 2});
     v_g6[0].add_mapped(-p2_g3[0], {3, 4, 5});
     v_g6[1].add_mapped(-p2_g3[1], {3, 4, 5});
-    return v_g6.qlen() ^ T(.5);
+    return v_g6.qlen();
+}
+
+template <class T>
+auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
+    return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
 }
 
 template <class T>
@@ -647,21 +647,20 @@ inline auto polygons_grad(
            segment_grad(f2->center, f1->center, (f1 + 1)->center);
 }
 
-template <class T>
+template <class T, , typename Fqdist_transform>
 inline auto points_line_string_distance(
     const Vec<2, Diff2<3, T>> *points, int npoints,
     const Vec<2, Diff2<3, T>> *line_string, int nline,
-    T dist_offset,  // sum of width of both objects
-    Diff2<6, T>(*dist_transform)(Diff2<6, T>),
+    const Fqdist_transform&& qdist_transform,
 ) {
     Diff2<3, T> ret_dist;
 
     int line_pos = 0;
     for (int i = 0; i < npoints; i++) {
         T qdist = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos]));
-        T qdist_prev = 1e18, qdist_next = 1e18;
+
         if (line_pos) {
-            qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+            T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
             while (qdist_prev < qdist) {
                 line_pos--;
                 if (line_pos) {
@@ -671,10 +670,9 @@ inline auto points_line_string_distance(
                     break;
                 }
             }
-        } else {
-            qdist_prev = 1e18;
         }
 
+        T qdist_next;
         if (line_pos < nline - 1) {
             qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
             while (qdist_next < qdist) {
@@ -690,11 +688,57 @@ inline auto points_line_string_distance(
             qdist_next = 1e18;
         }
 
-        auto pt3 = line_string[line_pos-1 if qdist_prev < qdist_next else line_pos+1];
-        auto pt_dist_grad = segment_dist_grad(points[i], line_string[line_pos], pt3) - dist_offset;
-        if (T(pt_dist_grad) > 0) {
-            ret_dist += dist_transform(pt_dist_grad);
+        T qdist_prev;
+        if (line_pos) {
+            qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+        } else {
+            qdist_prev = 1e18;
         }
+        auto pt3 = line_string[line_pos-1 if qdist_prev < qdist_next else line_pos+1];
+        ret_dist += qdist_transform(
+            segment_qdist_grad(points[i], line_string[line_pos], pt3)
+        );
+    }
+
+    return ret_dist;
+}
+
+template <class T, , typename Fqdist_transform>
+inline auto points_line_ring_distance(
+    const Vec<2, Diff2<3, T>> *points, int npoints,
+    const Vec<2, Diff2<3, T>> *line_ring, int npoly,
+    const Fqdist_transform&& qdist_transform,
+) {
+    Diff2<3, T> ret_dist;
+
+    int line_pos = 0;
+    for (int i = 0; i < npoints; i++) {
+        T qdist = v2_nograd(points[i]).qdist(v2_nograd(line_ring[line_pos]));
+
+        {
+            int prev_pos = line_pos ? line_pos - 1 : npoly - 1;
+            T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[prev_pos]));
+            while (qdist_prev < qdist) {
+                line_pos = prev_pos;
+                prev_pos = line_pos ? line_pos - 1 : npoly - 1
+                qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[prev_pos]));
+            }
+        }
+
+        int next_pos = line_pos < npoly - 1 ? line_pos + 1 : 0;
+        T qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[next_pos]));
+        while (qdist_next < qdist) {
+            line_pos = next_pos;
+            next_pos = line_pos < npoly - 1 ? line_pos + 1 : 0;
+            qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[next_pos]));
+        }
+
+        int prev_pos = line_pos ? line_pos - 1 : npoly - 1;
+        T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[prev_pos]));
+        auto pt3 = line_string[prev_pos if qdist_prev < qdist_next else next_pos];
+        ret_dist += qdist_transform(
+            segment_qdist_grad(points[i], line_string[line_pos], pt3)
+        );
     }
 
     return ret_dist;
