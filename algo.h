@@ -558,36 +558,47 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
     }
 }
 
-template <class T>
-inline Diff2<6, T> segment_qdist_grad(
-    Vec<2, Diff2<3, T>> p_g3,
-    Vec<2, Diff2<3, T>> s1_g3,
-    Vec<2, Diff2<3, T>> s2_g3) {
-    auto d_g3 = s1_g3 - s2_g3;
+template <int N, class T>
+inline Diff2<N, T> segment_qdist_grad(
+    Vec<2, Diff2<N, T>> p,
+    Vec<2, Diff2<N, T>> s1,
+    Vec<2, Diff2<N, T>> s2) {
 
-    Vec<2, Diff2<6, T>> v_g6, d_g6;
-    v_g6[0].add_mapped(-p_g3[0], {0, 1, 2});
-    v_g6[0].add_mapped(s1_g3[0], {3, 4, 5});
-    v_g6[1].add_mapped(-p_g3[1], {0, 1, 2});
-    v_g6[1].add_mapped(s1_g3[1], {3, 4, 5});
-    d_g6[0].add_mapped(d_g3[0], {3, 4, 5});
-    d_g6[1].add_mapped(d_g3[1], {3, 4, 5});
+    auto d = s1 - s2;
+    Vec<2, Diff2<N, T>> v = s1 - p;
 
-    auto m = d_g6.dp(v_g6);
+    auto m = d.dp(v);
     if (m >= 0) {
-        return d_g6.qlen();
+        return d.qlen();
     }
 
-    auto v_qlen = v_g6.qlen();
+    auto v_qlen = v.qlen();
     auto vp_qlen = m * m / v_qlen;
     if (vp_qlen > v_qlen) {
-        return (v_g6 + d_g6).qlen();
+        return (v + d).qlen();
     }
 
-    auto qlen = d_g6.qlen() - vp_qlen;
+    auto qlen = d.qlen() - vp_qlen;
     cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
 
     return qlen;
+}
+
+template <class T>
+inline Diff2<6, T> segment_qdist_grad_g6(
+    Vec<2, Diff2<3, T>> p,
+    Vec<2, Diff2<3, T>> s1,
+    Vec<2, Diff2<3, T>> s2) {
+
+    Diff2<6, T> p, s1, s2;
+    p[0].add_mapped(points[i][0], {0, 1, 2});
+    p[1].add_mapped(points[i][1], {0, 1, 2});
+    s1[0].add_mapped(line_string[line_pos][0], {3, 4, 5});
+    s1[1].add_mapped(line_string[line_pos][1], {3, 4, 5});
+    s2[0].add_mapped(pt3[0], {3, 4, 5});
+    s2[1].add_mapped(pt3[1], {3, 4, 5});
+
+    return segment_qdist_grad(p, s1, s2);
 }
 
 template <class T>
@@ -606,46 +617,6 @@ auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
     return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
 }
 
-template <class T>
-inline auto polygons_grad(
-    const FragmentRange<T>* f1,
-    const PolygonTransformerGrad<T>& t1,
-    const FragmentRange<T>* f2,
-    const PolygonTransformerGrad<T>& t2) {
-    auto p1_g3 = t1.transform_grad(f1->center);
-    auto p2_g3 = t2.transform_grad(f2->center);
-    auto r1 = f1->r;
-    auto r2 = f2->r;
-
-    if ((r1 + r2) * (r1 + r2) > v2_nograd(p1_g3).qdist(v2_nograd(p2_g3))) {
-        return pos_grad(p1_g3, p1_g3) * (r1 * r2);
-    }
-
-    if (r1 > r2) {
-        // TODO: end pos detect
-        auto p = f1->start_pos_offset;
-        auto g6 = polygons_grad(f1 + p, t1, f2, t2);
-        for (int i = p + 1; i < (f1 + 1)->start_pos_offset; i++) {
-            g6 += polygons_grad(f1 + i, t1, f2, t2);
-        }
-        return g6;
-    }
-
-    if (f1->start_pos_offset >= 0 && f2->start_pos_offset >= 0) {
-        // TODO: end pos detect
-        auto p = f2->start_pos_offset;
-        auto g6 = polygons_grad(f1, t1, f2 + p, t2);
-        for (int i = p + 1; i < (f2 + 1)->start_pos_offset; i++) {
-            g6 += polygons_grad(f1, t1, f2 + i, t2);
-        }
-        return g6;
-    }
-
-    // TODO: end vertex detect
-    // TODO: scale, length * length ?
-    return segment_grad(f1->center, f2->center, (f2 + 1)->center) +
-           segment_grad(f2->center, f1->center, (f1 + 1)->center);
-}
 
 template <class T, , typename Fqdist_transform>
 inline auto points_line_string_distance(
@@ -695,15 +666,16 @@ inline auto points_line_string_distance(
             qdist_prev = 1e18;
         }
         auto pt3 = line_string[line_pos-1 if qdist_prev < qdist_next else line_pos+1];
+
         ret_dist += qdist_transform(
-            segment_qdist_grad(points[i], line_string[line_pos], pt3)
+            segment_qdist_grad_g6(points[i], line_string[line_pos], pt3)
         );
     }
 
     return ret_dist;
 }
 
-template <class T, , typename Fqdist_transform>
+template <class T, typename Fqdist_transform>
 inline auto points_line_ring_distance(
     const Vec<2, Diff2<3, T>> *points, int npoints,
     const Vec<2, Diff2<3, T>> *line_ring, int npoly,
@@ -736,8 +708,9 @@ inline auto points_line_ring_distance(
         int prev_pos = line_pos ? line_pos - 1 : npoly - 1;
         T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[prev_pos]));
         auto pt3 = line_string[prev_pos if qdist_prev < qdist_next else next_pos];
+
         ret_dist += qdist_transform(
-            segment_qdist_grad(points[i], line_string[line_pos], pt3)
+            segment_qdist_grad_g6(points[i], line_string[line_pos], pt3)
         );
     }
 
