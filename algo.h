@@ -47,11 +47,34 @@ bool vectors_intersect(
            (cross2d(ca, cd) * cross2d(cd, cb) < 0);
 }
 
-// template <int K, class T>
-// T triangle_height_qlen(
-//     const Vec<K, T>& A, const Vec<K, T>& B, const Vec<K, T>& C) {
-//     return triangle_height_vector(A, B, C).qlen();
-// }
+
+template<class T>
+void transform_points(
+    Vec<2, T> *out, const Vec<2, T> *points, int n,
+    Vec<2, T> pos, T a
+) {
+    T ca = std::cos(a);
+    T sa = std::sin(a);
+    for (int i=0; i<n; i++) {
+        const auto &v = points[i];
+        out[i][0] = v[0] * ca - v[1] * sa + pos[0];
+        out[i][1] = v[0] * sa + v[1] * ca + pos[1];
+    }
+}
+
+
+template<class T>
+void transform_points_g3(
+    Vec<2, Diff2<3, T>> *out, const Vec<2, T> *points, int n,
+    Vec<2, T> pos, T a
+) {
+    auto cs = Diff2<3, T>::from_var(a, 2).cossin();
+    for (int i=0; i<n; i++) {
+        const auto &v = points[i];
+        out[i][0] = v[0] * cs.cos - v[1] * cs.sin + Diff2<3, T>::from_var(pos[0], 0);
+        out[i][1] = v[0] * cs.sin + v[1] * cs.cos + Diff2<3, T>::from_var(pos[1], 1);
+    }
+}
 
 template <class T>
 class PolygonTransformer {
