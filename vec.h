@@ -338,4 +338,9 @@ Tstream& operator<<(Tstream& os, const Vec<K, T>& v) {
     return v.template put_to<Tstream>(os);
 }
 
+using Vec2f = Vec<2, float>;
+using Vec2d = Vec<2, double>;
+using Vec3f = Vec<3, float>;
+using Vec3d = Vec<3, double>;
+
 #endif /* __VEC_H_ */

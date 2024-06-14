@@ -53,19 +53,18 @@ class MatTriangle {
     }
 
     template <int ITK, int ITN, class Tm>
-    inline void add_to_mat_n(Tm& M, const Vec<K, int>& pos_mapping) const {
-        M.template at<T>(pos_mapping.get(ITK), pos_mapping.get(ITN)) +=
-            get(ITK, ITN);
+    inline void add_to_mat_n(Tm *M, const Vec<K, int>& pos_mapping) const {
+        M[pos_mapping.get(ITN)] += get(ITK, ITN);
         if constexpr (ITN > 0) {
             add_to_mat_n<ITK, ITN - 1, Tm>(M, pos_mapping);
         }
     }
 
     template <int ITK, class Tm>
-    inline void add_to_mat_k(Tm& M, const Vec<K, int>& pos_mapping) const {
-        add_to_mat_n<ITK, K - 1, Tm>(M, pos_mapping);
+    inline void add_to_mat_k(Tm *M, int width, const Vec<K, int>& pos_mapping) const {
+        add_to_mat_n<ITK, K - 1, Tm>(M + (pos_mapping.get(ITK) * width), pos_mapping);
         if constexpr (ITK > 0) {
-            add_to_mat_k<ITK - 1, Tm>(M, pos_mapping);
+            add_to_mat_k<ITK - 1, Tm>(M, width, pos_mapping);
         }
     }
 
@@ -179,8 +178,8 @@ class MatTriangle {
     //}
 
     template <class Tm>
-    inline void add_to_mat(Tm& M, const Vec<K, int>& pos_mapping) const {
-        add_to_mat_k<K - 1, Tm>(M, pos_mapping);
+    inline void add_to_mat(Tm *M, int width, const Vec<K, int>& pos_mapping) const {
+        add_to_mat_k<K - 1, Tm>(M, width, pos_mapping);
     }
 
     template <int K2, class T2>

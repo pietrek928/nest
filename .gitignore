@@ -1,3 +1,6 @@
 *.e
 *.s
-
+*.cpp
+*.so
+*.egg-info
+build
