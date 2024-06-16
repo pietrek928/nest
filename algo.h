@@ -13,6 +13,7 @@ using namespace std;
 #include "utils.h"
 #include "vec.h"
 
+
 template <int K, class T>
 Vec<K, T> triangle_height_vector(
     const Vec<K, T>& A, const Vec<K, T>& B, const Vec<K, T>& C) {
@@ -66,9 +67,6 @@ void transform_points(
     }
 }
 
-constexpr auto transform_points_2f = transform_points<float>;
-constexpr auto transform_points_2d = transform_points<double>;
-
 template<class T>
 void transform_points_g3(
     Vec<2, Diff2<3, T>> *out, const Vec<2, T> *points, int n,
@@ -77,8 +75,8 @@ void transform_points_g3(
     auto cs = Diff2<3, T>::from_var(a, 2).cossin();
     for (int i=0; i<n; i++) {
         const auto &v = points[i];
-        out[i][0] = v[0] * cs.cos - v[1] * cs.sin + Diff2<3, T>::from_var(pos[0], 0);
-        out[i][1] = v[0] * cs.sin + v[1] * cs.cos + Diff2<3, T>::from_var(pos[1], 1);
+        out[i].get_(0) = v[0] * cs.cos - v[1] * cs.sin + Diff2<3, T>::from_var(pos[0], 0);
+        out[i].get_(0) = v[0] * cs.sin + v[1] * cs.cos + Diff2<3, T>::from_var(pos[1], 1);
     }
 }
 

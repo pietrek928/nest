@@ -5,7 +5,10 @@
 
 template <int K, class T>
 class MatTriangle {
-    static constexpr int items_count = K * (K + 1) / 2;
+    public:
+    static constexpr unsigned int items_count = K * (K + 1) / 2;
+
+    private:
 
     T items[items_count];
 

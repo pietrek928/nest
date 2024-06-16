@@ -1,5 +1,5 @@
-#ifndef __VEC_H_
-#define __VEC_H_
+#pragma once
+
 
 template <int K, class T>
 class Vec {
@@ -337,10 +337,3 @@ template <class Tstream, int K, class T>
 Tstream& operator<<(Tstream& os, const Vec<K, T>& v) {
     return v.template put_to<Tstream>(os);
 }
-
-using Vec2f = Vec<2, float>;
-using Vec2d = Vec<2, double>;
-using Vec3f = Vec<3, float>;
-using Vec3d = Vec<3, double>;
-
-#endif /* __VEC_H_ */

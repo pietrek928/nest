@@ -34,6 +34,10 @@ class Diff2 {
         return d2x;
     }
 
+    static auto size() {
+        return 1 + K + MatTriangle<K, T>::items_count;
+    }
+
     template <class T2>
     inline auto operator+(const Diff2<K, T2>& v) const {
         auto xcp = *this;
@@ -201,7 +205,7 @@ class Diff2 {
     }
 
     inline auto cossin() const {
-        class {
+        struct {
             Diff2 cos, sin;
         } sc;
 
