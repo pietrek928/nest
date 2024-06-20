@@ -26,6 +26,10 @@ class Diff2 {
         return x;
     }
 
+    inline auto get_x() const {
+        return x;
+    }
+
     inline auto get_dx() const {
         return dx;
     }
@@ -70,9 +74,9 @@ class Diff2 {
 
     template <int K2, class T2>
     inline auto& add_mapped(const Diff2<K2, T2>& v2, const Vec<K2, int>& mapping) {
-        x += v2.x;
-        dx.add_vec_mapped(v2.dx, mapping);
-        d2x.add_mat_triangle(v2.d2x, mapping);
+        x += v2.get_x();
+        dx.add_vec_mapped(v2.get_dx(), mapping);
+        d2x.add_mat_triangle(v2.get_d2x(), mapping);
         return *this;
     }
 
@@ -143,7 +147,7 @@ class Diff2 {
         return xcp;
     }
 
-    inline auto inv() {
+    inline auto inv() const {
         auto xcp = *this;
         auto x_1 = T(1) / x;
         auto x_2 = x_1 * x_1;

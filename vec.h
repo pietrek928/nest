@@ -1,17 +1,10 @@
 #pragma once
 
 
+#include <variant>
 template <int K, class T>
 class Vec {
     T items[K];
-
-    template <int IT, class Tv, class... Targs>
-    inline void set_pos(Tv v, Targs... vs) {
-        items[IT] = v;
-        if constexpr (IT < K - 1) {
-            set_pos<IT + 1, Targs...>(vs...);
-        }
-    }
 
     template <int IT, class T2>
     inline T calc_dp(const Vec<K, T2>& v2) const {
@@ -151,9 +144,12 @@ class Vec {
 
     Vec() : items{0} {}
 
-    template <class... Targs>
-    Vec(Targs... pos_values) {
-        set_pos<0>(pos_values...);
+    template <int IT, class Tv, class... Targs>
+    inline void set_pos(Tv v, Targs... vs) {
+        items[IT] = v;
+        if constexpr (IT < K - 1) {
+            set_pos<IT + 1, Targs...>(vs...);
+        }
     }
 
     inline T& get_(int k) {
@@ -311,6 +307,13 @@ class Vec {
         return os;
     }
 };
+
+template <class T, class... Targs>
+inline auto v(Targs... pos_values) {
+    Vec<sizeof...(Targs), T> r;
+    r.template set_pos<0>(pos_values...);
+    return r;
+}
 
 template <class T>
 inline auto cross2d(const Vec<2, T>& v1, const Vec<2, T>& v2) {

@@ -620,20 +620,22 @@ inline Diff2<6, T> segment_qdist_grad_g6(
     Vec<2, Diff2<3, T>> p,
     Vec<2, Diff2<3, T>> s1,
     Vec<2, Diff2<3, T>> s2) {
+    auto mapping1 = v<int>(0, 1, 2);
+    auto mapping2 = v<int>(3, 4, 5);
 
     Vec<2, Diff2<6, T>> p_g6, s1_g6, s2_g6;
-    p_g6[0].add_mapped(p[0], {0, 1, 2});
-    p_g6[1].add_mapped(p[1], {0, 1, 2});
-    s1_g6[0].add_mapped(s1[0], {3, 4, 5});
-    s1_g6[1].add_mapped(s1[1], {3, 4, 5});
-    s2_g6[0].add_mapped(s2[0], {3, 4, 5});
-    s2_g6[1].add_mapped(s2[1], {3, 4, 5});
+    p_g6[0].add_mapped(p[0], mapping1);
+    p_g6[1].add_mapped(p[1], mapping1);
+    s1_g6[0].add_mapped(s1[0], mapping2);
+    s1_g6[1].add_mapped(s1[1], mapping2);
+    s2_g6[0].add_mapped(s2[0], mapping2);
+    s2_g6[1].add_mapped(s2[1], mapping2);
 
-    return segment_qdist_grad(p, s1, s2);
+    return segment_qdist_grad(p_g6, s1_g6, s2_g6);
 }
 
 template <class T>
-inline Diff2<6, T> pos_dist_grad(
+inline Diff2<6, T> pos_dist_grad_g6(
     const Vec<2, Diff2<3, T>> p1_g3, const Vec<2, Diff2<3, T>> p2_g3) {
     Vec<2, Diff2<6, T>> v_g6;
     v_g6[0].add_mapped(p1_g3[0], {0, 1, 2});
@@ -645,17 +647,17 @@ inline Diff2<6, T> pos_dist_grad(
 
 template <class T>
 auto v2_nograd(const Vec<2, Diff2<3, T>>& p1_g3) {
-    return Vec<2, T>(T(p1_g3[0]), T(p1_g3[1]));
+    return v<T>(T(p1_g3[0]), T(p1_g3[1]));
 }
 
 
 template <class T, typename Fqdist_transform>
-inline auto points_line_string_distance(
+inline auto points_line_string_distance_g3(
     const Vec<2, Diff2<3, T>> *points, int npoints,
     const Vec<2, Diff2<3, T>> *line_string, int nline,
     const Fqdist_transform&& qdist_transform
 ) {
-    Diff2<3, T> ret_dist;
+    Diff2<6, T> ret_dist;
 
     int line_pos = 0;
     for (int i = 0; i < npoints; i++) {
@@ -707,12 +709,12 @@ inline auto points_line_string_distance(
 }
 
 template <class T, typename Fqdist_transform>
-inline auto points_line_ring_distance(
+inline auto points_line_ring_distance_g3(
     const Vec<2, Diff2<3, T>> *points, int npoints,
     const Vec<2, Diff2<3, T>> *line_ring, int npoly,
     const Fqdist_transform&& qdist_transform
 ) {
-    Diff2<3, T> ret_dist;
+    Diff2<6, T> ret_dist;
 
     int line_pos = 0;
     for (int i = 0; i < npoints; i++) {
