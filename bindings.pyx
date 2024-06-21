@@ -10,7 +10,7 @@ cnp.import_array()
 cdef cnp.ndarray[cnp.float64_t, ndim=2] c_transform_points_2f(
     cnp.ndarray[cnp.float64_t, ndim=2] pts, float dx, float dy, float a
 ):
-    cdef int items_count = 1
+    cdef unsigned int items_count = 1
     for i in range(pts.ndim-1):
         items_count *= pts.shape[i]
 
@@ -24,7 +24,7 @@ cdef cnp.ndarray[cnp.float64_t, ndim=2] c_transform_points_2f(
 cdef cnp.ndarray[cnp.float64_t, ndim=2] c_transform_points_2d(
     cnp.ndarray[cnp.float64_t, ndim=2] pts, float dx, float dy, float a
 ):
-    cdef int items_count = 1
+    cdef unsigned int items_count = 1
     for i in range(pts.ndim-1):
         items_count *= pts.shape[i]
 
@@ -36,7 +36,7 @@ cdef cnp.ndarray[cnp.float64_t, ndim=2] c_transform_points_2d(
 
 
 def transform_points(cnp.ndarray pts, dx, dy, a):
-    cdef int vec_size = pts.shape[pts.ndim-1]
+    cdef unsigned int vec_size = pts.shape[pts.ndim-1]
     cdef dtype = pts.dtype
 
     if vec_size == 2:
@@ -51,7 +51,7 @@ def transform_points(cnp.ndarray pts, dx, dy, a):
 cdef cnp.ndarray[cnp.float32_t, ndim=3] c_transform_points_g3_2f(
     cnp.ndarray[cnp.float32_t, ndim=2] pts, float dx, float dy, float a
 ):
-    cdef int items_count = 1
+    cdef unsigned int items_count = 1
     cdef vector[cnp.npy_intp] out_dims
     for i in range(pts.ndim-1):
         items_count *= pts.shape[i]
@@ -69,7 +69,7 @@ cdef cnp.ndarray[cnp.float32_t, ndim=3] c_transform_points_g3_2f(
 cdef cnp.ndarray[cnp.float64_t, ndim=3] c_transform_points_g3_2d(
     cnp.ndarray[cnp.float64_t, ndim=2] pts, float dx, float dy, float a
 ):
-    cdef int items_count = 1
+    cdef unsigned int items_count = 1
     cdef vector[cnp.npy_intp] out_dims
     for i in range(pts.ndim-1):
         items_count *= pts.shape[i]
@@ -85,7 +85,7 @@ cdef cnp.ndarray[cnp.float64_t, ndim=3] c_transform_points_g3_2d(
 
 
 def transform_points_g3(cnp.ndarray pts, dx, dy, a):
-    cdef int vec_size = pts.shape[pts.ndim-1]
+    cdef unsigned int vec_size = pts.shape[pts.ndim-1]
     cdef dtype = pts.dtype
 
     if vec_size == 2:
@@ -100,8 +100,8 @@ def transform_points_g3(cnp.ndarray pts, dx, dy, a):
 cdef cnp.ndarray[cnp.float32_t, ndim=1] c_points_line_string_distance_2f_g3(
     cnp.ndarray[cnp.float32_t, ndim=3] points, cnp.ndarray[cnp.float32_t, ndim=3] line_string
 ):
-    cdef int points_count = points.shape[0]
-    cdef int line_string_count = line_string.shape[0]
+    cdef unsigned int points_count = points.shape[0]
+    cdef unsigned int line_string_count = line_string.shape[0]
 
     cdef const Vec2f_g3 *points_data = <Vec2f_g3 *> points.data
     cdef const Vec2f_g3 *line_string_data = <Vec2f_g3 *> line_string.data
@@ -112,8 +112,8 @@ cdef cnp.ndarray[cnp.float32_t, ndim=1] c_points_line_string_distance_2f_g3(
 cdef cnp.ndarray[cnp.float64_t, ndim=1] c_points_line_string_distance_2d_g3(
     cnp.ndarray[cnp.float64_t, ndim=3] points, cnp.ndarray[cnp.float64_t, ndim=3] line_string
 ):
-    cdef int points_count = points.shape[0]
-    cdef int line_string_count = line_string.shape[0]
+    cdef unsigned int points_count = points.shape[0]
+    cdef unsigned int line_string_count = line_string.shape[0]
 
     cdef const Vec2d_g3 *points_data = <Vec2d_g3 *> points.data
     cdef const Vec2d_g3 *line_string_data = <Vec2d_g3 *> line_string.data
@@ -122,8 +122,8 @@ cdef cnp.ndarray[cnp.float64_t, ndim=1] c_points_line_string_distance_2d_g3(
 
 
 def points_line_string_distance_g3(cnp.ndarray points, cnp.ndarray line_string):
-    cdef int elem_size = points.shape[points.ndim-1]
-    cdef int vec_size = points.shape[points.ndim-2]
+    cdef unsigned int elem_size = points.shape[points.ndim-1]
+    cdef unsigned int vec_size = points.shape[points.ndim-2]
     cdef dtype = points.dtype
 
     if vec_size == 2 and elem_size == g3_size():

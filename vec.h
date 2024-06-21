@@ -1,7 +1,7 @@
 #pragma once
 
+#include <initializer_list>
 
-#include <variant>
 template <int K, class T>
 class Vec {
     T items[K];
@@ -142,7 +142,13 @@ class Vec {
    public:
     using Tnum = T;
 
-    Vec() : items{0} {}
+    inline Vec() : items{0} {}
+    inline Vec(std::initializer_list<Tnum> il) {
+        int i = 0;
+        for (const auto& v : il) {
+            items[i++] = v;
+        }
+    }
 
     template <int IT, class Tv, class... Targs>
     inline void set_pos(Tv v, Targs... vs) {

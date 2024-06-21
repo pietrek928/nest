@@ -620,16 +620,14 @@ inline Diff2<6, T> segment_qdist_grad_g6(
     Vec<2, Diff2<3, T>> p,
     Vec<2, Diff2<3, T>> s1,
     Vec<2, Diff2<3, T>> s2) {
-    auto mapping1 = v<int>(0, 1, 2);
-    auto mapping2 = v<int>(3, 4, 5);
 
     Vec<2, Diff2<6, T>> p_g6, s1_g6, s2_g6;
-    p_g6[0].add_mapped(p[0], mapping1);
-    p_g6[1].add_mapped(p[1], mapping1);
-    s1_g6[0].add_mapped(s1[0], mapping2);
-    s1_g6[1].add_mapped(s1[1], mapping2);
-    s2_g6[0].add_mapped(s2[0], mapping2);
-    s2_g6[1].add_mapped(s2[1], mapping2);
+    p_g6[0].add_mapped(p[0], {0, 1, 2});
+    p_g6[1].add_mapped(p[1], {0, 1, 2});
+    s1_g6[0].add_mapped(s1[0], {3, 4, 5});
+    s1_g6[1].add_mapped(s1[1], {3, 4, 5});
+    s2_g6[0].add_mapped(s2[0], {3, 4, 5});
+    s2_g6[1].add_mapped(s2[1], {3, 4, 5});
 
     return segment_qdist_grad(p_g6, s1_g6, s2_g6);
 }
@@ -667,6 +665,7 @@ inline auto points_line_string_distance_g3(
             T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
             while (qdist_prev < qdist) {
                 line_pos--;
+                qdist = qdist_prev;
                 if (line_pos) {
                     qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
                 } else {
@@ -681,6 +680,7 @@ inline auto points_line_string_distance_g3(
             qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
             while (qdist_next < qdist) {
                 line_pos++;
+                qdist = qdist_next;
                 if (line_pos < nline - 1) {
                     qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
                 } else {
@@ -725,6 +725,7 @@ inline auto points_line_ring_distance_g3(
             T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_ring[prev_pos]));
             while (qdist_prev < qdist) {
                 line_pos = prev_pos;
+                qdist = qdist_prev;
                 prev_pos = line_pos ? line_pos - 1 : npoly - 1;
                 qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_ring[prev_pos]));
             }
@@ -734,6 +735,7 @@ inline auto points_line_ring_distance_g3(
         T qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_ring[next_pos]));
         while (qdist_next < qdist) {
             line_pos = next_pos;
+            qdist = qdist_next;
             next_pos = line_pos < npoly - 1 ? line_pos + 1 : 0;
             qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_ring[next_pos]));
         }
