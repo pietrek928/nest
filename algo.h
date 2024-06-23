@@ -76,7 +76,7 @@ void transform_points_g3(
     for (int i=0; i<n; i++) {
         const auto &v = points[i];
         out[i].get_(0) = v[0] * cs.cos - v[1] * cs.sin + Diff2<3, T>::from_var(pos[0], 0);
-        out[i].get_(0) = v[0] * cs.sin + v[1] * cs.cos + Diff2<3, T>::from_var(pos[1], 1);
+        out[i].get_(1) = v[0] * cs.sin + v[1] * cs.cos + Diff2<3, T>::from_var(pos[1], 1);
     }
 }
 
@@ -345,25 +345,53 @@ inline bool convex_polygons_local_qdist(
 }
 
 template <class T>
-inline T segment_qdist(const Vec<2, T> d, const Vec<2, T> v) {
-    auto d_qlen = d.qlen();
+inline T segment_qdist(const Vec<2, T> vp1, const Vec<2, T> v21) {
+    auto v21_qlen = v21.qlen();
 
-    auto m = d.dp(v);
+    auto m = v21.dp(vp1);
     if (m >= 0) {
-        return d_qlen;
+        return vp1.qlen();
     }
 
-    auto v_qlen = v.qlen();
-    auto vp_qlen = m * m / v_qlen;
-    if (vp_qlen > v_qlen) {
-        return (v + d).qlen();
+    auto vp1_qlen = vp1.qlen();
+    auto vT_qlen = m * m / vp1_qlen;
+    if (vT_qlen > v21_qlen) {
+        return (vp1 - v21).qlen();
     }
 
-    auto qlen = d_qlen - vp_qlen;
-    cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
+    auto qlen = vp1_qlen - vT_qlen;
+    cout << "aaaaaaaaa " << qlen << " " << v21 << " " << vp1 << endl;
 
     return qlen;
 }
+
+
+// template <int N, class T>
+// inline Diff2<N, T> segment_qdist_grad(
+//     Vec<2, Diff2<N, T>> p,
+//     Vec<2, Diff2<N, T>> s1,
+//     Vec<2, Diff2<N, T>> s2) {
+
+//     auto v21 = s1 - s2;
+//     Vec<2, Diff2<N, T>> vp1 = s1 - p;
+
+//     auto m = v21.dp(vp1);
+//     if (m >= 0) {
+//         return vp1.qlen();
+//     }
+
+//     auto vp1_qlen = vp1.qlen();
+//     auto vp_qlen = m * m / vp1_qlen;
+//     if (vp_qlen > vp1_qlen) {
+//         return (vp1 - v21).qlen();
+//     }
+
+//     auto qlen = v21.qlen() - vp_qlen;
+//     cout << "aaaaaaaaa " << qlen << " " << v21 << " " << v << endl;
+
+//     return qlen;
+// }
+
 
 template <class T>
 inline T convex_polygons_qdist(
@@ -589,32 +617,6 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
 
 #endif
 
-template <int N, class T>
-inline Diff2<N, T> segment_qdist_grad(
-    Vec<2, Diff2<N, T>> p,
-    Vec<2, Diff2<N, T>> s1,
-    Vec<2, Diff2<N, T>> s2) {
-
-    auto d = s1 - s2;
-    Vec<2, Diff2<N, T>> v = s1 - p;
-
-    auto m = d.dp(v);
-    if (m >= 0) {
-        return d.qlen();
-    }
-
-    auto v_qlen = v.qlen();
-    auto vp_qlen = m * m / v_qlen;
-    if (vp_qlen > v_qlen) {
-        return (v + d).qlen();
-    }
-
-    auto qlen = d.qlen() - vp_qlen;
-    cout << "aaaaaaaaa " << qlen << " " << d << " " << v << endl;
-
-    return qlen;
-}
-
 template <class T>
 inline Diff2<6, T> segment_qdist_grad_g6(
     Vec<2, Diff2<3, T>> p,
@@ -622,24 +624,24 @@ inline Diff2<6, T> segment_qdist_grad_g6(
     Vec<2, Diff2<3, T>> s2) {
 
     Vec<2, Diff2<6, T>> p_g6, s1_g6, s2_g6;
-    p_g6[0].add_mapped(p[0], {0, 1, 2});
-    p_g6[1].add_mapped(p[1], {0, 1, 2});
-    s1_g6[0].add_mapped(s1[0], {3, 4, 5});
-    s1_g6[1].add_mapped(s1[1], {3, 4, 5});
-    s2_g6[0].add_mapped(s2[0], {3, 4, 5});
-    s2_g6[1].add_mapped(s2[1], {3, 4, 5});
+    p_g6.get_(0).add_mapped(p[0], {0, 1, 2});
+    p_g6.get_(1).add_mapped(p[1], {0, 1, 2});
+    s1_g6.get_(0).add_mapped(s1[0], {3, 4, 5});
+    s1_g6.get_(1).add_mapped(s1[1], {3, 4, 5});
+    s2_g6.get_(0).add_mapped(s2[0], {3, 4, 5});
+    s2_g6.get_(1).add_mapped(s2[1], {3, 4, 5});
 
-    return segment_qdist_grad(p_g6, s1_g6, s2_g6);
+    return segment_qdist(s1_g6 - p_g6, s1_g6 - s2_g6);
 }
 
 template <class T>
 inline Diff2<6, T> pos_dist_grad_g6(
     const Vec<2, Diff2<3, T>> p1_g3, const Vec<2, Diff2<3, T>> p2_g3) {
     Vec<2, Diff2<6, T>> v_g6;
-    v_g6[0].add_mapped(p1_g3[0], {0, 1, 2});
-    v_g6[1].add_mapped(p1_g3[1], {0, 1, 2});
-    v_g6[0].add_mapped(-p2_g3[0], {3, 4, 5});
-    v_g6[1].add_mapped(-p2_g3[1], {3, 4, 5});
+    v_g6.get_(0).add_mapped(p1_g3[0], {0, 1, 2});
+    v_g6.get_(1).add_mapped(p1_g3[1], {0, 1, 2});
+    v_g6.get_(0).add_mapped(-p2_g3[0], {3, 4, 5});
+    v_g6.get_(1).add_mapped(-p2_g3[1], {3, 4, 5});
     return v_g6.qlen();
 }
 
@@ -659,15 +661,16 @@ inline auto points_line_string_distance_g3(
 
     int line_pos = 0;
     for (int i = 0; i < npoints; i++) {
-        T qdist = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos]));
+        auto pt_nograd = v2_nograd(points[i]);
+        T qdist = pt_nograd.qdist(v2_nograd(line_string[line_pos]));
 
         if (line_pos) {
-            T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+            T qdist_prev = pt_nograd.qdist(v2_nograd(line_string[line_pos - 1]));
             while (qdist_prev < qdist) {
                 line_pos--;
                 qdist = qdist_prev;
                 if (line_pos) {
-                    qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+                    qdist_prev = pt_nograd.qdist(v2_nograd(line_string[line_pos - 1]));
                 } else {
                     qdist_prev = 1e18;
                     break;
@@ -677,12 +680,12 @@ inline auto points_line_string_distance_g3(
 
         T qdist_next;
         if (line_pos < nline - 1) {
-            qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
+            qdist_next = pt_nograd.qdist(v2_nograd(line_string[line_pos + 1]));
             while (qdist_next < qdist) {
                 line_pos++;
                 qdist = qdist_next;
                 if (line_pos < nline - 1) {
-                    qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos + 1]));
+                    qdist_next = pt_nograd.qdist(v2_nograd(line_string[line_pos + 1]));
                 } else {
                     qdist_next = 1e18;
                     break;
@@ -694,7 +697,7 @@ inline auto points_line_string_distance_g3(
 
         T qdist_prev;
         if (line_pos) {
-            qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_string[line_pos - 1]));
+            qdist_prev = pt_nograd.qdist(v2_nograd(line_string[line_pos - 1]));
         } else {
             qdist_prev = 1e18;
         }
@@ -718,30 +721,31 @@ inline auto points_line_ring_distance_g3(
 
     int line_pos = 0;
     for (int i = 0; i < npoints; i++) {
-        T qdist = v2_nograd(points[i]).qdist(v2_nograd(line_ring[line_pos]));
+        auto pt_nograd = v2_nograd(points[i]);
+        T qdist = pt_nograd.qdist(v2_nograd(line_ring[line_pos]));
 
         {
             int prev_pos = line_pos ? line_pos - 1 : npoly - 1;
-            T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_ring[prev_pos]));
+            T qdist_prev = pt_nograd.qdist(v2_nograd(line_ring[prev_pos]));
             while (qdist_prev < qdist) {
                 line_pos = prev_pos;
                 qdist = qdist_prev;
                 prev_pos = line_pos ? line_pos - 1 : npoly - 1;
-                qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_ring[prev_pos]));
+                qdist_prev = pt_nograd.qdist(v2_nograd(line_ring[prev_pos]));
             }
         }
 
         int next_pos = line_pos < npoly - 1 ? line_pos + 1 : 0;
-        T qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_ring[next_pos]));
+        T qdist_next = pt_nograd.qdist(v2_nograd(line_ring[next_pos]));
         while (qdist_next < qdist) {
             line_pos = next_pos;
             qdist = qdist_next;
             next_pos = line_pos < npoly - 1 ? line_pos + 1 : 0;
-            qdist_next = v2_nograd(points[i]).qdist(v2_nograd(line_ring[next_pos]));
+            qdist_next = pt_nograd.qdist(v2_nograd(line_ring[next_pos]));
         }
 
         int prev_pos = line_pos ? line_pos - 1 : npoly - 1;
-        T qdist_prev = v2_nograd(points[i]).qdist(v2_nograd(line_ring[prev_pos]));
+        T qdist_prev = pt_nograd.qdist(v2_nograd(line_ring[prev_pos]));
         auto pt3 = line_ring[qdist_prev < qdist_next ? prev_pos : next_pos];
 
         ret_dist += qdist_transform(

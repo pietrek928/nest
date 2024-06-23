@@ -213,13 +213,13 @@ class Diff2 {
             Diff2 cos, sin;
         } sc;
 
-        auto sx = std::sin(x);
         auto cx = std::cos(x);
+        auto sx = std::sin(x);
         auto dx_mul = MatTriangle<K, T>::from_1vec(dx);
 
         sc.cos.x = cx;
         sc.cos.dx = dx * (-sx);
-        sc.sin.d2x = d2x * (-sx) - dx_mul * cx;
+        sc.cos.d2x = d2x * (-sx) - dx_mul * cx;
         sc.sin.x = sx;
         sc.sin.dx = dx * cx;
         sc.sin.d2x = d2x * cx - dx_mul * sx;

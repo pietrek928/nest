@@ -40,7 +40,7 @@ class MatTriangle {
     template <int ITK, int ITN, int K2, class T2>
     inline void add_mat_triangle_n(
         const MatTriangle<K2, T2>& M, const Vec<K2, int>& pos_mapping) {
-        get_(pos_mapping.get(ITK), pos_mapping.get(ITN)) += M.get(ITK, ITN);
+        get_(pos_mapping[ITK], pos_mapping[ITN]) += M.get(ITK, ITN);
         if constexpr (ITN > 0) {
             add_mat_triangle_n<ITK, ITN - 1, K2, T2>(M, pos_mapping);
         }

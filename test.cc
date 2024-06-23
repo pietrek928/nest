@@ -16,31 +16,34 @@ int main() {
     // cout << v2+v3 << endl;
     // cout << is_point_on_left(v1, v2, v3) << endl;
 
-    // auto a = Diff2<3, double>::from_var(1., 1);
-    // auto b = Diff2<3, double>::from_var(2., 1);
+    // auto a = Diff2<3, double>::from_var(1., 0);
+    // auto b = Diff2<3, double>::from_var(2., 2);
     // auto c = a * b;
-    // a ^= 5.;
-    // cout << ((-1) % 5) << endl;
+    // c ^= .5;
+    // c = c.cossin().cos;
+    // cout << c.get_x() << endl;
+    // cout << c.get_dx() << endl;
+    // cout << c.get_d2x() << endl;
 
-    Vec<2, double> p1_data[] = {{0, 1}, {1, 2}, {1, 1}, {0, 0}};
-    Vec<2, double> p2_data[] = {{3, 2}, {3, 0}, {1, 0}};
+    // Vec<2, double> p1_data[] = {{0, 1}, {1, 2}, {1, 1}, {0, 0}};
+    // Vec<2, double> p2_data[] = {{3, 2}, {3, 0}, {1, 0}};
 
-    auto p1_it = PolygonIterator(p1_data, sizeof(p1_data) / sizeof(p1_data[0]));
-    auto p2_it = PolygonIterator(p2_data, sizeof(p2_data) / sizeof(p2_data[0]));
+    // auto p1_it = PolygonIterator(p1_data, sizeof(p1_data) / sizeof(p1_data[0]));
+    // auto p2_it = PolygonIterator(p2_data, sizeof(p2_data) / sizeof(p2_data[0]));
 
     // Vec<2, double> v1 = {1, 0};
     // Vec<2, double> v2 = {0, 1};
     // cout << turns_left(v1, v2) << endl;
     // cout << convex_polygons_intersect(p1_it, p2_it) << endl;
     // cout << convex_polygons_intersect(p1_it, p2_it, true) << endl;
-    cout << convex_polygons_qdist(p1_it, p2_it) << endl;
+    // cout << convex_polygons_qdist(p1_it, p2_it) << endl;
 
-    // Vec<2, double> p1(0., 0.);
-    // Vec<2, double> p2(1., 0.);
-    // Vec<2, double> p3(0., 2.);
-    // auto d = p2 - p1;
-    // auto v = p3 - p2;
-    // cout << segment_qdist(d, v) << endl;
+    Vec<2, double> p1 = {0., 0.};
+    Vec<2, double> p2 = {1., 0.};
+    Vec<2, double> p3 = {0., 2.};
+    auto d = p2 - p1;
+    auto v = p3 - p2;
+    cout << segment_qdist(d, v) << endl;
 
     return 0;
 }

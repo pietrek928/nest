@@ -47,12 +47,12 @@ class Vec {
         return r;
     }
 
-    template <int IT, class T2>
-    inline T calc_qdist(const Vec<K, T2>& v2) const {
+    template <int IT>
+    inline T calc_qdist(const Vec<K, T>& v2) const {
         T diff = items[IT] - v2[IT];
         T r = diff * diff;
         if constexpr (IT > 0) {
-            r += calc_qdist<IT - 1, T2>(v2);
+            r += calc_qdist<IT - 1>(v2);
         }
         return r;
     }
@@ -121,12 +121,12 @@ class Vec {
         }
     }
 
-    template <int IT, int K2, class T2>
+    template <int IT, int K2>
     inline void add_vec_mapped_it(
-        const Vec<K2, T2>& V, const Vec<K2, int>& pos_mapping) {
-        get_(pos_mapping.get(IT)) += items[IT];
+        const Vec<K2, T>& V, const Vec<K2, int>& pos_mapping) {
+        get_(pos_mapping[IT]) += V[IT];
         if constexpr (IT > 0) {
-            add_vec_mapped_it<IT - 1, K2, T2>(V, pos_mapping);
+            add_vec_mapped_it<IT - 1, K2>(V, pos_mapping);
         }
     }
 
@@ -285,9 +285,8 @@ class Vec {
         return calc_abssum<K - 1>();
     }
 
-    template <class T2>
-    inline T qdist(const Vec<K, T2>& v2) const {
-        return calc_qdist<K - 1, T2>(v2);
+    inline T qdist(const Vec<K, T>& v2) const {
+        return calc_qdist<K - 1>(v2);
     }
 
     inline T sum() const {
@@ -299,10 +298,11 @@ class Vec {
         add_to_vec_it<K - 1, Tv>(V, pos_mapping);
     }
 
-    template <int K2, class T2>
+    template <int K2>
     inline void add_vec_mapped(
-        const Vec<K2, T2>& V, const Vec<K2, int>& pos_mapping) {
-        add_vec_mapped_it<K - 1, K2, T2>(V, pos_mapping);
+        const Vec<K2, T>& V, const Vec<K2, int>& pos_mapping
+    ) {
+        add_vec_mapped_it<K - 1, K2>(V, pos_mapping);
     }
 
     template <class Tstream>
