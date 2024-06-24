@@ -618,6 +618,99 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
 #endif
 
 template <class T>
+inline T convex_line_rings_qdist(
+    const Vec<2, T> *ring1, unsigned int n1,
+    const Vec<2, T> *ring2, unsigned int n2,
+    unsigned int it1 = 0, unsigned int it2 = 0
+) {
+    T qdist = 1e18, tmp_qdist;
+    bool cont = false;
+
+    auto p1 = ring1[it1];
+    auto p2 = ring2[it2];
+
+    do {
+        cont = false;
+
+        bool moved_next;
+        do {
+            bool moved_next = false;
+
+            {
+                auto it2_next = it2 < n2 - 1 ? it2 + 1 : 0;
+                auto p2_next = ring2[it2_next];
+                while ((tmp_qdist = segment_qdist(p2 - p1, p2_next - p2)) <
+                    qdist) {
+                    qdist = tmp_qdist;
+                    it2 = it2_next;
+                    p2 = p2_next;
+                    it2_next = it2 < n2 - 1 ? it2 + 1 : 0;
+                    p2_next = ring2[it2_next];
+                    moved_next = true;
+                }
+            }
+
+            {
+                auto it1_next = it1 < n1 - 1 ? it1 + 1 : 0;
+                auto p1_next = ring1[it1_next];
+                while ((tmp_qdist = segment_qdist(p1 - p2, p1_next - p1)) <
+                    qdist) {
+                    qdist = tmp_qdist;
+                    it1 = it1_next;
+                    p1 = p1_next;
+                    it1_next = it1 < n1 - 1 ? it1 + 1 : 0;
+                    p1_next = ring1[it1_next];
+                    moved_next = true;
+                }
+            }
+
+            if (moved_next) {
+                cont = true;
+            }
+        } while (moved_next);
+
+        bool moved_prev;
+        do {
+            bool moved_prev = false;
+
+            {
+                auto it2_prev = it2 ? it2 - 1 : n2 - 1;
+                auto p2_prev = ring2[it2_prev];
+                while ((tmp_qdist = segment_qdist(p2 - p1, p2_prev - p2)) <
+                    qdist) {
+                    qdist = tmp_qdist;
+                    it2 = it2_prev;
+                    p2 = p2_prev;
+                    it2_prev = it2 ? it2 - 1 : n2 - 1;
+                    p2_prev = ring2[it2_prev];
+                    moved_prev = true;
+                }
+            }
+
+            {
+                auto it1_prev = it1 ? it1 - 1 : n1 - 1;
+                auto p1_prev = ring1[it1_prev];
+                while ((tmp_qdist = segment_qdist(p1 - p2, p1_prev - p1)) <
+                    qdist) {
+                    qdist = tmp_qdist;
+                    it1 = it1_prev;
+                    p1 = p1_prev;
+                    it1_prev = it1 ? it1 - 1 : n1 - 1;
+                    p1_prev = ring1[it1_prev];
+                    moved_prev = true;
+                }
+            }
+
+            if (moved_prev) {
+                cont = true;
+            }
+        } while (moved_prev);
+    } while (cont);
+
+    return qdist;
+}
+
+template <class T>
 inline Diff2<6, T> segment_qdist_grad_g6(
     Vec<2, Diff2<3, T>> p,
     Vec<2, Diff2<3, T>> s1,
