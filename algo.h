@@ -366,33 +366,6 @@ inline T segment_qdist(const Vec<2, T> vp1, const Vec<2, T> v21) {
 }
 
 
-// template <int N, class T>
-// inline Diff2<N, T> segment_qdist_grad(
-//     Vec<2, Diff2<N, T>> p,
-//     Vec<2, Diff2<N, T>> s1,
-//     Vec<2, Diff2<N, T>> s2) {
-
-//     auto v21 = s1 - s2;
-//     Vec<2, Diff2<N, T>> vp1 = s1 - p;
-
-//     auto m = v21.dp(vp1);
-//     if (m >= 0) {
-//         return vp1.qlen();
-//     }
-
-//     auto vp1_qlen = vp1.qlen();
-//     auto vp_qlen = m * m / vp1_qlen;
-//     if (vp_qlen > vp1_qlen) {
-//         return (vp1 - v21).qlen();
-//     }
-
-//     auto qlen = v21.qlen() - vp_qlen;
-//     cout << "aaaaaaaaa " << qlen << " " << v21 << " " << v << endl;
-
-//     return qlen;
-// }
-
-
 template <class T>
 inline T convex_polygons_qdist(
     PolygonIterator<Vec<2, T>>& p1, PolygonIterator<Vec<2, T>>& p2) {
@@ -616,6 +589,80 @@ auto create_hierarchy(Vec<2, T>* pts, int n) {
 }
 
 #endif
+
+template <class T>
+inline bool convex_polygons_intersect(
+    const Vec<2, T> *poly1, int n1,
+    const Vec<2, T> *poly2, int n2,
+    bool direction = false,
+    int it1 = 0, int it2 = 0
+) {
+    int op_limit = n1 + n2 + 16;
+    auto p1 = poly1[it1];
+    auto p2 = poly2[it2];
+    auto d = p1 - p2;
+    do {
+        auto op_limit_old = op_limit;
+        {
+            auto it1_next = it1 < n1 - 1 ? it1 + 1 : 0;
+            auto p1_next = poly1[it1_next];
+            auto d_next = p1_next - p2;
+            while (turns_direction(d, d_next, direction)) {
+                it1 = it1_next;
+                d = d_next;
+                it1_next = it1 < n1 - 1 ? it1 + 1 : 0;
+                p1_next = poly1[it1_next];
+                d_next = p1_next - p2;
+                if (--op_limit <= 0) {
+                    break;
+                }
+            }
+        }
+        {
+            auto it2_next = it2 < n2 - 1 ? it2 + 1 : 0;
+            auto p2_next = poly2[it2_next];
+            while (turns_direction(d, p2_next - p2, !direction)) {
+                it2 = it2_next;
+                p2 = p2_next;
+                d = p1 - p2;
+                if (--op_limit <= 0) {
+                    break;
+                }
+            }
+        }
+        {
+            auto it1_prev = it1 ? it1 - 1 : n1 - 1;
+            auto p1_prev = poly1[it1_prev];
+            auto d_prev = p1_prev - p2;
+            while (turns_direction(d, d_prev, direction)) {
+                d = d_prev;
+                it1 = it1_prev;
+                p1 = p1_prev;
+                d_prev = p1_prev - p2;
+                if (--op_limit <= 0) {
+                    break;
+                }
+            }
+        }
+        {
+            auto it2_prev = it2 ? it2 - 1 : n2 - 1;
+            auto p2_prev = poly2[it2_prev];
+            while (turns_direction(d, p2_prev - p2, !direction)) {
+                it2 = it2_prev;
+                p2 = p2_prev;
+                d = p1 - p2;
+                if (--op_limit <= 0) {
+                    break;
+                }
+            }
+        }
+        if (op_limit == op_limit_old) {
+            // all conditions met - polygons do not intersect
+            return false;
+        }
+    } while (op_limit > 0);
+    return true;
+}
 
 template <class T>
 inline T convex_line_rings_qdist(
