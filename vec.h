@@ -114,7 +114,7 @@ class Vec {
     }
 
     template <int IT, class Tv>
-    inline void add_to_vec_it(Tv& V, const Vec<K, int>& pos_mapping) const {
+    inline void add_to_vec_it(Tv *V, const Vec<K, int>& pos_mapping) const {
         V[pos_mapping[IT]] = items[IT];
         if constexpr (IT > 0) {
             add_to_vec_it<IT - 1, Tv>(V, pos_mapping);
@@ -294,7 +294,7 @@ class Vec {
     }
 
     template <class Tv>
-    inline void add_to_vec(Tv& V, const Vec<K, int>& pos_mapping) const {
+    inline void add_to_vec(Tv *V, const Vec<K, int>& pos_mapping) const {
         add_to_vec_it<K - 1, Tv>(V, pos_mapping);
     }
 
