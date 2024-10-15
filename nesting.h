@@ -11,7 +11,7 @@ struct Poly2DGradPtr {
 };
 
 template<class Tgrad, class Tcoord>
-Tgrad accum_dist_gradients(
+void accum_dist_gradients(
     Tgrad *V, Tgrad *M, int Mwidth,
     const Poly2DGradPtr<Tcoord> *polys, int n,
     Tgrad dist_thresh
@@ -23,7 +23,7 @@ Tgrad accum_dist_gradients(
             auto grad = points_line_ring_distance_g3(
                 polys[i].coords, polys[i].size,
                 polys[j].coords, polys[j].size,
-                [](const auto &qdist) {
+                [=](const auto &qdist) {
                     if (qdist > qdist_thresh) {
                         return (qdist ^ .5 - qdist_thresh) ^ 1.5;
                     } else {

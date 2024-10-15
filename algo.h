@@ -120,7 +120,7 @@ inline T segment_qdist(const Vec<2, T> vp1, const Vec<2, T> v21) {
     }
 
     auto qlen = vp1_qlen - vT_qlen;
-    cout << "aaaaaaaaa " << qlen << " " << v21 << " " << vp1 << endl;
+    // cout << "aaaaaaaaa " << qlen << " " << v21 << " " << vp1 << endl;
 
     return qlen;
 }
