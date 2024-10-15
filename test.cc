@@ -50,26 +50,47 @@ int main() {
     std::vector<Vec<2, double>> pborder_data = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
     std::vector<Vec<2, double>> p_data = {{0, 0}, {0, 1}, {1, 1}, {1, 0}};
 
-    cv::Mat_<double> x(9, 1), v(9, 1), m(9, 9);
-    x = {0, 0, 0, 1, 1, M_PI/4, 8, 7, -M_PI/4};
-    v.setTo(0);
-    m.setTo(0);
-
-    std::vector<Vec<2, Diff2<3, double>>> pborder_grad(4), p1_grad(4), p2_grad(4);
-    transform_points_g3(&pborder_grad[0], &pborder_data[0], pborder_data.size(), {x.at<double>(0), x.at<double>(1)}, x.at<double>(2));
-    transform_points_g3(&p1_grad[0], &p_data[0], p_data.size(), {x.at<double>(3), x.at<double>(4)}, x.at<double>(5));
-    transform_points_g3(&p2_grad[0], &p_data[0], p_data.size(), {x.at<double>(6), x.at<double>(7)}, x.at<double>(8));
-
-    Poly2DGradPtr<double> grad_ptrs[] = {
-        {.size = pborder_grad.size(), .coords = &pborder_grad[0], .grad_pos = {0, 1, 2}},
-        {.size = p1_grad.size(), .coords = &p1_grad[0], .grad_pos = {3, 4, 5}},
-        {.size = p2_grad.size(), .coords = &p2_grad[0], .grad_pos = {6, 7, 8}},
-    };
-    accum_dist_gradients(v.ptr<double>(0), m.ptr<double>(0, 0), 9, grad_ptrs, 3, 0.0);
-
+    cv::Mat_<double> x(12, 1), v(12, 1), m(12, 12);
+    x = {0, 0, 0, 1, 1, M_PI/4, 5, 6, -M_PI/3, 3, 2, 0};
     std::cout << x << std::endl;
-    // std::cout << m.inv() << std::endl;
-    std::cout << x - .03f * m.inv() * v << std::endl;
+
+    for (int i=0; i<10; i++) {
+        v.setTo(0);
+        m.setTo(0);
+
+        std::vector<Vec<2, Diff2<3, double>>> pborder_grad(4), p1_grad(4), p2_grad(4), p3_grad(4);
+        transform_points_g3(&pborder_grad[0], &pborder_data[0], pborder_data.size(), {x.at<double>(0), x.at<double>(1)}, x.at<double>(2));
+        transform_points_g3(&p1_grad[0], &p_data[0], p_data.size(), {x.at<double>(3), x.at<double>(4)}, x.at<double>(5));
+        transform_points_g3(&p2_grad[0], &p_data[0], p_data.size(), {x.at<double>(6), x.at<double>(7)}, x.at<double>(8));
+        transform_points_g3(&p3_grad[0], &p_data[0], p_data.size(), {x.at<double>(9), x.at<double>(10)}, x.at<double>(11));
+
+        Poly2DGradPtr<double> grad_ptrs[] = {
+            {.size = pborder_grad.size(), .coords = &pborder_grad[0], .grad_pos = {0, 1, 2}},
+            {.size = p1_grad.size(), .coords = &p1_grad[0], .grad_pos = {3, 4, 5}},
+            {.size = p2_grad.size(), .coords = &p2_grad[0], .grad_pos = {6, 7, 8}},
+            {.size = p3_grad.size(), .coords = &p3_grad[0], .grad_pos = {9, 10, 11}},
+        };
+        accum_dist_gradients(v.ptr<double>(0), m.ptr<double>(0, 0), 12, grad_ptrs, 4, 0.0);
+
+        // std::cout << m.inv() << std::endl;
+        cv::Mat_<double> x2 = x - m.inv() * v;
+        double xs = x2.at<double>(0), ys = x2.at<double>(1), as = x2.at<double>(2);
+        x2.at<double>(0) -= xs;
+        x2.at<double>(1) -= ys;
+        x2.at<double>(2) -= as;
+        x2.at<double>(3) -= xs;
+        x2.at<double>(4) -= ys;
+        x2.at<double>(5) -= as;
+        x2.at<double>(6) -= xs;
+        x2.at<double>(7) -= ys;
+        x2.at<double>(8) -= as;
+        x2.at<double>(9) -= xs;
+        x2.at<double>(10) -= ys;
+        x2.at<double>(11) -= as;
+        std::cout << x2 << std::endl << std::endl;
+
+        x = x2;
+    }
 
     return 0;
 }

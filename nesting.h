@@ -25,7 +25,7 @@ void accum_dist_gradients(
                 polys[j].coords, polys[j].size,
                 [=](const auto &qdist) {
                     if (qdist > qdist_thresh) {
-                        return (qdist ^ .5 - qdist_thresh) ^ 1.5;
+                        return (qdist ^ .5 - qdist_thresh) ^ 2;
                     } else {
                         return (qdist_thresh - qdist ^ .5) ^ 2;
                     }
