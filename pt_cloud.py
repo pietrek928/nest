@@ -10,11 +10,11 @@ def find_approx_poly(A, y):
     A = A - c
 
     pt_vals = []
-    for p in range(A.shape[1]):
-        for pp in range(p+1):
-            pt_vals.append(A[:, p] * A[:, pp])
-    for p in range(A.shape[1]):
-        pt_vals.append(A[:, p])
+    for i in range(A.shape[1]):
+        for j in range(p+1):
+            pt_vals.append(A[:, i] * A[:, j])
+    for i in range(A.shape[1]):
+        pt_vals.append(A[:, i])
     pt_vals.append(np.ones_like(pt_vals[-1]))
 
     pt_vals = np.stack(pt_vals, axis=-1)
@@ -22,7 +22,7 @@ def find_approx_poly(A, y):
 
 
 def compute_poly(A, p, c):
-    A -= c
+    A = A - c
     it = 0
     r = np.ones_like(A[:, 0]) * p[-1]
     # r = np.zeros_like(A[:, 0])
@@ -34,6 +34,22 @@ def compute_poly(A, p, c):
         r += A[:, i] * p[it]
         it += 1
         return r
+
+
+def get_optim_dir(x, p, c):
+    x = x - c
+    A = np.zeros((x.shape[0], x.shape[0]), dtype=np.float32)
+    b = np.zeros((x.shape[0], ), dtype=np.float32)
+    it = 0
+    for i in range(x.shape[0]):
+        for j in range(i+1):
+            A[i, j] = p[it]
+            A[j, i] = p[it]
+            it += 1
+    for i in range(A.shape[1]):
+        b[i] = p[it]
+        it += 1
+    return np.inv(A) * b
 
 
 def check_distance(p1: BaseGeometry, p2: BaseGeometry):
@@ -70,6 +86,8 @@ def test():
         print(v, end=' ')
         if it >= 100:
             break
+
+    print(get_optim_dir())
 
 
 test()
