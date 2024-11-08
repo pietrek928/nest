@@ -24,11 +24,12 @@ void accum_dist_gradients(
                 polys[i].coords, polys[i].size,
                 polys[j].coords, polys[j].size,
                 [=](const auto &qdist) {
-                    if (qdist > qdist_thresh) {
-                        return (qdist ^ .5 - qdist_thresh) ^ 2;
-                    } else {
-                        return (qdist_thresh - qdist ^ .5) ^ 2;
-                    }
+                    return (1. + qdist ^ .75).inv();
+                    // if (qdist > qdist_thresh) {
+                    //     return ((qdist - qdist_thresh) ^ 2).inv();
+                    // } else {
+                    //     return (qdist_thresh - qdist ^ .5) ^ 2;
+                    // }
                 }
             );
             auto vi_pos = polys[i].grad_pos;

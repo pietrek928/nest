@@ -47,14 +47,14 @@ int main() {
     // auto v = p3 - p2;
     // cout << segment_qdist(d, v) << endl;
 
-    std::vector<Vec<2, double>> pborder_data = {{0, 0}, {10, 0}, {10, 10}, {0, 10}};
+    std::vector<Vec<2, double>> pborder_data = {{0, 0}, {0, 10}, {10, 10}, {10, 0}};
     std::vector<Vec<2, double>> p_data = {{0, 0}, {0, 1}, {1, 1}, {1, 0}};
 
     cv::Mat_<double> x(12, 1), v(12, 1), m(12, 12);
     x = {0, 0, 0, 1, 1, M_PI/4, 5, 6, -M_PI/3, 3, 2, 0};
     std::cout << x << std::endl;
 
-    for (int i=0; i<10; i++) {
+    for (int i=0; i<5; i++) {
         v.setTo(0);
         m.setTo(0);
 
@@ -70,10 +70,10 @@ int main() {
             {.size = p2_grad.size(), .coords = &p2_grad[0], .grad_pos = {6, 7, 8}},
             {.size = p3_grad.size(), .coords = &p3_grad[0], .grad_pos = {9, 10, 11}},
         };
-        accum_dist_gradients(v.ptr<double>(0), m.ptr<double>(0, 0), 12, grad_ptrs, 4, 0.0);
+        accum_dist_gradients(v.ptr<double>(0), m.ptr<double>(0, 0), 12, grad_ptrs, 4, 0.1);
 
         // std::cout << m.inv() << std::endl;
-        cv::Mat_<double> x2 = x - m.inv() * v;
+        cv::Mat_<double> x2 = x - .4 * m.inv() * v;
         double xs = x2.at<double>(0), ys = x2.at<double>(1), as = x2.at<double>(2);
         x2.at<double>(0) -= xs;
         x2.at<double>(1) -= ys;

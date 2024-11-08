@@ -1,9 +1,7 @@
 {
     "files.associations": {
-        "ostream": "cpp",
-        "random": "cpp",
-        "bitset": "cpp",
-        "fstream": "cpp"
-    },
-    "python.pythonPath": "/home/pietrek/.virtualenvs/py39/bin/python"
+        "*.h": "cpp",
+        "cmath": "cpp",
+        "vector": "cpp"
+    }
 }
