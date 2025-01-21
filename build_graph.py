@@ -69,6 +69,42 @@ def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, f
     )
 
 
+def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
+    idx = Index()
+    selected = []
+    matrix = np.zeros((len(polygons), len(polygons)), dtype=np.float32)
+
+    for i, (p, w, transforms) in enumerate(polygons):
+        for t in transforms:
+            poly_t = transform_poly(p, t)
+            d = polygon_board_distance(b, poly_t)
+            if d > 0:
+                d += np.random.rand() * 1e-4
+                selected.append(poly_t)
+                idx.insert(len(selected) - 1, poly_t.bounds)
+    for i, poly in enumerate(polygons):
+        for j in idx.intersection(poly.bounds):
+            if poly.intersects(polygons[j]):
+                matrix[i, j] = matrix[j, i] = 1
+        idx.insert(i, poly.bounds)
+    for i in range(len(polygons)):
+        matrix[i, i] = -.1
+    return matrix
+
+
+def optimize_polygons(M: np.ndarray):
+    M_rev = M.inverse()
+    v = np.random.rand(M.shape[0])
+    score = 1e9
+    for it in range(128):
+        v += np.random.rand(M.shape[0]) * 1e-2
+        v -= 1e-2 * (M_rev @ v)
+        v = np.clip(v, 0, 1)
+        score = v @ M @ v
+        print(f'iter {it}, score {score}')
+    return v
+
+
 def score_transforms(b: BaseGeometry, p: Polygon, transforms: np.ndarray):
     scores = np.zeros((transforms.shape[0], ))
     for i, t in enumerate(transforms):
