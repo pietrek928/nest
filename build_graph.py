@@ -1,14 +1,24 @@
 # CFLAGS="-Wno-error=incompatible-pointer-types" pip install --force-reinstall --no-binary=shapely shapely
 # pip install --force-reinstall --no-binary=rtree rtree
 
-from typing import Tuple
 import numpy as np
 import cv2 as cv
+from pydantic import BaseModel
 from shapely import Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.affinity import translate, rotate
 from rtree.index import Index
 from tqdm import tqdm
+from typing import Tuple
+
+
+class PolygonGroup(BaseModel):
+    class Config:
+        arbitrary_types_allowed = True
+
+    polygon: Polygon
+    weight: float
+    transforms: np.ndarray
 
 
 def transform_poly(p: Polygon, transform_data: Tuple[float, float, float]):
@@ -72,36 +82,36 @@ def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, f
 def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
     idx = Index()
     selected = []
-    matrix = np.zeros((len(polygons), len(polygons)), dtype=np.float32)
+    group_weights = []
 
     for i, (p, w, transforms) in enumerate(polygons):
+        n = len(transforms)
         for t in transforms:
             poly_t = transform_poly(p, t)
-            d = polygon_board_distance(b, poly_t)
-            if d > 0:
-                d += np.random.rand() * 1e-4
+            if b.contains(poly_t):
                 selected.append(poly_t)
-                idx.insert(len(selected) - 1, poly_t.bounds)
-    for i, poly in enumerate(polygons):
+                # group_weights.append(w / n)
+                group_weights.append(w)
+
+    M = np.zeros((len(selected), len(selected)), dtype=np.float32)
+    for i, poly in enumerate(tqdm(selected)):
         for j in idx.intersection(poly.bounds):
-            if poly.intersects(polygons[j]):
-                matrix[i, j] = matrix[j, i] = 1
+            if poly.intersects(selected[j]):
+                M[i, j] = M[j, i] = 1
         idx.insert(i, poly.bounds)
-    for i in range(len(polygons)):
-        matrix[i, i] = -.1
-    return matrix
+        M[i, i] = -group_weights[i]
+
+    return M, selected
 
 
-def optimize_polygons(M: np.ndarray):
-    M_rev = M.inverse()
-    v = np.random.rand(M.shape[0])
+def optimize_polygons(M: np.ndarray, v: np.ndarray):
     score = 1e9
-    for it in range(128):
-        v += np.random.rand(M.shape[0]) * 1e-2
-        v -= 1e-2 * (M_rev @ v)
+    for it in range(1280):
+        v += np.random.rand(M.shape[0]) * 1e-5
+        v -= 1.5e-2 * (M @ v)
         v = np.clip(v, 0, 1)
         score = v @ M @ v
-        print(f'iter {it}, score {score}')
+        print(f'iter {it}, score {score}, mean {v.mean()}, max {v.max()}')
     return v
 
 
@@ -150,6 +160,21 @@ def render_placement(b: BaseGeometry, elems: Tuple[Tuple[Polygon, np.ndarray], .
     return im
 
 
+def render_selection(b: BaseGeometry, polys: Tuple[Polygon, ...], v: np.ndarray, im_shape=(1024, 1024)):
+    xstart, ystart, xend, yend = b.bounds
+    xscale = im_shape[0] / (xend - xstart)
+    yscale = im_shape[1] / (yend - ystart)
+    im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
+    cv.drawContours(im, [scale_coords(
+        np.array(b.exterior.coords), xstart, ystart, xscale, yscale
+    )], -1, (255, 255, 255), 3)
+    for w, p in sorted(zip(v, polys), key=lambda x: x[0]):
+        cv.drawContours(im, [scale_coords(
+            np.array(p.exterior.coords), xstart, ystart, xscale, yscale
+        )], -1, (255*w, 255*w, 255*w), 3)
+    return im
+
+
 def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_shape=(1024, 1024)):
     xstart, ystart, xend, yend = b.bounds
     xscale = im_shape[0] / (xend - xstart)
@@ -175,31 +200,38 @@ selected_t = [
     np.random.rand(128, 3) * [1.5, 1.5, 2 * np.pi],
 ]
 
-video = cv.VideoWriter('/tmp/test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
+# video = cv.VideoWriter('/tmp/test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 
-for _ in tqdm(tuple(range(25))):
+for it in tqdm(tuple(range(4))):
     s0 = [
-        np.random.rand(10240, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
-        s0.append(transforms_around(selected_t[0], (0.1, 0.01, 0.1), 1000))
+        s0.append(transforms_around(selected_t[0], (0.1, 0.01, 0.1), 100))
 
     s1 = [
-        np.random.rand(10240, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
     ]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
-        s1.append(transforms_around(selected_t[1], (0.1, 0.1, 0.1), 1000))
+        s1.append(transforms_around(selected_t[1], (0.1, 0.1, 0.1), 100))
 
     selected_t = [
         np.concatenate(s0),
         np.concatenate(s1),
     ]
-    selected_t = select_polygons_from_edges(p_board, [(p1, 0, selected_t[0]), (p2, .022, selected_t[1])])
-    video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))
+    M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
+    print('------', M.shape, M.sum()/M.shape[0])
+    v = optimize_polygons(M, np.zeros((M.shape[0], )))
+    print()
 
-video.release()
+    selected_t = select_polygons_from_edges(p_board, [(p1, 0, selected_t[0]), (p2, .022, selected_t[1])])
+    # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))
+    # video.write(render_selection(p_board, polys, v))
+    cv.imwrite(f'/tmp/test_{it}.jpg', render_selection(p_board, polys, v))
+
+# video.release()
 
 # render
 # im = render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
