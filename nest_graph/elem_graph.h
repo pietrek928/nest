@@ -33,6 +33,12 @@ typedef struct BBoxPlaceRule {
 } BBoxPlaceRule;
 
 
+typedef struct PlacementRuleSet {
+    std::vector<PointPlaceRule> point_rules;
+    std::vector<BBoxPlaceRule> bbox_rules;
+} PlacementRuleSet;
+
+
 typedef struct ElemGraph {
     std::vector<Tvertex> group_id;
     std::vector<Point> centers;
@@ -43,12 +49,6 @@ typedef struct ElemGraph {
 } ElemGraph;
 
 
-typedef struct PlacementRules {
-    std::vector<PointPlaceRule> point_rules;
-    std::vector<BBoxPlaceRule> bbox_rules;
-} PlacementRules;
-
-
 std::vector<std::vector<Tvertex>> nest_by_graph(
-    const ElemGraph &g, const std::vector<PlacementRules> &cases
+    const ElemGraph &g, const std::vector<PlacementRuleSet> &cases
 );

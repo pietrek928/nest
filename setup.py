@@ -1,26 +1,22 @@
-import numpy as np
-from setuptools import setup, Extension
+from setuptools import find_packages, setup, Extension
 from Cython.Build import cythonize
 
-module_name = 'vec_test'
-
-extensions = [
+ext_modules = [
     Extension(
-        module_name,
-        sources=[f'bindings.pyx'],
-        language='c++',
+        "nest_graph.elem_graph",
+        sources=["nest_graph/elem_graph.pyx"],
+        language="c++",
         extra_compile_args=['-std=c++17', '-Ofast'],
-        include_dirs=[np.get_include()],
-        define_macros=[('NPY_NO_DEPRECATED_API', 'NPY_1_7_API_VERSION')]
     )
 ]
 
 setup(
-    name=module_name,
+    name="nest_graph",
+    packages=find_packages(include=["nest_graph"]),
     ext_modules=cythonize(
-        extensions,
+        ext_modules,
         compiler_directives=dict(
             language_level=3,
         )
-    )
+    ),
 )

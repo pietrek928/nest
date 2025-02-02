@@ -40,7 +40,7 @@ std::vector<std::vector<Tvertex>> get_elems_by_group(const ElemGraph &g) {
 
 void compute_scores(
     const ElemGraph &g, const std::vector<std::vector<Tvertex>> &elems_by_group,
-    std::vector<Tscore> &scores_out, const PlacementRules rules
+    std::vector<Tscore> &scores_out, const PlacementRuleSet rules
 ) {
     int n = g.size();
     scores_out.resize(n);
@@ -60,7 +60,7 @@ void compute_scores(
 
 void select_elems(
     const ElemGraph &g, const std::vector<std::vector<Tvertex>> &elems_by_group,
-    const PlacementRules rules, const std::vector<Tscore> scores, std::vector<bool> &marked,
+    const PlacementRuleSet rules, const std::vector<Tscore> scores, std::vector<bool> &marked,
     std::vector<Tvertex> &selected, std::vector<Tvertex> &points_sort_buf
 ) {
     marked.resize(g.size());
@@ -90,7 +90,7 @@ void select_elems(
 }
 
 std::vector<std::vector<Tvertex>> nest_by_graph(
-    const ElemGraph &g, const std::vector<PlacementRules> &cases
+    const ElemGraph &g, const std::vector<PlacementRuleSet> &cases
 ) {
     std::vector<Tscore> scores;
     std::vector<bool> marked;
@@ -99,7 +99,7 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
     auto elems_by_group = get_elems_by_group(g);
 
     std::vector<std::vector<Tvertex>> result;
-    for (const PlacementRules &rules : cases) {
+    for (const PlacementRuleSet &rules : cases) {
         compute_scores(g, elems_by_group, scores, rules);
         select_elems(g, elems_by_group, rules, scores, marked, selected, points_sort_buf);
 
