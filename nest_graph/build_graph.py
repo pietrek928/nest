@@ -11,6 +11,12 @@ from rtree.index import Index
 from tqdm import tqdm
 from typing import Tuple
 
+from .elem_graph import (
+    ElemGraph, BBox, Point,
+    PointPlaceRule, BBoxPlaceRule, PlacementRuleSet,
+    nest_by_graph
+)
+
 
 class PolygonGroup(BaseModel):
     class Config:
@@ -102,6 +108,35 @@ def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, n
         M[i, i] = -group_weights[i]
 
     return M, selected
+
+
+def make_polygon_graph(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
+    idx = Index()
+    selected = []
+    graph = ElemGraph()
+
+    for i, (p, transforms) in enumerate(polygons):
+        # n = len(transforms)
+        for t in transforms:
+            poly_t = transform_poly(p, t)
+            if b.contains(poly_t):
+                # group_weights.append(w / n)
+                center = Point(poly_t.centroid.coords[0]),
+                bbox = poly_t.bounds
+                graph.append_elem(
+                    group_id=i,
+                    center=Point(x=center[0].x, y=center[0].y),
+                    bbox=BBox(xmin=bbox[0], ymin=bbox[1], xmax=bbox[2], ymax=bbox[3]),
+                )
+
+                n = len(selected)
+                for j in idx.intersection(poly_t.bounds):
+                    if poly_t.intersects(selected[j]):
+                        graph.add_collision(n, j)
+                selected.append(poly_t)
+                idx.insert(i, poly_t.bounds)
+
+    return graph, selected
 
 
 def optimize_polygons(M: np.ndarray, v: np.ndarray):
@@ -200,36 +235,57 @@ selected_t = [
     np.random.rand(128, 3) * [1.5, 1.5, 2 * np.pi],
 ]
 
+rule_set = PlacementRuleSet()
+rule_set.append_point_rule(PointPlaceRule(
+    x=0, y=0, r=1, w=2, group=0
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=0, y=0, r=1, w=1, group=1
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=1.2, y=0, r=1, w=2, group=0
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=1.2, y=0, r=1, w=1, group=1
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=0, y=1.1, r=1, w=2, group=0
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=0, y=1.1, r=1, w=1, group=1
+))
+
 # video = cv.VideoWriter('/tmp/test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 
-for it in tqdm(tuple(range(4))):
-    s0 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
-    ]
-    if selected_t[0].shape[0] > 0:
-        s0.append(selected_t[0])
-        s0.append(transforms_around(selected_t[0], (0.1, 0.01, 0.1), 100))
+# for it in tqdm(tuple(range(4))):
+#     s0 = [
+#         np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+#     ]
+#     if selected_t[0].shape[0] > 0:
+#         s0.append(selected_t[0])
+#         s0.append(transforms_around(selected_t[0], (0.1, 0.01, 0.1), 100))
 
-    s1 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
-    ]
-    if selected_t[1].shape[0] > 0:
-        s1.append(selected_t[1])
-        s1.append(transforms_around(selected_t[1], (0.1, 0.1, 0.1), 100))
+#     s1 = [
+#         np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+#     ]
+#     if selected_t[1].shape[0] > 0:
+#         s1.append(selected_t[1])
+#         s1.append(transforms_around(selected_t[1], (0.1, 0.1, 0.1), 100))
 
-    selected_t = [
-        np.concatenate(s0),
-        np.concatenate(s1),
-    ]
-    M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
-    print('------', M.shape, M.sum()/M.shape[0])
-    v = optimize_polygons(M, np.zeros((M.shape[0], )))
-    print()
+#     selected_t = [
+#         np.concatenate(s0),
+#         np.concatenate(s1),
+#     ]
+#     graph, polys = make_polygon_graph(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
+#     # M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
+#     # print('------', M.shape, M.sum()/M.shape[0])
+#     # v = optimize_polygons(M, np.zeros((M.shape[0], )))
+#     print()
 
-    selected_t = select_polygons_from_edges(p_board, [(p1, 0, selected_t[0]), (p2, .022, selected_t[1])])
-    # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))
-    # video.write(render_selection(p_board, polys, v))
-    cv.imwrite(f'/tmp/test_{it}.jpg', render_selection(p_board, polys, v))
+#     selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
+#     # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))
+#     # video.write(render_selection(p_board, polys, v))
+#     cv.imwrite(f'/tmp/test_{it}.jpg', render_selection(p_board, polys, v))
 
 # video.release()
 

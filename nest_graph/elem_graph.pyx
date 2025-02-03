@@ -2,55 +2,12 @@ from typing import List
 from libcpp.vector cimport vector
 from pydantic import BaseModel
 
-from .elem_graph cimport (
+from .elem_graph_ccexport cimport (
     nest_by_graph as nest_by_graph_cc, Tvertex,
     BBox as BBoxCC, Point as PointCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC
 )
-
-# typedef struct BBox {
-#     float xstart, xend, ystart, yend;
-# } BBox;
-
-# typedef struct Point {
-#     float x, y;
-# } Point;
-
-
-# typedef struct ElemGroup {
-#     int count_limit;
-#     float priority;
-# } ElemGroup;
-
-
-# typedef struct PointPlaceRule {
-#     float x, y, r, w;
-#     Tvertex group;
-# } PointPlaceRule;
-
-
-# typedef struct BBoxPlaceRule {
-#     BBox bbox;
-#     float r, w;
-#     Tvertex group;
-# } BBoxPlaceRule;
-
-
-# typedef struct ElemGraph {
-#     std::vector<Tvertex> group_id;
-#     std::vector<Point> centers;
-#     std::vector<BBox> coords;
-#     std::vector<std::vector<Tvertex>> collisions;
-
-#     auto size() const { return group_id.size(); }
-# } ElemGraph;
-
-
-# typedef struct PlacementRules {
-#     std::vector<PointPlaceRule> point_rules;
-#     std::vector<BBoxPlaceRule> bbox_rules;
-# } PlacementRules;
 
 
 class BBox(BaseModel):
@@ -78,9 +35,6 @@ class BBoxPlaceRule(BaseModel):
 
 cdef class PlacementRuleSet:
     cdef PlacementRuleSetCC cpp_obj
-
-    def __cinit__(self):
-        self.cpp_obj = PlacementRuleSetCC()
     
     def append_point_rule(self, point_rule : PointPlaceRule):
         cdef PointPlaceRuleCC point_rule_cc
@@ -105,9 +59,6 @@ cdef class PlacementRuleSet:
 cdef class ElemGraph:
     cdef ElemGraphCC cpp_obj
 
-    def __cinit__(self):
-        self.cpp_obj = ElemGraphCC()
-
     def append_elem(self, group_id: int, center: Point, coord: BBox):
         self.cpp_obj.group_id.push_back(group_id)
         cdef PointCC center_cc
@@ -127,7 +78,7 @@ cdef class ElemGraph:
         self.cpp_obj.collisions[group2].push_back(group1)
 
 
-def py_nest_by_graph(ElemGraph g, List[PlacementRules] cases):
+def nest_by_graph(ElemGraph g, List[PlacementRuleSet] cases):
     cdef vector[PlacementRuleSetCC] cases_cc
     for case in cases:
         cases_cc.push_back(case.cpp_obj)

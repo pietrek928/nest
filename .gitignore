@@ -4,3 +4,8 @@
 *.so
 *.egg-info
 build
+
+# Python
+**/*.pyc
+**/__pycache__
+

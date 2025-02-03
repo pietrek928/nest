@@ -1,20 +1,5 @@
 from libcpp.vector cimport vector
 
-# typedef struct PlacementRuleSet {
-#     std::vector<PointPlaceRule> point_rules;
-#     std::vector<BBoxPlaceRule> bbox_rules;
-# } PlacementRuleSet;
-
-
-# typedef struct ElemGraph {
-#     std::vector<Tvertex> group_id;
-#     std::vector<Point> centers;
-#     std::vector<BBox> coords;
-#     std::vector<std::vector<Tvertex>> collisions;
-
-#     auto size() const { return group_id.size(); }
-# } ElemGraph;
-
 
 cdef extern from "elem_graph.cc":
     ctypedef int Tvertex
