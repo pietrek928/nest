@@ -72,9 +72,9 @@ void select_elems(
     for (Tvertex i = 0; i < g.size(); i++) {
         points_sort_buf[i] = i;
     }
-    std::sort(points_sort_buf.begin(), points_sort_buf.end(), [&scores](Tvertex a, Tvertex b) {
-        return scores[a] > scores[b];
-    });
+    std::sort(points_sort_buf.begin(), points_sort_buf.end(),
+        [&scores](Tvertex a, Tvertex b) {return scores[a] > scores[b];}
+    );
 
     for (Tvertex i : points_sort_buf) {
         if (marked[i]) {

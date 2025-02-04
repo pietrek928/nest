@@ -34,8 +34,8 @@ class BBoxPlaceRule(BaseModel):
     group: int
 
 cdef class PlacementRuleSet:
-    cdef PlacementRuleSetCC cpp_obj
-    
+    cdef public PlacementRuleSetCC cpp_obj
+
     def append_point_rule(self, point_rule : PointPlaceRule):
         cdef PointPlaceRuleCC point_rule_cc
         point_rule_cc.x = point_rule.x
@@ -57,7 +57,7 @@ cdef class PlacementRuleSet:
         self.cpp_obj.bbox_rules.push_back(bbox_rule_cc)
 
 cdef class ElemGraph:
-    cdef ElemGraphCC cpp_obj
+    cdef public ElemGraphCC cpp_obj
 
     def append_elem(self, group_id: int, center: Point, coord: BBox):
         self.cpp_obj.group_id.push_back(group_id)
