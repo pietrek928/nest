@@ -239,9 +239,9 @@ selected_t = [
     np.random.rand(128, 3) * [1.5, 1.5, 2 * np.pi],
 ]
 
-wrect = 1.3
+wrect = 1
 wtriang = 1
-r = .5
+r = .2
 rule_set = PlacementRuleSet()
 rule_set.append_point_rule(PointPlaceRule(
     x=0, y=0, r=r, w=wrect, group=0
@@ -261,28 +261,28 @@ rule_set.append_point_rule(PointPlaceRule(
 rule_set.append_point_rule(PointPlaceRule(
     x=0, y=1.1, r=r, w=wtriang, group=1
 ))
-# rule_set.append_point_rule(PointPlaceRule(
-#     x=0.7, y=0.7, r=r, w=wrect, group=0
-# ))
-# rule_set.append_point_rule(PointPlaceRule(
-#     x=0.7, y=0.7, r=r, w=wtriang, group=1
-# ))
+rule_set.append_point_rule(PointPlaceRule(
+    x=0.7, y=0.7, r=r, w=wrect, group=0
+))
+rule_set.append_point_rule(PointPlaceRule(
+    x=0.7, y=0.7, r=r, w=wtriang, group=1
+))
 video = cv.VideoWriter('/tmp/test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 
-for it in tqdm(tuple(range(32))):
+for it in tqdm(tuple(range(256))):
     s0 = [
         np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
-        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0.1), 100))
+        s0.append(transforms_around(selected_t[0], (0.005, 0.005, 0.05), 32))
 
     s1 = [
         np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
     ]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
-        s1.append(transforms_around(selected_t[1], (0.01, 0.01, 0.1), 100))
+        s1.append(transforms_around(selected_t[1], (0.005, 0.005, 0.05), 32))
 
     selected_t = [
         np.concatenate(s0),
@@ -298,6 +298,7 @@ for it in tqdm(tuple(range(32))):
         polys[i] for i in selected_polys[0]
     ]])
     video.write(im)
+    cv.imwrite('/tmp/test.jpg', im)
 
     selected_t = [[], []]
     for i in selected_polys[0]:
