@@ -123,14 +123,12 @@ void unselect_node(Tvertex node, const ElemGraph &g, bool *selected, int *select
     }
 }
 
+// node MUST NOT be selected
 bool increase_path_dfs(
     Tvertex node, const ElemGraph &g,
-    bool *visited, bool *selected, int *selected_collisions
+    bool *tried_select, bool *selected, int *selected_collisions
 ) {
-    if (selected[node]) {
-        return false;
-    }
-    visited[node] = true;
+    tried_select[node] = true;
     select_node(node, g, selected, selected_collisions);
     if (!selected_collisions[node]) {
         return true;
@@ -138,13 +136,11 @@ bool increase_path_dfs(
 
     for (auto &v : g.collisions[node]) {
         if (selected[v]) {
-            visited[v] = true;
-
             unselect_node(v, g, selected, selected_collisions);
             bool path_found = false;
             for (auto &v2 : g.collisions[node]) {
-                if (!visited[v2] && !selected[v2] && selected_collisions[v2] <= 1) {
-                    if (increase_path_dfs(v2, g, visited, selected, selected_collisions)) {
+                if (!tried_select[v2] && !selected[v2] && selected_collisions[v2] <= 1) {
+                    if (increase_path_dfs(v2, g, tried_select, selected, selected_collisions)) {
                         path_found = true;
                         break;
                     }
