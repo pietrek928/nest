@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "Cython>=0.29.21"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nest_graph"
+version = "0.0.1"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "pydantic",
+    "shapely",
+    "rtree",
+    "tqdm",
+]
+
+[tool.setuptools]
+packages = ["nest_graph"]
+
+[[tool.setuptools.ext-modules]]
+name = "nest_graph.elem_graph"
+sources = ["nest_graph/elem_graph.pyx"]
+language = "c++"
+extra-compile-args = ["-std=c++17", "-Ofast"]
+
+[tool.setuptools.cmdclass]
+build_ext = "Cython.Build.build_ext"
