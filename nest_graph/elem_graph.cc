@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <algorithm>
+#include <random>
 
 
 float bbox_qdist(const BBox &a, const BBox &b) {
@@ -109,14 +110,14 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
 }
 
 
-void select_node(Tvertex node, const ElemGraph &g, bool *selected, int *selected_collisions) {
+void select_node(Tvertex node, const ElemGraph &g, unsigned char *selected, int *selected_collisions) {
     selected[node] = true;
     for (auto &v : g.collisions[node]) {
         selected_collisions[v] ++;
     }
 }
 
-void unselect_node(Tvertex node, const ElemGraph &g, bool *selected, int *selected_collisions) {
+void unselect_node(Tvertex node, const ElemGraph &g, unsigned char *selected, int *selected_collisions) {
     selected[node] = false;
     for (auto &v : g.collisions[node]) {
         selected_collisions[v] --;
@@ -126,7 +127,7 @@ void unselect_node(Tvertex node, const ElemGraph &g, bool *selected, int *select
 // node MUST NOT be selected
 bool increase_path_dfs(
     Tvertex node, const ElemGraph &g,
-    bool *tried_select, bool *selected, int *selected_collisions
+    unsigned char *tried_select, unsigned char *selected, int *selected_collisions
 ) {
     tried_select[node] = true;
     select_node(node, g, selected, selected_collisions);
@@ -155,4 +156,53 @@ bool increase_path_dfs(
     }
 
     return true;
+}
+
+std::vector<Tvertex> increase_selection_bfs(
+    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes
+) {
+    std::random_device rd;
+    std::mt19937 rand_gen(rd());
+
+    auto n = g.size();
+    std::vector<unsigned char> tried_select(n), selected(n);
+    std::vector<int> selected_collisions(n);
+    std::vector<Tvertex> nodes(n);
+
+    std::fill(selected.begin(), selected.end(), false);
+    for (auto &v : selected_nodes) {
+        selected[v] = true;
+    }
+
+    for (Tvertex i=0; i<n; i++) {
+        nodes[i] = i;
+        selected_collisions[i] = 0;
+        for (auto &v : g.collisions[i]) {
+            if (selected[v]) {
+                selected_collisions[i] ++;
+            }
+        }
+    }
+
+    bool increased;
+    do {
+        increased = false;
+        std::fill(tried_select.begin(), tried_select.end(), false);
+        std::shuffle(nodes.begin(), nodes.end(), rand_gen);
+        for (auto &v : nodes) {
+            if (!selected[v]) {
+                if (increase_path_dfs(v, g, &tried_select[0], &selected[0], &selected_collisions[0])) {
+                    increased = true;
+                }
+            }
+        }
+    } while (increased);
+
+    std::vector<Tvertex> r;
+    for (Tvertex i = 0; i < n; i++) {
+        if (selected[i]) {
+            r.push_back(i);
+        }
+    }
+    return r;
 }
