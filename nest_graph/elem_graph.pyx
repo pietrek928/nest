@@ -1,12 +1,15 @@
 from typing import List
+from libcpp cimport bool
 from libcpp.vector cimport vector
 from pydantic import BaseModel
 
 from .elem_graph_ccexport cimport (
-    nest_by_graph as nest_by_graph_cc, Tvertex,
+    Tvertex,
     BBox as BBoxCC, Point as PointCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
-    ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC
+    ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
+    nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc,
+    increase_selection_dfs as increase_selection_dfs_cc
 )
 
 
@@ -84,3 +87,13 @@ def nest_by_graph(ElemGraph g, List[PlacementRuleSet] cases):
         cases_cc.push_back(case.cpp_obj)
     cdef vector[vector[Tvertex]] result = nest_by_graph_cc(g.cpp_obj, cases_cc)
     return result
+
+
+def sort_graph(ElemGraph g, PlacementRuleSet rules, bool reverse=False):
+    r = ElemGraph()
+    r.cpp_obj = sort_graph_cc(g.cpp_obj, rules.cpp_obj, reverse)
+    return r
+
+
+def increase_selection_dfs(ElemGraph g, List[int] selection, max_tries: int):
+    return increase_selection_dfs_cc(g.cpp_obj, selection, max_tries)

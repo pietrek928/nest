@@ -14,7 +14,7 @@ from typing import Tuple
 from .elem_graph import (
     ElemGraph, BBox, Point,
     PointPlaceRule, BBoxPlaceRule, PlacementRuleSet,
-    nest_by_graph
+    nest_by_graph, sort_graph, increase_selection_dfs
 )
 
 
@@ -267,22 +267,28 @@ rule_set.append_point_rule(PointPlaceRule(
 rule_set.append_point_rule(PointPlaceRule(
     x=0.7, y=0.7, r=r, w=wtriang, group=1
 ))
-video = cv.VideoWriter('/tmp/test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
+video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
+
+history = [np.zeros((1, 3)), np.zeros((1, 3))]
 
 for it in tqdm(tuple(range(256))):
     s0 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(512, 3) * [1.5, 1.5, 2 * np.pi],
+        history[0]
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
-        s0.append(transforms_around(selected_t[0], (0.005, 0.005, 0.05), 32))
+        s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 16))
+        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0.1), 16))
 
     s1 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(512, 3) * [1.5, 1.5, 2 * np.pi],
+        history[1]
     ]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
-        s1.append(transforms_around(selected_t[1], (0.005, 0.005, 0.05), 32))
+        s1.append(transforms_around(selected_t[1], (0.05, 0.05, 1), 16))
+        s0.append(transforms_around(selected_t[1], (0.01, 0.01, 0.1), 16))
 
     selected_t = [
         np.concatenate(s0),
@@ -292,18 +298,30 @@ for it in tqdm(tuple(range(256))):
     # M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
     # print('------', M.shape, M.sum()/M.shape[0])
     # v = optimize_polygons(M, np.zeros((M.shape[0], )))
-    selected_polys = nest_by_graph(graph, [rule_set])
-    print(len(polys), len(selected_polys[0]))
+    selected_polys = nest_by_graph(graph, [rule_set])[0]
+    old_len = len(selected_polys)
+    graph_sorted = sort_graph(graph, rule_set)
+    graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
+    for _ in range(128):
+        selected_polys = increase_selection_dfs(graph, selected_polys, 8)
+        selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8)
+        selected_polys = increase_selection_dfs(graph_sorted, selected_polys, 8)
+    # selected_polys = selected_polys[0]
+    print(len(polys), old_len, ' -> ', len(selected_polys))
     im = render_polys(p_board, [[
-        polys[i] for i in selected_polys[0]
+        polys[i] for i in selected_polys
     ]])
     video.write(im)
-    cv.imwrite('/tmp/test.jpg', im)
+    cv.imwrite('test.jpg', im)
 
     selected_t = [[], []]
-    for i in selected_polys[0]:
+    for i in selected_polys:
         selected_t[group_id[i]].append(transform[i])
     selected_t = tuple(np.array(t) for t in selected_t)
+    if len(history[0]) and len(selected_t[0]):
+        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[1024:, :]
+    if len(history[1]) and len(selected_t[1]):
+        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[1024:, :]
 
 # selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
 # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))

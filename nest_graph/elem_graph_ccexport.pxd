@@ -1,3 +1,4 @@
+from libcpp cimport bool
 from libcpp.vector cimport vector
 
 
@@ -38,3 +39,5 @@ cdef extern from "elem_graph.cc":
         vector[vector[Tvertex]] collisions
 
     vector[vector[Tvertex]] nest_by_graph(const ElemGraph& g, const vector[PlacementRuleSet]& cases)
+    ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse)
+    vector[Tvertex] increase_selection_dfs(const ElemGraph &g, const vector[Tvertex] &selected_nodes, int max_tries)

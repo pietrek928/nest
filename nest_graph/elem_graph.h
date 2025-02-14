@@ -52,3 +52,9 @@ typedef struct ElemGraph {
 std::vector<std::vector<Tvertex>> nest_by_graph(
     const ElemGraph &g, const std::vector<PlacementRuleSet> &cases
 );
+
+ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse);
+
+std::vector<Tvertex> increase_selection_dfs(
+    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes
+);

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <vector>
 
 
 float bbox_qdist(const BBox &a, const BBox &b) {
@@ -109,64 +110,111 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
     return result;
 }
 
-
-void select_node(Tvertex node, const ElemGraph &g, unsigned char *selected, int *selected_collisions) {
-    selected[node] = true;
-    for (auto &v : g.collisions[node]) {
-        selected_collisions[v] ++;
+void sort_collisions(std::vector<std::vector<Tvertex>> collisions, Tscore *scores, bool reverse) {
+    if (!reverse) {
+        for (auto &cs : collisions) {
+            std::sort(
+                cs.begin(), cs.end(),
+                [&scores](Tvertex a, Tvertex b) {return scores[a] < scores[b];}
+            );
+        }
+    } else {
+        for (auto &cs : collisions) {
+            std::sort(
+                cs.begin(), cs.end(),
+                [&scores](Tvertex a, Tvertex b) {return scores[a] > scores[b];}
+            );
+        }
     }
 }
 
-void unselect_node(Tvertex node, const ElemGraph &g, unsigned char *selected, int *selected_collisions) {
-    selected[node] = false;
-    for (auto &v : g.collisions[node]) {
-        selected_collisions[v] --;
+ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse) {
+    ElemGraph r = g;
+    std::vector<Tscore> scores;
+    auto elems_by_group = get_elems_by_group(g);
+
+    compute_scores(g, elems_by_group, scores, rules);
+    sort_collisions(r.collisions, &scores[0], reverse);
+    return r;
+}
+
+
+void select_node(Tvertex node, const std::vector<Tvertex> *collisions, unsigned char *selected, int *selected_collisions) {
+    if (!selected[node]) {
+        selected[node] = true;
+        for (auto &v : collisions[node]) {
+            selected_collisions[v] ++;
+        }
+    }
+}
+
+void unselect_node(Tvertex node, const std::vector<Tvertex> *collisions, unsigned char *selected, int *selected_collisions) {
+    if (selected[node]) {
+        selected[node] = false;
+        for (auto &v : collisions[node]) {
+            selected_collisions[v] --;
+        }
+    }
+}
+
+void mark_collisions(Tvertex node, const std::vector<Tvertex> *collisions, int *mark) {
+    for (auto &v: collisions[node]) {
+        mark[v] ++;
+    }
+}
+
+void unmark_collisions(Tvertex node, const std::vector<Tvertex> *collisions, int *mark) {
+    for (auto &v: collisions[node]) {
+        mark[v] ++;
     }
 }
 
 // node MUST NOT be selected
 bool increase_path_dfs(
-    Tvertex node, const ElemGraph &g,
-    unsigned char *tried_select, unsigned char *selected, int *selected_collisions
+    Tvertex node, const std::vector<Tvertex> *collisions,
+    int *mark, unsigned char *selected, int *selected_collisions
 ) {
-    tried_select[node] = true;
-    select_node(node, g, selected, selected_collisions);
+    mark[node] ++;
+    mark_collisions(node, collisions, mark);
+    select_node(node, collisions, selected, selected_collisions);
     if (!selected_collisions[node]) {
         return true;
     }
 
-    for (auto &v : g.collisions[node]) {
+    for (auto &v : collisions[node]) {
         if (selected[v]) {
-            unselect_node(v, g, selected, selected_collisions);
+            unselect_node(v, collisions, selected, selected_collisions);
             bool path_found = false;
-            for (auto &v2 : g.collisions[node]) {
-                if (!tried_select[v2] && !selected[v2] && selected_collisions[v2] <= 1) {
-                    if (increase_path_dfs(v2, g, tried_select, selected, selected_collisions)) {
+            for (auto &v2 : collisions[v]) {
+                if (!mark[v2] && !selected[v2] && selected_collisions[v2] <= 1) {
+                    if (increase_path_dfs(v2, collisions, mark, selected, selected_collisions)) {
                         path_found = true;
                         break;
                     }
                 }
             }
             if (!path_found) {
-                select_node(v, g, selected, selected_collisions);
-                unselect_node(node, g, selected, selected_collisions);
+                select_node(v, collisions, selected, selected_collisions);
+                unmark_collisions(node, collisions, mark);
+                unselect_node(node, collisions, selected, selected_collisions);
                 return false;
             }
         }
     }
 
+    unmark_collisions(node, collisions, mark);
     return true;
 }
 
-std::vector<Tvertex> increase_selection_bfs(
-    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes
+std::vector<Tvertex> increase_selection_dfs(
+    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes, int max_tries
 ) {
     std::random_device rd;
     std::mt19937 rand_gen(rd());
 
     auto n = g.size();
-    std::vector<unsigned char> tried_select(n), selected(n);
-    std::vector<int> selected_collisions(n);
+    std::vector<unsigned char> selected(n);
+    std::vector<int> mark(n), selected_collisions(n);
     std::vector<Tvertex> nodes(n);
 
     std::fill(selected.begin(), selected.end(), false);
@@ -184,19 +232,18 @@ std::vector<Tvertex> increase_selection_bfs(
         }
     }
 
-    bool increased;
+    int tries = max_tries;
     do {
-        increased = false;
-        std::fill(tried_select.begin(), tried_select.end(), false);
         std::shuffle(nodes.begin(), nodes.end(), rand_gen);
+        std::fill(mark.begin(), mark.end(), 0);
         for (auto &v : nodes) {
             if (!selected[v]) {
-                if (increase_path_dfs(v, g, &tried_select[0], &selected[0], &selected_collisions[0])) {
-                    increased = true;
+                if (increase_path_dfs(v, &g.collisions[0], &mark[0], &selected[0], &selected_collisions[0])) {
+                    tries = max_tries;
                 }
             }
         }
-    } while (increased);
+    } while (--tries);
 
     std::vector<Tvertex> r;
     for (Tvertex i = 0; i < n; i++) {
