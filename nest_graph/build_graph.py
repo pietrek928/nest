@@ -14,7 +14,7 @@ from typing import Tuple
 from .elem_graph import (
     ElemGraph, BBox, Point,
     PointPlaceRule, BBoxPlaceRule, PlacementRuleSet,
-    nest_by_graph, sort_graph, increase_selection_dfs
+    nest_by_graph, sort_graph, increase_selection_dfs, increase_score_dfs
 )
 
 
@@ -273,22 +273,24 @@ history = [np.zeros((1, 3)), np.zeros((1, 3))]
 
 for it in tqdm(tuple(range(256))):
     s0 = [
-        np.random.rand(512, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
         history[0]
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
         s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 16))
         s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0.1), 16))
+        s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0.01), 16))
 
     s1 = [
-        np.random.rand(512, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
         history[1]
     ]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
         s1.append(transforms_around(selected_t[1], (0.05, 0.05, 1), 16))
         s0.append(transforms_around(selected_t[1], (0.01, 0.01, 0.1), 16))
+        s0.append(transforms_around(selected_t[1], (0.001, 0.001, 0.01), 16))
 
     selected_t = [
         np.concatenate(s0),
@@ -303,9 +305,11 @@ for it in tqdm(tuple(range(256))):
     graph_sorted = sort_graph(graph, rule_set)
     graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
     for _ in range(128):
-        selected_polys = increase_selection_dfs(graph, selected_polys, 8)
-        selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8)
-        selected_polys = increase_selection_dfs(graph_sorted, selected_polys, 8)
+        selected_polys = increase_selection_dfs(graph, selected_polys, 8, 1)
+        selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8, 2)
+        selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, rule_set)
+        selected_polys = increase_selection_dfs(graph_sorted, selected_polys, 8, 2)
+        selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, rule_set)
     # selected_polys = selected_polys[0]
     print(len(polys), old_len, ' -> ', len(selected_polys))
     im = render_polys(p_board, [[

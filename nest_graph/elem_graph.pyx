@@ -9,7 +9,8 @@ from .elem_graph_ccexport cimport (
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
     nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc,
-    increase_selection_dfs as increase_selection_dfs_cc
+    increase_selection_dfs as increase_selection_dfs_cc,
+    increase_score_dfs as increase_score_dfs_cc
 )
 
 
@@ -95,5 +96,9 @@ def sort_graph(ElemGraph g, PlacementRuleSet rules, bool reverse=False):
     return r
 
 
-def increase_selection_dfs(ElemGraph g, List[int] selection, max_tries: int):
-    return increase_selection_dfs_cc(g.cpp_obj, selection, max_tries)
+def increase_selection_dfs(ElemGraph g, List[int] selection, max_tries: int, min_collisions: int):
+    return increase_selection_dfs_cc(g.cpp_obj, selection, max_tries, min_collisions)
+
+
+def increase_score_dfs(ElemGraph g, List[int] selection, PlacementRuleSet rules):
+    return increase_score_dfs_cc(g.cpp_obj, selection, rules.cpp_obj)
