@@ -3,6 +3,7 @@
 #include <cmath>
 #include <algorithm>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 
@@ -138,6 +139,14 @@ ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool rev
     return r;
 }
 
+std::vector<Tscore> score_elems(
+    const ElemGraph& g, const PlacementRuleSet& rules) {
+    std::vector<Tscore> scores;
+    auto elems_by_group = get_elems_by_group(g);
+
+    compute_scores(g, elems_by_group, scores, rules);
+    return scores;
+}
 
 void select_node(Tvertex node, const std::vector<Tvertex> *collisions, unsigned char *selected, int *selected_collisions) {
     if (!selected[node]) {
@@ -307,13 +316,13 @@ Tscore increase_score_path_dfs(
 std::vector<Tvertex> increase_score_dfs(
     const ElemGraph& g,
     const std::vector<Tvertex>& selected_nodes,
-    const PlacementRuleSet& rules) {
+    const std::vector<Tscore>& scores) {
     std::random_device rd;
     std::mt19937 rand_gen(rd());
 
-    std::vector<Tscore> scores;
-    auto elems_by_group = get_elems_by_group(g);
-    compute_scores(g, elems_by_group, scores, rules);
+    if (g.size() != scores.size()) {
+        throw std::invalid_argument("Graph size different than scores size");
+    }
 
     auto n = g.size();
     std::vector<unsigned char> selected(n);
@@ -338,6 +347,20 @@ std::vector<Tvertex> increase_score_dfs(
     bool stop = false;
     while (!stop) {
         stop = true;
+        std::sort(nodes.begin(), nodes.end(), [&scores](Tvertex a, Tvertex b) {
+            return scores[a] > scores[b];
+        });
+        std::fill(mark.begin(), mark.end(), 0);
+        for (auto& v : nodes) {
+            if (!selected[v] && selected_collisions[v] <= 1) {
+                if (increase_score_path_dfs(
+                        v, &g.collisions[0], &scores[0], 0, &mark[0],
+                        &selected[0], &selected_collisions[0]) > 0) {
+                    stop = false;
+                }
+            }
+        }
+
         std::shuffle(nodes.begin(), nodes.end(), rand_gen);
         std::fill(mark.begin(), mark.end(), 0);
         for (auto& v : nodes) {

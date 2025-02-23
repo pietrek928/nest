@@ -4,6 +4,7 @@ from libcpp.vector cimport vector
 
 cdef extern from "elem_graph.cc":
     ctypedef int Tvertex
+    ctypedef float Tscore
 
     cdef struct BBox:
         float xstart, xend, ystart, yend
@@ -39,8 +40,9 @@ cdef extern from "elem_graph.cc":
         vector[vector[Tvertex]] collisions
 
     vector[vector[Tvertex]] nest_by_graph(const ElemGraph& g, const vector[PlacementRuleSet]& cases)
+    vector[Tscore] score_elems(const ElemGraph& g, const PlacementRuleSet& rules)
     ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse)
     vector[Tvertex] increase_selection_dfs(
         const ElemGraph &g, const vector[Tvertex] &selected_nodes, int max_tries, int min_collisions
     )
-    vector[Tvertex] increase_score_dfs(const ElemGraph& g, const vector[Tvertex] &selected_nodes, const PlacementRuleSet &rules)
+    vector[Tvertex] increase_score_dfs(const ElemGraph& g, const vector[Tvertex] &selected_nodes, const vector[Tscore] &scores)

@@ -4,11 +4,11 @@ from libcpp.vector cimport vector
 from pydantic import BaseModel
 
 from .elem_graph_ccexport cimport (
-    Tvertex,
+    Tvertex, Tscore,
     BBox as BBoxCC, Point as PointCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
-    nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc,
+    nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc, score_elems as score_elems_cc,
     increase_selection_dfs as increase_selection_dfs_cc,
     increase_score_dfs as increase_score_dfs_cc
 )
@@ -82,6 +82,14 @@ cdef class ElemGraph:
         self.cpp_obj.collisions[group2].push_back(group1)
 
 
+cdef class ElemOrder:
+    cdef public vector[Tvertex] elems
+
+
+cdef class ElemScores:
+    cdef public vector[Tscore] scores
+
+
 def nest_by_graph(ElemGraph g, List[PlacementRuleSet] cases):
     cdef vector[PlacementRuleSetCC] cases_cc
     for case in cases:
@@ -96,9 +104,15 @@ def sort_graph(ElemGraph g, PlacementRuleSet rules, bool reverse=False):
     return r
 
 
+def score_elems(ElemGraph g, PlacementRuleSet rules):
+    scores = ElemScores()
+    scores.scores = score_elems_cc(g.cpp_obj, rules.cpp_obj)
+    return scores
+
+
 def increase_selection_dfs(ElemGraph g, List[int] selection, max_tries: int, min_collisions: int):
     return increase_selection_dfs_cc(g.cpp_obj, selection, max_tries, min_collisions)
 
 
-def increase_score_dfs(ElemGraph g, List[int] selection, PlacementRuleSet rules):
-    return increase_score_dfs_cc(g.cpp_obj, selection, rules.cpp_obj)
+def increase_score_dfs(ElemGraph g, List[int] selection, ElemScores scores):
+    return increase_score_dfs_cc(g.cpp_obj, selection, scores.scores)

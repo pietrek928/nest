@@ -14,7 +14,8 @@ from typing import Tuple
 from .elem_graph import (
     ElemGraph, BBox, Point,
     PointPlaceRule, BBoxPlaceRule, PlacementRuleSet,
-    nest_by_graph, sort_graph, increase_selection_dfs, increase_score_dfs
+    nest_by_graph, sort_graph, score_elems,
+    increase_selection_dfs, increase_score_dfs
 )
 
 
@@ -246,9 +247,9 @@ rule_set = PlacementRuleSet()
 rule_set.append_point_rule(PointPlaceRule(
     x=0, y=0, r=r, w=wrect, group=0
 ))
-rule_set.append_point_rule(PointPlaceRule(
-    x=0, y=0, r=r, w=wtriang, group=1
-))
+# rule_set.append_point_rule(PointPlaceRule(
+#     x=0, y=0, r=r, w=wtriang, group=1
+# ))
 rule_set.append_point_rule(PointPlaceRule(
     x=1.2, y=0, r=r, w=wrect, group=0
 ))
@@ -261,9 +262,9 @@ rule_set.append_point_rule(PointPlaceRule(
 rule_set.append_point_rule(PointPlaceRule(
     x=0, y=1.1, r=r, w=wtriang, group=1
 ))
-rule_set.append_point_rule(PointPlaceRule(
-    x=0.7, y=0.7, r=r, w=wrect, group=0
-))
+# rule_set.append_point_rule(PointPlaceRule(
+#     x=0.7, y=0.7, r=r, w=wrect, group=0
+# ))
 rule_set.append_point_rule(PointPlaceRule(
     x=0.7, y=0.7, r=r, w=wtriang, group=1
 ))
@@ -280,7 +281,9 @@ for it in tqdm(tuple(range(256))):
         s0.append(selected_t[0])
         s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 16))
         s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0.1), 16))
-        s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0.01), 16))
+        s0.append(transforms_around(selected_t[0], (0, 0, 0.1), 16))
+        s0.append(transforms_around(selected_t[0], (0, 0, 0.01), 16))
+        s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0), 16))
 
     s1 = [
         np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
@@ -289,8 +292,10 @@ for it in tqdm(tuple(range(256))):
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
         s1.append(transforms_around(selected_t[1], (0.05, 0.05, 1), 16))
-        s0.append(transforms_around(selected_t[1], (0.01, 0.01, 0.1), 16))
-        s0.append(transforms_around(selected_t[1], (0.001, 0.001, 0.01), 16))
+        s1.append(transforms_around(selected_t[1], (0.01, 0.01, 0), 16))
+        s1.append(transforms_around(selected_t[1], (0, 0, 0.1), 16))
+        s1.append(transforms_around(selected_t[1], (0, 0, 0.01), 16))
+        s1.append(transforms_around(selected_t[1], (0.001, 0.001, 0), 16))
 
     selected_t = [
         np.concatenate(s0),
@@ -304,13 +309,13 @@ for it in tqdm(tuple(range(256))):
     old_len = len(selected_polys)
     graph_sorted = sort_graph(graph, rule_set)
     graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
-    for _ in range(128):
-        selected_polys = increase_selection_dfs(graph, selected_polys, 8, 1)
+    scores = score_elems(graph, rule_set)
+    for _ in range(16):
         selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8, 2)
-        selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, rule_set)
+        selected_polys = increase_selection_dfs(graph, selected_polys, 8, 1)
+        selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, scores)
         selected_polys = increase_selection_dfs(graph_sorted, selected_polys, 8, 2)
-        selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, rule_set)
-    # selected_polys = selected_polys[0]
+        selected_polys = increase_score_dfs(graph_sorted, selected_polys, scores)
     print(len(polys), old_len, ' -> ', len(selected_polys))
     im = render_polys(p_board, [[
         polys[i] for i in selected_polys

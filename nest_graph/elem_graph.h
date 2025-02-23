@@ -61,5 +61,6 @@ std::vector<Tvertex> increase_selection_dfs(
     int max_tries,
     int min_collisions);
 std::vector<Tvertex> increase_score_dfs(
-    const ElemGraph& g, const std::vector<Tvertex>& selected_nodes, const PlacementRuleSet& rules
-);
+    const ElemGraph& g,
+    const std::vector<Tvertex>& selected_nodes,
+    const std::vector<Tscore>& scores);
