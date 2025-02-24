@@ -29,6 +29,20 @@ Tscore compute_score(const BBoxPlaceRule &p, const BBox &bbox) {
     return p.w * std::exp(-qdist / p.r);
 }
 
+Tscore compute_score(const PointAngleRule &p, float x, float y, float a) {
+    float adist = std::abs(p.a - a);
+    adist = std::min(adist, 2 * (Tscore)M_PI - adist);
+    float qdist = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) + 1.0;
+    return p.w * adist * std::exp(-qdist / p.r);
+}
+
+Tscore compute_score(const BBoxAngleRule &p, const BBox &bbox, float a) {
+    float adist = std::abs(p.a - a);
+    adist = std::min(adist, 2 * (Tscore)M_PI - adist);
+    float qdist = bbox_qdist(p.bbox, bbox) + 1.0;
+    return p.w * adist * std::exp(-qdist / p.r);
+}
+
 std::vector<std::vector<Tvertex>> get_elems_by_group(const ElemGraph &g) {
     std::vector<std::vector<Tvertex>> elems_by_group;
     for (Tvertex i = 0; i < g.group_id.size(); i++) {
@@ -51,12 +65,22 @@ void compute_scores(
 
     for (const PointPlaceRule &p : rules.point_rules) {
         for (Tvertex elem : elems_by_group[p.group]) {
-            scores_out[elem] += compute_score(p, g.centers[elem].x, g.centers[elem].y);
+            scores_out[elem] += compute_score(p, g.elems[elem].x, g.elems[elem].y);
         }
     }
     for (const BBoxPlaceRule &p : rules.bbox_rules) {
         for (Tvertex elem : elems_by_group[p.group]) {
             scores_out[elem] += compute_score(p, g.coords[elem]);
+        }
+    }
+    for (const PointAngleRule &p : rules.point_angle_rules) {
+        for (Tvertex elem : elems_by_group[p.group]) {
+            scores_out[elem] += compute_score(p, g.elems[elem].x, g.elems[elem].y, g.elems[elem].a);
+        }
+    }
+    for (const BBoxAngleRule &p : rules.bbox_angle_rules) {
+        for (Tvertex elem : elems_by_group[p.group]) {
+            scores_out[elem] += compute_score(p, g.coords[elem], g.elems[elem].a);
         }
     }
 }

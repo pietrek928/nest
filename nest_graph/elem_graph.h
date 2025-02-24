@@ -13,6 +13,9 @@ typedef struct Point {
     float x, y;
 } Point;
 
+typedef struct ElemPlace {
+    float x, y, a;
+} ElemPlace;
 
 typedef struct ElemGroup {
     int count_limit;
@@ -33,15 +36,30 @@ typedef struct BBoxPlaceRule {
 } BBoxPlaceRule;
 
 
+typedef struct PointAngleRule {
+    float x, y, a, r, w;
+    Tvertex group;
+} PointAngleRule;
+
+
+typedef struct BBoxAngleRule {
+    BBox bbox;
+    float a, r, w;
+    Tvertex group;
+} BBoxAngleRule;
+
+
 typedef struct PlacementRuleSet {
     std::vector<PointPlaceRule> point_rules;
     std::vector<BBoxPlaceRule> bbox_rules;
+    std::vector<PointAngleRule> point_angle_rules;
+    std::vector<BBoxAngleRule> bbox_angle_rules;
 } PlacementRuleSet;
 
 
 typedef struct ElemGraph {
     std::vector<Tvertex> group_id;
-    std::vector<Point> centers;
+    std::vector<ElemPlace> elems;
     std::vector<BBox> coords;
     std::vector<std::vector<Tvertex>> collisions;
 

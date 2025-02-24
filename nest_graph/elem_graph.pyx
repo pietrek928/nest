@@ -5,7 +5,7 @@ from pydantic import BaseModel
 
 from .elem_graph_ccexport cimport (
     Tvertex, Tscore,
-    BBox as BBoxCC, Point as PointCC, ElemGroup as ElemGroupCC,
+    BBox as BBoxCC, Point as PointCC, ElemPlace as ElemPlaceCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
     nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc, score_elems as score_elems_cc,
@@ -24,6 +24,11 @@ class Point(BaseModel):
     x: float
     y: float
 
+class ElemPlace(BaseModel):
+    x: float
+    y: float
+    a: float
+
 class PointPlaceRule(BaseModel):
     x: float
     y: float
@@ -33,6 +38,21 @@ class PointPlaceRule(BaseModel):
 
 class BBoxPlaceRule(BaseModel):
     bbox: BBox
+    r: float
+    w: float
+    group: int
+
+class PointAngleRule(BaseModel):
+    x: float
+    y: float
+    a: float
+    r: float
+    w: float
+    group: int
+
+class BBoxAngleRule(BaseModel):
+    bbox: BBox
+    a: float
     r: float
     w: float
     group: int
@@ -65,10 +85,10 @@ cdef class ElemGraph:
 
     def append_elem(self, group_id: int, center: Point, coord: BBox):
         self.cpp_obj.group_id.push_back(group_id)
-        cdef PointCC center_cc
-        center_cc.x = center.x
-        center_cc.y = center.y
-        self.cpp_obj.centers.push_back(center_cc)
+        cdef ElemPlaceCC place_cc
+        place_cc.x = center.x
+        place_cc.y = center.y
+        self.cpp_obj.elems.push_back(place_cc)
         cdef BBoxCC coord_cc
         coord_cc.xstart = coord.xstart
         coord_cc.xend = coord.xend

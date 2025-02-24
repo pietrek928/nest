@@ -12,6 +12,9 @@ cdef extern from "elem_graph.cc":
     cdef struct Point:
         float x, y
 
+    cdef struct ElemPlace:
+        float x, y, a
+
     cdef struct ElemGroup:
         int count_limit
         float priority
@@ -35,7 +38,7 @@ cdef extern from "elem_graph.cc":
 
     cdef struct ElemGraph:
         vector[Tvertex] group_id
-        vector[Point] centers
+        vector[ElemPlace] elems
         vector[BBox] coords
         vector[vector[Tvertex]] collisions
 
