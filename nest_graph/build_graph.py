@@ -244,28 +244,28 @@ wrect = 1
 wtriang = 1
 r = .2
 rule_set = PlacementRuleSet()
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=0, y=0, r=r, w=wrect, group=0
 ))
 # rule_set.append_point_rule(PointPlaceRule(
 #     x=0, y=0, r=r, w=wtriang, group=1
 # ))
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=1.2, y=0, r=r, w=wrect, group=0
 ))
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=1.2, y=0, r=r, w=wtriang, group=1
 ))
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=0, y=1.1, r=r, w=wrect, group=0
 ))
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=0, y=1.1, r=r, w=wtriang, group=1
 ))
 # rule_set.append_point_rule(PointPlaceRule(
 #     x=0.7, y=0.7, r=r, w=wrect, group=0
 # ))
-rule_set.append_point_rule(PointPlaceRule(
+rule_set.append_rule(PointPlaceRule(
     x=0.7, y=0.7, r=r, w=wtriang, group=1
 ))
 video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))

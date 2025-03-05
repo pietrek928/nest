@@ -28,13 +28,20 @@ cdef extern from "elem_graph.cc":
         float x, y, r, w
         Tvertex group
 
-    cdef struct PointPlaceRule:
-        float x, y, r, w
+    cdef struct PointAngleRule:
+        float x, y, a, r, w
+        Tvertex group
+
+    cdef struct BBoxAngleRule:
+        BBox bbox
+        float r, w
         Tvertex group
 
     cdef struct PlacementRuleSet:
         vector[PointPlaceRule] point_rules
         vector[BBoxPlaceRule] bbox_rules
+        vector[PointAngleRule] point_angle_rules
+        vector[BBoxAngleRule] bbox_angle_rules
 
     cdef struct ElemGraph:
         vector[Tvertex] group_id

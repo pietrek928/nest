@@ -7,6 +7,7 @@ from .elem_graph_ccexport cimport (
     Tvertex, Tscore,
     BBox as BBoxCC, Point as PointCC, ElemPlace as ElemPlaceCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
+    PointAngleRule as PointAngleRuleCC, BBoxAngleRule as BBoxAngleRuleCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
     nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc, score_elems as score_elems_cc,
     increase_selection_dfs as increase_selection_dfs_cc,
@@ -60,25 +61,52 @@ class BBoxAngleRule(BaseModel):
 cdef class PlacementRuleSet:
     cdef public PlacementRuleSetCC cpp_obj
 
-    def append_point_rule(self, point_rule : PointPlaceRule):
+    def append_rule(self, rule):
         cdef PointPlaceRuleCC point_rule_cc
-        point_rule_cc.x = point_rule.x
-        point_rule_cc.y = point_rule.y
-        point_rule_cc.r = point_rule.r
-        point_rule_cc.w = point_rule.w
-        point_rule_cc.group = point_rule.group
-        self.cpp_obj.point_rules.push_back(point_rule_cc)
-
-    def append_bbox_rule(self, bbox_rule : BBoxPlaceRule):
         cdef BBoxPlaceRuleCC bbox_rule_cc
-        bbox_rule_cc.bbox.xstart = bbox_rule.bbox.xstart
-        bbox_rule_cc.bbox.xend = bbox_rule.bbox.xend
-        bbox_rule_cc.bbox.ystart = bbox_rule.bbox.ystart
-        bbox_rule_cc.bbox.yend = bbox_rule.bbox.yend
-        bbox_rule_cc.r = bbox_rule.r
-        bbox_rule_cc.w = bbox_rule.w
-        bbox_rule_cc.group = bbox_rule.group
-        self.cpp_obj.bbox_rules.push_back(bbox_rule_cc)
+        cdef PointAngleRuleCC point_angle_rule_cc
+        cdef BBoxAngleRuleCC bbox_angle_rule_cc
+
+        if isinstance(rule, PointPlaceRule):
+            point_rule_cc.x = rule.x
+            point_rule_cc.y = rule.y
+            point_rule_cc.r = rule.r
+            point_rule_cc.w = rule.w
+            point_rule_cc.group = rule.group
+            self.cpp_obj.point_rules.push_back(point_rule_cc)
+
+        elif isinstance(rule, BBoxPlaceRule):
+            bbox_rule_cc.bbox.xstart = rule.bbox.xstart
+            bbox_rule_cc.bbox.xend = rule.bbox.xend
+            bbox_rule_cc.bbox.ystart = rule.bbox.ystart
+            bbox_rule_cc.bbox.yend = rule.bbox.yend
+            bbox_rule_cc.r = rule.r
+            bbox_rule_cc.w = rule.w
+            bbox_rule_cc.group = rule.group
+            self.cpp_obj.bbox_rules.push_back(bbox_rule_cc)
+
+        elif isinstance(rule, PointAngleRule):
+            point_angle_rule_cc.x = rule.x
+            point_angle_rule_cc.y = rule.y
+            point_angle_rule_cc.a = rule.a
+            point_angle_rule_cc.r = rule.r
+            point_angle_rule_cc.w = rule.w
+            point_angle_rule_cc.group = rule.group
+            self.cpp_obj.point_angle_rules.push_back(point_angle_rule_cc)
+        
+        elif isinstance(rule, BBoxAngleRule):
+            bbox_angle_rule_cc.bbox.xstart = rule.bbox.xstart
+            bbox_angle_rule_cc.bbox.xend = rule.bbox.xend
+            bbox_angle_rule_cc.bbox.ystart = rule.bbox.ystart
+            bbox_angle_rule_cc.bbox.yend = rule.bbox.yend
+            bbox_angle_rule_cc.a = rule.a
+            bbox_angle_rule_cc.r = rule.r
+            bbox_angle_rule_cc.w = rule.w
+            bbox_angle_rule_cc.group = rule.group
+            self.cpp_obj.bbox_angle_rules.push_back(bbox_angle_rule_cc)
+        
+        else:
+            raise ValueError(f'Unknown rule type {type(rule).__name__}')
 
 cdef class ElemGraph:
     cdef public ElemGraphCC cpp_obj
