@@ -13,7 +13,7 @@ from typing import Tuple
 
 from .elem_graph import (
     ElemGraph, BBox, Point,
-    PointPlaceRule, BBoxPlaceRule, PlacementRuleSet,
+    PointPlaceRule, BBoxPlaceRule, PointAngleRule, PlacementRuleSet,
     nest_by_graph, sort_graph, score_elems,
     increase_selection_dfs, increase_score_dfs
 )
@@ -250,23 +250,29 @@ rule_set.append_rule(PointPlaceRule(
 # rule_set.append_point_rule(PointPlaceRule(
 #     x=0, y=0, r=r, w=wtriang, group=1
 # ))
-rule_set.append_rule(PointPlaceRule(
-    x=1.2, y=0, r=r, w=wrect, group=0
-))
-rule_set.append_rule(PointPlaceRule(
-    x=1.2, y=0, r=r, w=wtriang, group=1
-))
-rule_set.append_rule(PointPlaceRule(
-    x=0, y=1.1, r=r, w=wrect, group=0
-))
-rule_set.append_rule(PointPlaceRule(
-    x=0, y=1.1, r=r, w=wtriang, group=1
-))
-# rule_set.append_point_rule(PointPlaceRule(
+# rule_set.append_rule(PointPlaceRule(
+#     x=1.2, y=0, r=r, w=wrect, group=0
+# ))
+# rule_set.append_rule(PointPlaceRule(
+#     x=1.2, y=0, r=r, w=wtriang, group=1
+# ))
+# rule_set.append_rule(PointPlaceRule(
+#     x=0, y=1.1, r=r, w=wrect, group=0
+# ))
+# rule_set.append_rule(PointPlaceRule(
+#     x=0, y=1.1, r=r, w=wtriang, group=1
+# ))
+# rule_set.append_rule(PointPlaceRule(
 #     x=0.7, y=0.7, r=r, w=wrect, group=0
 # ))
 rule_set.append_rule(PointPlaceRule(
     x=0.7, y=0.7, r=r, w=wtriang, group=1
+))
+rule_set.append_rule(PointAngleRule(
+    x=0.7, y=0.7, r=r, a=np.pi/4, w=wtriang, group=1
+))
+rule_set.append_rule(PointAngleRule(
+    x=0.7, y=0.7, r=r, a=np.pi*5/4, w=wtriang, group=1
 ))
 video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 
