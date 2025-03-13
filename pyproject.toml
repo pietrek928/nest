@@ -7,6 +7,7 @@ name = "nest_graph"
 version = "0.0.1"
 dependencies = [
     "numpy",
+    "matplotlib",
     "opencv-python",
     "pydantic",
     "shapely",

@@ -268,11 +268,29 @@ rule_set.append_rule(PointPlaceRule(
 rule_set.append_rule(PointPlaceRule(
     x=0.7, y=0.7, r=r, w=wtriang, group=1
 ))
+rule_set.append_rule(PointPlaceRule(
+    x=0, y=1.1, r=r, w=wtriang, group=1
+))
+rule_set.append_rule(PointPlaceRule(
+    x=1.2, y=0, r=r, w=wtriang, group=1
+))
+# rule_set.append_rule(PointAngleRule(
+#     x=0.7, y=0.7, r=r, a=np.pi/4, w=.1*wtriang, group=1
+# ))
+# rule_set.append_rule(PointAngleRule(
+#     x=0.7, y=0.7, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
+# ))
 rule_set.append_rule(PointAngleRule(
-    x=0.7, y=0.7, r=r, a=np.pi/4, w=wtriang, group=1
+    x=0, y=1.1, r=r, a=np.pi/4, w=.1*wtriang, group=1
 ))
 rule_set.append_rule(PointAngleRule(
-    x=0.7, y=0.7, r=r, a=np.pi*5/4, w=wtriang, group=1
+    x=0, y=1.1, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
+))
+rule_set.append_rule(PointAngleRule(
+    x=1.2, y=0, r=r, a=np.pi/4, w=.1*wtriang, group=1
+))
+rule_set.append_rule(PointAngleRule(
+    x=1.2, y=0, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
 ))
 video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 
@@ -280,19 +298,21 @@ history = [np.zeros((1, 3)), np.zeros((1, 3))]
 
 for it in tqdm(tuple(range(256))):
     s0 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
         history[0]
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
         s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 16))
-        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0.1), 16))
+        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0), 16))
         s0.append(transforms_around(selected_t[0], (0, 0, 0.1), 16))
         s0.append(transforms_around(selected_t[0], (0, 0, 0.01), 16))
         s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0), 16))
+        s0.append(transforms_around(history[0], (0.03, 0.03, 0), 2))
+        s0.append(transforms_around(history[0], (0, 0, 0.03), 2))
 
     s1 = [
-        np.random.rand(1024, 3) * [1.5, 1.5, 2 * np.pi],
+        np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
         history[1]
     ]
     if selected_t[1].shape[0] > 0:
@@ -302,6 +322,8 @@ for it in tqdm(tuple(range(256))):
         s1.append(transforms_around(selected_t[1], (0, 0, 0.1), 16))
         s1.append(transforms_around(selected_t[1], (0, 0, 0.01), 16))
         s1.append(transforms_around(selected_t[1], (0.001, 0.001, 0), 16))
+        s1.append(transforms_around(history[1], (0.03, 0.03, 0), 2))
+        s1.append(transforms_around(history[1], (0, 0, 0.03), 2))
 
     selected_t = [
         np.concatenate(s0),
@@ -316,7 +338,7 @@ for it in tqdm(tuple(range(256))):
     graph_sorted = sort_graph(graph, rule_set)
     graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
     scores = score_elems(graph, rule_set)
-    for _ in range(16):
+    for _ in range(3):
         selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8, 2)
         selected_polys = increase_selection_dfs(graph, selected_polys, 8, 1)
         selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, scores)
@@ -334,9 +356,9 @@ for it in tqdm(tuple(range(256))):
         selected_t[group_id[i]].append(transform[i])
     selected_t = tuple(np.array(t) for t in selected_t)
     if len(history[0]) and len(selected_t[0]):
-        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[1024:, :]
+        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[512:, :]
     if len(history[1]) and len(selected_t[1]):
-        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[1024:, :]
+        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[512:, :]
 
 # selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
 # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))

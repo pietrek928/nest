@@ -59,7 +59,7 @@ class BBoxAngleRule(BaseModel):
     group: int
 
 cdef class PlacementRuleSet:
-    cdef public PlacementRuleSetCC cpp_obj
+    cdef public PlacementRuleSetCC cc_obj
 
     def append_rule(self, rule):
         cdef PointPlaceRuleCC point_rule_cc
@@ -73,7 +73,7 @@ cdef class PlacementRuleSet:
             point_rule_cc.r = rule.r
             point_rule_cc.w = rule.w
             point_rule_cc.group = rule.group
-            self.cpp_obj.point_rules.push_back(point_rule_cc)
+            self.cc_obj.point_rules.push_back(point_rule_cc)
 
         elif isinstance(rule, BBoxPlaceRule):
             bbox_rule_cc.bbox.xstart = rule.bbox.xstart
@@ -83,7 +83,7 @@ cdef class PlacementRuleSet:
             bbox_rule_cc.r = rule.r
             bbox_rule_cc.w = rule.w
             bbox_rule_cc.group = rule.group
-            self.cpp_obj.bbox_rules.push_back(bbox_rule_cc)
+            self.cc_obj.bbox_rules.push_back(bbox_rule_cc)
 
         elif isinstance(rule, PointAngleRule):
             point_angle_rule_cc.x = rule.x
@@ -92,7 +92,7 @@ cdef class PlacementRuleSet:
             point_angle_rule_cc.r = rule.r
             point_angle_rule_cc.w = rule.w
             point_angle_rule_cc.group = rule.group
-            self.cpp_obj.point_angle_rules.push_back(point_angle_rule_cc)
+            self.cc_obj.point_angle_rules.push_back(point_angle_rule_cc)
         
         elif isinstance(rule, BBoxAngleRule):
             bbox_angle_rule_cc.bbox.xstart = rule.bbox.xstart
@@ -103,31 +103,31 @@ cdef class PlacementRuleSet:
             bbox_angle_rule_cc.r = rule.r
             bbox_angle_rule_cc.w = rule.w
             bbox_angle_rule_cc.group = rule.group
-            self.cpp_obj.bbox_angle_rules.push_back(bbox_angle_rule_cc)
+            self.cc_obj.bbox_angle_rules.push_back(bbox_angle_rule_cc)
         
         else:
             raise ValueError(f'Unknown rule type {type(rule).__name__}')
 
 cdef class ElemGraph:
-    cdef public ElemGraphCC cpp_obj
+    cdef public ElemGraphCC cc_obj
 
     def append_elem(self, group_id: int, center: Point, coord: BBox):
-        self.cpp_obj.group_id.push_back(group_id)
+        self.cc_obj.group_id.push_back(group_id)
         cdef ElemPlaceCC place_cc
         place_cc.x = center.x
         place_cc.y = center.y
-        self.cpp_obj.elems.push_back(place_cc)
+        self.cc_obj.elems.push_back(place_cc)
         cdef BBoxCC coord_cc
         coord_cc.xstart = coord.xstart
         coord_cc.xend = coord.xend
         coord_cc.ystart = coord.ystart
         coord_cc.yend = coord.yend
-        self.cpp_obj.coords.push_back(coord_cc)
-        self.cpp_obj.collisions.emplace_back()
+        self.cc_obj.coords.push_back(coord_cc)
+        self.cc_obj.collisions.emplace_back()
 
     def add_collision(self, group1: int, group2: int):
-        self.cpp_obj.collisions[group1].push_back(group2)
-        self.cpp_obj.collisions[group2].push_back(group1)
+        self.cc_obj.collisions[group1].push_back(group2)
+        self.cc_obj.collisions[group2].push_back(group1)
 
 
 cdef class ElemOrder:
@@ -141,26 +141,26 @@ cdef class ElemScores:
 def nest_by_graph(ElemGraph g, List[PlacementRuleSet] cases):
     cdef vector[PlacementRuleSetCC] cases_cc
     for case in cases:
-        cases_cc.push_back(case.cpp_obj)
-    cdef vector[vector[Tvertex]] result = nest_by_graph_cc(g.cpp_obj, cases_cc)
+        cases_cc.push_back(case.cc_obj)
+    cdef vector[vector[Tvertex]] result = nest_by_graph_cc(g.cc_obj, cases_cc)
     return result
 
 
 def sort_graph(ElemGraph g, PlacementRuleSet rules, bool reverse=False):
     r = ElemGraph()
-    r.cpp_obj = sort_graph_cc(g.cpp_obj, rules.cpp_obj, reverse)
+    r.cc_obj = sort_graph_cc(g.cc_obj, rules.cc_obj, reverse)
     return r
 
 
 def score_elems(ElemGraph g, PlacementRuleSet rules):
     scores = ElemScores()
-    scores.scores = score_elems_cc(g.cpp_obj, rules.cpp_obj)
+    scores.scores = score_elems_cc(g.cc_obj, rules.cc_obj)
     return scores
 
 
 def increase_selection_dfs(ElemGraph g, List[int] selection, max_tries: int, min_collisions: int):
-    return increase_selection_dfs_cc(g.cpp_obj, selection, max_tries, min_collisions)
+    return increase_selection_dfs_cc(g.cc_obj, selection, max_tries, min_collisions)
 
 
 def increase_score_dfs(ElemGraph g, List[int] selection, ElemScores scores):
-    return increase_score_dfs_cc(g.cpp_obj, selection, scores.scores)
+    return increase_score_dfs_cc(g.cc_obj, selection, scores.scores)

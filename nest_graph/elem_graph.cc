@@ -5,6 +5,7 @@
 #include <random>
 #include <stdexcept>
 #include <vector>
+#include "types.h"
 
 
 float bbox_qdist(const BBox &a, const BBox &b) {
@@ -31,16 +32,18 @@ Tscore compute_score(const BBoxPlaceRule &p, const BBox &bbox) {
 
 Tscore compute_score(const PointAngleRule &p, float x, float y, float a) {
     float adist = std::abs(p.a - a);
-    adist = - std::min(adist, 2 * (Tscore)M_PI - adist);
+    while (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
+    adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0;
     float qdist = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) + 1.0;
-    return p.w * adist * std::exp(-qdist / p.r);
+    return p.w * std::exp(-qdist * adist / p.r);
 }
 
 Tscore compute_score(const BBoxAngleRule &p, const BBox &bbox, float a) {
     float adist = std::abs(p.a - a);
-    adist = - std::min(adist, 2 * (Tscore)M_PI - adist);
+    while (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
+    adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0;
     float qdist = bbox_qdist(p.bbox, bbox) + 1.0;
-    return p.w * adist * std::exp(-qdist / p.r);
+    return p.w * std::exp(-qdist * adist / p.r);
 }
 
 std::vector<std::vector<Tvertex>> get_elems_by_group(const ElemGraph &g) {
@@ -133,6 +136,32 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
         result.push_back(selected);
     }
     return result;
+}
+
+std::vector<Tscore> score_rules(
+    const std::vector<ElemGraph> &graphs,
+    const std::vector<PlacementRuleSet> &rule_sets
+) {
+    std::vector<Tscore> rule_scores;
+
+    std::vector<Tscore> elem_scores;
+    std::vector<bool> marked;
+    std::vector<Tvertex> selected;
+    std::vector<Tvertex> points_sort_buf;
+
+    for (auto &graph : graphs) {
+        auto elems_by_group = get_elems_by_group(graph);
+
+        for (int i=0; i<rule_sets.size(); i++) {
+            compute_scores(graph, elems_by_group, elem_scores, rule_sets[i]);
+            select_elems(graph, elems_by_group, rule_sets[i], elem_scores, marked, selected, points_sort_buf);
+
+            // TODO: make better scoring
+            rule_scores[i] += selected.size();
+        }
+    }
+
+    return rule_scores;
 }
 
 void sort_collisions(std::vector<std::vector<Tvertex>> collisions, Tscore *scores, bool reverse) {
