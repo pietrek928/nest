@@ -8,7 +8,9 @@ from .elem_graph_ccexport cimport (
     BBox as BBoxCC, Point as PointCC, ElemPlace as ElemPlaceCC, ElemGroup as ElemGroupCC,
     PointPlaceRule as PointPlaceRuleCC, BBoxPlaceRule as BBoxPlaceRuleCC,
     PointAngleRule as PointAngleRuleCC, BBoxAngleRule as BBoxAngleRuleCC,
+    RuleMutationSettings as RuleMutationSettingsCC,
     ElemGraph as ElemGraphCC, PlacementRuleSet as PlacementRuleSetCC,
+    augment_rules as augment_rules_cc,
     nest_by_graph as nest_by_graph_cc, sort_graph as sort_graph_cc, score_elems as score_elems_cc,
     increase_selection_dfs as increase_selection_dfs_cc,
     increase_score_dfs as increase_score_dfs_cc
@@ -107,6 +109,29 @@ cdef class PlacementRuleSet:
         
         else:
             raise ValueError(f'Unknown rule type {type(rule).__name__}')
+
+class RuleMutationSettings(BaseModel):
+    box: BBox
+    dpos: float
+    dw: float
+    da: float
+    insert_p: float
+    remove_p: float
+    mutate_p: float
+    ngroups: int
+
+def augment_rules(rules: List[PlacementRuleSet], settings: RuleMutationSettings):
+    cdef RuleMutationSettingsCC settings_cc
+    settings_cc.box = settings.box
+    settings_cc.dpos = settings.dpos
+    settings_cc.dw = settings.dw
+    settings_cc.da = settings.da
+    settings_cc.insert_p = settings.insert_p
+    settings_cc.remove_p = settings.remove_p
+    settings_cc.mutate_p = settings.mutate_p
+    settings_cc.ngroups = settings.ngroups
+
+    return augment_rules_cc(rules, settings_cc)
 
 cdef class ElemGraph:
     cdef public ElemGraphCC cc_obj

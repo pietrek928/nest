@@ -1,7 +1,3 @@
-[build-system]
-requires = ["setuptools>=45", "wheel", "Cython>=0.29.21"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "nest_graph"
 version = "0.0.1"
@@ -14,6 +10,13 @@ dependencies = [
     "rtree",
     "tqdm",
 ]
+
+[build-system]
+requires = ["setuptools>=45", "wheel", "Cython>=0.29.21"]
+build-backend = "setuptools.build_meta"
+
+[tool.cython]
+language_level = "3"
 
 [tool.setuptools]
 packages = ["nest_graph"]
