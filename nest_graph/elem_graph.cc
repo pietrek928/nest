@@ -95,7 +95,7 @@ void select_elems(
 ) {
     marked.resize(g.size());
     std::fill(marked.begin(), marked.end(), false);
-    selected.resize(0);
+    selected.clear();
 
     // sort points by score
     points_sort_buf.resize(g.size());
@@ -142,7 +142,7 @@ std::vector<Tscore> score_rules(
     const std::vector<ElemGraph> &graphs,
     const std::vector<PlacementRuleSet> &rule_sets
 ) {
-    std::vector<Tscore> rule_scores;
+    std::vector<Tscore> rule_scores(rule_sets.size(), 0.0);
 
     std::vector<Tscore> elem_scores;
     std::vector<bool> marked;

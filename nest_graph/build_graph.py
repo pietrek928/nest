@@ -14,7 +14,8 @@ from typing import Tuple
 from .elem_graph import (
     ElemGraph, BBox, Point,
     PointPlaceRule, BBoxPlaceRule, PointAngleRule, PlacementRuleSet,
-    nest_by_graph, sort_graph, score_elems,
+    RuleMutationSettings,
+    nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
     increase_selection_dfs, increase_score_dfs
 )
 
@@ -231,6 +232,40 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
     return im
 
 
+def improve_rules(graphs, rules, mutation_settings, n):
+    rules = list(rules)
+    for _ in range(16):
+        rules.extend(augment_rules(rules, mutation_settings))
+    scores = score_rules(graphs, rules)
+    scored = []
+    for s, r in zip(scores, rules):
+        scored.append((s - r.size() * .3, r))
+    scored = sorted(scored, key=lambda x: x[0], reverse=True)
+    return [
+        v[1] for v in scored[:n]
+    ]
+
+
+mutation_settings = RuleMutationSettings(
+    box=BBox(xstart=0, ystart=0, xend=1.2, yend=1.1),
+    dpos=.05,
+    dw=.05,
+    da=np.pi/16,
+    insert_p=0.1,
+    remove_p=0.1,
+    mutate_p=0.15,
+    ngroups=2
+)
+graphs = []
+first_rule_set = PlacementRuleSet()
+first_rule_set.append_rule(PointPlaceRule(
+    x=0, y=0, r=.1, w=.1, group=0
+))
+first_rule_set.append_rule(PointPlaceRule(
+    x=0, y=0, r=.1, w=.1, group=1
+))
+rule_sets = [first_rule_set]
+
 p_board = Polygon([(0, 0), (1.2, 0), (0, 1.1)])
 p1 = Polygon([(0, 0), (.1, 0), (.1, .1), (0, .1)])
 p2 = Polygon([(0, 0), (.15, 0), (0, .07)])
@@ -303,11 +338,11 @@ for it in tqdm(tuple(range(256))):
     ]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
-        s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 16))
-        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0), 16))
-        s0.append(transforms_around(selected_t[0], (0, 0, 0.1), 16))
-        s0.append(transforms_around(selected_t[0], (0, 0, 0.01), 16))
-        s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0), 16))
+        s0.append(transforms_around(selected_t[0], (0.05, 0.05, 1), 8))
+        s0.append(transforms_around(selected_t[0], (0.01, 0.01, 0), 8))
+        s0.append(transforms_around(selected_t[0], (0, 0, 0.1), 8))
+        s0.append(transforms_around(selected_t[0], (0, 0, 0.01), 8))
+        s0.append(transforms_around(selected_t[0], (0.001, 0.001, 0), 8))
         s0.append(transforms_around(history[0], (0.03, 0.03, 0), 2))
         s0.append(transforms_around(history[0], (0, 0, 0.03), 2))
 
@@ -317,11 +352,11 @@ for it in tqdm(tuple(range(256))):
     ]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
-        s1.append(transforms_around(selected_t[1], (0.05, 0.05, 1), 16))
-        s1.append(transforms_around(selected_t[1], (0.01, 0.01, 0), 16))
-        s1.append(transforms_around(selected_t[1], (0, 0, 0.1), 16))
-        s1.append(transforms_around(selected_t[1], (0, 0, 0.01), 16))
-        s1.append(transforms_around(selected_t[1], (0.001, 0.001, 0), 16))
+        s1.append(transforms_around(selected_t[1], (0.05, 0.05, 1), 8))
+        s1.append(transforms_around(selected_t[1], (0.01, 0.01, 0), 8))
+        s1.append(transforms_around(selected_t[1], (0, 0, 0.1), 8))
+        s1.append(transforms_around(selected_t[1], (0, 0, 0.01), 8))
+        s1.append(transforms_around(selected_t[1], (0.001, 0.001, 0), 8))
         s1.append(transforms_around(history[1], (0.03, 0.03, 0), 2))
         s1.append(transforms_around(history[1], (0, 0, 0.03), 2))
 
@@ -330,10 +365,13 @@ for it in tqdm(tuple(range(256))):
         np.concatenate(s1),
     ]
     graph, polys, group_id, transform = make_polygon_graph(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
+    graphs.append(graph)
+    graphs = graphs[-16:]
+    rule_sets = improve_rules(graphs, rule_sets, mutation_settings, 128)
     # M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
     # print('------', M.shape, M.sum()/M.shape[0])
     # v = optimize_polygons(M, np.zeros((M.shape[0], )))
-    selected_polys = nest_by_graph(graph, [rule_set])[0]
+    selected_polys = nest_by_graph(graph, rule_sets[:1])[0]
     old_len = len(selected_polys)
     graph_sorted = sort_graph(graph, rule_set)
     graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
@@ -356,9 +394,9 @@ for it in tqdm(tuple(range(256))):
         selected_t[group_id[i]].append(transform[i])
     selected_t = tuple(np.array(t) for t in selected_t)
     if len(history[0]) and len(selected_t[0]):
-        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[512:, :]
+        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[2048:, :]
     if len(history[1]) and len(selected_t[1]):
-        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[512:, :]
+        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[2048:, :]
 
 # selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
 # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))

@@ -42,6 +42,7 @@ cdef extern from "elem_graph.cc":
         vector[BBoxPlaceRule] bbox_rules
         vector[PointAngleRule] point_angle_rules
         vector[BBoxAngleRule] bbox_angle_rules
+    int size(const PlacementRuleSet &s)
 
     cdef struct RuleMutationSettings:
         BBox box
@@ -62,6 +63,9 @@ cdef extern from "elem_graph.cc":
     vector[vector[Tvertex]] nest_by_graph(const ElemGraph& g, const vector[PlacementRuleSet]& cases)
     vector[Tscore] score_elems(const ElemGraph& g, const PlacementRuleSet& rules)
     ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse)
+    vector[Tscore] score_rules(
+        const vector[ElemGraph] &graphs, const vector[PlacementRuleSet] &rule_sets
+    )
     vector[Tvertex] increase_selection_dfs(
         const ElemGraph &g, const vector[Tvertex] &selected_nodes, int max_tries, int min_collisions
     )

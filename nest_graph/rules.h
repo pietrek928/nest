@@ -37,11 +37,11 @@ typedef struct PlacementRuleSet {
     std::vector<BBoxPlaceRule> bbox_rules;
     std::vector<PointAngleRule> point_angle_rules;
     std::vector<BBoxAngleRule> bbox_angle_rules;
-    inline auto size () {
+    inline auto size () const  {
         return point_rules.size() + bbox_rules.size() + point_angle_rules.size() + bbox_angle_rules.size();
     }
 } PlacementRuleSet;
-
+inline auto size(const PlacementRuleSet &s) {return s.size();}
 
 typedef struct RuleMutationSettings {
     BBox box;
