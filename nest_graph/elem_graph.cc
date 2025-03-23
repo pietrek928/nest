@@ -32,7 +32,7 @@ Tscore compute_score(const BBoxPlaceRule &p, const BBox &bbox) {
 
 Tscore compute_score(const PointAngleRule &p, float x, float y, float a) {
     float adist = std::abs(p.a - a);
-    while (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
+    if (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
     adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0;
     float qdist = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y) + 1.0;
     return p.w * std::exp(-qdist * adist / p.r);
@@ -40,7 +40,7 @@ Tscore compute_score(const PointAngleRule &p, float x, float y, float a) {
 
 Tscore compute_score(const BBoxAngleRule &p, const BBox &bbox, float a) {
     float adist = std::abs(p.a - a);
-    while (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
+    if (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
     adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0;
     float qdist = bbox_qdist(p.bbox, bbox) + 1.0;
     return p.w * std::exp(-qdist * adist / p.r);

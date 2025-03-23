@@ -233,13 +233,13 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
 
 
 def improve_rules(graphs, rules, mutation_settings, n):
-    rules = list(rules)
-    for _ in range(16):
-        rules.extend(augment_rules(rules, mutation_settings))
-    scores = score_rules(graphs, rules)
+    new_rules = list(rules)
+    for _ in range(4):
+        new_rules.extend(augment_rules(rules, mutation_settings))
+    scores = score_rules(graphs, new_rules)
     scored = []
-    for s, r in zip(scores, rules):
-        scored.append((s - r.size() * .3, r))
+    for s, r in zip(scores, new_rules):
+        scored.append((s - r.size() * .4, r))
     scored = sorted(scored, key=lambda x: x[0], reverse=True)
     return [
         v[1] for v in scored[:n]
@@ -248,12 +248,12 @@ def improve_rules(graphs, rules, mutation_settings, n):
 
 mutation_settings = RuleMutationSettings(
     box=BBox(xstart=0, ystart=0, xend=1.2, yend=1.1),
-    dpos=.05,
-    dw=.05,
-    da=np.pi/16,
-    insert_p=0.1,
-    remove_p=0.1,
-    mutate_p=0.15,
+    dpos=.025,
+    dw=.025,
+    da=np.pi/32,
+    insert_p=0.2,
+    remove_p=0.2,
+    mutate_p=0.35,
     ngroups=2
 )
 graphs = []
@@ -366,8 +366,8 @@ for it in tqdm(tuple(range(256))):
     ]
     graph, polys, group_id, transform = make_polygon_graph(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
     graphs.append(graph)
-    graphs = graphs[-16:]
-    rule_sets = improve_rules(graphs, rule_sets, mutation_settings, 128)
+    graphs = graphs[-6:]
+    rule_sets = improve_rules(graphs, rule_sets, mutation_settings, 32)
     # M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
     # print('------', M.shape, M.sum()/M.shape[0])
     # v = optimize_polygons(M, np.zeros((M.shape[0], )))
@@ -394,9 +394,9 @@ for it in tqdm(tuple(range(256))):
         selected_t[group_id[i]].append(transform[i])
     selected_t = tuple(np.array(t) for t in selected_t)
     if len(history[0]) and len(selected_t[0]):
-        history[0] = np.unique(np.concatenate([history[0], selected_t[0]]), axis=0)[2048:, :]
+        history[0] = np.unique(np.concatenate([selected_t[0], history[0]]), axis=0)[256:, :]
     if len(history[1]) and len(selected_t[1]):
-        history[1] = np.unique(np.concatenate([history[1], selected_t[1]]), axis=0)[2048:, :]
+        history[1] = np.unique(np.concatenate([selected_t[1], history[1]]), axis=0)[256:, :]
 
 # selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
 # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))

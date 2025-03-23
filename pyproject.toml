@@ -25,7 +25,8 @@ packages = ["nest_graph"]
 name = "nest_graph.elem_graph"
 sources = ["nest_graph/elem_graph.pyx"]
 language = "c++"
-extra-compile-args = ["-std=c++17", "-Ofast"]
+# extra-compile-args = ["-std=c++17", "-march=native", "-Ofast"]
+extra-compile-args = ["-std=c++17", "-march=native", "-O2", "-g"]
 
 [tool.setuptools.cmdclass]
 build_ext = "Cython.Build.build_ext"
