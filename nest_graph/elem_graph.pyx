@@ -69,12 +69,6 @@ cdef class PlacementRuleSet:
     cdef set_cc_obj(self, PlacementRuleSetCC *cc_ptr):
         self.cc_obj = cc_ptr[0]
 
-    # cdef __cinit__(self, PlacementRuleSetCC *cc_ptr = NULL):
-    #     if cc_ptr is NULL:
-    #         self.cc_obj = PlacementRuleSetCC()
-    #     else:
-    #         self.cc_obj = cc[0]
-
     def append_rule(self, rule):
         cdef PointPlaceRuleCC point_rule_cc
         cdef BBoxPlaceRuleCC bbox_rule_cc
@@ -125,17 +119,6 @@ cdef class PlacementRuleSet:
     def size(self):
         return size(self.cc_obj)
 
-cdef PlacementRuleSet_Init(PlacementRuleSetCC *cc_obj = NULL):
-    r = PlacementRuleSet()
-    if cc_obj is not NULL:
-        r.set_cc_obj(cc_obj)
-    return r
-
-# cdef PlacementRuleSet_Init(const PlacementRuleSetCC *cc_obj):
-#     r = PlacementRuleSet()
-#     r.cc_obj = cc_obj[0]
-#     return r
-
 class RuleMutationSettings(BaseModel):
     box: BBox
     dpos: float
@@ -148,14 +131,10 @@ class RuleMutationSettings(BaseModel):
 
 cdef _transform_rules_to_cc(vector[PlacementRuleSetCC] &rules_cc):
     rules = []
-    cdef vector[PlacementRuleSetCC].iterator it = rules_cc.begin()
-    cdef PlacementRuleSetCC rule_set
-    while it != rules_cc.end():
+    for rule_set in rules_cc:
         r = PlacementRuleSet()
-        rule_set = deref(it)
         r.cc_obj = rule_set
         rules.append(r)
-        inc(it)
     return rules
 
 def augment_rules(
