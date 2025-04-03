@@ -2,9 +2,20 @@
 
 #include <vector>
 #include <random>
+#include <cmath>
 
 #include "types.h"
 
+template<class T>
+T adjust_angle(T a) {
+    if (a < 0) {
+        return a + 2 * M_PI;
+    } 
+    if (a > 2 * M_PI) {
+        return a - 2 * M_PI;
+    }
+    return a;
+}
 
 typedef struct PointPlaceRule {
     float x, y, r, w;
@@ -136,7 +147,7 @@ PointAngleRule mutate_random(
     return {
         .x = p.x + distrib_pos(gen),
         .y = p.y + distrib_pos(gen),
-        .a = p.a + distrib_a(gen),
+        .a = adjust_angle(p.a + distrib_a(gen)),
         .w = p.w + distrib_w(gen),
         .group = p.group
     };
@@ -151,7 +162,7 @@ PointAngleRule generate_random_point_angle_rule(
     return {
         .x = distrib_x(gen),
         .y = distrib_y(gen),
-        .a = distrib_a(gen),
+        .a = adjust_angle(distrib_a(gen)),
         .w = distrib_w(gen),
         .group = distrib_group(gen)
     };
@@ -166,7 +177,7 @@ BBoxAngleRule mutate_random(
 ) {
     return {
         .bbox = mutate_random(p.bbox, gen, distrib_pos),
-        .a = p.a + distrib_a(gen),
+        .a = adjust_angle(p.a + distrib_a(gen)),
         .r = p.r + distrib_pos(gen),
         .w = p.w + distrib_w(gen),
         .group = p.group
@@ -181,7 +192,7 @@ BBoxAngleRule generate_random_bbox_angle_rule(
 ) {
     return {
         .bbox = generate_random_bbox(gen, distrib_x, distrib_y),
-        .a = distrib_a(gen),
+        .a = adjust_angle(distrib_a(gen)),
         .r = distrib_r(gen),
         .w = distrib_w(gen),
         .group = distrib_group(gen)
