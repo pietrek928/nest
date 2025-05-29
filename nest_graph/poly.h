@@ -1,4 +1,9 @@
+#include <algorithm>
+#include <cmath>
+#include <tuple>
+
 #include "vec.h"
+#include "geom_obj.h"
 
 
 template <class T>
@@ -209,4 +214,74 @@ inline T convex_line_rings_qdist(
         .it1 = it1,
         .it2 = it2,
     };
+}
+
+
+template <class T>
+inline bool polygons_intersect(
+    const Polygon<T> &p1, const Polygon<T> &p2
+) {
+    for (int i=0; i<p1.circles.size(); i++) {
+        const auto &c1 = p1.circles[i];
+        auto r1 = std::sqrt(c1.square_radius());
+        for (int j=0; j<p2.circles.size(); j++) {
+            const auto &c2 = p2.circles[j];
+            auto dist = std::sqrt(c1.center.qdist(c2.center));
+            auto r2 = std::sqrt(c2.square_radius());
+            if (dist <= r1 + r2) {
+                const auto *conv1_pts = &p1.points[p1.convex_ends[i]];
+                auto conv1_n = p1.convex_ends[i+1] - p1.convex_ends[i];
+                const auto *conv2_pts = &p2.points[p2.convex_ends[j]];
+                auto conv2_n = p2.convex_ends[j+1] - p2.convex_ends[j];
+
+                if (convex_polygons_intersect(
+                    conv1_pts, conv1_n, conv2_pts, conv2_n
+                )) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+template <class T>
+inline T polygons_distance(
+    const Polygon<T> &p1, const Polygon<T> &p2
+) {
+    // TODO: pass buffer here
+    std::vector<std::tuple<float, int, int>> buffer;
+    for (int i=0; i<p1.circles.size(); i++) {
+        const auto &c1 = p1.circles[i];
+        auto r1 = std::sqrt(c1.square_radius());
+        for (int j=0; j<p2.circles.size(); j++) {
+            const auto &c2 = p2.circles[j];
+            auto dist = std::sqrt(c1.center.qdist(c2.center));
+            auto r2 = std::sqrt(c2.square_radius());
+            buffer.emplace_back(dist - r1 - r2, i, j);
+        }
+    }
+    std::sort(buffer.begin(), buffer.end());
+
+    T dist = 1e18;
+    for (const auto &t : buffer) {
+        if (std::get<0>(t) >= dist) {
+            break;
+        }
+        auto p1_pos = std::get<1>(t);
+        auto p2_pos = std::get<2>(t);
+        const auto *conv1_pts = &p1.points[p1.convex_ends[p1_pos]];
+        auto conv1_n = p1.convex_ends[p1_pos+1] - p1.convex_ends[p1_pos];
+        const auto *conv2_pts = &p2.points[p2.convex_ends[p2_pos]];
+        auto conv2_n = p2.convex_ends[p2_pos+1] - p2.convex_ends[p2_pos];
+
+        auto res = convex_line_rings_qdist(
+            conv1_pts, conv1_n, conv2_pts, conv2_n
+        );
+        auto new_dist = std::sqrt(res.qdist);
+        if (new_dist < dist) {
+            dist = new_dist;
+        }
+    }
+    return dist;
 }

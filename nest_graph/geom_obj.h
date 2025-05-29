@@ -46,15 +46,25 @@ class Circle {
     bool is_inside(Vec<2, T> p) {
         return p.qdist(c) <= qr;
     }
+
+    auto center() const {
+        return c;
+    }
+
+    auto square_radius() const {
+        return qr;
+    }
 };
 
+// TODO: deeper convex parts hierarchy
 template<class T>
 class Polygon {
+    public:
+
     std::vector<Vec<2, T>> points;
     std::vector<int> convex_ends;
     std::vector<Circle<T>> circles;
 
-    public:
     Polygon(
         const std::vector<Vec<2, T>> &points,
         const std::vector<int> &convex_ends,
