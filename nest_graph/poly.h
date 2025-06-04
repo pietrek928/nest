@@ -218,6 +218,116 @@ inline T convex_line_rings_qdist(
 
 
 template <class T>
+inline T convex_line_strings_qdist(
+    const Vec<2, T> *string1, unsigned int n1,
+    const Vec<2, T> *string2, unsigned int n2,
+    unsigned int it1 = 0, unsigned int it2 = 0
+) {
+    typedef struct {
+        T qdist;
+        unsigned int it1, it2;
+    } ret_t;
+
+    T qdist = 1e18, tmp_qdist;
+    bool cont = false;
+
+    auto p1 = string1[it1];
+    auto p2 = string2[it2];
+
+    do {
+        cont = false;
+
+        bool moved_next;
+        do {
+            bool moved_next = false;
+            {
+                auto it2_next = it2 + 1;
+                while (it2_next < n2) {
+                    auto p2_next = string2[it2_next];
+                    auto tmp_qdist = segment_qdist(p2 - p1, p2_next - p2);
+                    if (tmp_qdist >= qdist) {
+                        break;
+                    }
+                    qdist = tmp_qdist;
+                    it2 = it2_next;
+                    p2 = p2_next;
+                    it2_next = it2 + 1;
+                    moved_next = true;
+                }
+            }
+
+            {
+                auto it1_next = it1 + 1;
+                while (it1_next < n1) {
+                    auto p1_next = string1[it1_next];
+                    auto tmp_qdist = segment_qdist(p1 - p2, p1_next - p1);
+                    if (tmp_qdist >= qdist) {
+                        break;
+                    }
+                    qdist = tmp_qdist;
+                    it1 = it1_next;
+                    p1 = p1_next;
+                    it1_next = it1 + 1;
+                    moved_next = true;
+                }
+            }
+
+            if (moved_next) {
+                cont = true;
+            }
+        } while (moved_next);
+
+        bool moved_prev;
+        do {
+            bool moved_prev = false;
+
+            {
+                auto it2_prev = it2 - 1;
+                while (it2_prev >= 0) {
+                    auto p2_prev = string2[it2_prev];
+                    auto tmp_qdist = segment_qdist(p2 - p1, p2_prev - p2);
+                    if (tmp_qdist >= qdist) {
+                        break;
+                    }
+                    qdist = tmp_qdist;
+                    it2 = it2_prev;
+                    p2 = p2_prev;
+                    it2_prev = it2 - 1;
+                    moved_prev = true;
+                }
+            }
+
+            {
+                auto it1_prev = it1 - 1;
+                while (it1_prev >= 0) {
+                    auto p1_prev = string1[it1_prev];
+                    auto tmp_qdist = segment_qdist(p1 - p2, p1_prev - p1);
+                    if (tmp_qdist >= qdist) {
+                        break;
+                    }
+                    qdist = tmp_qdist;
+                    it1 = it1_prev;
+                    p1 = p1_prev;
+                    it1_prev = it1 - 1;
+                    moved_prev = true;
+                }
+            }
+
+            if (moved_prev) {
+                cont = true;
+            }
+        } while (moved_prev);
+    } while (cont);
+
+    return ret_t{
+        .qdist = qdist,
+        .it1 = it1,
+        .it2 = it2,
+    };
+}
+
+
+template <class T>
 inline bool polygons_intersect(
     const Polygon<T> &p1, const Polygon<T> &p2
 ) {
