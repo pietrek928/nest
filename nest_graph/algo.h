@@ -34,15 +34,26 @@ inline T &circle_pos(T *A, int n, int npoints, int pos) {
 }
 
 template <class T>
-std::vector<Circle<T>> all_bounding_circles(Vec<2, T>* pts, int n) {
+std::vector<Circle<T>> convex_bounding_circles(Vec<2, T>* pts, int n) {
     std::vector<Vec<2, T>> pts_round(pts, pts + n);
     std::vector<Vec<2, T>> pts_tmp(n);
     Vec<2, T> R[3];
     pts_round.emplace(pts, pts + n);
-    std::vector<Circle<T>> result(n * (n-2));
+    std::vector<Circle<T>> result(n * (n-2), Circle<T>(Vec<2, T>(0, 0), 1e18));
 
     for (int i=0; i<n; i++) {
-        for (int j=2; j<=n; j++) {
+        circle_pos(pts_tmp.data(), n, 2, i) = Circle<T>::from(pts_round[i], pts_round[i+1]);
+
+        int last_direction = -1;
+        for (int j=3; j<=n; j++) {
+            int direction = turns_right(pts[i+j-3]-pts[i+j-1], pts[i+j-2]-pts[i+j-1]);
+            if (direction != last_direction) {
+                if (last_direction == -1) {
+                    last_direction = direction;
+                } else {
+                    break;
+                }
+            }
             std::memcpy(pts_tmp.data(), pts_round.data() + i, j * sizeof(T));
             circle_pos(pts_tmp.data(), n, j, i) = bounding_circle(pts_tmp.data(), j, R);
         }
@@ -118,4 +129,25 @@ Polygon<T> &&polygon_from_split(Vec<2, T> *pts, int n, int start_pos, int *conve
     }
 
     return Polygon<T>(points, convex_ends, circles);
+}
+
+template<class T>
+int find_mid_angle_point(Vec<2, T> *pts, int n) {
+    if (n <= 3) {
+        return n >> 1;
+    }
+    auto vm = pts[1] - pts[0] - pts[n-2] + pts[n-1];
+
+    int last_direction = -1;
+    for (int it=0; it<n-1; it++) {
+        int direction = turns_right(pts[it+1]-pts[it], vm);
+        if (direction != last_direction) {
+            if (last_direction == -1) {
+                last_direction = direction;
+            } else {
+                return it;
+            }
+        }
+    }
+    return n-1;
 }

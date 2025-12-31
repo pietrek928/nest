@@ -27,13 +27,16 @@ class Circle {
         return Circle(p + a, p.qlen());
     }
 
+    static Circle from(Vec<2, T> a, Vec<2, T> b) {
+        return Circle((a + b) * .5, (a - b).qlen() * .5);
+    }
+
     static Circle from(Vec<2, T>* pts, int n) {
         switch (n) {
             case 1:
                 return Circle(pts[0], 0);
             case 2: {
-                return Circle(
-                    (pts[0] + pts[1]) * .5, pts[0].qdist(pts[1]) * .25);
+                return from(pts[0], pts[1])
             }
             case 3: {
                 return from(pts[0], pts[1], pts[2]);
@@ -56,18 +59,27 @@ class Circle {
     }
 };
 
+template <class T>
+class FragmentBoundingCircle {
+    Vec<2, T> c;
+    T r;
+    int start_pos, mid_angle_pos;
+
+    public:
+    FragmentBoundingCircle(Vec<2, T> c, T r, int start_pos, int mid_angle_pos)
+        : c(c), r(r), start_pos(start_pos), mid_angle_pos(mid_angle_pos) {}
+};
+
 // TODO: deeper convex parts hierarchy
 template<class T>
 class Polygon {
     public:
 
     std::vector<Vec<2, T>> points;
-    std::vector<int> convex_ends;
-    std::vector<Circle<T>> circles;
+    std::vector<FragmentBoundingCircle<T>> circles;
 
     Polygon(
         const std::vector<Vec<2, T>> &points,
-        const std::vector<int> &convex_ends,
-        const std::vector<Circle<T>> &circles)
-        : points(points), convex_ends(convex_ends), circles(circles) {}
+        const std::vector<FragmentBoundingCircle<T>> &circles)
+        : points(points), circles(circles) {}
 };
