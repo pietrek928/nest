@@ -11,7 +11,7 @@ from tqdm import tqdm
 from typing import Tuple
 
 from .utils import normalize_poly, transform_poly
-from .propose import propose_placements_ribbon
+from .propose import propose_placements_nudge
 from .track_perf import show_performance
 from .elem_graph import (
     ElemGraph, BBox, Point,
@@ -336,16 +336,26 @@ def test_placement():
     p1 = normalize_poly(Polygon([(0, 0), (.1, 0), (.1, .1), (0, .1)]))
     p2 = normalize_poly(Polygon([(0, 0), (.15, 0), (0, .07)]))
 
-    p1_place = propose_placements_ribbon(
-        p_board.exterior, p1, min_dist=0.01, num_angles=16, top_n=100, max_nudges=20
-    )
-    p2_place = propose_placements_ribbon(
-        p_board.exterior, p2, min_dist=0.01, num_angles=16, top_n=100, max_nudges=20
-    )
+    p1_result = []
+    p2_result = []
+    base_shape = Polygon()
+    for _ in range(4):
+        p1_places = propose_placements_nudge(
+            base_shape, p1, p_board, min_dist=0.001, direction_vector=(0, 1), num_angles=16, top_n=100, max_nudges=40
+        )
+        print('p1', len(p1_places))
+        p1_result.append(p1_places[0])
+        base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
+        p2_places = propose_placements_nudge(
+            base_shape, p2, p_board, min_dist=0.001, direction_vector=(0, 1), num_angles=16, top_n=100, max_nudges=40
+        )
+        print('p2', len(p2_places))
+        p2_result.append(p2_places[0])
+        base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
 
     im = render_polys(p_board, [
-        [transform_poly(p1, t) for t in p1_place],
-        [transform_poly(p2, t) for t in p2_place]
+        [transform_poly(p1, t) for t in p1_result],
+        [transform_poly(p2, t) for t in p2_result]
     ])
     cv.imwrite('test.jpg', im)
 

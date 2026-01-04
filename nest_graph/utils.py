@@ -15,11 +15,21 @@ def normalize_poly(p: BaseGeometry):
 
 
 def get_shape_exteriors(p: BaseGeometry):
-    if hasattr(p, 'geoms'):
-        e = []
-        for g in p.geoms:
-            e.extend(get_shape_exteriors(g))
-        return tuple(e)
+    if p.is_empty:
+        return ()
+    if p.geom_type.startswith('Multi'):
+        return tuple(
+            e for g in p.geoms for e in get_shape_exteriors(g)
+        )
     if hasattr(p, 'exterior'):
         return (p.exterior,)
     return (p,)
+
+
+def get_shape_polygons_coords(g):
+    """
+    get coordinates from non-zero area parts of a shape.
+    """
+    if g.geom_type.startswith('Multi'):
+        return tuple(c for poly in g.geoms for c in get_shape_polygons_coords(poly))
+    return tuple(g.exterior.coords) if hasattr(g, 'exterior') else ()

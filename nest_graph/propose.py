@@ -1,9 +1,10 @@
+import random
 import numpy as np
 from shapely import LineString, MultiPoint, MultiPolygon, Point
 from shapely.ops import polylabel, unary_union, voronoi_diagram, nearest_points
 from shapely.affinity import translate, rotate
 
-from .utils import get_shape_exteriors, transform_poly
+from .utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
 
 def propose_placements_erosion(
@@ -254,31 +255,47 @@ def propose_placements_raycasting(
     return unique_props
 
 
-def propose_placements_ribbon(
-    base_shape, shape_to_place,
-    min_dist=1.0, num_angles=8, max_nudges=10, top_n=3,
-    weight_dist=0.5
+def propose_placements_nudge(
+    base_shape, shape_to_place, boundary,
+    direction_vector=(1.0, 0.0),
+    min_dist=1.0, num_angles=8, max_nudges=25, top_n=3,
+    weight_dist=0.3, weight_dir=0.4, weight_hull=0.3
 ):
-    """
-    Proposes placements using Ribbon-sampling + Linear & Rotational Nudging.
-    """
     propositions = []
-    base_centroid = base_shape.centroid
+    base_centroid = base_shape.centroid if not base_shape.is_empty else boundary.centroid
     base_hull_area = base_shape.convex_hull.area
 
-    r_min = shape_to_place.boundary.distance(Point(0,0))
-    r_max = max([Point(0,0).distance(Point(p)) for p in shape_to_place.exterior.coords])
+    # Normalize direction vector for dot product
+    dir_v = np.array(direction_vector, dtype=float)
+    dir_v = dir_v / np.linalg.norm(dir_v) if np.linalg.norm(dir_v) > 0 else dir_v
+
+    # Adaptive Sampling (as before)
+    minx, miny, maxx, maxy = shape_to_place.bounds
+    sample_step = max(maxx - minx, maxy - miny) * 0.5
+
+    # Calculate min/max radius of the shape_to_place from its centroid
+    shape_to_place_center = shape_to_place.centroid
+    r_min = shape_to_place.exterior.distance(shape_to_place_center)
+    r_max = max([shape_to_place_center.distance(Point(p)) for p in shape_to_place.exterior.coords])
 
     # Define Ribbon Search Zone
-    outer_ribbon = base_shape.buffer(r_max + min_dist)
-    inner_ribbon = base_shape.buffer(r_min + min_dist)
-    search_zone = outer_ribbon.difference(inner_ribbon) if not outer_ribbon.is_empty else outer_ribbon
+    if not base_shape.is_empty:
+        outer_ribbon = base_shape.buffer(r_max + min_dist)
+        inner_ribbon = base_shape.buffer(r_min + min_dist)
+    else:
+        outer_ribbon = boundary.exterior.buffer(r_max + min_dist)
+        inner_ribbon = boundary.exterior.buffer(r_min + min_dist)
+    search_zone = (
+        outer_ribbon.difference(inner_ribbon) if not outer_ribbon.is_empty else outer_ribbon
+    ).intersection(boundary)
 
-    # Sample candidates along ribbon boundaries
     samples = []
     for line in get_shape_exteriors(search_zone):
-        for d in np.linspace(0, line.length, 12):
+        num_samples = max(8, int(line.length / sample_step))
+        for d in np.linspace(0, line.length, num_samples):
             samples.append(line.interpolate(d))
+        for p in line.coords:
+            samples.append(Point(p))
 
     angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
 
@@ -286,61 +303,115 @@ def propose_placements_ribbon(
         for start_angle in angles:
             curr_x, curr_y = start_pt.x, start_pt.y
             curr_angle = start_angle
-            valid = False
 
-            for _ in range(max_nudges):
+            best_local_score = float('inf')
+            best_local_coords = None
+
+            for i in range(max_nudges + 1): # +1 to evaluate the initial position
+                learning_rate = 1.0 - (i / max_nudges)
                 placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_angle))
 
-                if base_shape.distance(placed_shape) >= min_dist:
-                    print('?????????????', base_shape.distance(placed_shape), min_dist)
-                    valid = True
-                    break
+                # --- VALIDATION GATE ---
+                is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
+                is_inside = boundary.contains(placed_shape)
+                curr_dist = base_shape.distance(placed_shape) if not base_shape.is_empty else float('inf')
 
-                # COLLISION RESOLUTION
-                # Find the point on the shape (p1) furthest inside/near the wall (p2)
-                # p1, p2 = nearest_points(placed_shape, base_shape.exterior)
-                if placed_shape.intersects(base_shape):
-                    intersection = placed_shape.intersection(base_shape)
-                    _, p1 = nearest_points(intersection, Point(curr_x, curr_y))
-                    p1, p2 = nearest_points(p1, placed_shape.exterior)
-                else:
-                    p2, p1 = nearest_points(placed_shape, base_shape)
+                # A placement is valid if it's inside, not colliding, and obeys min_dist
+                is_valid = is_inside and (not is_colliding) and (curr_dist >= min_dist)
 
-                # 1. Linear Push Vector
-                vx = (p1.x - p2.x) * 0.5 # Step size factor
-                vy = (p1.y - p2.y) * 0.5
+                # --- SCORE TRACKING ---
+                if is_valid:
+                    score = calculate_complex_score(
+                        base_shape, placed_shape, base_hull_area,
+                        base_centroid, dir_v, weight_dist, weight_dir, weight_hull
+                    )
+                    if score < best_local_score:
+                        best_local_score = score
+                        best_local_coords = (curr_x, curr_y, curr_angle)
 
-                # 2. Rotational Torque (Cross Product)
-                # Vector from shape center to collision point
-                rx, ry = p1.x - curr_x, p1.y - curr_y
-                # 2D cross product: rx*py - ry*px
-                torque = (rx * vy) - (ry * vx)
+                # --- FORCE CALCULATION ---
+                vx, vy, v_torque = 0.0, 0.0, 0.0
 
-                # Nudge parameters
-                curr_x += vx
-                curr_y += vy
-                curr_angle += np.sign(torque) * 2.0/180.0*np.pi # Nudge 2 degrees at a time
+                # A. Gravity (The Optimization Drive)
+                vx += dir_v[0] * 0.8
+                vy += dir_v[1] * 0.8
 
-            if valid:
-                dist_to_center = Point(curr_x, curr_y).distance(base_centroid)
+                # B. Stochastic Forces (Jitter & Shake)
+                if i % 6 == 0: # Shake
+                    vx += random.uniform(-1.5, 1.5)
+                    vy += random.uniform(-1.5, 1.5)
+                vx += random.uniform(-0.1, 0.1) # Constant Jitter
+                vy += random.uniform(-0.1, 0.1)
 
-                # Hull Growth
-                final_pts = list(base_shape.convex_hull.exterior.coords) + \
-                            list(placed_shape.exterior.coords)
-                hull_growth = np.sqrt(max(0, MultiPoint(final_pts).convex_hull.area - base_hull_area))
+                # C. Constraints (Repulsion)
+                if not is_inside:
+                    p_placed, p_bound = nearest_points(placed_shape, boundary.exterior)
+                    vx += (p_bound.x - p_placed.x) * 3.0 # Strong pull back in
+                    vy += (p_bound.y - p_placed.y) * 3.0
 
-                score = (weight_dist * dist_to_center) + ((1 - weight_dist) * hull_growth)
-                propositions.append({'coords': (curr_x, curr_y, float(curr_angle)), 'cost': score})
+                elif (is_colliding or curr_dist < min_dist) and not base_shape.is_empty:
+                    if is_colliding:
+                        inter = base_shape.intersection(placed_shape)
+                        # Filter intersection to ignore 0-area artifacts for repulsion anchor
+                        if inter.area < 1e-7 and not inter.is_empty:
+                            _, p_on_base = nearest_points(Point(curr_x, curr_y), inter)
+                        else:
+                            p_on_base = inter.centroid
+                        p_on_base, p_on_placed = nearest_points(p_on_base, placed_shape.exterior)
+                    else:
+                        p_on_base, p_on_placed = nearest_points(base_shape, placed_shape)
 
-    # Deduplicate and return
+                    # Push away vector: p_on_placed - p_on_base
+                    push_x, push_y = p_on_placed.x - p_on_base.x, p_on_placed.y - p_on_base.y
+                    mag = np.sqrt(push_x**2 + push_y**2)
+                    if mag > 0:
+                        # Repulsion scales to overcome gravity and jitter
+                        vx += (push_x / mag) * 2.0
+                        vy += (push_y / mag) * 2.0
+
+                    # Torque for rotation optimization
+                    rx, ry = p_on_placed.x - curr_x, p_on_placed.y - curr_y
+                    v_torque = np.sign((rx * push_y) - (ry * push_x))
+
+                # --- APPLY PHYSICS ---
+                curr_x += vx * learning_rate
+                curr_y += vy * learning_rate
+                curr_angle += v_torque * (5.0/180.0 * np.pi) * learning_rate
+
+            if best_local_coords:
+                propositions.append({'coords': best_local_coords, 'cost': best_local_score})
+
+    return finalize_propositions(propositions, top_n)
+
+
+def calculate_complex_score(base, placed, base_hull_area, centroid, dir_v, w_dist, w_dir, w_hull):
+    # 1. Distance Component
+    dist_to_center = Point(placed.centroid).distance(centroid)
+
+    # 2. Directional Component (Dot Product)
+    # We negate this because we want to MINIMIZE score as we move ALONG the vector
+    pos = np.array([placed.centroid.x, placed.centroid.y])
+    direction_score = -np.dot(pos, dir_v)
+
+    pts = get_shape_polygons_coords(base) + get_shape_polygons_coords(placed)
+    hull_growth = np.sqrt(max(0, MultiPoint(pts).convex_hull.area - base_hull_area))
+
+    return (w_dist * dist_to_center) + (w_dir * direction_score) + (w_hull * hull_growth)
+
+
+def finalize_propositions(propositions, top_n):
+    """
+    Sorts, deduplicates, and returns the top N propositions.
+    """
     propositions.sort(key=lambda x: x['cost'])
-    unique_results = []
+
+    unique_props = []
     seen = set()
     for p in propositions:
         key = (round(p['coords'][0], 2), round(p['coords'][1], 2), round(p['coords'][2], 2))
         if key not in seen:
-            unique_results.append(p['coords'])
+            unique_props.append(p['coords'])
             seen.add(key)
-        if len(unique_results) >= top_n: break
-
-    return unique_results
+        if len(unique_props) >= top_n:
+            break
+    return unique_props
