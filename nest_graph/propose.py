@@ -257,17 +257,25 @@ def propose_placements_raycasting(
 
 def propose_placements_nudge(
     base_shape, shape_to_place, boundary,
-    direction_vector=(1.0, 0.0),
-    min_dist=1.0, num_angles=8, max_nudges=25, top_n=3,
-    weight_dist=0.3, weight_dir=0.4, weight_hull=0.3
+    direction_vector=(1.0, 0.0), min_dist=1.0, num_angles=8, max_nudges=35, top_n=3,
+    previous_best_angles=None, # List of angles that worked before
+    pull_factor=0.06, ray_count=16
 ):
     propositions = []
-    base_centroid = base_shape.centroid if not base_shape.is_empty else boundary.centroid
-    base_hull_area = base_shape.convex_hull.area
+    bound_centroid = boundary.centroid
+    base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0
+    target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
 
-    # Normalize direction vector for dot product
+    # --- ANGLE HINTS ---
+    # Merge standard sampled angles with hints from previous successes
+    sampled_angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False).tolist()
+    if previous_best_angles:
+        # Use a few recent successful angles as starting "hints"
+        sampled_angles = list(set(sampled_angles + previous_best_angles[-3:]))
+
     dir_v = np.array(direction_vector, dtype=float)
-    dir_v = dir_v / np.linalg.norm(dir_v) if np.linalg.norm(dir_v) > 0 else dir_v
+    dir_v_mag = np.linalg.norm(dir_v)
+    dir_v = dir_v / dir_v_mag if dir_v_mag > 0 else np.array([1.0, 0.0])
 
     # Adaptive Sampling (as before)
     minx, miny, maxx, maxy = shape_to_place.bounds
@@ -297,86 +305,83 @@ def propose_placements_nudge(
         for p in line.coords:
             samples.append(Point(p))
 
-    angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
-
     for start_pt in samples:
-        for start_angle in angles:
+        for start_angle in sampled_angles:
             curr_x, curr_y = start_pt.x, start_pt.y
             curr_angle = start_angle
+
+            # Adam Optimizer State for Angle
+            m_angle, v_angle = 0.0, 0.0
+            beta1, beta2, eps = 0.9, 0.999, 1e-8
 
             best_local_score = float('inf')
             best_local_coords = None
 
-            for i in range(max_nudges + 1): # +1 to evaluate the initial position
-                learning_rate = 1.0 - (i / max_nudges)
+            for i in range(1, max_nudges + 1):
+                lr = 1.0 - (i / max_nudges)
                 placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_angle))
+                print('............', (curr_x, curr_y, curr_angle))
 
-                # --- VALIDATION GATE ---
-                is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
+                # Validity Checks
                 is_inside = boundary.contains(placed_shape)
-                curr_dist = base_shape.distance(placed_shape) if not base_shape.is_empty else float('inf')
+                is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
+                dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 5.0
+                is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
 
-                # A placement is valid if it's inside, not colliding, and obeys min_dist
-                is_valid = is_inside and (not is_colliding) and (curr_dist >= min_dist)
-
-                # --- SCORE TRACKING ---
                 if is_valid:
-                    score = calculate_complex_score(
-                        base_shape, placed_shape, base_hull_area,
-                        base_centroid, dir_v, weight_dist, weight_dir, weight_hull
-                    )
+                    score = calculate_complex_score(base_shape, placed_shape, base_hull_area,
+                                                 base_shape.centroid, target_v)
                     if score < best_local_score:
                         best_local_score = score
                         best_local_coords = (curr_x, curr_y, curr_angle)
 
-                # --- FORCE CALCULATION ---
-                vx, vy, v_torque = 0.0, 0.0, 0.0
+                # --- 1. RAY CASTING (Translation Pull) ---
+                # Direction logic: if invalid, pull toward center. If valid, pull toward target.
+                to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
+                to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
+                active_dir = target_v if is_valid else (to_center_u * 0.8 + target_v * 0.2)
 
-                # A. Gravity (The Optimization Drive)
-                vx += dir_v[0] * 0.8
-                vy += dir_v[1] * 0.8
+                best_ray_v = np.array([0.0, 0.0])
+                max_int = -float('inf')
 
-                # B. Stochastic Forces (Jitter & Shake)
-                if i % 6 == 0: # Shake
-                    vx += random.uniform(-1.5, 1.5)
-                    vy += random.uniform(-1.5, 1.5)
-                vx += random.uniform(-0.1, 0.1) # Constant Jitter
-                vy += random.uniform(-0.1, 0.1)
+                for r_angle in np.linspace(0, 2*np.pi, ray_count, endpoint=False):
+                    rv = np.array([np.cos(r_angle), np.sin(r_angle)])
+                    ray_line = LineString([(curr_x, curr_y), (curr_x + rv[0]*10, curr_y + rv[1]*10)])
 
-                # C. Constraints (Repulsion)
-                if not is_inside:
-                    p_placed, p_bound = nearest_points(placed_shape, boundary.exterior)
-                    vx += (p_bound.x - p_placed.x) * 3.0 # Strong pull back in
-                    vy += (p_bound.y - p_placed.y) * 3.0
+                    reach = min(ray_line.distance(base_shape) if not base_shape.is_empty else 10,
+                                ray_line.distance(boundary.exterior), 10)
 
-                elif (is_colliding or curr_dist < min_dist) and not base_shape.is_empty:
-                    if is_colliding:
-                        inter = base_shape.intersection(placed_shape)
-                        # Filter intersection to ignore 0-area artifacts for repulsion anchor
-                        if inter.area < 1e-7 and not inter.is_empty:
-                            _, p_on_base = nearest_points(Point(curr_x, curr_y), inter)
-                        else:
-                            p_on_base = inter.centroid
-                        p_on_base, p_on_placed = nearest_points(p_on_base, placed_shape.exterior)
-                    else:
-                        p_on_base, p_on_placed = nearest_points(base_shape, placed_shape)
+                    intensity = np.dot(rv, active_dir) * 2.0 + (reach / 10.0)
+                    if intensity > max_int:
+                        max_int = intensity
+                        best_ray_v = rv * reach
 
-                    # Push away vector: p_on_placed - p_on_base
-                    push_x, push_y = p_on_placed.x - p_on_base.x, p_on_placed.y - p_on_base.y
-                    mag = np.sqrt(push_x**2 + push_y**2)
-                    if mag > 0:
-                        # Repulsion scales to overcome gravity and jitter
-                        vx += (push_x / mag) * 2.0
-                        vy += (push_y / mag) * 2.0
+                curr_x += best_ray_v[0] * pull_factor * lr
+                curr_y += best_ray_v[1] * pull_factor * lr
 
-                    # Torque for rotation optimization
-                    rx, ry = p_on_placed.x - curr_x, p_on_placed.y - curr_y
-                    v_torque = np.sign((rx * push_y) - (ry * push_x))
+                # --- 2. ADAM OPTIMIZER (Angle Adjusting) ---
+                # Define 'gradient' (torque)
+                grad_angle = 0.0
+                if not is_valid:
+                    # Search torque: high-frequency oscillation to find gaps
+                    grad_angle = np.sin(i * 1.2) * 0.5
+                elif not base_shape.is_empty:
+                    # Alignment torque: rotate to face base shape's nearest point
+                    p1, p2 = nearest_points(base_shape, placed_shape)
+                    grad_angle = np.arctan2(p2.y - p1.y, p2.x - p1.x) * 0.1
 
-                # --- APPLY PHYSICS ---
-                curr_x += vx * learning_rate
-                curr_y += vy * learning_rate
-                curr_angle += v_torque * (5.0/180.0 * np.pi) * learning_rate
+                # Adam Update Logic
+                m_angle = beta1 * m_angle + (1 - beta1) * grad_angle
+                v_angle = beta2 * v_angle + (1 - beta2) * (grad_angle**2)
+
+                m_corr = m_angle / (1 - beta1**i)
+                v_corr = v_angle / (1 - beta2**i)
+
+                if v_angle > 0:
+                    v_corr = v_angle / (1 - beta2**i)
+                    curr_angle += (m_corr / (np.sqrt(v_corr) + eps)) * lr
+                else:
+                    curr_angle += grad_angle * lr # Fallback to simple nudge
 
             if best_local_coords:
                 propositions.append({'coords': best_local_coords, 'cost': best_local_score})

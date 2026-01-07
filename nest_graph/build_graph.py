@@ -311,9 +311,9 @@ def improve_rules(graphs, rules, n):
 
 
 def transform_selection(s, n):
-    yield transforms_around(s, (0.15, 0.15, 2), n)
-    yield transforms_around(s, (0.15, 0.15, 0), n)
-    yield transforms_around(s, (0, 0, 2), n)
+    yield transforms_around(s, (0.1, 0.1, 1.5), n)
+    yield transforms_around(s, (0.1, 0.1, 0), n)
+    yield transforms_around(s, (0, 0, 1.5), n)
     yield transforms_around(s, (0.05, 0.05, 1), n)
     yield transforms_around(s, (0.05, 0.05, 0), n)
     yield transforms_around(s, (0, 0, 1), n)
@@ -326,33 +326,35 @@ def transform_selection(s, n):
 
 
 def transform_history(h, n):
-    yield transforms_around(h, (0.1, 0.1, 0.2), n)
-    yield transforms_around(h, (0.1, 0.1, 0), n)
-    yield transforms_around(h, (0, 0, 0.2), n)
+    yield transforms_around(h, (0.05, 0.05, 0.1), n)
+    yield transforms_around(h, (0.05, 0.05, 0), n)
+    yield transforms_around(h, (0, 0, 0.1), n)
 
 
 def test_placement():
     p_board = Polygon([(0, 0), (1.2, 0), (0, 1.1)])
-    p1 = normalize_poly(Polygon([(0, 0), (.1, 0), (.1, .1), (0, .1)]))
-    p2 = normalize_poly(Polygon([(0, 0), (.15, 0), (0, .07)]))
+    p1 = normalize_poly(Polygon([(0, 0), (.15, 0), (0, .07)]))
+    p2 = normalize_poly(Polygon([(0, 0), (.1, 0), (.1, .1), (0, .1)]))
 
     p1_result = []
     p2_result = []
     base_shape = Polygon()
-    for _ in range(4):
+    for _ in range(1):
         p1_places = propose_placements_nudge(
-            base_shape, p1, p_board, min_dist=0.001, direction_vector=(0, 1), num_angles=16, top_n=100, max_nudges=40
+            base_shape, p1, p_board, min_dist=0.001, direction_vector=(-1, 1), num_angles=8, top_n=100, max_nudges=20
         )
         print('p1', len(p1_places))
-        p1_result.append(p1_places[0])
-        base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
-        p2_places = propose_placements_nudge(
-            base_shape, p2, p_board, min_dist=0.001, direction_vector=(0, 1), num_angles=16, top_n=100, max_nudges=40
-        )
-        print('p2', len(p2_places))
-        p2_result.append(p2_places[0])
-        base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
+        # p1_result.append(p1_places[0])
+        # base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
+        p1_result = tuple(p1_places)
+        # p2_places = propose_placements_nudge(
+        #     base_shape, p2, p_board, min_dist=0.001, direction_vector=(-1, 1), num_angles=8, top_n=100, max_nudges=20
+        # )
+        # print('p2', len(p2_places))
+        # p2_result.append(p2_places[0])
+        # base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
 
+    print(p1_result)
     im = render_polys(p_board, [
         [transform_poly(p1, t) for t in p1_result],
         [transform_poly(p2, t) for t in p2_result]
@@ -438,22 +440,22 @@ def main():
 
     for it in tqdm(tuple(range(256))):
         s0 = [
-            np.random.rand(max(0, 1024-selected_t[0].shape[0]), 3) * [1.5, 1.5, 2 * np.pi],
+            np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
             history[0]
         ]
         if selected_t[0].shape[0] > 0:
             s0.append(selected_t[0])
-            s0.extend(transform_selection(selected_t[0], 8))
-            s0.extend(transform_history(history[0], 4))
+            s0.extend(transform_selection(selected_t[0], 4))
+            s0.extend(transform_history(history[0], 2))
 
         s1 = [
-            np.random.rand(max(0, 1024-selected_t[1].shape[0]), 3) * [1.5, 1.5, 2 * np.pi],
+            np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
             history[1]
         ]
         if selected_t[1].shape[0] > 0:
             s1.append(selected_t[1])
-            s1.extend(transform_selection(selected_t[1], 8))
-            s1.extend(transform_history(history[1], 4))
+            s1.extend(transform_selection(selected_t[1], 4))
+            s1.extend(transform_history(history[1], 2))
 
         selected_t = [
             np.concatenate(s0),
