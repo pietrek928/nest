@@ -11,7 +11,7 @@ from tqdm import tqdm
 from typing import Tuple
 
 from .utils import normalize_poly, transform_poly
-from .propose import propose_placements_nudge
+from .propose import propose_placements_point_cloud
 from .track_perf import show_performance
 from .elem_graph import (
     ElemGraph, BBox, Point,
@@ -340,19 +340,20 @@ def test_placement():
     p2_result = []
     base_shape = Polygon()
     for _ in range(1):
-        p1_places = propose_placements_nudge(
-            base_shape, p1, p_board, min_dist=0.001, direction_vector=(-1, 1), num_angles=8, top_n=100, max_nudges=20
+        p1_places = propose_placements_point_cloud(
+            base_shape, p1, p_board, min_dist=0.001, direction_vector=(-1, -1), top_n=100
         )
         print('p1', len(p1_places))
-        # p1_result.append(p1_places[0])
-        # base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
-        p1_result = tuple(p1_places)
-        # p2_places = propose_placements_nudge(
-        #     base_shape, p2, p_board, min_dist=0.001, direction_vector=(-1, 1), num_angles=8, top_n=100, max_nudges=20
-        # )
-        # print('p2', len(p2_places))
-        # p2_result.append(p2_places[0])
-        # base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
+        if p1_places:
+            p1_result.append(p1_places[0])
+            base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
+        p2_places = propose_placements_point_cloud(
+            base_shape, p2, p_board, min_dist=0.001, direction_vector=(-1, -1), top_n=100
+        )
+        print('p2', len(p2_places))
+        if p2_places:
+            p2_result.append(p2_places[0])
+            base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
 
     print(p1_result)
     im = render_polys(p_board, [

@@ -1,4 +1,5 @@
 import random
+from typing import Tuple
 import numpy as np
 from shapely import LineString, MultiPoint, MultiPolygon, Point
 from shapely.ops import polylabel, unary_union, voronoi_diagram, nearest_points
@@ -255,117 +256,110 @@ def propose_placements_raycasting(
     return unique_props
 
 
-def propose_placements_nudge(
-    base_shape, shape_to_place, boundary,
-    direction_vector=(1.0, 0.0), min_dist=1.0, num_angles=12, max_nudges=40, top_n=3,
-    previous_best_angles=None, pull_factor=0.08, ray_count=16,
-    weight_dist=0.001, weight_dir=0.4, weight_hull=0.1
+def propose_placements_point_cloud(
+    base_shape, shape_to_place, boundary, direction_vector=(1.0, 0.0),
+    num_particles=64, max_iterations=128, min_dist=1.0, top_n=3,
+    omega=0.6, c1=1.2, c2=1.4, nudge_iters=8, pull_factor=0.08,
+    cull_ratio=0.2, stagnation_limit=5,
+    mutation_sigma=np.array([2.0, 2.0, 0.5, 0.5]) # [x, y, theta, phi]
 ):
-    propositions = []
     bound_centroid = boundary.centroid
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0
-    target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
+    ribbon_pts = sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist)
 
-    # ENHANCED ANGLE SAMPLING
-    # We include standard intervals, previous successes, and 90-degree "snaps"
-    sampled_angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False).tolist()
-    if previous_best_angles:
-        sampled_angles.extend(previous_best_angles[-4:])
+    # 1. Initialize Particles: [x, y, theta, phi]
+    particles = []
+    for i in range(num_particles):
+        pt = ribbon_pts[i % len(ribbon_pts)] if ribbon_pts else bound_centroid
+        particles.append([pt.x, pt.y, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)])
 
-    # Add common geometric orientations (0, 90, 180, 270)
-    sampled_angles.extend([0, np.pi/2, np.pi, 3*np.pi/2])
-    sampled_angles = tuple(sorted(set([round(a, 4) for a in sampled_angles]))) # Deduplicate
+    particles = np.array(particles)
+    velocities = np.random.uniform(-0.5, 0.5, (num_particles, 4))
+    p_best_pos = particles.copy()
+    p_best_score = np.full(num_particles, float('inf'))
+    p_best_settled = particles[:, :3].copy() # Store the (x,y,theta) after nudge
+    stagnation_counters = np.zeros(num_particles)
 
-    # CORE OPTIMIZATION LOOP
-    for start_pt in sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist):
-        for start_angle in sampled_angles:
-            curr_x, curr_y, curr_angle = start_pt.x, start_pt.y, start_angle
+    g_best_pos = particles[0].copy()
+    g_best_score = float('inf')
 
-            # Adam Optimizer State
-            m_angle, v_angle = 0.0, 0.0
-            beta1, beta2, eps = 0.9, 0.999, 1e-8
+    # 2. Optimization Loop
+    for iteration in range(max_iterations):
+        current_scores = []
+        settled_coords_list = []
 
-            best_local_score = float('inf')
-            best_local_coords = None
+        for i in range(num_particles):
+            score, settled = evaluate_ray_placement(
+                particles[i], base_shape, shape_to_place, boundary,
+                base_hull_area, bound_centroid, direction_vector, min_dist, nudge_iters, pull_factor
+            )
+            current_scores.append(score)
+            settled_coords_list.append(settled)
 
-            for i in range(1, max_nudges + 1):
-                decay = 1.0 - (i / max_nudges)
-                placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_angle))
+            # Update Personal and Global Bests
+            if score < p_best_score[i]:
+                p_best_score[i] = score
+                p_best_pos[i] = particles[i].copy()
+                p_best_settled[i] = settled # Store the successful placement
+                stagnation_counters[i] = 0
+                if score < g_best_score:
+                    g_best_score = score
+                    g_best_pos = particles[i].copy()
+            else:
+                stagnation_counters[i] += 1
 
-                # Validity Checks
-                is_inside = boundary.contains(placed_shape)
-                is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
-                dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 10.0
-                is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
+        # 3. Population Management
+        if iteration % 4 == 0:
+            sorted_idx = np.argsort(current_scores)
+            num_cull = int(num_particles * cull_ratio)
 
-                if is_valid:
-                    score = calculate_complex_score(
-                        base_shape, placed_shape, base_hull_area, bound_centroid,
-                        direction_vector, weight_dist, weight_dir, weight_hull
-                    )
-                    if score < best_local_score:
-                        best_local_score = score
-                        best_local_coords = (curr_x, curr_y, curr_angle)
+            # Method 1 & 2: Cull worst and spawn Crossover clones of best
+            for j in range(num_cull):
+                w_idx = sorted_idx[-(j+1)]
+                p1_idx, p2_idx = np.random.choice(sorted_idx[:num_particles//3], 2)
 
-                # --- TRANSLATION (Ray Casting) ---
-                to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
-                to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
-                active_dir = target_v if is_valid else (to_center_u * 0.7 + target_v * 0.3)
+                # Crossover: Position from Parent 1, Rotation/Ray from Parent 2
+                particles[w_idx][:2] = p_best_pos[p1_idx][:2]
+                particles[w_idx][2:] = p_best_pos[p2_idx][2:]
 
-                best_ray_v = np.array([0.0, 0.0])
-                max_int = -float('inf')
+                # Mutation (Jitter)
+                particles[w_idx] += np.random.normal(0, mutation_sigma)
+                velocities[w_idx] *= 0.5 # Reset momentum for new spawns
 
-                for r_angle in np.linspace(0, 2*np.pi, ray_count, endpoint=False):
-                    rv = np.array([np.cos(r_angle), np.sin(r_angle)])
-                    intensity = np.dot(rv, active_dir)
-                    if intensity > max_int:
-                        max_int = intensity
-                        best_ray_v = rv
+        # Method 3: Stagnation Reset (Re-birth if stuck)
+        for i in range(num_particles):
+            if stagnation_counters[i] > stagnation_limit:
+                new_pt = ribbon_pts[np.random.randint(len(ribbon_pts))] if ribbon_pts else bound_centroid
+                particles[i] = [new_pt.x, new_pt.y, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+                stagnation_counters[i] = 0
+                velocities[i] = np.random.uniform(-0.2, 0.2, 4)
 
-                curr_x += best_ray_v[0] * pull_factor * decay * 5.0
-                curr_y += best_ray_v[1] * pull_factor * decay * 5.0
+        # 4. Momentum Update
+        r1, r2 = np.random.rand(num_particles, 4), np.random.rand(num_particles, 4)
+        velocities = (omega * velocities +
+                      c1 * r1 * (p_best_pos - particles) +
+                      c2 * r2 * (g_best_pos - particles))
 
-                # --- ANGLE OPTIMIZATION (Adam + Jitter) ---
-                grad_angle = 0.0
+        particles += velocities
+        particles[:, 2:4] = np.mod(particles[:, 2:4], 2 * np.pi)
 
-                if not is_valid:
-                    # If stuck/invalid, add "Jitter" + search torque
-                    grad_angle = np.sin(i * 1.5) * 0.1  # Stronger oscillation
-                    if i % 5 == 0: # Every 5 steps, try a random jump
-                        curr_angle += np.random.uniform(-0.2, 0.2)
-                elif not base_shape.is_empty:
-                    # ALIGNMENT TORQUE: Try to make the shape's side parallel to the base
-                    p1, p2 = nearest_points(base_shape, placed_shape)
-                    # Simple heuristic: rotate toward the vector perpendicular to the gap
-                    grad_angle = np.arctan2(p2.y - p1.y, p2.x - p1.x) * 0.15
-
-                # Adam Update
-                m_angle = beta1 * m_angle + (1 - beta1) * grad_angle
-                v_angle = beta2 * v_angle + (1 - beta2) * (grad_angle**2)
-                m_corr = m_angle / (1 - beta1**i)
-                v_corr = v_angle / (1 - beta2**i)
-
-                curr_angle += (m_corr / (np.sqrt(v_corr) + eps)) * decay
-
-            if best_local_coords:
-                propositions.append({'coords': best_local_coords, 'cost': best_local_score})
-
+    propositions = [{'coords': p_best_settled[i], 'cost': p_best_score[i]}
+                    for i in range(num_particles) if p_best_score[i] < 1e6]
     return finalize_propositions(propositions, top_n)
 
 
 def evaluate_ray_placement(
     params, base_shape, shape_to_place, boundary, base_hull_area,
-    bound_centroid, direction_vector, min_dist, nudge_iters=5
+    bound_centroid, direction_vector, min_dist, nudge_iters, pull_factor
 ):
     """
-    Evaluates a particle by 'sliding' it using ray casting.
-    params: [x, y, theta, phi] where phi is a bias for the ray search.
+    Local Search: Uses ray-casting to 'settle' a shape from a seed position.
     """
     curr_x, curr_y, curr_theta, phi = params
     target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
 
     # Local settlement loop (Ray Casting)
-    for i in range(nudge_iters):
+    for _ in range(nudge_iters):
         placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
 
         is_inside = boundary.contains(placed_shape)
@@ -373,40 +367,35 @@ def evaluate_ray_placement(
         dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 10.0
         is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
 
-        # --- Ray Casting Logic ---
-        # We blend the global target_v with the particle's preferred phi (ray_angle)
+        # Use phi (ray_angle) as a bias for search direction
         pref_v = np.array([np.cos(phi), np.sin(phi)])
         to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
         to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
 
-        # Determine the search direction for rays
+        # If invalid, pull toward center/preferred angle; if valid, follow target vector
         active_dir = target_v if is_valid else (to_center_u * 0.5 + pref_v * 0.5)
 
-        # Sample rays to find the best local translation
         best_ray_v = np.array([0.0, 0.0])
         max_int = -float('inf')
         for r_angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
             rv = np.array([np.cos(r_angle), np.sin(r_angle)])
-            # The 'phi' from our point cloud provides a 'momentum' to certain ray angles
             intensity = np.dot(rv, active_dir)
             if intensity > max_int:
                 max_int = intensity
                 best_ray_v = rv
 
-        # Apply the nudge (translation)
-        curr_x += best_ray_v[0] * 0.5  # Fixed step for local settlement
-        curr_y += best_ray_v[1] * 0.5
+        curr_x += best_ray_v[0] * pull_factor * 5.0
+        curr_y += best_ray_v[1] * pull_factor * 5.0
 
-    # Final Check and Scoring
     final_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
     if not (boundary.contains(final_shape) and (base_shape.disjoint(final_shape) or base_shape.is_empty)):
-        return 1e6, (curr_x, curr_y, curr_theta), False
+        return 1e6, (curr_x, curr_y, curr_theta)
 
     score = calculate_complex_score(
         base_shape, final_shape, base_hull_area, bound_centroid,
-        direction_vector, weight_dist=0.001, weight_dir=0.4, weight_hull=0.1
+        direction_vector, w_dist=0.001, w_dir=0.4, w_hull=0.1
     )
-    return score, (curr_x, curr_y, curr_theta), True
+    return score, (curr_x, curr_y, curr_theta)
 
 
 def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist):
