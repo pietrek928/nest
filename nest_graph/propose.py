@@ -257,60 +257,31 @@ def propose_placements_raycasting(
 
 def propose_placements_nudge(
     base_shape, shape_to_place, boundary,
-    direction_vector=(1.0, 0.0), min_dist=1.0, num_angles=8, max_nudges=35, top_n=3,
-    previous_best_angles=None, # List of angles that worked before
-    pull_factor=0.06, ray_count=16
+    direction_vector=(1.0, 0.0), min_dist=1.0, num_angles=12, max_nudges=40, top_n=3,
+    previous_best_angles=None, pull_factor=0.08, ray_count=16,
+    weight_dist=0.001, weight_dir=0.4, weight_hull=0.1
 ):
     propositions = []
     bound_centroid = boundary.centroid
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0
     target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
 
-    # --- ANGLE HINTS ---
-    # Merge standard sampled angles with hints from previous successes
+    # ENHANCED ANGLE SAMPLING
+    # We include standard intervals, previous successes, and 90-degree "snaps"
     sampled_angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False).tolist()
     if previous_best_angles:
-        # Use a few recent successful angles as starting "hints"
-        sampled_angles = list(set(sampled_angles + previous_best_angles[-3:]))
+        sampled_angles.extend(previous_best_angles[-4:])
 
-    dir_v = np.array(direction_vector, dtype=float)
-    dir_v_mag = np.linalg.norm(dir_v)
-    dir_v = dir_v / dir_v_mag if dir_v_mag > 0 else np.array([1.0, 0.0])
+    # Add common geometric orientations (0, 90, 180, 270)
+    sampled_angles.extend([0, np.pi/2, np.pi, 3*np.pi/2])
+    sampled_angles = tuple(sorted(set([round(a, 4) for a in sampled_angles]))) # Deduplicate
 
-    # Adaptive Sampling (as before)
-    minx, miny, maxx, maxy = shape_to_place.bounds
-    sample_step = max(maxx - minx, maxy - miny) * 0.5
-
-    # Calculate min/max radius of the shape_to_place from its centroid
-    shape_to_place_center = shape_to_place.centroid
-    r_min = shape_to_place.exterior.distance(shape_to_place_center)
-    r_max = max([shape_to_place_center.distance(Point(p)) for p in shape_to_place.exterior.coords])
-
-    # Define Ribbon Search Zone
-    if not base_shape.is_empty:
-        outer_ribbon = base_shape.buffer(r_max + min_dist)
-        inner_ribbon = base_shape.buffer(r_min + min_dist)
-    else:
-        outer_ribbon = boundary.exterior.buffer(r_max + min_dist)
-        inner_ribbon = boundary.exterior.buffer(r_min + min_dist)
-    search_zone = (
-        outer_ribbon.difference(inner_ribbon) if not outer_ribbon.is_empty else outer_ribbon
-    ).intersection(boundary)
-
-    samples = []
-    for line in get_shape_exteriors(search_zone):
-        num_samples = max(8, int(line.length / sample_step))
-        for d in np.linspace(0, line.length, num_samples):
-            samples.append(line.interpolate(d))
-        for p in line.coords:
-            samples.append(Point(p))
-
-    for start_pt in samples:
+    # CORE OPTIMIZATION LOOP
+    for start_pt in sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist):
         for start_angle in sampled_angles:
-            curr_x, curr_y = start_pt.x, start_pt.y
-            curr_angle = start_angle
+            curr_x, curr_y, curr_angle = start_pt.x, start_pt.y, start_angle
 
-            # Adam Optimizer State for Angle
+            # Adam Optimizer State
             m_angle, v_angle = 0.0, 0.0
             beta1, beta2, eps = 0.9, 0.999, 1e-8
 
@@ -318,75 +289,151 @@ def propose_placements_nudge(
             best_local_coords = None
 
             for i in range(1, max_nudges + 1):
-                lr = 1.0 - (i / max_nudges)
+                decay = 1.0 - (i / max_nudges)
                 placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_angle))
-                print('............', (curr_x, curr_y, curr_angle))
 
                 # Validity Checks
                 is_inside = boundary.contains(placed_shape)
                 is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
-                dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 5.0
+                dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 10.0
                 is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
 
                 if is_valid:
-                    score = calculate_complex_score(base_shape, placed_shape, base_hull_area,
-                                                 base_shape.centroid, target_v)
+                    score = calculate_complex_score(
+                        base_shape, placed_shape, base_hull_area, bound_centroid,
+                        direction_vector, weight_dist, weight_dir, weight_hull
+                    )
                     if score < best_local_score:
                         best_local_score = score
                         best_local_coords = (curr_x, curr_y, curr_angle)
 
-                # --- 1. RAY CASTING (Translation Pull) ---
-                # Direction logic: if invalid, pull toward center. If valid, pull toward target.
+                # --- TRANSLATION (Ray Casting) ---
                 to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
                 to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
-                active_dir = target_v if is_valid else (to_center_u * 0.8 + target_v * 0.2)
+                active_dir = target_v if is_valid else (to_center_u * 0.7 + target_v * 0.3)
 
                 best_ray_v = np.array([0.0, 0.0])
                 max_int = -float('inf')
 
                 for r_angle in np.linspace(0, 2*np.pi, ray_count, endpoint=False):
                     rv = np.array([np.cos(r_angle), np.sin(r_angle)])
-                    ray_line = LineString([(curr_x, curr_y), (curr_x + rv[0]*10, curr_y + rv[1]*10)])
-
-                    reach = min(ray_line.distance(base_shape) if not base_shape.is_empty else 10,
-                                ray_line.distance(boundary.exterior), 10)
-
-                    intensity = np.dot(rv, active_dir) * 2.0 + (reach / 10.0)
+                    intensity = np.dot(rv, active_dir)
                     if intensity > max_int:
                         max_int = intensity
-                        best_ray_v = rv * reach
+                        best_ray_v = rv
 
-                curr_x += best_ray_v[0] * pull_factor * lr
-                curr_y += best_ray_v[1] * pull_factor * lr
+                curr_x += best_ray_v[0] * pull_factor * decay * 5.0
+                curr_y += best_ray_v[1] * pull_factor * decay * 5.0
 
-                # --- 2. ADAM OPTIMIZER (Angle Adjusting) ---
-                # Define 'gradient' (torque)
+                # --- ANGLE OPTIMIZATION (Adam + Jitter) ---
                 grad_angle = 0.0
-                if not is_valid:
-                    # Search torque: high-frequency oscillation to find gaps
-                    grad_angle = np.sin(i * 1.2) * 0.5
-                elif not base_shape.is_empty:
-                    # Alignment torque: rotate to face base shape's nearest point
-                    p1, p2 = nearest_points(base_shape, placed_shape)
-                    grad_angle = np.arctan2(p2.y - p1.y, p2.x - p1.x) * 0.1
 
-                # Adam Update Logic
+                if not is_valid:
+                    # If stuck/invalid, add "Jitter" + search torque
+                    grad_angle = np.sin(i * 1.5) * 0.1  # Stronger oscillation
+                    if i % 5 == 0: # Every 5 steps, try a random jump
+                        curr_angle += np.random.uniform(-0.2, 0.2)
+                elif not base_shape.is_empty:
+                    # ALIGNMENT TORQUE: Try to make the shape's side parallel to the base
+                    p1, p2 = nearest_points(base_shape, placed_shape)
+                    # Simple heuristic: rotate toward the vector perpendicular to the gap
+                    grad_angle = np.arctan2(p2.y - p1.y, p2.x - p1.x) * 0.15
+
+                # Adam Update
                 m_angle = beta1 * m_angle + (1 - beta1) * grad_angle
                 v_angle = beta2 * v_angle + (1 - beta2) * (grad_angle**2)
-
                 m_corr = m_angle / (1 - beta1**i)
                 v_corr = v_angle / (1 - beta2**i)
 
-                if v_angle > 0:
-                    v_corr = v_angle / (1 - beta2**i)
-                    curr_angle += (m_corr / (np.sqrt(v_corr) + eps)) * lr
-                else:
-                    curr_angle += grad_angle * lr # Fallback to simple nudge
+                curr_angle += (m_corr / (np.sqrt(v_corr) + eps)) * decay
 
             if best_local_coords:
                 propositions.append({'coords': best_local_coords, 'cost': best_local_score})
 
     return finalize_propositions(propositions, top_n)
+
+
+def evaluate_ray_placement(
+    params, base_shape, shape_to_place, boundary, base_hull_area,
+    bound_centroid, direction_vector, min_dist, nudge_iters=5
+):
+    """
+    Evaluates a particle by 'sliding' it using ray casting.
+    params: [x, y, theta, phi] where phi is a bias for the ray search.
+    """
+    curr_x, curr_y, curr_theta, phi = params
+    target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
+
+    # Local settlement loop (Ray Casting)
+    for i in range(nudge_iters):
+        placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
+
+        is_inside = boundary.contains(placed_shape)
+        is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
+        dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 10.0
+        is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
+
+        # --- Ray Casting Logic ---
+        # We blend the global target_v with the particle's preferred phi (ray_angle)
+        pref_v = np.array([np.cos(phi), np.sin(phi)])
+        to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
+        to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
+
+        # Determine the search direction for rays
+        active_dir = target_v if is_valid else (to_center_u * 0.5 + pref_v * 0.5)
+
+        # Sample rays to find the best local translation
+        best_ray_v = np.array([0.0, 0.0])
+        max_int = -float('inf')
+        for r_angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
+            rv = np.array([np.cos(r_angle), np.sin(r_angle)])
+            # The 'phi' from our point cloud provides a 'momentum' to certain ray angles
+            intensity = np.dot(rv, active_dir)
+            if intensity > max_int:
+                max_int = intensity
+                best_ray_v = rv
+
+        # Apply the nudge (translation)
+        curr_x += best_ray_v[0] * 0.5  # Fixed step for local settlement
+        curr_y += best_ray_v[1] * 0.5
+
+    # Final Check and Scoring
+    final_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
+    if not (boundary.contains(final_shape) and (base_shape.disjoint(final_shape) or base_shape.is_empty)):
+        return 1e6, (curr_x, curr_y, curr_theta), False
+
+    score = calculate_complex_score(
+        base_shape, final_shape, base_hull_area, bound_centroid,
+        direction_vector, weight_dist=0.001, weight_dir=0.4, weight_hull=0.1
+    )
+    return score, (curr_x, curr_y, curr_theta), True
+
+
+def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist):
+    # RIBBON SEARCH ZONE (Same logic, slightly wider for better capture)
+    minx, miny, maxx, maxy = shape_to_place.bounds
+    sample_step = max(maxx - minx, maxy - miny) * 0.4
+
+    # Identify the "tightest" and "loosest" fit radii for sampling
+    shape_to_place_center = shape_to_place.centroid
+    r_min = shape_to_place.exterior.distance(shape_to_place_center)
+    r_max = max([shape_to_place_center.distance(Point(p)) for p in shape_to_place.exterior.coords])
+
+    if not base_shape.is_empty:
+        outer_ribbon = base_shape.buffer(r_max + min_dist)
+        inner_ribbon = base_shape.buffer(r_min + min_dist)
+    else:
+        outer_ribbon = boundary.buffer(-(r_min + min_dist))
+        inner_ribbon = boundary.buffer(-(r_max + min_dist))
+    search_zone = outer_ribbon.difference(inner_ribbon).intersection(boundary)
+
+    samples = []
+    for line in get_shape_exteriors(search_zone):
+        num_pts = max(8, int(line.length / sample_step))
+        for d in np.linspace(0, line.length, num_pts):
+            samples.append(line.interpolate(d))
+
+    return tuple(samples)
 
 
 def calculate_complex_score(base, placed, base_hull_area, centroid, dir_v, w_dist, w_dir, w_hull):
