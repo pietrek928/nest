@@ -421,6 +421,7 @@ def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dis
         num_pts = max(8, int(line.length / sample_step))
         for d in np.linspace(0, line.length, num_pts):
             samples.append(line.interpolate(d))
+        samples.append(line.centroid)
 
     return tuple(samples)
 

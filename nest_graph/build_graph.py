@@ -339,7 +339,7 @@ def test_placement():
     p1_result = []
     p2_result = []
     base_shape = Polygon()
-    for _ in range(1):
+    for _ in range(100):
         p1_places = propose_placements_point_cloud(
             base_shape, p1, p_board, min_dist=0.001, direction_vector=(-1, -1), top_n=100
         )
@@ -355,12 +355,11 @@ def test_placement():
             p2_result.append(p2_places[0])
             base_shape = unary_union([base_shape, transform_poly(p2, p2_places[0])])
 
-    print(p1_result)
-    im = render_polys(p_board, [
-        [transform_poly(p1, t) for t in p1_result],
-        [transform_poly(p2, t) for t in p2_result]
-    ])
-    cv.imwrite('test.jpg', im)
+        im = render_polys(p_board, [
+            [transform_poly(p1, t) for t in p1_result],
+            [transform_poly(p2, t) for t in p2_result]
+        ])
+        cv.imwrite('test.jpg', im)
 
 
 def main():
