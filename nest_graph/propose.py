@@ -257,7 +257,7 @@ def propose_placements_raycasting(
 
 
 def propose_placements_point_cloud(
-    base_shape, shape_to_place, boundary, direction_vector=(1.0, 0.0),
+    base_shape, shape_to_place, boundary, pt_push,
     num_particles=64, max_iterations=128, min_dist=1.0, top_n=3,
     omega=0.6, c1=1.2, c2=1.4, nudge_iters=8, pull_factor=0.08,
     cull_ratio=0.2, stagnation_limit=5,
@@ -291,7 +291,7 @@ def propose_placements_point_cloud(
         for i in range(num_particles):
             score, settled = evaluate_ray_placement(
                 particles[i], base_shape, shape_to_place, boundary,
-                base_hull_area, bound_centroid, direction_vector, min_dist, nudge_iters, pull_factor
+                base_hull_area, bound_centroid, pt_push, min_dist, nudge_iters, pull_factor
             )
             current_scores.append(score)
             settled_coords_list.append(settled)
@@ -350,50 +350,86 @@ def propose_placements_point_cloud(
 
 def evaluate_ray_placement(
     params, base_shape, shape_to_place, boundary, base_hull_area,
-    bound_centroid, direction_vector, min_dist, nudge_iters, pull_factor
+    bound_centroid, pt_push, min_dist, nudge_iters, pull_factor
 ):
-    """
-    Local Search: Uses ray-casting to 'settle' a shape from a seed position.
-    """
-    curr_x, curr_y, curr_theta, phi = params
-    target_v = np.array(direction_vector) / (np.linalg.norm(direction_vector) + 1e-6)
+    curr_x, curr_y, curr_theta, _ = params
 
-    # Local settlement loop (Ray Casting)
-    for _ in range(nudge_iters):
+    # Torque momentum
+    m_theta = 0.0
+    beta_theta = 0.9
+
+    for i in range(1, nudge_iters + 1):
+        decay = 1.0 - (i / nudge_iters)
         placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
 
+        # 1. ANALYZE ENVIRONMENT
         is_inside = boundary.contains(placed_shape)
         is_colliding = base_shape.intersects(placed_shape) if not base_shape.is_empty else False
-        dist_to_base = base_shape.distance(placed_shape) if not base_shape.is_empty else 10.0
-        is_valid = is_inside and (not is_colliding) and (dist_to_base >= min_dist)
 
-        # Use phi (ray_angle) as a bias for search direction
-        pref_v = np.array([np.cos(phi), np.sin(phi)])
-        to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
-        to_center_u = to_center / (np.linalg.norm(to_center) + 1e-6)
+        # Pull vector away from the push point
+        push_v = np.array([curr_x - pt_push.x, curr_y - pt_push.y])
+        push_v_u = push_v / (np.linalg.norm(push_v) + 1e-6)
 
-        # If invalid, pull toward center/preferred angle; if valid, follow target vector
-        active_dir = target_v if is_valid else (to_center_u * 0.5 + pref_v * 0.5)
+        # 2. CALCULATE ATTRACTION (The 'Tightness' Hint)
+        if not base_shape.is_empty:
+            p_base, p_shape = nearest_points(base_shape, placed_shape)
+            # Vector pointing exactly from us to the base
+            attract_v = np.array([p_base.x - p_shape.x, p_base.y - p_shape.y])
+            attract_v_u = attract_v / (np.linalg.norm(attract_v) + 1e-6)
 
+            # TORQUE: Rotate to align the nearest points (helps 'roll' into gaps)
+            # Cross product to find rotation direction toward the attraction vector
+            lever_arm = np.array([p_shape.x - placed_shape.centroid.x, p_shape.y - placed_shape.centroid.y])
+            torque = (lever_arm[0] * attract_v_u[1] - lever_arm[1] * attract_v_u[0])
+            m_theta = beta_theta * m_theta + (1 - beta_theta) * torque
+            curr_theta += m_theta * 0.3 * decay
+        else:
+            attract_v_u = np.array([0.0, 0.0])
+
+        # 3. DEFINE THE RAY GOAL
+        if not is_inside or is_colliding:
+            # EMERGENCY: Pull toward center to recover
+            to_center = np.array([bound_centroid.x - curr_x, bound_centroid.y - curr_y])
+            active_dir = to_center / (np.linalg.norm(to_center) + 1e-6)
+        else:
+            # TIGHT PACKING: Squeeze the shape between the push-point and the base-cluster
+            # We favor the attraction to the base (0.7) over the push (0.3)
+            active_dir = (attract_v_u * 0.7 + push_v_u * 0.3)
+
+        # 4. RAY CASTING (Choosing the best movement)
         best_ray_v = np.array([0.0, 0.0])
         max_int = -float('inf')
-        for r_angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
+
+        # Higher ray count (16) to find narrow gaps for tight packing
+        for r_angle in np.linspace(0, 2*np.pi, 16, endpoint=False):
             rv = np.array([np.cos(r_angle), np.sin(r_angle)])
+
+            # Calculate intensity based on alignment with our 'Tightness' goal
             intensity = np.dot(rv, active_dir)
+
+            # Bonus: rays that point directly toward the base get a boost
+            if not base_shape.is_empty:
+                intensity += np.dot(rv, attract_v_u) * 0.5
+
             if intensity > max_int:
                 max_int = intensity
                 best_ray_v = rv
 
-        curr_x += best_ray_v[0] * pull_factor * 5.0
-        curr_y += best_ray_v[1] * pull_factor * 5.0
+        # Apply displacement
+        curr_x += best_ray_v[0] * pull_factor * 5.0 * decay
+        curr_y += best_ray_v[1] * pull_factor * 5.0 * decay
 
+    # 5. FINAL EVALUATION (Using your old score function)
     final_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
-    if not (boundary.contains(final_shape) and (base_shape.disjoint(final_shape) or base_shape.is_empty)):
+
+    # Final validity check
+    dist_to_base = base_shape.distance(final_shape) if not base_shape.is_empty else 10.0
+    if not (boundary.contains(final_shape) and (dist_to_base >= min_dist) and (not base_shape.intersects(final_shape) or base_shape.is_empty)):
         return 1e6, (curr_x, curr_y, curr_theta)
 
     score = calculate_complex_score(
         base_shape, final_shape, base_hull_area, bound_centroid,
-        direction_vector, w_dist=0.001, w_dir=0.4, w_hull=0.1
+        pt_push, w_dist=0.001, w_dir=0.4, w_hull=0.1
     )
     return score, (curr_x, curr_y, curr_theta)
 
@@ -426,14 +462,13 @@ def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dis
     return tuple(samples)
 
 
-def calculate_complex_score(base, placed, base_hull_area, centroid, dir_v, w_dist, w_dir, w_hull):
+def calculate_complex_score(base, placed, base_hull_area, centroid, pt_push, w_dist, w_dir, w_hull):
     # 1. Distance Component
     dist_to_center = Point(placed.centroid).distance(centroid)
 
     # 2. Directional Component (Dot Product)
-    # We negate this because we want to MINIMIZE score as we move ALONG the vector
-    pos = np.array([placed.centroid.x, placed.centroid.y])
-    direction_score = -np.dot(pos, dir_v)
+    # We want to out of pt_push
+    direction_score = -pt_push.distance(placed.centroid)
 
     pts = get_shape_polygons_coords(base) + get_shape_polygons_coords(placed)
     hull_growth = np.sqrt(max(0, MultiPoint(pts).convex_hull.area - base_hull_area))

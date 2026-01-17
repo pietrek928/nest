@@ -41,6 +41,15 @@ def make_placement_base(base_shape, polys, exclude_p, exclude_dist=0):
     return unary_union(out_polys)
 
 
+def placement_base_ribbon(polys, p_center, exclued_dist, include_dist):
+    out_polys = []
+    for p in polys:
+        dist = p.distance(p_center)
+        if dist > exclued_dist and dist < include_dist:
+            out_polys.append(p)
+    return unary_union(out_polys)
+
+
 class PolygonGroup(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
@@ -341,14 +350,14 @@ def test_placement():
     base_shape = Polygon()
     for _ in range(100):
         p1_places = propose_placements_point_cloud(
-            base_shape, p1, p_board, min_dist=0.001, direction_vector=(-1, -1), top_n=100
+            base_shape, p1, p_board, min_dist=0.001, pt_push=p_board.centroid, top_n=100
         )
         print('p1', len(p1_places))
         if p1_places:
             p1_result.append(p1_places[0])
             base_shape = unary_union([base_shape, transform_poly(p1, p1_places[0])])
         p2_places = propose_placements_point_cloud(
-            base_shape, p2, p_board, min_dist=0.001, direction_vector=(-1, -1), top_n=100
+            base_shape, p2, p_board, min_dist=0.001, pt_push=p_board.centroid, top_n=100
         )
         print('p2', len(p2_places))
         if p2_places:
