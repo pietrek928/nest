@@ -20,7 +20,7 @@ Vec<K, T> triangle_height_vector(
     auto ab = A - B;
     auto ac = A - C;
 
-    auto kab = (ab.dp(ac) / ab.qlen());
+    auto kab = (ab.dp(ac) / ab.len_sq());
 
     return ac - ab * kab;
 }
@@ -93,7 +93,7 @@ inline bool walk_to_nearest_edge(
         auto ca = ba.dp(d);
 
         if (cc < 0) {
-            auto la = ca.qlen();
+            auto la = ca.len_sq();
             if (< la) {
                 auto sa = cross2d(bc, d);
             }
@@ -106,23 +106,23 @@ inline bool walk_to_nearest_edge(
 
 template <class T>
 inline T segment_qdist(const Vec<2, T> vp1, const Vec<2, T> v21) {
-    auto v21_qlen = v21.qlen();
+    auto v21_len_sq = v21.len_sq();
 
     auto m = v21.dp(vp1);
     if (m >= 0) {
-        return vp1.qlen();
+        return vp1.len_sq();
     }
 
-    auto vp1_qlen = vp1.qlen();
-    auto vT_qlen = m * m / vp1_qlen;
-    if (vT_qlen > v21_qlen) {
-        return (vp1 - v21).qlen();
+    auto vp1_len_sq = vp1.len_sq();
+    auto vT_len_sq = m * m / vp1_len_sq;
+    if (vT_len_sq > v21_len_sq) {
+        return (vp1 - v21).len_sq();
     }
 
-    auto qlen = vp1_qlen - vT_qlen;
-    // cout << "aaaaaaaaa " << qlen << " " << v21 << " " << vp1 << endl;
+    auto len_sq = vp1_len_sq - vT_len_sq;
+    // cout << "aaaaaaaaa " << len_sq << " " << v21 << " " << vp1 << endl;
 
-    return qlen;
+    return len_sq;
 }
 
 
@@ -146,7 +146,7 @@ class Circle {
 
         Vec<2, T> p((cy * B - by * C) / D, (bx * C - cx * B) / D);
 
-        return Circle(p + a, p.qlen());
+        return Circle(p + a, p.len_sq());
     }
 
     static Circle from(Vec<2, T>* pts, int n) {
@@ -501,7 +501,7 @@ inline Diff2<6, T> pos_dist_grad_g6(
     v_g6.get_(1).add_mapped(p1_g3[1], {0, 1, 2});
     v_g6.get_(0).add_mapped(-p2_g3[0], {3, 4, 5});
     v_g6.get_(1).add_mapped(-p2_g3[1], {3, 4, 5});
-    return v_g6.qlen();
+    return v_g6.len_sq();
 }
 
 template <class T>

@@ -63,7 +63,7 @@ class PlaneMatcher {
     T match_point(Vec<3, T> p) {
         p -= center;
         auto orto_dp = p.dp(orto);
-        auto qdist = p.qlen();
+        auto qdist = p.len_sq();
         return .4 + pow(qdist, .6) * dist_weight -
                pow(orto_dp * orto_dp + .4, -1.85) * orto_weight;  // ?????????
     }
@@ -72,7 +72,7 @@ class PlaneMatcher {
         n++;
 
         auto p = v3nograd(p_) - center_grad();
-        auto qdist = p.qlen();
+        auto qdist = p.len_sq();
         auto o = orto_grad();
         auto orto_dp = p.dp(o);
         score += ((qdist ^ .6) * dist_weight) -
@@ -103,13 +103,13 @@ class PlaneMatcher {
             auto center_diff = Vec<3, T>(
                 diff_cv.at<T>(0, 3), diff_cv.at<T>(0, 4),
                 diff_cv.at<T>(0, 5));
-            auto center_diff_len = std::sqrt(center_diff.qlen());
+            auto center_diff_len = std::sqrt(center_diff.len_sq());
             if (center_diff_len > .5) {
                 center_diff *= .5 / center_diff_len;
             }
 
             orto -= orto_diff;
-            orto *= (1. / std::sqrt(orto.qlen()));
+            orto *= (1. / std::sqrt(orto.len_sq()));
             center -= center_diff;
         }
 

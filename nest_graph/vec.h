@@ -2,6 +2,7 @@
 
 #include <initializer_list>
 
+
 template <int K, class T>
 class Vec {
     T items[K];
@@ -25,11 +26,11 @@ class Vec {
     }
 
     template <int IT>
-    inline T calc_qlen() const {
+    inline T calc_len_sq() const {
         auto& v = items[IT];
         T r = v * v;
         if constexpr (IT > 0) {
-            r += calc_qlen<IT - 1>();
+            r += calc_len_sq<IT - 1>();
         }
         return r;
     }
@@ -277,8 +278,8 @@ class Vec {
         return calc_dp<K - 1, T2>(v2);
     }
 
-    inline T qlen() const {
-        return calc_qlen<K - 1>();
+    inline T len_sq() const {
+        return calc_len_sq<K - 1>();
     }
 
     inline T abssum() const {
