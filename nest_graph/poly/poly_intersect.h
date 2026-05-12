@@ -3,28 +3,29 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "circle.h"
 #include "poly.h"
 #include "convex_intersect.h"
 #include "convex_contain.h"
 
+// -------------------------------------------------------------------------
+// NARROW PHASE ROUTERS (Smart GJK Dispatch)
+// -------------------------------------------------------------------------
+const int GRADIENT_THRESHOLD = 24;
 
-// -------------------------------------------------------------------------
-// NARROW PHASE: Smart GJK Router
-// -------------------------------------------------------------------------
 template<class T, class VecType>
 inline bool narrow_phase_intersect(
     const VecType* polyA, int nA,
     const VecType* polyB, int nB
 ) {
+    // Ensure smaller polygon is always first for cache efficiency
     const VecType* p1 = (nA <= nB) ? polyA : polyB;
     int s1 = (nA <= nB) ? nA : nB;
 
     const VecType* p2 = (nA <= nB) ? polyB : polyA;
     int s2 = (nA <= nB) ? nB : nA;
-
-    const int GRADIENT_THRESHOLD = 24;
 
     if (s1 + s2 > GRADIENT_THRESHOLD) {
         return convex_polygons_intersect_gjk_gradient<T, VecType>(p1, s1, p2, s2).intersect;
@@ -33,20 +34,21 @@ inline bool narrow_phase_intersect(
     }
 }
 
-
-// -------------------------------------------------------------------------
-// STRUCTURES
-// -------------------------------------------------------------------------
-
 template<class T, class VecType>
-struct SweepElement {
-    int poly_idx;
-    T min_proj;
-    T max_proj;
-    const Circle<T, VecType>* bounds;
-};
+inline bool narrow_phase_contain(
+    const VecType* polyA, int nA,
+    const VecType* polyB, int nB
+) {
+    if (nA + nB > GRADIENT_THRESHOLD) {
+        return is_polygon_fully_inside_gradient<T, VecType>(polyA, nA, polyB, nB);
+    } else {
+        return is_polygon_fully_inside<T, VecType>(polyA, nA, polyB, nB);
+    }
+}
 
-// Unified Element for both 2-Poly Sweep and N-Poly Cluster Sweep
+// -------------------------------------------------------------------------
+// STRUCTURES & HELPERS
+// -------------------------------------------------------------------------
 template<class T, class VecType>
 struct PartSweepElement {
     int poly_idx;
@@ -56,12 +58,13 @@ struct PartSweepElement {
     const Circle<T, VecType>* bounds;
 };
 
-// Helper to generate a unique pair ID (smaller index first)
 inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
 }
 
-// Helper 1: Verify if a confirmed collision is invalidated by a hole
+// -------------------------------------------------------------------------
+// INVALIDATION & PAIR CHECKS
+// -------------------------------------------------------------------------
 template<class T, class VecType>
 inline bool is_invalidated_by_hole(
     const VecType* ptsA, int nA, const Polygon<T, VecType>& polyA,
@@ -69,14 +72,14 @@ inline bool is_invalidated_by_hole(
 ) {
     // Check if Part A is entirely swallowed by a hole in Poly B
     for (size_t hb = 0; hb < polyB.convex_holes.size(); ++hb) {
-        if (is_polygon_fully_inside<T, VecType>(ptsA, nA, polyB.get_hole_points(hb), polyB.get_hole_size(hb))) {
+        if (narrow_phase_contain<T, VecType>(ptsA, nA, polyB.get_hole_points(hb), polyB.get_hole_size(hb))) {
             return true;
         }
     }
 
     // Check if Part B is entirely swallowed by a hole in Poly A
     for (size_t ha = 0; ha < polyA.convex_holes.size(); ++ha) {
-        if (is_polygon_fully_inside<T, VecType>(ptsB, nB, polyA.get_hole_points(ha), polyA.get_hole_size(ha))) {
+        if (narrow_phase_contain<T, VecType>(ptsB, nB, polyA.get_hole_points(ha), polyA.get_hole_size(ha))) {
             return true;
         }
     }
@@ -84,9 +87,6 @@ inline bool is_invalidated_by_hole(
     return false;
 }
 
-// -------------------------------------------------------------------------
-// CORE LOGIC: Check a specific Convex Part vs another Convex Part
-// -------------------------------------------------------------------------
 template<class T, class VecType>
 inline bool check_part_vs_part(
     const Polygon<T, VecType>& polyA, int a_idx,
@@ -115,7 +115,7 @@ inline bool check_part_vs_part(
 }
 
 // -------------------------------------------------------------------------
-// THE EXTRACTOR: Flattens a Polygon's parts into the global sweep array
+// SWEEP ENGINE
 // -------------------------------------------------------------------------
 template<class T, class VecType>
 inline void append_poly_parts_to_sweep(
@@ -134,9 +134,6 @@ inline void append_poly_parts_to_sweep(
     }
 }
 
-// -------------------------------------------------------------------------
-// CORE SWEEP EXECUTION: The Pure Data Router
-// -------------------------------------------------------------------------
 template<class T, class VecType>
 inline std::vector<std::pair<int, int>> execute_part_sweep(
     const std::vector<Polygon<T, VecType>>& polygons,
@@ -164,14 +161,16 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
 
             auto pair_id = make_sorted_pair(polyA_idx, polyB_idx);
 
-            // Skip if we already confirmed this Polygon-to-Polygon collision
-            if (std::find(known_collisions.begin(), known_collisions.end(), pair_id) != known_collisions.end()) {
-                continue;
+            // OPTIMIZATION: O(log K) binary search instead of O(K) linear search
+            auto it = std::lower_bound(known_collisions.begin(), known_collisions.end(), pair_id);
+            if (it != known_collisions.end() && *it == pair_id) {
+                continue; // Already confirmed collision
             }
 
             // Narrow Phase: Circle -> GJK -> Holes
             if (check_part_vs_part(polygons[polyA_idx], elements[i].part_idx, polygons[polyB_idx], elements[j].part_idx)) {
-                known_collisions.push_back(pair_id);
+                // Insert maintaining sorted order
+                known_collisions.insert(it, pair_id);
                 confirmed_collisions.push_back(pair_id);
             }
         }
@@ -179,9 +178,8 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
     return confirmed_collisions;
 }
 
-
 // -------------------------------------------------------------------------
-// MAIN ENGINE ENTRY POINT 1: Sweep ALL Polygons
+// MAIN ENGINE ENTRY POINTS
 // -------------------------------------------------------------------------
 template<class T, class VecType>
 std::vector<std::pair<int, int>> find_polygon_intersections(
@@ -191,26 +189,20 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
     if (polygons.size() < 2) return {};
 
     std::vector<PartSweepElement<T, VecType>> elements;
-    elements.reserve(polygons.size() * 4); // Estimate 4 parts per polygon
+    elements.reserve(polygons.size() * 4);
 
-    // Safety check for axis length to avoid division/scaling by zero later
     T axis_sq = sweep_axis.len_sq();
     if (axis_sq < static_cast<T>(1e-8)) return {};
 
     T axis_len_sqrt = std::sqrt(axis_sq);
 
     for (size_t i = 0; i < polygons.size(); ++i) {
-        append_poly_parts_to_sweep(
-            static_cast<int>(i), polygons[i], sweep_axis, axis_len_sqrt, elements
-        );
+        append_poly_parts_to_sweep(static_cast<int>(i), polygons[i], sweep_axis, axis_len_sqrt, elements);
     }
 
     return execute_part_sweep(polygons, elements);
 }
 
-// -------------------------------------------------------------------------
-// MAIN ENGINE ENTRY POINT 2: Sweep ONLY Active Indices
-// -------------------------------------------------------------------------
 template<class T, class VecType>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<T, VecType>>& polygons,
@@ -228,9 +220,7 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
     T axis_len_sqrt = std::sqrt(axis_sq);
 
     for (int p_idx : active_indices) {
-        append_poly_parts_to_sweep(
-            p_idx, polygons[p_idx], sweep_axis, axis_len_sqrt, elements
-        );
+        append_poly_parts_to_sweep(p_idx, polygons[p_idx], sweep_axis, axis_len_sqrt, elements);
     }
 
     return execute_part_sweep(polygons, elements);

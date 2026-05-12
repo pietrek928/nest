@@ -1,9 +1,8 @@
 #pragma once
 
 #include <cmath>
-#include <algorithm>
-
 #include "gjk.h"
+
 
 template <class T>
 struct IntersectResult {
@@ -20,196 +19,122 @@ inline VecType triple_product(const VecType& a, const VecType& b, const VecType&
 }
 
 // -------------------------------------------------------------------------
-// STANDARD GJK INTERSECTION FUNCTION (Hill-Climbing)
+// CORE IMPLEMENTATION
 // -------------------------------------------------------------------------
-template <class T, class VecType>
-inline IntersectResult<T> convex_polygons_intersect_gjk(
+template <bool UseGradient, class T, class VecType>
+inline IntersectResult<T> convex_polygons_intersect_gjk_impl(
     const VecType* poly1, int n1,
     const VecType* poly2, int n2,
-    int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-8)
+    int it1, int it2,
+    T epsilon
 ) {
-    T epsilon_sq = epsilon * epsilon;
+    const T epsilon_sq = epsilon * epsilon;
     VecType simplex[3];
     int simplex_size = 0;
 
-    // Initial search direction based on cached points
-    auto dir = poly1[it1] - poly2[it2];
-
-    // If starting points are perfectly overlapping, they intersect
-    if (dir.len_sq() < epsilon_sq) {
-        return {true, it1, it2};
-    }
-
-    int op_limit = 32; // Silent safety net for catastrophic float failures
-
-    while (op_limit-- > 0) {
-        // 1. Get Support Point on Minkowski Difference
-        it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
-        it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
-
-        auto support = poly1[it1] - poly2[it2];
-
-        // 2. Terminate early if the furthest point doesn't cross the origin
-        if (support.dp(dir) < 0) {
-            return {false, it1, it2};
-        }
-
-        // 3. Duplicate Point Check (Cycle Detection)
-        for (int i = 0; i < simplex_size; ++i) {
-            auto diff = support - simplex[i];
-            if (diff.len_sq() < epsilon_sq) {
-                return {false, it1, it2};
-            }
-        }
-
-        // 4. Update Simplex
-        simplex[2] = simplex[1];
-        simplex[1] = simplex[0];
-        simplex[0] = support;
-        simplex_size++;
-
-        // 5. Evolve Simplex State Machine
-        switch (simplex_size) {
-            case 1: {
-                // Newest simplex is a single point: search toward the origin
-                dir = -simplex[0];
-                if (dir.len_sq() < epsilon_sq) {
-                    return {true, it1, it2};
-                }
-                break;
-            }
-            case 2: { // Line Segment State
-                auto AB = simplex[1] - simplex[0];
-                auto AO = -simplex[0];
-
-                dir = triple_product(AB, AO, AB);
-                if (dir.len_sq() < epsilon_sq) {
-                    return {true, it1, it2};
-                }
-                break;
-            }
-            case 3: { // Triangle State
-                auto AB = simplex[1] - simplex[0];
-                auto AC = simplex[2] - simplex[0];
-                auto AO = -simplex[0];
-
-                auto AB_perp = triple_product(AC, AB, AB);
-                auto AC_perp = triple_product(AB, AC, AC);
-
-                if (AB_perp.dp(AO) > 0) {
-                    simplex_size = 2; // Downgrade to Line
-                    dir = AB_perp;
-                }
-                else if (AC_perp.dp(AO) > 0) {
-                    simplex[1] = simplex[2]; // Keep AC, drop B
-                    simplex_size = 2; // Downgrade to Line
-                    dir = AC_perp;
-                }
-                else {
-                    // Origin safely encapsulated
-                    return {true, it1, it2};
-                }
-                break;
-            }
-        }
-    }
-
-    // Safety net fallback (assume collision if math completely breaks down)
-    return {true, it1, it2};
-}
-
-// -------------------------------------------------------------------------
-// GRADIENT-BOOSTED GJK INTERSECTION (Galloping Search)
-// -------------------------------------------------------------------------
-template <class T, class VecType>
-inline IntersectResult<T> convex_polygons_intersect_gjk_gradient(
-    const VecType* poly1, int n1,
-    const VecType* poly2, int n2,
-    int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-8)
-) {
-    T epsilon_sq = epsilon * epsilon;
-    VecType simplex[3];
-    int simplex_size = 0;
-
+    // 1. Initial vector between cached points
     auto dir = poly1[it1] - poly2[it2];
 
     if (dir.len_sq() < epsilon_sq) {
         return {true, it1, it2};
     }
+
+    // 2. LOGICAL FIX: Point towards the origin!
+    // GJK searches Minkowski space. We must actively seek the origin (0,0).
+    dir = -dir;
 
     int op_limit = 32;
 
     while (op_limit-- > 0) {
-        // Use the Gradient-Boosted Exponential Search
-        it1 = get_extreme_index_gradient<T, VecType>(poly1, n1, dir, it1);
-        it2 = get_extreme_index_gradient<T, VecType>(poly2, n2, -dir, it2);
+        // Support Search
+        if constexpr (UseGradient) {
+            it1 = get_extreme_index_gradient<T, VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index_gradient<T, VecType>(poly2, n2, -dir, it2);
+        } else {
+            it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
+        }
 
-        auto support = poly1[it1] - poly2[it2];
+        const auto support = poly1[it1] - poly2[it2];
 
-        // Terminate early if the furthest point doesn't cross the origin
+        // 3. Early Exit: If the furthest point in the direction of the origin
+        // hasn't actually crossed the origin, containment is impossible.
         if (support.dp(dir) < 0) {
             return {false, it1, it2};
         }
 
-        // Duplicate Point Check (Cycle Detection)
-        for (int i = 0; i < simplex_size; ++i) {
-            auto diff = support - simplex[i];
-            if (diff.len_sq() < epsilon_sq) {
-                return {false, it1, it2};
-            }
-        }
-
+        // Shift existing points and insert newest point at index 0
         simplex[2] = simplex[1];
         simplex[1] = simplex[0];
         simplex[0] = support;
         simplex_size++;
 
-        // Evolve Simplex State Machine
-        switch (simplex_size) {
-            case 1: {
-                dir = -simplex[0];
-                if (dir.len_sq() < epsilon_sq) {
-                    return {true, it1, it2};
-                }
-                break;
-            }
-            case 2: { // Line Segment State
-                auto AB = simplex[1] - simplex[0];
-                auto AO = -simplex[0];
+        // 5. SIMPLEX STATE MACHINE (Hot-Path Optimized)
+        // We prioritize size == 3 because after 2 iterations, the algorithm
+        // spends its entire life evaluating triangles.
+        if (simplex_size == 3) {
+            auto AB = simplex[1] - simplex[0];
+            auto AC = simplex[2] - simplex[0];
+            auto AO = -simplex[0];
 
-                dir = triple_product(AB, AO, AB);
-                if (dir.len_sq() < epsilon_sq) {
-                    return {true, it1, it2};
-                }
-                break;
-            }
-            case 3: { // Triangle State
-                auto AB = simplex[1] - simplex[0];
-                auto AC = simplex[2] - simplex[0];
-                auto AO = -simplex[0];
+            auto AB_perp = triple_product(AC, AB, AB);
+            auto AC_perp = triple_product(AB, AC, AC);
 
-                auto AB_perp = triple_product(AC, AB, AB);
-                auto AC_perp = triple_product(AB, AC, AC);
-
-                if (AB_perp.dp(AO) > 0) {
-                    simplex_size = 2; // Downgrade to Line
-                    dir = AB_perp;
-                }
-                else if (AC_perp.dp(AO) > 0) {
-                    simplex[1] = simplex[2]; // Keep AC, drop B
-                    simplex_size = 2; // Downgrade to Line
-                    dir = AC_perp;
-                }
-                else {
-                    // Origin safely encapsulated
-                    return {true, it1, it2};
-                }
-                break;
+            if (AB_perp.dp(AO) > 0) {
+                // Drop C, keep A and B
+                simplex_size = 2;
+                dir = AB_perp;
             }
+            else if (AC_perp.dp(AO) > 0) {
+                // Drop B, keep A and C
+                simplex[1] = simplex[2];
+                simplex_size = 2;
+                dir = AC_perp;
+            }
+            else {
+                // The origin is strictly bounded by the triangle. Collision!
+                return {true, it1, it2};
+            }
+        }
+        else if (simplex_size == 2) {
+            auto AB = simplex[1] - simplex[0];
+            auto AO = -simplex[0];
+
+            dir = triple_product(AB, AO, AB);
+
+            // If the perpendicular vector is 0, the origin lies exactly on the segment
+            if (dir.len_sq() < epsilon_sq) {
+                return {true, it1, it2};
+            }
+        }
+        else { // simplex_size == 1
+            dir = -simplex[0];
         }
     }
 
+    // Fallback: If op_limit triggers, assume true to prevent object tunneling
     return {true, it1, it2};
+}
+
+// -------------------------------------------------------------------------
+// PUBLIC APIs
+// -------------------------------------------------------------------------
+template <class T, class VecType>
+IntersectResult<T> convex_polygons_intersect_gjk(
+    const VecType* poly1, int n1,
+    const VecType* poly2, int n2,
+    int it1 = 0, int it2 = 0,
+    T epsilon = static_cast<T>(1e-8)
+) {
+    return convex_polygons_intersect_gjk_impl<false, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
+}
+
+template <class T, class VecType>
+IntersectResult<T> convex_polygons_intersect_gjk_gradient(
+    const VecType* poly1, int n1,
+    const VecType* poly2, int n2,
+    int it1 = 0, int it2 = 0,
+    T epsilon = static_cast<T>(1e-8)
+) {
+    return convex_polygons_intersect_gjk_impl<true, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
 }

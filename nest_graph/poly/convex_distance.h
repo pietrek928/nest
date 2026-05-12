@@ -1,223 +1,155 @@
 #pragma once
 
 #include <cmath>
-#include <algorithm>
-
+#include <limits>
 #include "gjk.h"
 
 
-template <class T>
-struct DistanceResult {
-    T distance_sq;      // Squared distance between polygons (0 if intersecting)
-    bool intersect;     // True if distance is 0
-    int it1, it2;       // Cached indices for temporal coherence
+template <class T, class VecType>
+struct SimplexResult {
+    VecType closest_point;
+    int new_size;
+    int indices[2];
 };
 
-// Helper: Find the closest point on line segment AB to the origin
+template <class T>
+struct DistanceResult {
+    T distance_sq;
+    bool intersect;
+    int it1, it2;
+};
+
 template <class T, class VecType>
-inline VecType closest_point_to_origin(
-    const VecType& A, const VecType& B, int& out_simplex_size,
-    T epsilon = static_cast<T>(1e-8)
+inline SimplexResult<T, VecType> closest_point_on_segment(
+    const VecType& A, const VecType& B, T epsilon_sq
 ) {
-    T epsilon_sq = epsilon * epsilon;
     VecType AB = B - A;
-    VecType AO = -A;
+    T ab_len_sq = AB.qlen();
 
-    T ab_len_sq = AB.len_sq();
-
-    // If A and B are essentially the same point
     if (ab_len_sq < epsilon_sq) {
-        out_simplex_size = 1;
-        return A;
+        return { A, 1, {0, 0} };
     }
 
-    // Project AO onto AB to find the interpolation factor 't'
-    T t = AO.dp(AB) / ab_len_sq;
+    T t = (-A).dp(AB) / ab_len_sq;
 
-    if (t <= 0) {
-        // Closest point is A. We drop B from the simplex.
-        out_simplex_size = 1;
-        return A;
-    }
-    else if (t >= 1) {
-        // Closest point is B. We drop A from the simplex.
-        out_simplex_size = 1;
-        return B; // Note: the caller must shift B into simplex[0]
-    }
-    else {
-        // Closest point is strictly on the segment between A and B
-        out_simplex_size = 2;
-        return A + AB * t;
-    }
+    if (t <= 0)      return { A, 1, {0, 0} };
+    else if (t >= 1) return { B, 1, {1, 0} };
+    else             return { A + AB * t, 2, {0, 1} };
 }
 
 // -------------------------------------------------------------------------
-// STANDARD DISTANCE ALGORITHM (Hill-Climbing)
+// THE CORE IMPLEMENTATION
 // -------------------------------------------------------------------------
-template <class T, class VecType>
-inline DistanceResult<T> convex_polygons_distance_gjk(
+template <bool UseGradient, class T, class VecType>
+inline DistanceResult<T> convex_polygons_distance_gjk_impl(
     const VecType* poly1, int n1,
     const VecType* poly2, int n2,
-    int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-6)
+    int it1, int it2,
+    T epsilon
 ) {
-    T epsilon_sq = epsilon * epsilon;
-    VecType simplex[3];
-    int simplex_size = 0;
-
-    // Initial search direction
-    auto dir = poly1[it1] - poly2[it2];
-
-    // If we start exactly on top of each other, distance is 0
-    if (dir.len_sq() < epsilon_sq) {
-        return { 0, true, it1, it2 };
-    }
-
-    // Reverse direction to point TOWARDS the origin
-    dir = -dir;
-
-    // Initialize with dir to guarantee dimension matching without {0,0}
-    VecType closest_point = dir;
-    int op_limit = 32;
-
-    while (op_limit-- > 0) {
-        // 1. Get Support Point
-        it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
-        it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
-
-        auto support = poly1[it1] - poly2[it2];
-
-        // 2. Add to Simplex State Machine
-        switch (simplex_size) {
-            case 0:
-                simplex[0] = support;
-                simplex_size = 1;
-                closest_point = support;
-                break;
-
-            case 1:
-                simplex[1] = simplex[0];
-                simplex[0] = support;
-                simplex_size = 2;
-                break;
-
-            case 2:
-                // Shift oldest point out, keep the newest
-                simplex[1] = simplex[0];
-                simplex[0] = support;
-                break;
-        }
-
-        // 3. Find the closest point on our current simplex to the origin
-        if (simplex_size == 2) {
-            int new_size;
-            closest_point = closest_point_to_origin<T>(
-                simplex[0], simplex[1], new_size, epsilon
-            );
-
-            // If the closest point was B (simplex[1]), shift it to index 0
-            if (new_size == 1 && (closest_point - simplex[1]).len_sq() < epsilon_sq) {
-                simplex[0] = simplex[1];
-            }
-            simplex_size = new_size;
-        }
-
-        // 4. Check for Convergence
-        T dist_sq = closest_point.len_sq();
-
-        if (dist_sq < epsilon_sq) {
-            return { 0, true, it1, it2 };
-        }
-
-        // Project our new support point onto the direction vector
-        T v_dot_w = -closest_point.dp(support);
-        if (v_dot_w - dist_sq <= epsilon_sq) {
-            return { dist_sq, false, it1, it2 };
-        }
-
-        // 5. Update search direction to point from the closest point to the origin
-        dir = -closest_point;
-    }
-
-    T fallback_dist_sq = closest_point.len_sq();
-    return { fallback_dist_sq, fallback_dist_sq < epsilon_sq, it1, it2 };
-}
-
-// -------------------------------------------------------------------------
-// GRADIENT-BOOSTED DISTANCE ALGORITHM (Galloping Search)
-// -------------------------------------------------------------------------
-template <class T, class VecType>
-inline DistanceResult<T> convex_polygons_distance_gjk_gradient(
-    const VecType* poly1, int n1,
-    const VecType* poly2, int n2,
-    int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-6)
-) {
-    T epsilon_sq = epsilon * epsilon;
+    const T epsilon_sq = epsilon * epsilon;
     VecType simplex[3];
     int simplex_size = 0;
 
     auto dir = poly1[it1] - poly2[it2];
-
-    if (dir.len_sq() < epsilon_sq) {
-        return { 0, true, it1, it2 };
-    }
+    if (dir.qlen() < epsilon_sq) return { 0, true, it1, it2 };
 
     dir = -dir;
+    VecType closest_point = -dir;
+    T last_dist_sq = std::numeric_limits<T>::max();
 
-    VecType closest_point = dir;
     int op_limit = 32;
-
     while (op_limit-- > 0) {
-        // Gradient Support Functions
-        it1 = get_extreme_index_gradient<T, VecType>(poly1, n1, dir, it1);
-        it2 = get_extreme_index_gradient<T, VecType>(poly2, n2, -dir, it2);
-
-        auto support = poly1[it1] - poly2[it2];
-
-        // Add to Simplex State Machine
-        switch (simplex_size) {
-            case 0:
-                simplex[0] = support;
-                simplex_size = 1;
-                closest_point = support;
-                break;
-
-            case 1:
-                simplex[1] = simplex[0];
-                simplex[0] = support;
-                simplex_size = 2;
-                break;
-
-            case 2:
-                // Shift oldest point out, keep the newest
-                simplex[1] = simplex[0];
-                simplex[0] = support;
-                break;
+        if constexpr (UseGradient) {
+            it1 = get_extreme_index_gradient<T, VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index_gradient<T, VecType>(poly2, n2, -dir, it2);
+        } else {
+            it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
         }
 
-        // Find the closest point
+        const auto support = poly1[it1] - poly2[it2];
+        const T dist_sq = closest_point.qlen();
+
+        // Convergence: Is the new point far enough "past" our current closest point?
+        // This projection check is the most numerically stable way to end GJK.
+        T proj = (-closest_point).dp(support - closest_point);
+        if (proj < epsilon_sq || dist_sq >= last_dist_sq) {
+            return { dist_sq, dist_sq < epsilon_sq, it1, it2 };
+        }
+        last_dist_sq = dist_sq;
+
+        // We check '== 2' first because most GJK iterations occur
+        // in this state while "sliding" along the Minkowski boundary.
         if (simplex_size == 2) {
-            int new_size;
-            closest_point = closest_point_to_origin<T, VecType>(
-                simplex[0], simplex[1], new_size, epsilon
-            );
+            // Triangle logic: Support + current Segment
+            auto res01 = closest_point_on_segment<T, VecType>(support, simplex[0], epsilon_sq);
+            auto res02 = closest_point_on_segment<T, VecType>(support, simplex[1], epsilon_sq);
 
-            if (new_size == 1 && (closest_point - simplex[1]).len_sq() < epsilon_sq) {
-                simplex[0] = simplex[1];
+            if (res01.closest_point.qlen() < res02.closest_point.qlen()) {
+                closest_point = res01.closest_point;
+                VecType next_s[2] = { support, simplex[0] };
+                simplex[0] = next_s[res01.indices[0]];
+                simplex[1] = next_s[res01.indices[1]];
+                simplex_size = res01.new_size;
+            } else {
+                closest_point = res02.closest_point;
+                VecType next_s[2] = { support, simplex[1] };
+                simplex[0] = next_s[res02.indices[0]];
+                simplex[1] = next_s[res02.indices[1]];
+                simplex_size = res02.new_size;
             }
-            simplex_size = new_size;
+        }
+        else if (simplex_size == 1) {
+            // Segment logic: Support + current Point
+            simplex[1] = simplex[0];
+            simplex[0] = support;
+            auto res = closest_point_on_segment<T, VecType>(simplex[0], simplex[1], epsilon_sq);
+
+            VecType next_s[2] = { simplex[res.indices[0]], simplex[res.indices[1]] };
+            simplex[0] = next_s[0];
+            simplex[1] = next_s[1];
+            simplex_size = res.new_size;
+            closest_point = res.closest_point;
+        }
+        else {
+            // Initial state: size == 0
+            simplex[0] = support;
+            simplex_size = 1;
+            closest_point = support;
         }
 
-        T dist_sq = closest_point.len_sq();
-
-        if (dist_sq < epsilon_sq) {
-            return { 0, true, it1, it2 };
-        }
-
+        if (closest_point.qlen() < epsilon_sq) return { 0, true, it1, it2 };
         dir = -closest_point;
     }
 
-    T fallback_dist_sq = closest_point.len_sq();
-    return { fallback_dist_sq, fallback_dist_sq < epsilon_sq, it1, it2 };
+    return { closest_point.qlen(), false, it1, it2 };
+}
+
+// -------------------------------------------------------------------------
+// PUBLIC APIs
+// -------------------------------------------------------------------------
+// Separation distance (squared); when polygons have positive gap,
+// DistanceResult::distance_sq is that gap squared (up to epsilon) and
+// intersect is usually false unless numerically grazing zero.
+//
+// Not for penetration, overlap depth, containment, or "one hull inside another":
+// once the convex hulls touch or overlap in R^d, vanilla GJK on the difference
+// no longer minimizes to a penetration metric; callers must use intersect / EPA
+// (or a 2D-specific routine). Do not infer overlap from DistanceResult alone.
+template <class T, class VecType>
+DistanceResult<T> convex_polygons_distance_gjk(
+    const VecType* poly1, int n1, const VecType* poly2, int n2,
+    int it1 = 0, int it2 = 0, T epsilon = static_cast<T>(1e-6)
+) {
+    return convex_polygons_distance_gjk_impl<false, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
+}
+
+// Same contract as convex_polygons_distance_gjk (gradient-based support indices).
+template <class T, class VecType>
+DistanceResult<T> convex_polygons_distance_gjk_gradient(
+    const VecType* poly1, int n1, const VecType* poly2, int n2,
+    int it1 = 0, int it2 = 0, T epsilon = static_cast<T>(1e-6)
+) {
+    return convex_polygons_distance_gjk_impl<true, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
 }
