@@ -45,8 +45,8 @@ inline IntersectResult<T> convex_polygons_intersect_gjk(
 
     while (op_limit-- > 0) {
         // 1. Get Support Point on Minkowski Difference
-        it1 = get_extreme_index<T>(poly1, n1, dir, it1);
-        it2 = get_extreme_index<T>(poly2, n2, -dir, it2);
+        it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
+        it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
 
         auto support = poly1[it1] - poly2[it2];
 
@@ -71,6 +71,14 @@ inline IntersectResult<T> convex_polygons_intersect_gjk(
 
         // 5. Evolve Simplex State Machine
         switch (simplex_size) {
+            case 1: {
+                // Newest simplex is a single point: search toward the origin
+                dir = -simplex[0];
+                if (dir.len_sq() < epsilon_sq) {
+                    return {true, it1, it2};
+                }
+                break;
+            }
             case 2: { // Line Segment State
                 auto AB = simplex[1] - simplex[0];
                 auto AO = -simplex[0];
@@ -160,6 +168,13 @@ inline IntersectResult<T> convex_polygons_intersect_gjk_gradient(
 
         // Evolve Simplex State Machine
         switch (simplex_size) {
+            case 1: {
+                dir = -simplex[0];
+                if (dir.len_sq() < epsilon_sq) {
+                    return {true, it1, it2};
+                }
+                break;
+            }
             case 2: { // Line Segment State
                 auto AB = simplex[1] - simplex[0];
                 auto AO = -simplex[0];

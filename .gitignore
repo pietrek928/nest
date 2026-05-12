@@ -6,6 +6,8 @@
 build
 
 # Python
+.venv
+.pyenv
 **/*.pyc
 **/__pycache__
 

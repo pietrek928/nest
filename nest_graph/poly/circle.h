@@ -16,6 +16,8 @@ public:
     VecType c;
     T r_sq;
 
+    Circle() : c(), r_sq(static_cast<T>(0)) {}
+
     Circle(const VecType& c, T r_sq) : c(c), r_sq(r_sq) {}
 
     // 2-point fallback (Diameter)

@@ -1,0 +1,4 @@
+# Out-of-source build → build/compile_commands.json. Refresh:
+#   cmake -B build -S . -DPython_EXECUTABLE=<python-with-nanobind>
+CompileFlags:
+  CompilationDatabase: build

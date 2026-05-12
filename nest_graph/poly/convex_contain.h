@@ -29,7 +29,7 @@ inline bool point_in_convex_poly_gjk(
     while (op_limit-- > 0) {
         // 1. MASSIVE OPTIMIZATION: We only search Polygon B!
         // P is always the extreme point of Polygon A.
-        cached_it2 = get_extreme_index<T>(polyB, nB, -dir, cached_it2);
+        cached_it2 = get_extreme_index<T, VecType>(polyB, nB, -dir, cached_it2);
 
         auto support = P - polyB[cached_it2];
 

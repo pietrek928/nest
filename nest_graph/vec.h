@@ -282,6 +282,9 @@ class Vec {
         return calc_len_sq<K - 1>();
     }
 
+    /** Squared length (alias used by polygon GJK helpers). */
+    inline T qlen() const { return len_sq(); }
+
     inline T abssum() const {
         return calc_abssum<K - 1>();
     }

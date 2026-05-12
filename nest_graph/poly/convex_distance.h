@@ -82,8 +82,8 @@ inline DistanceResult<T> convex_polygons_distance_gjk(
 
     while (op_limit-- > 0) {
         // 1. Get Support Point
-        it1 = get_extreme_index<T>(poly1, n1, dir, it1);
-        it2 = get_extreme_index<T>(poly2, n2, -dir, it2);
+        it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
+        it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
 
         auto support = poly1[it1] - poly2[it2];
 
@@ -213,12 +213,6 @@ inline DistanceResult<T> convex_polygons_distance_gjk_gradient(
 
         if (dist_sq < epsilon_sq) {
             return { 0, true, it1, it2 };
-        }
-
-        // Convergence Check
-        T v_dot_w = -closest_point.dp(support);
-        if (v_dot_w - dist_sq <= epsilon_sq) {
-            return { dist_sq, false, it1, it2 };
         }
 
         dir = -closest_point;

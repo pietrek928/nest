@@ -1,68 +1,22 @@
-#pragma once
+#include "rules.h"
 
-#include <vector>
-#include <random>
+#include <algorithm>
 #include <cmath>
+#include <random>
+#include <vector>
 
-#include "types.h"
-
-template<class T>
+template <class T>
 T adjust_angle(T a) {
     if (a < 0) {
         return a + 2 * M_PI;
-    } 
+    }
     if (a > 2 * M_PI) {
         return a - 2 * M_PI;
     }
     return a;
 }
 
-typedef struct PointPlaceRule {
-    float x, y, r, w;
-    Tvertex group;
-} PointPlaceRule;
-
-
-typedef struct BBoxPlaceRule {
-    BBox bbox;
-    float r, w;
-    Tvertex group;
-} BBoxPlaceRule;
-
-
-typedef struct PointAngleRule {
-    float x, y, a, r, w;
-    Tvertex group;
-} PointAngleRule;
-
-
-typedef struct BBoxAngleRule {
-    BBox bbox;
-    float a, r, w;
-    Tvertex group;
-} BBoxAngleRule;
-
-
-typedef struct PlacementRuleSet {
-    std::vector<PointPlaceRule> point_rules;
-    std::vector<BBoxPlaceRule> bbox_rules;
-    std::vector<PointAngleRule> point_angle_rules;
-    std::vector<BBoxAngleRule> bbox_angle_rules;
-    inline auto size () const  {
-        return point_rules.size() + bbox_rules.size() + point_angle_rules.size() + bbox_angle_rules.size();
-    }
-} PlacementRuleSet;
-inline auto size(const PlacementRuleSet &s) {return s.size();}
-
-typedef struct RuleMutationSettings {
-    BBox box;
-    float dpos, dw, da;
-    float insert_p, remove_p, mutate_p;
-    Tvertex ngroups;
-} RuleMutationSettings;
-
-
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 BBox mutate_random(const BBox &b, Tgen gen, Tdistrib &distrib) {
     return {
         .xstart = b.xstart + distrib(gen),
@@ -72,7 +26,7 @@ BBox mutate_random(const BBox &b, Tgen gen, Tdistrib &distrib) {
     };
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 BBox generate_random_bbox(Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y) {
     auto x1 = distrib_x(gen);
     auto x2 = distrib_x(gen);
@@ -87,7 +41,7 @@ BBox generate_random_bbox(Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y) {
     };
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 PointPlaceRule mutate_random(
     const PointPlaceRule &p, Tgen gen, Tdistrib &distrib_pos, Tdistrib &distrib_w
 ) {
@@ -100,7 +54,7 @@ PointPlaceRule mutate_random(
     };
 }
 
-template<class Tgen, class Tdistrib, class Tdistrib_group>
+template <class Tgen, class Tdistrib, class Tdistrib_group>
 PointPlaceRule generate_random_point_place_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_w, Tdistrib_group &distrib_group
@@ -114,7 +68,7 @@ PointPlaceRule generate_random_point_place_rule(
     };
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 BBoxPlaceRule mutate_random(
     const BBoxPlaceRule &p, Tgen gen, Tdistrib &distrib_pos, Tdistrib &distrib_w
 ) {
@@ -126,7 +80,7 @@ BBoxPlaceRule mutate_random(
     };
 }
 
-template<class Tgen, class Tdistrib, class Tdistrib_group>
+template <class Tgen, class Tdistrib, class Tdistrib_group>
 BBoxPlaceRule generate_random_bbox_place_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_w, Tdistrib_group &distrib_group
@@ -139,7 +93,7 @@ BBoxPlaceRule generate_random_bbox_place_rule(
     };
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 PointAngleRule mutate_random(
     const PointAngleRule &p, Tgen gen, Tdistrib &distrib_pos,
     Tdistrib &distrib_a, Tdistrib &distrib_w
@@ -153,7 +107,7 @@ PointAngleRule mutate_random(
     };
 }
 
-template<class Tgen, class Tdistrib, class Tdistrib_group>
+template <class Tgen, class Tdistrib, class Tdistrib_group>
 PointAngleRule generate_random_point_angle_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_a,
@@ -167,10 +121,8 @@ PointAngleRule generate_random_point_angle_rule(
         .group = distrib_group(gen)
     };
 }
-    
 
-
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 BBoxAngleRule mutate_random(
     const BBoxAngleRule &p, Tgen gen,
     Tdistrib &distrib_pos, Tdistrib &distrib_a, Tdistrib &distrib_w
@@ -184,7 +136,7 @@ BBoxAngleRule mutate_random(
     };
 }
 
-template<class Tgen, class Tdistrib, class Tdistrib_group>
+template <class Tgen, class Tdistrib, class Tdistrib_group>
 BBoxAngleRule generate_random_bbox_angle_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_a,
@@ -199,7 +151,7 @@ BBoxAngleRule generate_random_bbox_angle_rule(
     };
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 PlacementRuleSet mutate_random(
     const PlacementRuleSet &s, Tgen gen, Tdistrib &distrib_select,
     Tdistrib &distrib_pos, Tdistrib &distrib_a, Tdistrib &distrib_w
@@ -236,7 +188,7 @@ PlacementRuleSet mutate_random(
     return r;
 }
 
-template<class Tgen, class Tdistrib, class Tdistrib_group>
+template <class Tgen, class Tdistrib, class Tdistrib_group>
 PlacementRuleSet insert_random(
     const PlacementRuleSet &s, Tgen gen, Tdistrib &distrib_insert,
     Tdistrib &distrib_pos, Tdistrib &distrib_a,
@@ -266,7 +218,7 @@ PlacementRuleSet insert_random(
     return r;
 }
 
-template<class Tgen, class Tdistrib>
+template <class Tgen, class Tdistrib>
 PlacementRuleSet remove_random(
     const PlacementRuleSet &s, Tgen gen, Tdistrib &distrib_remove
 ) {
@@ -295,19 +247,19 @@ PlacementRuleSet remove_random(
 }
 
 std::vector<PlacementRuleSet> augment_rules(
-    const std::vector<PlacementRuleSet> & rules, const RuleMutationSettings & settings
+    const std::vector<PlacementRuleSet> &rules, const RuleMutationSettings &settings
 ) {
     std::random_device rd;
     std::mt19937 gen(rd());
 
-    std::uniform_real_distribution<float> 
+    std::uniform_real_distribution<float>
         distrib_pos(-settings.dpos, settings.dpos),
         distrib_w(-settings.dw, settings.dw),
         distrib_a(-settings.da, settings.da),
         distrib_insert(0.0, 1.0 / (settings.insert_p + 1e-6)),
         distrib_remove(0.0, 1.0 / (settings.remove_p + 1e-6)),
         distrib_mutate(0.0, 1.0 / (settings.mutate_p + 1e-6));
-    std::uniform_int_distribution<Tvertex> distrib_group(0, settings.ngroups-1);
+    std::uniform_int_distribution<Tvertex> distrib_group(0, settings.ngroups - 1);
 
     std::vector<PlacementRuleSet> r;
     for (const PlacementRuleSet &s : rules) {

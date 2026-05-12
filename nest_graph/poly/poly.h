@@ -20,7 +20,7 @@ class ConvexPolygon {
         : points(poly, poly+n) {
         std::random_device rd;
         std::mt19937 gen(rd());
-        bounding_circle = compute_exact_bounding_circle(
+        bounding_circle = compute_exact_bounding_circle<T, VecType>(
             poly, n, gen
         );
     }
@@ -33,20 +33,19 @@ class Polygon {
         Circle<T, VecType> bounding_circle;
     } ConvexPolygonEntry;
 
+public:
     std::vector<ConvexPolygonEntry> convex_parts;
     std::vector<VecType> poly_points;
     std::vector<ConvexPolygonEntry> convex_holes;
     std::vector<VecType> hole_points;
     Circle<T, VecType> bounding_circle;
 
-    public:
-
     void append_convex_poly(const VecType* poly, int n) {
         std::random_device rd;
         std::mt19937 gen(rd());
         convex_parts.push_back({
             poly_points.size(),
-            compute_exact_bounding_circle(poly, n, gen)
+            compute_exact_bounding_circle<T, VecType>(poly, n, gen)
         });
         poly_points.insert(poly_points.end(), poly, poly+n);
     }
@@ -56,7 +55,7 @@ class Polygon {
         std::mt19937 gen(rd());
         convex_holes.push_back({
             hole_points.size(),
-            compute_exact_bounding_circle(hole, n, gen)
+            compute_exact_bounding_circle<T, VecType>(hole, n, gen)
         });
         hole_points.insert(hole_points.end(), hole, hole+n);
     }
@@ -64,8 +63,10 @@ class Polygon {
     void finalize() {
         std::random_device rd;
         std::mt19937 gen(rd());
-        bounding_circle = compute_exact_bounding_circle(
-            poly_points.data(), poly_points.size(), gen
+        bounding_circle = compute_exact_bounding_circle<T, VecType>(
+            poly_points.data(),
+            static_cast<int>(poly_points.size()),
+            gen
         );
         poly_points.shrink_to_fit();
         hole_points.shrink_to_fit();

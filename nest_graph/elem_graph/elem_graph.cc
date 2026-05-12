@@ -5,7 +5,6 @@
 #include <random>
 #include <stdexcept>
 #include <vector>
-#include "types.h"
 
 
 float bbox_qdist(const BBox &a, const BBox &b) {

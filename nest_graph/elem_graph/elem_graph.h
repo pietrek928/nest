@@ -30,6 +30,9 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
 
 ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse);
 
+std::vector<Tscore> score_elems(
+    const ElemGraph& g, const PlacementRuleSet& rules);
+
 std::vector<Tscore> score_rules(
     const std::vector<ElemGraph> &graphs,
     const std::vector<PlacementRuleSet> &rule_sets
