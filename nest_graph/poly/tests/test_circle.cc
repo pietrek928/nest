@@ -10,7 +10,7 @@
 #include "vec.h"
 
 using Vec2 = Vec<2, double>;
-using Circle2 = Circle<double, Vec2>;
+using Circle2 = Circle<Vec2>;
 
 namespace {
 
@@ -120,17 +120,17 @@ TEST_CASE("Circle is_inside interior boundary exterior", "[circle]") {
 
 TEST_CASE("compute_exact_bounding_circle degenerate counts", "[circle]") {
     std::mt19937 gen(42);
-    Circle2 empty = compute_exact_bounding_circle<double, Vec2>(nullptr, 0, gen);
+    Circle2 empty = compute_exact_bounding_circle<Vec2>(nullptr, 0, gen);
     REQUIRE(empty.square_radius() == Catch::Approx(0.0));
 
     Vec2 one[] = {{{3.0, -4.0}}};
-    Circle2 single = compute_exact_bounding_circle<double, Vec2>(one, 1, gen);
+    Circle2 single = compute_exact_bounding_circle<Vec2>(one, 1, gen);
     REQUIRE(single.center()[0] == Catch::Approx(3.0));
     REQUIRE(single.center()[1] == Catch::Approx(-4.0));
     REQUIRE(single.square_radius() == Catch::Approx(0.0));
 
     Vec2 seg[] = {{{0.0, 0.0}}, {{4.0, 0.0}}};
-    Circle2 dia = compute_exact_bounding_circle<double, Vec2>(seg, 2, gen);
+    Circle2 dia = compute_exact_bounding_circle<Vec2>(seg, 2, gen);
     expect_circle_near(dia, Circle2::from(seg[0], seg[1]));
 }
 
@@ -140,8 +140,8 @@ TEST_CASE("compute_exact_bounding_circle square", "[circle]") {
     };
     std::mt19937 g0(0);
     std::mt19937 g999(999);
-    Circle2 c0 = compute_exact_bounding_circle<double, Vec2>(sq.data(), static_cast<int>(sq.size()), g0);
-    Circle2 c1 = compute_exact_bounding_circle<double, Vec2>(sq.data(), static_cast<int>(sq.size()), g999);
+    Circle2 c0 = compute_exact_bounding_circle<Vec2>(sq.data(), static_cast<int>(sq.size()), g0);
+    Circle2 c1 = compute_exact_bounding_circle<Vec2>(sq.data(), static_cast<int>(sq.size()), g999);
     expect_circle_near(c0, c1);
     REQUIRE(c0.center()[0] == Catch::Approx(1.0));
     REQUIRE(c0.center()[1] == Catch::Approx(1.0));
@@ -155,7 +155,7 @@ TEST_CASE("compute_exact_bounding_circle collinear cloud", "[circle]") {
         line.push_back(Vec2{{static_cast<double>(i), 0.0}});
     }
     std::mt19937 gen(7);
-    Circle2 c = compute_exact_bounding_circle<double, Vec2>(
+    Circle2 c = compute_exact_bounding_circle<Vec2>(
         line.data(), static_cast<int>(line.size()), gen);
     expect_circle_near(c, Circle2::from(line.front(), line.back()));
     REQUIRE(circle_contains_points(c, line, 1e-6));
@@ -164,7 +164,7 @@ TEST_CASE("compute_exact_bounding_circle collinear cloud", "[circle]") {
 TEST_CASE("compute_exact_bounding_circle matches three-point circumcircle", "[circle]") {
     Vec2 tri[] = {{{0.0, 0.0}}, {{2.0, 0.0}}, {{0.0, 2.0}}};
     std::mt19937 gen(123);
-    Circle2 welzl = compute_exact_bounding_circle<double, Vec2>(tri, 3, gen);
+    Circle2 welzl = compute_exact_bounding_circle<Vec2>(tri, 3, gen);
     Circle2 circum = Circle2::from(tri[0], tri[1], tri[2]);
     expect_circle_near(welzl, circum, 1e-8);
 }

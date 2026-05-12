@@ -1,10 +1,9 @@
 #pragma once
 
 #include <cmath>
-#include "gjk.h"
+#include "../gjk.h"
 
 
-template <class T>
 struct IntersectResult {
     bool intersect;
     int it1;
@@ -21,14 +20,15 @@ inline VecType triple_product(const VecType& a, const VecType& b, const VecType&
 // -------------------------------------------------------------------------
 // CORE IMPLEMENTATION
 // -------------------------------------------------------------------------
-template <bool UseGradient, class T, class VecType>
-inline IntersectResult<T> convex_polygons_intersect_gjk_impl(
+template <bool UseGradient, class VecType>
+inline IntersectResult convex_polygons_intersect_gjk_impl(
     const VecType* poly1, int n1,
     const VecType* poly2, int n2,
     int it1, int it2,
-    T epsilon
+    typename VecType::Scalar epsilon
 ) {
-    const T epsilon_sq = epsilon * epsilon;
+    using Scalar = typename VecType::Scalar;
+    const Scalar epsilon_sq = epsilon * epsilon;
     VecType simplex[3];
     int simplex_size = 0;
 
@@ -48,11 +48,11 @@ inline IntersectResult<T> convex_polygons_intersect_gjk_impl(
     while (op_limit-- > 0) {
         // Support Search
         if constexpr (UseGradient) {
-            it1 = get_extreme_index_gradient<T, VecType>(poly1, n1, dir, it1);
-            it2 = get_extreme_index_gradient<T, VecType>(poly2, n2, -dir, it2);
+            it1 = get_extreme_index_gradient<VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index_gradient<VecType>(poly2, n2, -dir, it2);
         } else {
-            it1 = get_extreme_index<T, VecType>(poly1, n1, dir, it1);
-            it2 = get_extreme_index<T, VecType>(poly2, n2, -dir, it2);
+            it1 = get_extreme_index<VecType>(poly1, n1, dir, it1);
+            it2 = get_extreme_index<VecType>(poly2, n2, -dir, it2);
         }
 
         const auto support = poly1[it1] - poly2[it2];
@@ -119,22 +119,22 @@ inline IntersectResult<T> convex_polygons_intersect_gjk_impl(
 // -------------------------------------------------------------------------
 // PUBLIC APIs
 // -------------------------------------------------------------------------
-template <class T, class VecType>
-IntersectResult<T> convex_polygons_intersect_gjk(
+template <class VecType>
+IntersectResult convex_polygons_intersect_gjk(
     const VecType* poly1, int n1,
     const VecType* poly2, int n2,
     int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-8)
+    typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-8)
 ) {
-    return convex_polygons_intersect_gjk_impl<false, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
+    return convex_polygons_intersect_gjk_impl<false, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
 }
 
-template <class T, class VecType>
-IntersectResult<T> convex_polygons_intersect_gjk_gradient(
+template <class VecType>
+IntersectResult convex_polygons_intersect_gjk_gradient(
     const VecType* poly1, int n1,
     const VecType* poly2, int n2,
     int it1 = 0, int it2 = 0,
-    T epsilon = static_cast<T>(1e-8)
+    typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-8)
 ) {
-    return convex_polygons_intersect_gjk_impl<true, T, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
+    return convex_polygons_intersect_gjk_impl<true, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
 }

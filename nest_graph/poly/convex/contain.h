@@ -2,19 +2,20 @@
 
 #include <cmath>
 #include <algorithm>
-#include "gjk.h"
+#include "intersect.h"
 
 // -------------------------------------------------------------------------
 // CORE IMPLEMENTATION: Point vs Convex Polygon
 // -------------------------------------------------------------------------
-template <bool UseGradient, class T, class VecType>
+template <bool UseGradient, class VecType>
 inline bool point_in_convex_poly_gjk_impl(
     const VecType& P,
     const VecType* polyB, int nB,
     int& cached_it2,
-    T epsilon
+    typename VecType::Scalar epsilon
 ) {
-    const T epsilon_sq = epsilon * epsilon;
+    using Scalar = typename VecType::Scalar;
+    const Scalar epsilon_sq = epsilon * epsilon;
     VecType simplex[3];
     int simplex_size = 0;
 
@@ -33,9 +34,9 @@ inline bool point_in_convex_poly_gjk_impl(
     while (op_limit-- > 0) {
         // 3. Support Search (Only searching Polygon B)
         if constexpr (UseGradient) {
-            cached_it2 = get_extreme_index_gradient<T, VecType>(polyB, nB, -dir, cached_it2);
+            cached_it2 = get_extreme_index_gradient<VecType>(polyB, nB, -dir, cached_it2);
         } else {
-            cached_it2 = get_extreme_index<T, VecType>(polyB, nB, -dir, cached_it2);
+            cached_it2 = get_extreme_index<VecType>(polyB, nB, -dir, cached_it2);
         }
 
         auto support = P - polyB[cached_it2];
@@ -98,18 +99,18 @@ inline bool point_in_convex_poly_gjk_impl(
 // -------------------------------------------------------------------------
 // PUBLIC APIs
 // -------------------------------------------------------------------------
-template <class T, class VecType>
+template <class VecType>
 bool is_polygon_fully_inside(
     const VecType* polyA, int nA,
     const VecType* polyB, int nB,
-    T epsilon = static_cast<T>(1e-8)
+    typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-8)
 ) {
     if (nA == 0 || nB == 0) return false;
 
     int cached_it2 = 0;
 
     for (int i = 0; i < nA; ++i) {
-        if (!point_in_convex_poly_gjk_impl<false, T, VecType>(
+        if (!point_in_convex_poly_gjk_impl<false, VecType>(
             polyA[i], polyB, nB, cached_it2, epsilon
         )) {
             return false;
@@ -119,18 +120,18 @@ bool is_polygon_fully_inside(
     return true;
 }
 
-template <class T, class VecType>
+template <class VecType>
 bool is_polygon_fully_inside_gradient(
     const VecType* polyA, int nA,
     const VecType* polyB, int nB,
-    T epsilon = static_cast<T>(1e-8)
+    typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-8)
 ) {
     if (nA == 0 || nB == 0) return false;
 
     int cached_it2 = 0;
 
     for (int i = 0; i < nA; ++i) {
-        if (!point_in_convex_poly_gjk_impl<true, T, VecType>(
+        if (!point_in_convex_poly_gjk_impl<true, VecType>(
             polyA[i], polyB, nB, cached_it2, epsilon
         )) {
             return false;

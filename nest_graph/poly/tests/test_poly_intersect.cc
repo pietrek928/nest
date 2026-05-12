@@ -10,7 +10,7 @@
 #include "vec.h"
 
 using Vec2 = Vec<2, double>;
-using Polygon2 = Polygon<double, Vec2>;
+using Polygon2 = Polygon<Vec2>;
 
 namespace {
 
@@ -109,7 +109,7 @@ Polygon2 polygon_two_overlapping_parts_same_partner() {
 TEST_CASE("narrow_phase_intersect disjoint convex", "[poly_intersect][router]") {
     auto sq_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto sq_b = polygon_from_quad({{5, 0}, {7, 0}, {7, 2}, {5, 2}});
-    REQUIRE_FALSE(narrow_phase_intersect<double, Vec2>(
+    REQUIRE_FALSE(narrow_phase_intersect<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
         sq_b.get_part_points(0), sq_b.get_part_size(0)));
 }
@@ -117,7 +117,7 @@ TEST_CASE("narrow_phase_intersect disjoint convex", "[poly_intersect][router]") 
 TEST_CASE("narrow_phase_intersect touch vertex", "[poly_intersect][router]") {
     auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto poly_b = polygon_from_quad({{2, 2}, {4, 2}, {4, 4}, {2, 4}});
-    REQUIRE(narrow_phase_intersect<double, Vec2>(
+    REQUIRE(narrow_phase_intersect<Vec2>(
         poly_a.get_part_points(0), poly_a.get_part_size(0),
         poly_b.get_part_points(0), poly_b.get_part_size(0)));
 }
@@ -125,7 +125,7 @@ TEST_CASE("narrow_phase_intersect touch vertex", "[poly_intersect][router]") {
 TEST_CASE("narrow_phase_intersect touch edge", "[poly_intersect][router]") {
     auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto poly_b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
-    REQUIRE(narrow_phase_intersect<double, Vec2>(
+    REQUIRE(narrow_phase_intersect<Vec2>(
         poly_a.get_part_points(0), poly_a.get_part_size(0),
         poly_b.get_part_points(0), poly_b.get_part_size(0)));
 }
@@ -133,7 +133,7 @@ TEST_CASE("narrow_phase_intersect touch edge", "[poly_intersect][router]") {
 TEST_CASE("narrow_phase_intersect overlap interior", "[poly_intersect][router]") {
     auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto poly_b = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    REQUIRE(narrow_phase_intersect<double, Vec2>(
+    REQUIRE(narrow_phase_intersect<Vec2>(
         poly_a.get_part_points(0), poly_a.get_part_size(0),
         poly_b.get_part_points(0), poly_b.get_part_size(0)));
 }
@@ -141,10 +141,10 @@ TEST_CASE("narrow_phase_intersect overlap interior", "[poly_intersect][router]")
 TEST_CASE("narrow_phase_intersect swap argument order symmetry", "[poly_intersect][router]") {
     auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto poly_b = polygon_from_quad({{5, 0}, {7, 0}, {7, 2}, {5, 2}});
-    bool ab = narrow_phase_intersect<double, Vec2>(
+    bool ab = narrow_phase_intersect<Vec2>(
         poly_a.get_part_points(0), poly_a.get_part_size(0),
         poly_b.get_part_points(0), poly_b.get_part_size(0));
-    bool ba = narrow_phase_intersect<double, Vec2>(
+    bool ba = narrow_phase_intersect<Vec2>(
         poly_b.get_part_points(0), poly_b.get_part_size(0),
         poly_a.get_part_points(0), poly_a.get_part_size(0));
     REQUIRE(ab == ba);
@@ -156,7 +156,7 @@ TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][
     auto dense23 = polygon_dense_bottom_rect(20, 36, 0.0, 2.0);
     REQUIRE(sq_a.get_part_size(0) + dense23.get_part_size(0) == 23);
 
-    bool hit23 = narrow_phase_intersect<double, Vec2>(
+    bool hit23 = narrow_phase_intersect<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
         dense23.get_part_points(0), dense23.get_part_size(0));
 
@@ -164,7 +164,7 @@ TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][
     auto dense26 = polygon_dense_bottom_rect(20, 39, 0.0, 2.0);
     REQUIRE(sq_a.get_part_size(0) + dense26.get_part_size(0) == 26);
 
-    bool hit26 = narrow_phase_intersect<double, Vec2>(
+    bool hit26 = narrow_phase_intersect<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
         dense26.get_part_points(0), dense26.get_part_size(0));
 
@@ -172,10 +172,10 @@ TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][
     REQUIRE_FALSE(hit23);
 
     auto overlap_square = polygon_from_quad({{18, 0}, {22, 0}, {22, 2}, {18, 2}});
-    bool ov23 = narrow_phase_intersect<double, Vec2>(
+    bool ov23 = narrow_phase_intersect<Vec2>(
         overlap_square.get_part_points(0), overlap_square.get_part_size(0),
         dense23.get_part_points(0), dense23.get_part_size(0));
-    bool ov26 = narrow_phase_intersect<double, Vec2>(
+    bool ov26 = narrow_phase_intersect<Vec2>(
         overlap_square.get_part_points(0), overlap_square.get_part_size(0),
         dense26.get_part_points(0), dense26.get_part_size(0));
     REQUIRE(ov23);
@@ -185,12 +185,12 @@ TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][
 TEST_CASE("narrow_phase_contain strict inside vs escaped vertex", "[poly_intersect][router]") {
     auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto inner_ok = polygon_from_quad({{1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
-    REQUIRE(narrow_phase_contain<double, Vec2>(
+    REQUIRE(narrow_phase_contain<Vec2>(
         inner_ok.get_part_points(0), inner_ok.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0)));
 
     auto inner_bad = polygon_from_quad({{1.5, 1.5}, {5.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
-    REQUIRE_FALSE(narrow_phase_contain<double, Vec2>(
+    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
         inner_bad.get_part_points(0), inner_bad.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0)));
 }
@@ -201,7 +201,7 @@ TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][ro
     auto dense_inside23 = polygon_dense_bottom_rect(5, 21, 1.0, 3.0);
     REQUIRE(outer.get_part_size(0) + dense_inside23.get_part_size(0) == 23);
 
-    bool in23 = narrow_phase_contain<double, Vec2>(
+    bool in23 = narrow_phase_contain<Vec2>(
         dense_inside23.get_part_points(0), dense_inside23.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0));
 
@@ -209,7 +209,7 @@ TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][ro
     auto dense_inside26 = polygon_dense_bottom_rect(5, 24, 1.0, 3.0);
     REQUIRE(outer.get_part_size(0) + dense_inside26.get_part_size(0) == 26);
 
-    bool in26 = narrow_phase_contain<double, Vec2>(
+    bool in26 = narrow_phase_contain<Vec2>(
         dense_inside26.get_part_points(0), dense_inside26.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0));
 
@@ -218,30 +218,30 @@ TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][ro
 
     auto dense_escape23 = polygon_dense_bottom_rect(5, 21, 5.5, 7.5);
     auto dense_escape26 = polygon_dense_bottom_rect(5, 24, 5.5, 7.5);
-    REQUIRE_FALSE(narrow_phase_contain<double, Vec2>(
+    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
         dense_escape23.get_part_points(0), dense_escape23.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0)));
-    REQUIRE_FALSE(narrow_phase_contain<double, Vec2>(
+    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
         dense_escape26.get_part_points(0), dense_escape26.get_part_size(0),
         outer.get_part_points(0), outer.get_part_size(0)));
 }
 
 TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sweep]") {
     Vec2 axis{{1.0, 0.0}};
-    REQUIRE(find_polygon_intersections<double, Vec2>({}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({}, axis).empty());
 
     Polygon2 single = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    REQUIRE(find_polygon_intersections<double, Vec2>({single}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({single}, axis).empty());
 
-    REQUIRE(find_polygon_intersections<double, Vec2>(
+    REQUIRE(find_polygon_intersections<Vec2>(
                 {single}, std::vector<int>{}, axis).empty());
 
-    REQUIRE(find_polygon_intersections<double, Vec2>(
+    REQUIRE(find_polygon_intersections<Vec2>(
                 {single}, std::vector<int>{0}, axis).empty());
 
     auto far_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto far_b = polygon_from_quad({{50, 0}, {52, 0}, {52, 2}, {50, 2}});
-    REQUIRE(find_polygon_intersections<double, Vec2>(
+    REQUIRE(find_polygon_intersections<Vec2>(
                 {far_a, far_b}, Vec2{{1e-10, 0.0}}).empty());
 }
 
@@ -251,9 +251,9 @@ TEST_CASE("find_polygon_intersections simple hit and miss", "[poly_intersect][sw
     auto right_sep = polygon_from_quad({{10, 0}, {12, 0}, {12, 2}, {10, 2}});
     auto overlap = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
 
-    REQUIRE(find_polygon_intersections<double, Vec2>({left, right_sep}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({left, right_sep}, axis).empty());
 
-    auto hits = find_polygon_intersections<double, Vec2>({left, overlap}, axis);
+    auto hits = find_polygon_intersections<Vec2>({left, overlap}, axis);
     REQUIRE_FALSE(hits.empty());
     REQUIRE(hits.front().first == 0);
     REQUIRE(hits.front().second == 1);
@@ -265,7 +265,7 @@ TEST_CASE("find_polygon_intersections three polygons subset pairs", "[poly_inter
     auto orphan = polygon_from_quad({{100, 100}, {101, 100}, {101, 101}, {100, 101}});
     auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
     std::vector<Polygon2> polys = {base, orphan, buddy};
-    auto hits = find_polygon_intersections<double, Vec2>(polys, axis);
+    auto hits = find_polygon_intersections<Vec2>(polys, axis);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 2));
 }
@@ -277,11 +277,11 @@ TEST_CASE("find_polygon_intersections active_indices overload", "[poly_intersect
     auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
     std::vector<Polygon2> polys = {base, orphan, buddy};
 
-    auto overlap_only = find_polygon_intersections<double, Vec2>(polys, std::vector<int>{0, 2}, axis);
+    auto overlap_only = find_polygon_intersections<Vec2>(polys, std::vector<int>{0, 2}, axis);
     REQUIRE(overlap_only.size() == 1);
     REQUIRE(overlap_only[0] == std::make_pair(0, 2));
 
-    auto disjoint_only = find_polygon_intersections<double, Vec2>(polys, std::vector<int>{0, 1}, axis);
+    auto disjoint_only = find_polygon_intersections<Vec2>(polys, std::vector<int>{0, 1}, axis);
     REQUIRE(disjoint_only.empty());
 }
 
@@ -292,7 +292,7 @@ TEST_CASE("find_polygon_intersections multipolygon dedupes polygon pair", "[poly
 
     auto stripe = polygon_from_quad({{1.0, -1.0}, {3.0, -1.0}, {3.0, 5.0}, {1.0, 5.0}});
     std::vector<Polygon2> polys = {compound, stripe};
-    auto hits = find_polygon_intersections<double, Vec2>(polys, axis);
+    auto hits = find_polygon_intersections<Vec2>(polys, axis);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 1));
 }
@@ -304,7 +304,7 @@ TEST_CASE("find_polygon_intersections no self collision across parts", "[poly_in
     // Must pass at least two top-level polygons (entry guard); distant third body
     // should not intersect. Pairs sharing poly_idx==0 are skipped in the sweep.
     auto far = polygon_from_quad({{200.0, 200.0}, {201.0, 200.0}, {201.0, 201.0}, {200.0, 201.0}});
-    auto hits = find_polygon_intersections<double, Vec2>({compound, far}, axis);
+    auto hits = find_polygon_intersections<Vec2>({compound, far}, axis);
     REQUIRE(hits.empty());
 }
 
@@ -312,7 +312,7 @@ TEST_CASE("find_polygon_intersections diagonal sweep axis overlap", "[poly_inter
     Vec2 axis{{1.0, 1.0}};
     auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto b = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    auto hits = find_polygon_intersections<double, Vec2>({a, b}, axis);
+    auto hits = find_polygon_intersections<Vec2>({a, b}, axis);
     REQUIRE_FALSE(hits.empty());
 }
 
@@ -325,14 +325,14 @@ TEST_CASE("hole invalidation swallows probe fully inside hole", "[poly_intersect
         {5.75, 5.75},
         {4.25, 5.75},
     });
-    REQUIRE(find_polygon_intersections<double, Vec2>({shell, probe_inside_void}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({shell, probe_inside_void}, axis).empty());
 }
 
 TEST_CASE("hole invalidation detects overlap with solid shell", "[poly_intersect][holes]") {
     Vec2 axis{{1.0, 0.0}};
     auto shell = polygon_outer_with_square_hole(0, 0, 10, 10, 4, 4, 6, 6);
     auto probe_in_annulus = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    auto hits = find_polygon_intersections<double, Vec2>({shell, probe_in_annulus}, axis);
+    auto hits = find_polygon_intersections<Vec2>({shell, probe_in_annulus}, axis);
     REQUIRE_FALSE(hits.empty());
 }
 
@@ -345,8 +345,8 @@ TEST_CASE("hole invalidation symmetric host polygon", "[poly_intersect][holes]")
         {25.75, 5.75},
         {24.25, 5.75},
     });
-    REQUIRE(find_polygon_intersections<double, Vec2>({shell_b, probe_b}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({shell_b, probe_b}, axis).empty());
 
     auto solid_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    REQUIRE(find_polygon_intersections<double, Vec2>({solid_a, shell_b}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({solid_a, shell_b}, axis).empty());
 }

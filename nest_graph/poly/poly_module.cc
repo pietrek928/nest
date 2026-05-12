@@ -12,7 +12,7 @@
 namespace nb = nanobind;
 
 using Vec2d = Vec<2, double>;
-using Polygon2d = Polygon<double, Vec2d>;
+using Polygon2d = Polygon<Vec2d>;
 
 static std::vector<Vec2d> points_from_iterable(nb::handle points) {
     std::vector<Vec2d> out;

@@ -4,8 +4,8 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "poly/convex_distance.h"
-#include "poly/convex_intersect.h"
+#include "poly/convex/distance.h"
+#include "poly/convex/intersect.h"
 #include "poly/poly_intersect.h"
 #include "vec.h"
 
@@ -40,9 +40,9 @@ static std::vector<Vec2> make_poly(std::initializer_list<std::initializer_list<d
     return out;
 }
 
-// Explicit <double, Vec2> selects the generic template (not a 2D overload).
+// Explicit <Vec2> instantiates generic N-D GJK (not an ad hoc 2D overload).
 static double approx_dist(const std::vector<Vec2>& a, const std::vector<Vec2>& b) {
-    auto d = convex_polygons_distance_gjk<double, Vec2>(
+    auto d = convex_polygons_distance_gjk<Vec2>(
         a.data(), static_cast<int>(a.size()),
         b.data(), static_cast<int>(b.size())
     );
@@ -52,7 +52,7 @@ static double approx_dist(const std::vector<Vec2>& a, const std::vector<Vec2>& b
 TEST_CASE("1: disjoint axis-aligned squares", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{3, 0}, {5, 0}, {5, 2}, {3, 2}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -63,12 +63,12 @@ TEST_CASE("1: disjoint axis-aligned squares", "[gjk]") {
 TEST_CASE("2: overlapping squares", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
     REQUIRE(ir.intersect);
-    auto d = convex_polygons_distance_gjk<double, Vec2>(
+    auto d = convex_polygons_distance_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size()));
     REQUIRE_FALSE(d.intersect);
@@ -78,7 +78,7 @@ TEST_CASE("2: overlapping squares", "[gjk]") {
 TEST_CASE("3: vertex-to-vertex touch", "[gjk][touch]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{2, 2}, {4, 2}, {4, 4}, {2, 4}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -89,7 +89,7 @@ TEST_CASE("3: vertex-to-vertex touch", "[gjk][touch]") {
 TEST_CASE("4: edge-to-edge touch", "[gjk][touch]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -100,7 +100,7 @@ TEST_CASE("4: edge-to-edge touch", "[gjk][touch]") {
 TEST_CASE("5: full containment", "[gjk]") {
     auto outer = make_poly({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto inner = make_poly({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         outer.data(), static_cast<int>(outer.size()),
         inner.data(), static_cast<int>(inner.size())
     );
@@ -115,12 +115,12 @@ TEST_CASE("6: high aspect ratio cross", "[gjk]") {
         make_poly({{-L, -1}, {L, -1}, {L, 1}, {-L, 1}});
     auto polyV =
         make_poly({{-1, -L}, {1, -L}, {1, L}, {-1, L}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyH.data(), static_cast<int>(polyH.size()),
         polyV.data(), static_cast<int>(polyV.size())
     );
     REQUIRE(ir.intersect);
-    auto d = convex_polygons_distance_gjk<double, Vec2>(
+    auto d = convex_polygons_distance_gjk<Vec2>(
         polyH.data(), static_cast<int>(polyH.size()),
         polyV.data(), static_cast<int>(polyV.size()));
     REQUIRE_FALSE(d.intersect);
@@ -131,7 +131,7 @@ TEST_CASE("6: high aspect ratio cross", "[gjk]") {
 TEST_CASE("7: micro-gap epsilon stress", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{2.00001, 0}, {4, 0}, {4, 2}, {2.00001, 2}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -142,7 +142,7 @@ TEST_CASE("7: micro-gap epsilon stress", "[gjk]") {
 TEST_CASE("8: identical triangles", "[gjk]") {
     auto polyA = make_poly({{-5.5, -5.5}, {5.5, -5.5}, {0.0, 5.5}});
     auto polyB = make_poly({{-5.5, -5.5}, {5.5, -5.5}, {0.0, 5.5}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -154,7 +154,7 @@ TEST_CASE("9: single point vs square", "[gjk]") {
     auto square =
         make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto point = make_poly({{4, 1}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         square.data(), static_cast<int>(square.size()),
         point.data(), static_cast<int>(point.size())
     );
@@ -171,7 +171,7 @@ TEST_CASE("10: triangle vs hexagon separated", "[gjk]") {
         make_poly({{2, -1}, {2, 1}, {5.5, 0}});
     auto hex = make_poly(
         {{8.14, -1.9}, {9.39, -0.45}, {9.39, 1.7}, {8.29, 2.95}, {7.04, 1.85}, {6.89, -0.4}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         tri.data(), static_cast<int>(tri.size()),
         hex.data(), static_cast<int>(hex.size())
     );
@@ -184,7 +184,7 @@ TEST_CASE("10: triangle vs hexagon separated", "[gjk]") {
 TEST_CASE("extra: case 1 with reversed winding", "[gjk]") {
     auto polyA = make_poly({{0, 2}, {0, 0}, {2, 0}, {2, 2}});
     auto polyB = make_poly({{3, 2}, {3, 0}, {5, 0}, {5, 2}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -195,7 +195,7 @@ TEST_CASE("extra: case 1 with reversed winding", "[gjk]") {
 TEST_CASE("extra: near-parallel thin rectangles", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {10, 0}, {10, 1}, {0, 1}});
     auto polyB = make_poly({{0, 2.5}, {10, 2.5}, {10, 3.5}, {0, 3.5}});
-    auto ir = convex_polygons_intersect_gjk<double, Vec2>(
+    auto ir = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -206,11 +206,11 @@ TEST_CASE("extra: near-parallel thin rectangles", "[gjk]") {
 TEST_CASE("extra: narrow_phase matches GJK for small n", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{3, 0}, {5, 0}, {5, 2}, {3, 2}});
-    bool np = narrow_phase_intersect<double, Vec2>(
+    bool np = narrow_phase_intersect<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
-    bool gjk = convex_polygons_intersect_gjk<double, Vec2>(
+    bool gjk = convex_polygons_intersect_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     ).intersect;

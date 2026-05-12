@@ -37,7 +37,7 @@
 
 template <int ndims, class T>
 class KDTree {
-    using Tpos = typename T::Tnum;
+    using Tpos = typename T::Scalar;
 
     class Lnode {
        public:

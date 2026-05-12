@@ -8,7 +8,7 @@ class BBox {
     Vec<K, T> start, end;
 
    public:
-    using Tnum = T;
+    using Scalar = T;
 
     BBox() {}
 

@@ -141,10 +141,10 @@ class Vec {
     }
 
    public:
-    using Tnum = T;
+    using Scalar = T;  // Coordinate / component type; geometric code uses VecType::Scalar.
 
     inline Vec() : items{0} {}
-    inline Vec(std::initializer_list<Tnum> il) {
+    inline Vec(std::initializer_list<Scalar> il) {
         int i = 0;
         for (const auto& v : il) {
             items[i++] = v;
