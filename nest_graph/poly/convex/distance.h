@@ -2,8 +2,8 @@
 
 #include <cmath>
 #include <limits>
+#include "../../vec.h"
 #include "../gjk.h"
-
 
 template <class VecType>
 struct SimplexResult {
@@ -74,17 +74,22 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
         const Scalar dist_sq = closest_point.qlen();
 
         // Convergence: Is the new point far enough "past" our current closest point?
-        // This projection check is the most numerically stable way to end GJK.
         Scalar proj = (-closest_point).dp(support - closest_point);
+
+        // If the support point doesn't meaningfully push us closer to the origin,
+        // or we stalled, the current closest_point is the absolute minimum.
         if (proj < epsilon_sq || dist_sq >= last_dist_sq) {
             return { dist_sq, dist_sq < epsilon_sq, it1, it2 };
         }
+
         last_dist_sq = dist_sq;
 
-        // We check '== 2' first because most GJK iterations occur
-        // in this state while "sliding" along the Minkowski boundary.
+        // --- SIMPLEX EVOLUTION ---
         if (simplex_size == 2) {
-            // Triangle logic: Support + current Segment
+            // Forward-Progression Triangle Logic:
+            // Because we passed the convergence check above, the new support point is GUARANTEED
+            // to form a boundary closer to the origin than the old segment.
+            // We strictly evaluate the two NEW edges. Do not evaluate the old edge.
             auto res01 = closest_point_on_segment<VecType>(support, simplex[0], epsilon_sq);
             auto res02 = closest_point_on_segment<VecType>(support, simplex[1], epsilon_sq);
 
@@ -121,24 +126,21 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
             closest_point = support;
         }
 
-        if (closest_point.qlen() < epsilon_sq) return { static_cast<Scalar>(0), true, it1, it2 };
+        if (closest_point.qlen() < epsilon_sq) {
+            return { static_cast<Scalar>(0), true, it1, it2 };
+        }
+
+        // Seek origin from current closest feature
         dir = -closest_point;
     }
 
-    return { closest_point.qlen(), false, it1, it2 };
+    // Fallback if max iterations reached
+    return { closest_point.qlen(), closest_point.qlen() < epsilon_sq, it1, it2 };
 }
 
 // -------------------------------------------------------------------------
 // PUBLIC APIs
 // -------------------------------------------------------------------------
-// Separation distance (squared); when polygons have positive gap,
-// DistanceResult::distance_sq is that gap squared (up to epsilon) and
-// intersect is usually false unless numerically grazing zero.
-//
-// Not for penetration, overlap depth, containment, or "one hull inside another":
-// once the convex hulls touch or overlap in R^d, vanilla GJK on the difference
-// no longer minimizes to a penetration metric; callers must use intersect / EPA
-// (or a 2D-specific routine). Do not infer overlap from DistanceResult alone.
 template <class VecType>
 DistanceResult<VecType> convex_polygons_distance_gjk(
     const VecType* poly1, int n1, const VecType* poly2, int n2,
@@ -148,7 +150,6 @@ DistanceResult<VecType> convex_polygons_distance_gjk(
     return convex_polygons_distance_gjk_impl<false, VecType>(poly1, n1, poly2, n2, it1, it2, epsilon);
 }
 
-// Same contract as convex_polygons_distance_gjk (gradient-based support indices).
 template <class VecType>
 DistanceResult<VecType> convex_polygons_distance_gjk_gradient(
     const VecType* poly1, int n1, const VecType* poly2, int n2,

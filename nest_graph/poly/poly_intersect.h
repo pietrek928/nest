@@ -5,20 +5,20 @@
 #include <cmath>
 #include <utility>
 
-#include "circle.h"
 #include "poly.h"
+#include "common_checks.h"
 #include "convex/intersect.h"
-#include "convex/contain.h"
+
 
 // -------------------------------------------------------------------------
 // NARROW PHASE ROUTERS (Smart GJK Dispatch)
 // -------------------------------------------------------------------------
-const int GRADIENT_THRESHOLD = 24;
 
 template<class VecType>
 inline bool narrow_phase_intersect(
     const VecType* polyA, int nA,
-    const VecType* polyB, int nB
+    const VecType* polyB, int nB,
+    int GRADIENT_THRESHOLD = 24
 ) {
     // Ensure smaller polygon is always first for cache efficiency
     const VecType* p1 = (nA <= nB) ? polyA : polyB;
@@ -34,59 +34,12 @@ inline bool narrow_phase_intersect(
     }
 }
 
-template<class VecType>
-inline bool narrow_phase_contain(
-    const VecType* polyA, int nA,
-    const VecType* polyB, int nB
-) {
-    if (nA + nB > GRADIENT_THRESHOLD) {
-        return is_polygon_fully_inside_gradient<VecType>(polyA, nA, polyB, nB);
-    } else {
-        return is_polygon_fully_inside<VecType>(polyA, nA, polyB, nB);
-    }
-}
-
 // -------------------------------------------------------------------------
-// STRUCTURES & HELPERS
+// HELPERS
 // -------------------------------------------------------------------------
-template<class VecType>
-struct PartSweepElement {
-    using Scalar = typename VecType::Scalar;
-
-    int poly_idx;
-    int part_idx;
-    Scalar min_proj;
-    Scalar max_proj;
-    const Circle<VecType>* bounds;
-};
 
 inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
-}
-
-// -------------------------------------------------------------------------
-// INVALIDATION & PAIR CHECKS
-// -------------------------------------------------------------------------
-template<class VecType>
-inline bool is_invalidated_by_hole(
-    const VecType* ptsA, int nA, const Polygon<VecType>& polyA,
-    const VecType* ptsB, int nB, const Polygon<VecType>& polyB
-) {
-    // Check if Part A is entirely swallowed by a hole in Poly B
-    for (size_t hb = 0; hb < polyB.convex_holes.size(); ++hb) {
-        if (narrow_phase_contain<VecType>(ptsA, nA, polyB.get_hole_points(hb), polyB.get_hole_size(hb))) {
-            return true;
-        }
-    }
-
-    // Check if Part B is entirely swallowed by a hole in Poly A
-    for (size_t ha = 0; ha < polyA.convex_holes.size(); ++ha) {
-        if (narrow_phase_contain<VecType>(ptsB, nB, polyA.get_hole_points(ha), polyA.get_hole_size(ha))) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 template<class VecType>
@@ -124,6 +77,7 @@ inline bool check_part_vs_part(
 template<class VecType>
 inline void append_poly_parts_to_sweep(
     int poly_idx,
+    int group_id,
     const Polygon<VecType>& poly,
     const VecType& sweep_axis,
     typename VecType::Scalar axis_len_sqrt,
@@ -135,14 +89,15 @@ inline void append_poly_parts_to_sweep(
         Scalar proj = bounds.center().dp(sweep_axis);
         Scalar r = static_cast<Scalar>(std::sqrt(static_cast<double>(bounds.square_radius()))) * axis_len_sqrt;
 
-        out_elements.push_back({poly_idx, static_cast<int>(part), proj - r, proj + r, &bounds});
+        out_elements.push_back({poly_idx, static_cast<int>(part), group_id, proj - r, proj + r, &poly, &bounds});
     }
 }
 
 template<class VecType>
 inline std::vector<std::pair<int, int>> execute_part_sweep(
-    const std::vector<Polygon<VecType>>& polygons,
-    std::vector<PartSweepElement<VecType>>& elements
+    std::vector<PartSweepElement<VecType>>& elements,
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1
 ) {
     std::vector<std::pair<int, int>> confirmed_collisions;
     if (elements.empty()) return confirmed_collisions;
@@ -159,22 +114,43 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
         for (size_t j = i + 1; j < elements.size(); ++j) {
             if (elements[j].min_proj > elements[i].max_proj) break; // Prune
 
-            int polyA_idx = elements[i].poly_idx;
-            int polyB_idx = elements[j].poly_idx;
+            int group_i = elements[i].group_id;
+            int group_j = elements[j].group_id;
+            int pA_idx = elements[i].poly_idx;
+            int pB_idx = elements[j].poly_idx;
 
-            if (polyA_idx == polyB_idx) continue; // Ignore self-collisions
+            if (pA_idx == pB_idx) continue; // Always ignore self-collisions
 
-            auto pair_id = make_sorted_pair(polyA_idx, polyB_idx);
+            std::pair<int, int> pair_id;
 
-            // OPTIMIZATION: O(log K) binary search instead of O(K) linear search
-            auto it = std::lower_bound(known_collisions.begin(), known_collisions.end(), pair_id);
-            if (it != known_collisions.end() && *it == pair_id) {
-                continue; // Already confirmed collision
+            // 3. Routing: Bipartite, Subset, or Monopartite
+            if (mode == SweepMode::Bipartite) {
+                if (group_i == group_j) continue; // Ignore same-set collisions
+
+                // Ensure Set A is always `first` and Set B is always `second` (local indices)
+                int idxA = (group_i == 0) ? pA_idx : pB_idx;
+                int idxB = (group_i == 1) ? pA_idx : pB_idx;
+                pair_id = std::make_pair(idxA, idxB);
+                if (bipartite_set_a_size > 0) {
+                    pair_id.second -= bipartite_set_a_size;
+                }
+            }
+            else if (mode == SweepMode::Subset) {
+                if (group_i == 0 && group_j == 0) continue; // Skip Static vs Static checks
+                pair_id = make_sorted_pair(pA_idx, pB_idx);
+            }
+            else { // SweepMode::Monopartite
+                pair_id = make_sorted_pair(pA_idx, pB_idx);
             }
 
-            // Narrow Phase: Circle -> GJK -> Holes
-            if (check_part_vs_part(polygons[polyA_idx], elements[i].part_idx, polygons[polyB_idx], elements[j].part_idx)) {
-                // Insert maintaining sorted order
+            // OPTIMIZATION: O(log K) binary search to prevent re-checking known polygon collisions
+            auto it = std::lower_bound(known_collisions.begin(), known_collisions.end(), pair_id);
+            if (it != known_collisions.end() && *it == pair_id) {
+                continue;
+            }
+
+            // Narrow Phase
+            if (check_part_vs_part(*(elements[i].poly_ptr), elements[i].part_idx, *(elements[j].poly_ptr), elements[j].part_idx)) {
                 known_collisions.insert(it, pair_id);
                 confirmed_collisions.push_back(pair_id);
             }
@@ -186,6 +162,8 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
 // -------------------------------------------------------------------------
 // MAIN ENGINE ENTRY POINTS
 // -------------------------------------------------------------------------
+
+// 1. ALL VS ALL (Single Array)
 template<class VecType>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<VecType>>& polygons,
@@ -199,16 +177,16 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
     Scalar axis_sq = sweep_axis.len_sq();
     if (axis_sq < static_cast<Scalar>(1e-8)) return {};
-
     Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
 
     for (size_t i = 0; i < polygons.size(); ++i) {
-        append_poly_parts_to_sweep(static_cast<int>(i), polygons[i], sweep_axis, axis_len_sqrt, elements);
+        append_poly_parts_to_sweep(static_cast<int>(i), 0, polygons[i], sweep_axis, axis_len_sqrt, elements);
     }
 
-    return execute_part_sweep(polygons, elements);
+    return execute_part_sweep(elements, SweepMode::Monopartite);
 }
 
+// 2. ACTIVE SUBSET VS ACTIVE SUBSET (Single Array)
 template<class VecType>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<VecType>>& polygons,
@@ -216,19 +194,64 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
     const VecType& sweep_axis
 ) {
     using Scalar = typename VecType::Scalar;
-    if (active_indices.size() < 2) return {};
+
+    // FIXED: Must allow 1 active index if there are other static polygons to collide against!
+    if (active_indices.empty() || polygons.size() < 2) return {};
 
     std::vector<PartSweepElement<VecType>> elements;
-    elements.reserve(active_indices.size() * 4);
+    elements.reserve(polygons.size() * 4); // Reserve for the whole world
 
     Scalar axis_sq = sweep_axis.len_sq();
     if (axis_sq < static_cast<Scalar>(1e-8)) return {};
-
     Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
 
-    for (int p_idx : active_indices) {
-        append_poly_parts_to_sweep(p_idx, polygons[p_idx], sweep_axis, axis_len_sqrt, elements);
+    // Create a fast O(1) lookup to flag active vs static bodies
+    std::vector<int> group_ids(polygons.size(), 0); // 0 = Static
+    for (int idx : active_indices) {
+        if (idx >= 0 && idx < static_cast<int>(polygons.size())) {
+            group_ids[idx] = 1; // 1 = Active
+        }
     }
 
-    return execute_part_sweep(polygons, elements);
+    // Load EVERYTHING into the sweep array
+    for (size_t i = 0; i < polygons.size(); ++i) {
+        append_poly_parts_to_sweep(static_cast<int>(i), group_ids[i], polygons[i], sweep_axis, axis_len_sqrt, elements);
+    }
+
+    return execute_part_sweep(elements, SweepMode::Subset);
+}
+
+// 3. SET A VS SET B (Two Distinct Arrays)
+template<class VecType>
+std::vector<std::pair<int, int>> find_polygon_intersections(
+    const std::vector<Polygon<VecType>>& setA,
+    const std::vector<Polygon<VecType>>& setB,
+    const VecType& sweep_axis
+) {
+    using Scalar = typename VecType::Scalar;
+    if (setA.empty() || setB.empty()) return {};
+
+    std::vector<PartSweepElement<VecType>> elements;
+    elements.reserve((setA.size() + setB.size()) * 4);
+
+    Scalar axis_sq = sweep_axis.len_sq();
+    if (axis_sq < static_cast<Scalar>(1e-8)) return {};
+    Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
+
+    // Load Set A into Group 0
+    for (size_t i = 0; i < setA.size(); ++i) {
+        append_poly_parts_to_sweep(static_cast<int>(i), 0, setA[i], sweep_axis, axis_len_sqrt, elements);
+    }
+    // Load Set B into Group 1 (poly_idx offset so sweep never treats A/B as self-collision)
+    for (size_t i = 0; i < setB.size(); ++i) {
+        append_poly_parts_to_sweep(
+            static_cast<int>(setA.size() + i),
+            1,
+            setB[i],
+            sweep_axis,
+            axis_len_sqrt,
+            elements);
+    }
+
+    return execute_part_sweep(elements, SweepMode::Bipartite, static_cast<int>(setA.size()));
 }
