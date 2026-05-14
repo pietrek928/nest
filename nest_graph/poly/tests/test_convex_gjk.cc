@@ -12,20 +12,20 @@
 using Vec2 = Vec<2, double>;
 
 // -----------------------------------------------------------------------------
-// Convex distance GJK is only asserted for externally separated or touching hulls:
+// convex_polygons_distance_gjk(..., known_overlap):
+//   false — separated / sliding Euclidean minima (default for approx_dist & disjoint cases).
+//   true  — overlap slack (tests 2 & 6): |closest|² stall + 2-edge simplex branch.
+// Pass-through from narrow_phase uses penetration intersect (no extra intersect GJK).
+// -----------------------------------------------------------------------------
 //
-//   2, 6 Overlapping penetration / crossed thin bars: intersect=true but distance_sq
-//         is meaningless (often large); not penetration depth — see asserts.
+//   3,4,8 Touch / coincidence: expect ~0 gap.
 //
-//   9  Degenerate vertex “polygon”: Euclidean gap to nearest edge handled here
-//      (square edge x=2 from point at (4,1)); weaker distance implementations
-//      can still fall back to a farther vertex pairing (e.g. sqrt(5)).
+//   9  Degenerate vertex “polygon”: Euclidean gap to nearest edge (e.g. x=2 vs point (4,1)).
 //
-//  10  Same hull idea: disjoint shapes can yield a vertex–vertex local minimum,
-//      missing the shorter edge–edge gap (exact 2D needs dedicated narrow phase).
+//  10  Disjoint vertex–vertex local minimum vs shorter edge–edge (known limitation).
 //
-// Passing intersections: disjoint separation (1), touch (3,4), containment (5,
-// intersect only), micro-gap (7), coincidence (8), winding/thin rects/extras.
+// Suite covers disjoint (1), touch (3,4), containment (5), overlaps (2), cross (6),
+// micro-gap (7), coincidence (8), extras.
 // -----------------------------------------------------------------------------
 
 static std::vector<Vec2> make_poly(std::initializer_list<std::initializer_list<double>> pts) {
@@ -70,7 +70,8 @@ TEST_CASE("2: overlapping squares", "[gjk]") {
     REQUIRE(ir.intersect);
     auto d = convex_polygons_distance_gjk<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
-        polyB.data(), static_cast<int>(polyB.size()));
+        polyB.data(), static_cast<int>(polyB.size()),
+        true);
     REQUIRE_FALSE(d.intersect);
     REQUIRE_FALSE(d.distance_sq < static_cast<double>(1e-6));
 }
@@ -122,7 +123,8 @@ TEST_CASE("6: high aspect ratio cross", "[gjk]") {
     REQUIRE(ir.intersect);
     auto d = convex_polygons_distance_gjk<Vec2>(
         polyH.data(), static_cast<int>(polyH.size()),
-        polyV.data(), static_cast<int>(polyV.size()));
+        polyV.data(), static_cast<int>(polyV.size()),
+        true);
     REQUIRE_FALSE(d.intersect);
     REQUIRE_FALSE(d.distance_sq < static_cast<double>(1e-6));
     REQUIRE(d.distance_sq == Catch::Approx(72.0).margin(1e-9));

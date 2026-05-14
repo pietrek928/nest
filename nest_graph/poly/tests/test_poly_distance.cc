@@ -119,6 +119,9 @@ const ComplexDistanceResult<Vec2>* find_distance_result(
 } // namespace
 
 TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance][stress]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
 
@@ -148,7 +151,7 @@ TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance
     });
 
     std::vector<Polygon2> polys = {p0, p1, p2, p3};
-    auto dist_results = find_polygon_distances<Vec2>(polys, axis, aura);
+    auto dist_results = find_polygon_distances(polys, axis, aura, &tracer);
 
     for (const auto& r : dist_results) {
         REQUIRE(r.polyA_idx != 3);
@@ -164,9 +167,16 @@ TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance
     REQUIRE(r02 != nullptr);
     REQUIRE_FALSE(r02->intersect);
     REQUIRE(r02->distance_sq == Catch::Approx(25.0).epsilon(1e-9));
+
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 3));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(1, 3));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(2, 3));
 }
 
 TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[poly_distance][stress]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
 
@@ -176,7 +186,7 @@ TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[pol
     auto core = polygon_from_quad({{24, 4}, {26, 4}, {26, 6}, {24, 6}});
 
     std::vector<Polygon2> polys = {c_shape, trapped, donut, core};
-    auto results = find_polygon_distances<Vec2>(polys, axis, aura);
+    auto results = find_polygon_distances(polys, axis, aura, &tracer);
 
     const auto* r01 = find_distance_result(results, 0, 1);
     REQUIRE(r01 != nullptr);
@@ -186,6 +196,10 @@ TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[pol
     const auto* r23 = find_distance_result(results, 2, 3);
     REQUIRE(r23 != nullptr);
     REQUIRE_FALSE(r23->intersect);
+
+    REQUIRE(tracer.stat_hole_invalidations > 0);
+    REQUIRE(tracer.stat_sweep_pairs > 0);
+    REQUIRE(tracer.stat_gjk_evals > 0);
 }
 
 TEST_CASE("stress distance TC3 spec hex EPA regression direct penetration", "[poly_distance][TC3][regression][penetration]") {
@@ -240,10 +254,9 @@ TEST_CASE("stress distance TC3 EPA MTV inversion hex first", "[poly_distance][st
     REQUIRE(std::abs(r->mtv[0]) > std::abs(r->mtv[1]) + 1e-6);
 }
 
-#ifdef NEST_GRAPH_NARROW_PHASE_SPY
-
 TEST_CASE("stress distance TC5 subset sweep active vs static no static-static narrow phase", "[poly_distance][stress][subset]") {
-    nest_graph::narrow_phase_spy_clear();
+    DebugTracer tracer;
+    tracer.reset();
 
     Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
@@ -268,7 +281,7 @@ TEST_CASE("stress distance TC5 subset sweep active vs static no static-static na
     });
 
     std::vector<Polygon2> polys = {floor, wall, active};
-    auto results = find_polygon_distances<Vec2>(polys, std::vector<int>{2}, axis, aura);
+    auto results = find_polygon_distances(polys, std::vector<int>{2}, axis, aura, &tracer);
 
     const auto* r02 = find_distance_result(results, 0, 2);
     const auto* r12 = find_distance_result(results, 1, 2);
@@ -279,12 +292,10 @@ TEST_CASE("stress distance TC5 subset sweep active vs static no static-static na
     REQUIRE(r02->penetration_sq > 0.0);
     REQUIRE(r12->penetration_sq > 0.0);
 
-    REQUIRE_FALSE(nest_graph::narrow_phase_spy_saw_any_narrow_pair(0, 1));
-    REQUIRE(nest_graph::narrow_phase_spy_saw_penetration_pair(0, 2));
-    REQUIRE(nest_graph::narrow_phase_spy_saw_penetration_pair(1, 2));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 1));
+    REQUIRE(tracer.saw_penetration_pair(0, 2));
+    REQUIRE(tracer.saw_penetration_pair(1, 2));
 }
-
-#endif
 
 TEST_CASE("stress distance TC6 collinear seam hover distance", "[poly_distance][stress][seam]") {
     Vec2 axis{{1.0, 0.0}};

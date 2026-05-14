@@ -1,10 +1,12 @@
 #pragma once
 
+#include <cstddef>
 #include <vector>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <type_traits>
 
 #include "poly.h"
 #include "convex/distance.h"
@@ -54,6 +56,7 @@ template<class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(
     const VecType* polyA, int nA,
     const VecType* polyB, int nB,
+    bool known_overlap,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
@@ -68,10 +71,9 @@ inline DistanceResult<VecType> narrow_phase_distance(
     int s2 = (nA <= nB) ? nB : nA;
 
     if (s1 + s2 > GRADIENT_THRESHOLD) {
-        return convex_polygons_distance_gjk_gradient<VecType>(p1, s1, p2, s2);
-    } else {
-        return convex_polygons_distance_gjk<VecType>(p1, s1, p2, s2);
+        return convex_polygons_distance_gjk_gradient<VecType>(p1, s1, p2, s2, known_overlap);
     }
+    return convex_polygons_distance_gjk<VecType>(p1, s1, p2, s2, known_overlap);
 }
 
 template<class VecType, class Tracer = DefaultTracer>
@@ -156,7 +158,7 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             int pA_idx = elements[i].poly_idx;
             int pB_idx = elements[j].poly_idx;
 
-            if (pA_idx == pB_idx) continue; // Always ignore self-collisions
+            if (pA_idx == pB_idx) continue;
 
             std::pair<int, int> pair_id;
             bool reverse = false;
@@ -171,12 +173,11 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                 }
             }
             else if (mode == SweepMode::Subset) {
-                // group: 0 = Static, 1 = Active
-                if (group_i == 0 && group_j == 0) continue; // Skip Static vs Static
+                if (group_i == 0 && group_j == 0) continue;
                 reverse = (pA_idx > pB_idx);
                 pair_id = reverse ? std::make_pair(pB_idx, pA_idx) : std::make_pair(pA_idx, pB_idx);
             }
-            else { // Monopartite
+            else {
                 reverse = (pA_idx > pB_idx);
                 pair_id = reverse ? std::make_pair(pB_idx, pA_idx) : std::make_pair(pA_idx, pB_idx);
             }
@@ -251,12 +252,15 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                 };
 
                 if (!isValidCollision) {
-                    auto dist_res = narrow_phase_distance<VecType, Tracer>(pts1, n1, pts2, n2, 24, tracer);
+                    // We already calculated pen_res.intersect! Pass it directly so we don't
+                    // have to run convex_polygons_intersect_gjk redundantly inside distance.
+                    auto dist_res = narrow_phase_distance<VecType, Tracer>(
+                        pts1, n1, pts2, n2, pen_res.intersect, 24, tracer);
+
                     if (dist_res.distance_sq > dynamic_threshold * dynamic_threshold) {
                         continue;
                     }
 
-                    // Note: Ensure touch_eps doesn't underflow Float32 squared!
                     const Scalar touch_eps = static_cast<Scalar>(1e-5);
                     const Scalar touch_eps_sq = touch_eps * touch_eps;
 
@@ -307,7 +311,6 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
 // MAIN ENGINE ENTRY POINTS
 // -------------------------------------------------------------------------
 
-// 1. ALL VS ALL (Single Array)
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& polygons,
@@ -332,7 +335,6 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     return execute_distance_sweep<VecType, Tracer>(elements, aura_multiplier, SweepMode::Monopartite, -1, tracer);
 }
 
-// 2. ACTIVE SUBSET VS ACTIVE SUBSET (Single Array)
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& polygons,
@@ -346,16 +348,16 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     if (active_indices.empty() || polygons.size() < 2) return {};
 
     std::vector<PartSweepElement<VecType>> elements;
-    elements.reserve(polygons.size() * 4); // Reserve for the whole world
+    elements.reserve(polygons.size() * 4);
 
     Scalar axis_sq = sweep_axis.len_sq();
     if (axis_sq < static_cast<Scalar>(1e-8)) return {};
     Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
 
-    std::vector<int> group_ids(polygons.size(), 0); // 0 = Static
+    std::vector<int> group_ids(polygons.size(), 0);
     for (int idx : active_indices) {
         if (idx >= 0 && idx < static_cast<int>(polygons.size())) {
-            group_ids[idx] = 1; // 1 = Active
+            group_ids[idx] = 1;
         }
     }
 
@@ -366,7 +368,6 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     return execute_distance_sweep<VecType, Tracer>(elements, aura_multiplier, SweepMode::Subset, -1, tracer);
 }
 
-// 3. SET A VS SET B (Two Distinct Arrays)
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& setA,
