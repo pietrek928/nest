@@ -89,9 +89,13 @@ inline bool check_part_vs_part(
         if constexpr (!std::is_same_v<Tracer, NullTracer>) {
             if (tracer) tracer->count_hole_invalidation();
         }
+        return false;
     }
 
-    return !hole_invalid;
+    if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+        if (tracer) tracer->record_penetration();
+    }
+    return true;
 }
 
 // -------------------------------------------------------------------------

@@ -7,6 +7,7 @@
 
 #include "poly/poly.h"
 #include "poly/poly_intersect.h"
+#include "poly/tracer.h"
 #include "vec.h"
 
 using Vec2 = Vec<2, double>;
@@ -293,17 +294,23 @@ TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sw
 }
 
 TEST_CASE("find_polygon_intersections simple hit and miss", "[poly_intersect][sweep]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     auto left = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto right_sep = polygon_from_quad({{10, 0}, {12, 0}, {12, 2}, {10, 2}});
     auto overlap = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
 
-    REQUIRE(find_polygon_intersections<Vec2>({left, right_sep}, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({left, right_sep}, axis, &tracer).empty());
 
-    auto hits = find_polygon_intersections<Vec2>({left, overlap}, axis);
+    auto hits = find_polygon_intersections<Vec2>({left, overlap}, axis, &tracer);
     REQUIRE_FALSE(hits.empty());
     REQUIRE(hits.front().first == 0);
     REQUIRE(hits.front().second == 1);
+    REQUIRE(tracer.saw_penetration_pair(0, 1));
+    REQUIRE(tracer.stat_gjk_evals > 0);
+    REQUIRE(tracer.stat_sweep_pairs > 0);
 }
 
 TEST_CASE("find_polygon_intersections three polygons subset pairs", "[poly_intersect][sweep]") {
@@ -331,6 +338,22 @@ TEST_CASE("find_polygon_intersections active_indices overload", "[poly_intersect
     std::vector<Polygon2> two_far = {base, orphan};
     auto disjoint_only = find_polygon_intersections<Vec2>(two_far, std::vector<int>{0, 1}, axis);
     REQUIRE(disjoint_only.empty());
+}
+
+TEST_CASE("find_polygon_intersections subset mode static-static never narrow-phased", "[poly_intersect][sweep][subset]") {
+    DebugTracer tracer;
+    tracer.reset();
+
+    Vec2 axis{{1.0, 0.0}};
+    auto base = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto orphan = polygon_from_quad({{100, 100}, {101, 100}, {101, 101}, {100, 101}});
+    auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    std::vector<Polygon2> polys = {base, orphan, buddy};
+
+    auto hits = find_polygon_intersections<Vec2>(polys, std::vector<int>{2}, axis, &tracer);
+    REQUIRE(hits.size() >= 1);
+    REQUIRE(tracer.saw_penetration_pair(0, 2));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 1));
 }
 
 TEST_CASE("find_polygon_intersections multipolygon dedupes polygon pair", "[poly_intersect][sweep]") {
@@ -400,6 +423,9 @@ TEST_CASE("hole invalidation symmetric host polygon", "[poly_intersect][holes]")
 }
 
 TEST_CASE("stress intersect TC1 giant floor only P0 P1", "[poly_intersect][stress]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     auto p0 = polygon_from_quad({
         {-100, -5},
@@ -426,22 +452,35 @@ TEST_CASE("stress intersect TC1 giant floor only P0 P1", "[poly_intersect][stres
         {200, 10},
     });
     std::vector<Polygon2> polys = {p0, p1, p2, p3};
-    auto hits = find_polygon_intersections<Vec2>(polys, axis);
+    auto hits = find_polygon_intersections<Vec2>(polys, axis, &tracer);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 1));
+    REQUIRE(tracer.saw_penetration_pair(0, 1));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 3));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(1, 3));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(2, 3));
 }
 
 TEST_CASE("stress intersect TC2 concave C trapped box donut no hits", "[poly_intersect][stress]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     auto c_shape = polygon_c_shape_three_parts();
     auto trapped = polygon_from_quad({{4, 4}, {6, 4}, {6, 6}, {4, 6}});
     auto donut = polygon_donut_with_square_hole();
     auto core = polygon_from_quad({{24, 4}, {26, 4}, {26, 6}, {24, 6}});
     std::vector<Polygon2> polys = {c_shape, trapped, donut, core};
-    REQUIRE(find_polygon_intersections<Vec2>(polys, axis).empty());
+    REQUIRE(find_polygon_intersections<Vec2>(polys, axis, &tracer).empty());
+    REQUIRE(tracer.stat_hole_invalidations > 0);
+    REQUIRE(tracer.stat_sweep_pairs > 0);
+    REQUIRE(tracer.stat_gjk_evals > 0);
 }
 
 TEST_CASE("stress intersect TC4 bipartite walls vs bullets", "[poly_intersect][stress]") {
+    DebugTracer tracer;
+    tracer.reset();
+
     Vec2 axis{{1.0, 0.0}};
     auto wall_l = polygon_from_quad({{0, 0}, {1, 0}, {1, 10}, {0, 10}});
     auto wall_r = polygon_from_quad({{10, 0}, {11, 0}, {11, 10}, {10, 10}});
@@ -449,9 +488,11 @@ TEST_CASE("stress intersect TC4 bipartite walls vs bullets", "[poly_intersect][s
     auto bullet2 = polygon_from_quad({{5, 5}, {6, 5}, {6, 6}, {5, 6}});
     std::vector<Polygon2> walls = {wall_l, wall_r};
     std::vector<Polygon2> bullets = {bullet1, bullet2};
-    auto hits = find_polygon_intersections<Vec2>(walls, bullets, axis);
+    auto hits = find_polygon_intersections<Vec2>(walls, bullets, axis, &tracer);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 0));
+    REQUIRE(tracer.saw_penetration_pair(0, 0));
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 1));
     // If these four bodies lived in one array as {wall_l, wall_r, bullet1, bullet2}, this is global (0, 2).
     // In bipartite mode, execute_part_sweep skips pairs with the same group_id, so the two walls are never narrow-phased together.
 }
