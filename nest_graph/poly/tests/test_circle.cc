@@ -7,7 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "poly/circle.h"
-#include "vec.h"
+#include <vec.h>
 
 using Vec2 = Vec<2, double>;
 using Circle2 = Circle<Vec2>;

@@ -12,6 +12,7 @@
 #include "convex/distance.h"
 #include "convex/penetration.h"
 #include "common_checks.h"
+#include "sweep.h"
 #include "tracer.h"
 
 // -------------------------------------------------------------------------
@@ -314,12 +315,13 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& polygons,
-    const VecType& sweep_axis,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
     if (polygons.size() < 2) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(polygons);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve(polygons.size() * 4);
@@ -339,13 +341,14 @@ template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& polygons,
     const std::vector<int>& active_indices,
-    const VecType& sweep_axis,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
 
     if (active_indices.empty() || polygons.size() < 2) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(polygons);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve(polygons.size() * 4);
@@ -372,12 +375,13 @@ template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<Polygon<VecType>>& setA,
     const std::vector<Polygon<VecType>>& setB,
-    const VecType& sweep_axis,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
     if (setA.empty() || setB.empty()) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(setA, setB);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve((setA.size() + setB.size()) * 4);

@@ -114,6 +114,26 @@ class Vec {
         }
     }
 
+    template <int IT, class T2>
+    inline void accum_max(const Vec<K, T2>& v2) {
+        if (v2[IT] > items[IT]) {
+            items[IT] = v2[IT];
+        }
+        if constexpr (IT > 0) {
+            accum_max<IT - 1, T2>(v2);
+        }
+    }
+
+    template <int IT, class T2>
+    inline void accum_min(const Vec<K, T2>& v2) {
+        if (v2[IT] < items[IT]) {
+            items[IT] = v2[IT];
+        }
+        if constexpr (IT > 0) {
+            accum_min<IT - 1, T2>(v2);
+        }
+    }
+
     template <int IT, class Tv>
     inline void add_to_vec_it(Tv *V, const Vec<K, int>& pos_mapping) const {
         V[pos_mapping[IT]] = items[IT];
@@ -142,6 +162,7 @@ class Vec {
 
    public:
     using Scalar = T;  // Coordinate / component type; geometric code uses VecType::Scalar.
+    static constexpr int dim = K;
 
     inline Vec() : items{0} {}
     inline Vec(std::initializer_list<Scalar> il) {
@@ -271,6 +292,20 @@ class Vec {
     inline auto& operator*=(const T2& v2) {
         accum_mul<K - 1, T2>(v2);
         return *this;
+    }
+
+    template <class T2>
+    inline auto max(const Vec<K, T2>& v2) const {
+        auto vcp = *this;
+        vcp.template accum_max<K - 1, T2>(v2);
+        return vcp;
+    }
+
+    template <class T2>
+    inline auto min(const Vec<K, T2>& v2) const {
+        auto vcp = *this;
+        vcp.template accum_min<K - 1, T2>(v2);
+        return vcp;
     }
 
     template <class T2>

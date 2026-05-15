@@ -1,8 +1,6 @@
 nanobind_add_module(poly_module poly_module.cc)
-target_include_directories(poly_module PRIVATE
-  "${CMAKE_SOURCE_DIR}/nest_graph"
-  "${CMAKE_CURRENT_SOURCE_DIR}"
-)
+target_link_libraries(poly_module PRIVATE nest_graph_headers)
+target_include_directories(poly_module PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(DEFINED ENV{NEST_GRAPH_NATIVE})
   target_compile_options(poly_module PRIVATE -march=native)
@@ -26,12 +24,10 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_poly_distance.cc
     tests/test_circle.cc
   )
-  target_link_libraries(poly_cpp_tests PRIVATE Catch2::Catch2WithMain)
-  target_include_directories(poly_cpp_tests PRIVATE
-    "${CMAKE_SOURCE_DIR}/nest_graph"
-    "${CMAKE_CURRENT_SOURCE_DIR}"
-  )
+  target_link_libraries(poly_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
+  target_include_directories(poly_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_definitions(poly_cpp_tests PRIVATE NEST_GRAPH_DEFAULT_TRACER=DebugTracer)
 
   add_test(NAME poly.cpp.gjk COMMAND poly_cpp_tests)
+  add_test(NAME poly.cpp.telemetry COMMAND poly_cpp_tests "[telemetry]")
 endif()

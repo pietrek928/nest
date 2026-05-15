@@ -1,7 +1,7 @@
 #ifndef __BBOX_H_
 #define __BBOX_H_
 
-#include "vec.h"
+#include <vec.h>
 
 template <int K, class T>
 class BBox {

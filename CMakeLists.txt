@@ -14,6 +14,12 @@ execute_process(
   OUTPUT_VARIABLE nanobind_ROOT)
 find_package(nanobind CONFIG REQUIRED)
 
+# Public include root for nest_graph headers (e.g. #include <vec.h>).
+add_library(nest_graph_headers INTERFACE)
+target_include_directories(nest_graph_headers INTERFACE
+  "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/nest_graph>"
+)
+
 option(NEST_GRAPH_BUILD_TESTS "Build C++ unit tests (Catch2 via FetchContent)" OFF)
 if(NEST_GRAPH_BUILD_TESTS)
   enable_testing()

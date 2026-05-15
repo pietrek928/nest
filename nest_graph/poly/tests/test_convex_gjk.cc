@@ -7,7 +7,7 @@
 #include "poly/convex/distance.h"
 #include "poly/convex/intersect.h"
 #include "poly/poly_intersect.h"
-#include "vec.h"
+#include <vec.h>
 
 using Vec2 = Vec<2, double>;
 

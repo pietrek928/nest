@@ -1,27 +1,10 @@
+#pragma once
+
 #include <cmath>
 
 #include "poly.h"
 #include "convex/contain.h"
 
-
-enum class SweepMode {
-    Monopartite, // All vs All (Skips self-collisions)
-    Bipartite,   // Set A vs Set B (Skips intra-set collisions)
-    Subset       // Active vs All (Skips Static vs Static)
-};
-
-template<class VecType>
-struct PartSweepElement {
-    int poly_idx;          // Original index in the user's vector
-    int part_idx;          // Which convex part of the polygon this is
-    int group_id;          // 0 = Set A, 1 = Set B (used for bipartite checks)
-
-    typename VecType::Scalar min_proj;
-    typename VecType::Scalar max_proj;
-
-    const Polygon<VecType>* poly_ptr; // NEW: Decouples element from its source vector
-    const Circle<VecType>* bounds;
-};
 
 template<class VecType>
 inline bool narrow_phase_contain(

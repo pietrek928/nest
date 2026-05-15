@@ -3,7 +3,7 @@
 #include <vector>
 #include <stdexcept>
 
-#include "vec.h"
+#include <vec.h>
 #include "geom_obj.h"
 
 

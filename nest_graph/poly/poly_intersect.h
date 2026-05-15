@@ -9,6 +9,7 @@
 #include "poly.h"
 #include "common_checks.h"
 #include "convex/intersect.h"
+#include "sweep.h"
 #include "tracer.h"
 
 // -------------------------------------------------------------------------
@@ -194,11 +195,12 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<VecType>>& polygons,
-    const VecType& sweep_axis,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
     if (polygons.size() < 2) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(polygons);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve(polygons.size() * 4);
@@ -218,12 +220,13 @@ template<class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<VecType>>& polygons,
     const std::vector<int>& active_indices,
-    const VecType& sweep_axis,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
 
     if (active_indices.empty() || polygons.size() < 2) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(polygons);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve(polygons.size() * 4);
@@ -250,11 +253,12 @@ template<class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
     const std::vector<Polygon<VecType>>& setA,
     const std::vector<Polygon<VecType>>& setB,
-    const VecType& sweep_axis,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
     if (setA.empty() || setB.empty()) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(setA, setB);
 
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve((setA.size() + setB.size()) * 4);

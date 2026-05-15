@@ -7,13 +7,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "poly/convex/penetration.h"
-#include "poly/poly.h"
 #include "poly/poly_distance.h"
-#include "poly/tracer.h"
-#include "vec.h"
+#include "tests/poly_test_helpers.h"
+#include <vec.h>
 
-using Vec2 = Vec<2, double>;
-using Polygon2 = Polygon<Vec2>;
+using Vec2 = PolyTestVec2;
+using Polygon2 = PolyTestPolygon2;
 
 namespace {
 
@@ -116,13 +115,53 @@ const ComplexDistanceResult<Vec2>* find_distance_result(
     return nullptr;
 }
 
+std::vector<Polygon2> make_tc5_subset_world() {
+    return {
+        polygon_from_quad({
+            {-100, -5},
+            {100, -5},
+            {100, 0},
+            {-100, 0},
+        }),
+        polygon_from_quad({
+            {90, 0},
+            {100, 0},
+            {100, 50},
+            {90, 50},
+        }),
+        polygon_from_quad({
+            {95, -2},
+            {105, -2},
+            {105, 8},
+            {95, 8},
+        }),
+    };
+}
+
+void assert_tc5_subset_distance_and_narrow_phase(
+    const std::vector<ComplexDistanceResult<Vec2>>& results,
+    const DebugTracer& tracer
+) {
+    const auto* r02 = find_distance_result(results, 0, 2);
+    const auto* r12 = find_distance_result(results, 1, 2);
+    REQUIRE(r02 != nullptr);
+    REQUIRE(r12 != nullptr);
+    REQUIRE(r02->intersect);
+    REQUIRE(r12->intersect);
+    REQUIRE(r02->penetration_sq > 0.0);
+    REQUIRE(r12->penetration_sq > 0.0);
+
+    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 1));
+    REQUIRE(tracer.saw_penetration_pair(0, 2));
+    REQUIRE(tracer.saw_penetration_pair(1, 2));
+}
+
 } // namespace
 
 TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance][stress]") {
     DebugTracer tracer;
     tracer.reset();
 
-    Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
 
     auto p0 = polygon_from_quad({
@@ -151,7 +190,7 @@ TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance
     });
 
     std::vector<Polygon2> polys = {p0, p1, p2, p3};
-    auto dist_results = find_polygon_distances(polys, axis, aura, &tracer);
+    auto dist_results = find_polygon_distances(polys, aura, &tracer);
 
     for (const auto& r : dist_results) {
         REQUIRE(r.polyA_idx != 3);
@@ -171,13 +210,16 @@ TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance
     REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 3));
     REQUIRE_FALSE(tracer.saw_any_narrow_pair(1, 3));
     REQUIRE_FALSE(tracer.saw_any_narrow_pair(2, 3));
+
+    REQUIRE(tracer.stat_sweep_pairs > 0);
+    REQUIRE(tracer.stat_gjk_evals > 0);
+    REQUIRE(tracer.stat_gjk_evals < 50);
 }
 
 TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[poly_distance][stress]") {
     DebugTracer tracer;
     tracer.reset();
 
-    Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
 
     auto c_shape = polygon_c_shape_three_parts();
@@ -186,7 +228,7 @@ TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[pol
     auto core = polygon_from_quad({{24, 4}, {26, 4}, {26, 6}, {24, 6}});
 
     std::vector<Polygon2> polys = {c_shape, trapped, donut, core};
-    auto results = find_polygon_distances(polys, axis, aura, &tracer);
+    auto results = find_polygon_distances(polys, aura, &tracer);
 
     const auto* r01 = find_distance_result(results, 0, 1);
     REQUIRE(r01 != nullptr);
@@ -217,7 +259,6 @@ TEST_CASE("stress distance TC3 spec hex EPA regression direct penetration", "[po
 }
 
 TEST_CASE("stress distance TC3 EPA MTV inversion small box first", "[poly_distance][stress]") {
-    Vec2 axis{{1.0, 1.0}};
     const double aura = 0.5;
 
     auto small_box = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
@@ -226,7 +267,7 @@ TEST_CASE("stress distance TC3 EPA MTV inversion small box first", "[poly_distan
     REQUIRE(hex.get_part_size(0) == 6);
     std::vector<Polygon2> polys = {small_box, hex};
 
-    auto results = find_polygon_distances<Vec2>(polys, axis, aura);
+    auto results = find_polygon_distances<Vec2>(polys, aura);
     const auto* r = find_distance_result(results, 0, 1);
     REQUIRE(r != nullptr);
     REQUIRE(r->intersect);
@@ -237,14 +278,13 @@ TEST_CASE("stress distance TC3 EPA MTV inversion small box first", "[poly_distan
 }
 
 TEST_CASE("stress distance TC3 EPA MTV inversion hex first", "[poly_distance][stress]") {
-    Vec2 axis{{1.0, 1.0}};
     const double aura = 0.5;
 
     auto small_box = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto hex = polygon_tc3_spec_hex();
     std::vector<Polygon2> polys = {hex, small_box};
 
-    auto results = find_polygon_distances<Vec2>(polys, axis, aura);
+    auto results = find_polygon_distances<Vec2>(polys, aura);
     const auto* r = find_distance_result(results, 0, 1);
     REQUIRE(r != nullptr);
     REQUIRE(r->intersect);
@@ -258,47 +298,19 @@ TEST_CASE("stress distance TC5 subset sweep active vs static no static-static na
     DebugTracer tracer;
     tracer.reset();
 
-    Vec2 axis{{1.0, 0.0}};
     const double aura = 0.5;
 
-    auto floor = polygon_from_quad({
-        {-100, -5},
-        {100, -5},
-        {100, 0},
-        {-100, 0},
-    });
-    auto wall = polygon_from_quad({
-        {90, 0},
-        {100, 0},
-        {100, 50},
-        {90, 50},
-    });
-    auto active = polygon_from_quad({
-        {95, -2},
-        {105, -2},
-        {105, 8},
-        {95, 8},
-    });
+    std::vector<Polygon2> polys = make_tc5_subset_world();
+    auto results = find_polygon_distances(polys, std::vector<int>{2}, aura, &tracer);
 
-    std::vector<Polygon2> polys = {floor, wall, active};
-    auto results = find_polygon_distances(polys, std::vector<int>{2}, axis, aura, &tracer);
-
-    const auto* r02 = find_distance_result(results, 0, 2);
-    const auto* r12 = find_distance_result(results, 1, 2);
-    REQUIRE(r02 != nullptr);
-    REQUIRE(r12 != nullptr);
-    REQUIRE(r02->intersect);
-    REQUIRE(r12->intersect);
-    REQUIRE(r02->penetration_sq > 0.0);
-    REQUIRE(r12->penetration_sq > 0.0);
-
-    REQUIRE_FALSE(tracer.saw_any_narrow_pair(0, 1));
-    REQUIRE(tracer.saw_penetration_pair(0, 2));
-    REQUIRE(tracer.saw_penetration_pair(1, 2));
+    assert_tc5_subset_distance_and_narrow_phase(results, tracer);
+    REQUIRE(tracer.stat_sweep_pairs == 2);
 }
 
 TEST_CASE("stress distance TC6 collinear seam hover distance", "[poly_distance][stress][seam]") {
-    Vec2 axis{{1.0, 0.0}};
+    DebugTracer tracer;
+    tracer.reset();
+
     const double aura = 0.5;
 
     auto tile_l = polygon_from_quad({{-10, 0}, {0, 0}, {0, -5}, {-10, -5}});
@@ -306,7 +318,7 @@ TEST_CASE("stress distance TC6 collinear seam hover distance", "[poly_distance][
     auto hover = polygon_from_quad({{-2, 2}, {2, 2}, {2, 4}, {-2, 4}});
 
     std::vector<Polygon2> polys = {tile_l, tile_r, hover};
-    auto results = find_polygon_distances<Vec2>(polys, axis, aura);
+    auto results = find_polygon_distances<Vec2, DebugTracer>(polys, aura, &tracer);
 
     const auto* r02 = find_distance_result(results, 0, 2);
     const auto* r12 = find_distance_result(results, 1, 2);
@@ -316,19 +328,72 @@ TEST_CASE("stress distance TC6 collinear seam hover distance", "[poly_distance][
     REQUIRE_FALSE(r12->intersect);
     REQUIRE(r02->distance_sq == Catch::Approx(4.0).epsilon(1e-9));
     REQUIRE(r12->distance_sq == Catch::Approx(4.0).epsilon(1e-9));
+
+    REQUIRE(tracer.stat_sweep_pairs == 3);
+    REQUIRE(tracer.stat_gjk_evals == 3);
 }
 
 TEST_CASE("stress distance TC7 kissing edge contact zero penetration", "[poly_distance][stress][kiss]") {
-    Vec2 axis{{1.0, 0.0}};
+    DebugTracer tracer;
+    tracer.reset();
+
     const double aura = 0.5;
 
     auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
 
-    auto results = find_polygon_distances<Vec2>({a, b}, axis, aura);
+    auto results = find_polygon_distances<Vec2, DebugTracer>({a, b}, aura, &tracer);
     const auto* r = find_distance_result(results, 0, 1);
     REQUIRE(r != nullptr);
     REQUIRE(r->intersect);
     REQUIRE(r->penetration_sq == Catch::Approx(0.0).margin(1e-9));
     REQUIRE(r->mtv.qlen() < 1e-8);
+
+    REQUIRE(tracer.stat_sweep_pairs >= 1);
+    REQUIRE(tracer.stat_gjk_evals >= 1);
+    REQUIRE(tracer.stat_gjk_evals < 20);
+}
+
+TEST_CASE("Physics Telemetry: Static vs Static Pruning (Subset Mode)", "[telemetry][broadphase][subset]") {
+    DebugTracer tracer;
+    tracer.reset();
+
+    const double aura = 0.5;
+
+    std::vector<Polygon2> polys = make_tc5_subset_world();
+    auto results = find_polygon_distances<Vec2, DebugTracer>(polys, std::vector<int>{2}, aura, &tracer);
+
+    assert_tc5_subset_distance_and_narrow_phase(results, tracer);
+    REQUIRE(tracer.stat_sweep_pairs == 2);
+
+    maybe_print_physics_telemetry(tracer);
+}
+
+TEST_CASE("Physics Telemetry: The Planar Seam Sliding Test", "[telemetry][narrowphase][gjk][seam]") {
+    DebugTracer tracer;
+    tracer.reset();
+
+    const double aura = 0.5;
+
+    // Two floor tiles meeting at x = 0, top at y = 0; hover y = 5..9 -> vertical gap 5, dist^2 = 25.
+    auto tile_l = make_box(-10.0, -5.0, 10.0, 5.0);
+    auto tile_r = make_box(10.0, -5.0, 10.0, 5.0);
+    auto hover = make_box(0.0, 7.0, 2.0, 2.0);
+
+    std::vector<Polygon2> world = {tile_l, tile_r, hover};
+    auto dist_results = find_polygon_distances<Vec2, DebugTracer>(world, aura, &tracer);
+
+    const auto* r02 = find_distance_result(dist_results, 0, 2);
+    const auto* r12 = find_distance_result(dist_results, 1, 2);
+    REQUIRE(r02 != nullptr);
+    REQUIRE(r12 != nullptr);
+    REQUIRE_FALSE(r02->intersect);
+    REQUIRE_FALSE(r12->intersect);
+    REQUIRE(r02->distance_sq == Catch::Approx(25.0).epsilon(1e-9));
+    REQUIRE(r12->distance_sq == Catch::Approx(25.0).epsilon(1e-9));
+
+    REQUIRE(tracer.stat_sweep_pairs == 3);
+    REQUIRE(tracer.stat_gjk_evals == 3);
+
+    maybe_print_physics_telemetry(tracer);
 }
