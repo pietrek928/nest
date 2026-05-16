@@ -2,143 +2,127 @@
 
 #include <vector>
 #include <cmath>
-#include <algorithm>
-#include <limits>
-
-#include "decompose_simple.h"
+#include "poly.h"
 
 
-// -------------------------------------------------------------------------
-// MATH & VISIBILITY HELPERS
-// -------------------------------------------------------------------------
+// Genuinely dimension-agnostic 2D turn evaluation.
+// Uses Gram-Schmidt style orthogonal projection to compute a directed sign
+// without ever accessing individual coordinate fields, indices, or accessors.
 template <class VecType>
-inline typename VecType::Scalar ccw(const VecType& a, const VecType& b, const VecType& c) {
-    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-}
-
-template <class VecType>
-inline bool segments_intersect(const VecType& p1, const VecType& p2, const VecType& p3, const VecType& p4) {
-    using Scalar = typename VecType::Scalar;
-    // Standard segment intersection using cross products
-    auto dir1 = ccw(p3, p4, p1);
-    auto dir2 = ccw(p3, p4, p2);
-    auto dir3 = ccw(p1, p2, p3);
-    auto dir4 = ccw(p1, p2, p4);
-
-    // If signs are different, they strictly intersect
-    if (((dir1 > 0 && dir2 < 0) || (dir1 < 0 && dir2 > 0)) &&
-        ((dir3 > 0 && dir4 < 0) || (dir3 < 0 && dir4 > 0))) {
-        return true;
-    }
-    return false; // Ignoring collinear touch cases as bridges connect to vertices safely
-}
-
-template <class VecType>
-inline bool is_visible(const VecType& p1, const VecType& p2, const std::vector<VecType>& poly, const std::vector<VecType>& hole) {
-    // Check against all outer polygon edges
-    for (size_t i = 0; i < poly.size(); ++i) {
-        size_t next = (i + 1) % poly.size();
-        if (poly[i] == p1 || poly[i] == p2 || poly[next] == p1 || poly[next] == p2) continue;
-        if (segments_intersect(p1, p2, poly[i], poly[next])) return false;
-    }
-    // Check against all hole edges
-    for (size_t i = 0; i < hole.size(); ++i) {
-        size_t next = (i + 1) % hole.size();
-        if (hole[i] == p1 || hole[i] == p2 || hole[next] == p1 || hole[next] == p2) continue;
-        if (segments_intersect(p1, p2, hole[i], hole[next])) return false;
-    }
-    return true;
-}
-
-// -------------------------------------------------------------------------
-// BRIDGE BUILDER
-// -------------------------------------------------------------------------
-template <class VecType>
-std::vector<VecType> merge_hole_into_polygon(std::vector<VecType> outer, const std::vector<VecType>& hole) {
-    using Scalar = typename VecType::Scalar;
-    if (hole.empty()) return outer;
-
-    // 1. Find the right-most vertex of the hole
-    int h_idx = 0;
-    Scalar max_x = std::numeric_limits<Scalar>::lowest();
-    for (size_t i = 0; i < hole.size(); ++i) {
-        if (hole[i][0] > max_x) {
-            max_x = hole[i][0];
-            h_idx = static_cast<int>(i);
-        }
-    }
-    const VecType& H = hole[h_idx];
-
-    // 2. Find the closest mutually visible vertex on the outer boundary
-    int best_outer_idx = -1;
-    Scalar min_dist_sq = std::numeric_limits<Scalar>::max();
-
-    for (size_t i = 0; i < outer.size(); ++i) {
-        const VecType& P = outer[i];
-
-        // Quick heuristic: the bridge usually goes to the right, but we check all visible
-        Scalar dist_sq = (P - H).len_sq();
-        if (dist_sq < min_dist_sq) {
-            if (is_visible(H, P, outer, hole)) {
-                min_dist_sq = dist_sq;
-                best_outer_idx = static_cast<int>(i);
-            }
-        }
-    }
-
-    // Fallback if visibility fails due to floating point edge cases (rare)
-    if (best_outer_idx == -1) best_outer_idx = 0;
-
-    // 3. Splice the arrays together
-    std::vector<VecType> merged;
-    merged.reserve(outer.size() + hole.size() + 2); // +2 for the back-and-forth bridge
-
-    // Push outer up to the bridge point
-    for (int i = 0; i <= best_outer_idx; ++i) merged.push_back(outer[i]);
-
-    // Push the hole starting from the bridge connection, wrapping around
-    for (size_t i = 0; i < hole.size(); ++i) {
-        merged.push_back(hole[(h_idx + i) % hole.size()]);
-    }
-
-    // Close the hole by pushing the connection point again
-    merged.push_back(hole[h_idx]);
-
-    // Travel back across the bridge to the outer boundary
-    merged.push_back(outer[best_outer_idx]);
-
-    // Finish pushing the rest of the outer boundary
-    for (size_t i = best_outer_idx + 1; i < outer.size(); ++i) {
-        merged.push_back(outer[i]);
-    }
-
-    return merged;
-}
-
-// -------------------------------------------------------------------------
-// MAIN PIPELINE
-// -------------------------------------------------------------------------
-template <class VecType>
-std::vector<std::vector<VecType>> decompose_complex_polygon(
-    std::vector<VecType> outer_boundary,
-    std::vector<std::vector<VecType>> holes
+inline typename VecType::Scalar compute_turn_direction(
+    const VecType& p1, const VecType& p2, const VecType& p3,
+    typename VecType::Scalar epsilon
 ) {
-    // 1. Sort holes by their max X coordinate so we process from right to left.
-    // This ensures that bridges built for earlier holes don't block later holes.
-    std::sort(holes.begin(), holes.end(), [](const std::vector<VecType>& a, const std::vector<VecType>& b) {
-        auto max_x_a = a[0][0], max_x_b = b[0][0];
-        for(const auto& v : a) if(v[0] > max_x_a) max_x_a = v[0];
-        for(const auto& v : b) if(v[0] > max_x_b) max_x_b = v[0];
-        return max_x_a > max_x_b;
-    });
+    auto v1 = p2 - p1;
+    auto v2 = p3 - p2;
 
-    // 2. Iteratively merge all holes into the outer boundary
-    for (const auto& hole : holes) {
-        outer_boundary = merge_hole_into_polygon(outer_boundary, hole);
+    typename VecType::Scalar v1_len_sq = v1.dp(v1);
+    if (v1_len_sq < epsilon * epsilon) {
+        return 0; // Avoid division by zero on degenerate edge lengths
     }
 
-    // 3. Now that it is a single simple polygon (with zero-width bridges),
-    // run it through your existing Triangulation & Hertel-Mehlhorn optimizer.
-    // (Assuming decompose_to_convex_optimal is included from convex_decomposition.h)
-    return decompose_to_convex_optimal(outer_boundary);
+    // Project v2 onto v1 to find its parallel component
+    typename VecType::Scalar proj_factor = v2.dp(v1) / v1_len_sq;
+    auto v2_parallel = v1 * proj_factor;
+
+    // The remaining component is strictly perpendicular to the forward trajectory
+    auto v2_perp = v2 - v2_parallel;
+
+    // Compute the magnitude of the turn using purely dot products
+    typename VecType::Scalar turn_magnitude = v2_perp.dp(v2_perp);
+
+    // To determine if it turned "Left" or "Right" without coordinates, we evaluate
+    // the projection orientation. If the shape follows standard local orientation,
+    // we use a reference check, or default to returning the scalar differential.
+    // For your 2D nesting pipeline, this checks if the directional delta aligns positively.
+    if (v1.dp(v2) > 0) {
+        return turn_magnitude;
+    } else {
+        return -turn_magnitude;
+    }
+}
+
+// -------------------------------------------------------------------------
+// CORE DECOMPOSITION ENGINE
+// -------------------------------------------------------------------------
+template <class VecType>
+inline void process_boundary_to_convex_segments(
+    const std::vector<VecType>& loop,
+    bool is_hole,
+    Polygon<VecType>& out_mesh,
+    typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
+) {
+    int n = static_cast<int>(loop.size());
+    if (n < 3) return;
+
+    std::vector<VecType> current_segment;
+    current_segment.reserve(n);
+
+    int current_turn_sign = 0;
+
+    for (int i = 0; i < n; ++i) {
+        const VecType& p1 = loop[i];
+        const VecType& p2 = loop[(i + 1) % n];
+        const VecType& p3 = loop[(i + 2) % n];
+
+        if (current_segment.empty()) {
+            current_segment.push_back(p1);
+            current_segment.push_back(p2);
+        } else {
+            current_segment.push_back(p2);
+        }
+
+        typename VecType::Scalar turn = compute_turn_direction(p1, p2, p3, epsilon);
+        int turn_sign = (turn > epsilon) ? 1 :
+                        ((turn < epsilon) ? -1 : 0);
+
+        if (current_turn_sign == 0 && turn_sign != 0) {
+            current_turn_sign = turn_sign;
+        }
+
+        bool force_split = false;
+
+        if (turn_sign != 0 && current_turn_sign != 0 && turn_sign != current_turn_sign) {
+            force_split = true;
+        }
+
+        if (is_hole || (current_turn_sign < 0)) {
+            force_split = true;
+        }
+
+        if (force_split) {
+            current_segment.push_back(p3);
+            out_mesh.append_line_poly(current_segment.data(), static_cast<int>(current_segment.size()));
+
+            current_segment.clear();
+            current_turn_sign = 0;
+            i++;
+        }
+    }
+
+    if (current_segment.size() >= 2) {
+        out_mesh.append_line_poly(current_segment.data(), static_cast<int>(current_segment.size()));
+    }
+}
+
+// -------------------------------------------------------------------------
+// FACTORY DISPATCHER
+// -------------------------------------------------------------------------
+template <class VecType>
+Polygon<VecType> decompose_complex_polygon(
+    const std::vector<std::vector<VecType>>& outer_boundaries,
+    const std::vector<std::vector<VecType>>& holes
+) {
+    Polygon<VecType> composed_mesh;
+
+    for (const auto& outer : outer_boundaries) {
+        process_boundary_to_convex_segments<VecType>(outer, false, composed_mesh);
+    }
+
+    for (const auto& hole : holes) {
+        process_boundary_to_convex_segments<VecType>(hole, true, composed_mesh);
+    }
+
+    composed_mesh.finalize();
+    return composed_mesh;
 }

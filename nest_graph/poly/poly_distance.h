@@ -9,9 +9,8 @@
 #include <type_traits>
 
 #include "poly.h"
-#include "convex/distance.h"
-#include "convex/penetration.h"
-#include "common_checks.h"
+#include "convex/distance.h"    // Updated to Line String GJK
+#include "convex/penetration.h" // Updated to Line String EPA
 #include "sweep.h"
 #include "tracer.h"
 
@@ -51,12 +50,37 @@ struct PolyPairTracker {
 };
 
 // -------------------------------------------------------------------------
+// SOLID-SIDE CONTAINMENT CHECK
+// -------------------------------------------------------------------------
+template<class VecType>
+inline bool is_point_inside_solid_space(const VecType& pt, const Polygon<VecType>& poly) {
+    using Scalar = typename VecType::Scalar;
+    int crossings = 0;
+
+    for (size_t part = 0; part < poly.line_parts.size(); ++part) {
+        const VecType* pts = poly.get_part_points(part);
+        int n = poly.get_part_size(part);
+
+        for (int i = 0; i < n; ++i) {
+            const VecType& v1 = pts[i];
+            const VecType& v2 = pts[(i + 1) % n];
+
+            if (((v1[1] > pt[1]) != (v2[1] > pt[1])) &&
+                (pt[0] < (v2[0] - v1[0]) * (pt[1] - v1[1]) / (v2[1] - v1[1]) + v1[0])) {
+                crossings++;
+            }
+        }
+    }
+    return (crossings % 2) != 0;
+}
+
+// -------------------------------------------------------------------------
 // NARROW PHASE ROUTERS (Smart Dispatch & MTV Correction)
 // -------------------------------------------------------------------------
 template<class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(
-    const VecType* polyA, int nA,
-    const VecType* polyB, int nB,
+    const VecType* lsA, int nA,
+    const VecType* lsB, int nB,
     bool known_overlap,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
@@ -65,22 +89,22 @@ inline DistanceResult<VecType> narrow_phase_distance(
         if (tracer) tracer->record_distance();
     }
 
-    const VecType* p1 = (nA <= nB) ? polyA : polyB;
+    const VecType* p1 = (nA <= nB) ? lsA : lsB;
     int s1 = (nA <= nB) ? nA : nB;
 
-    const VecType* p2 = (nA <= nB) ? polyB : polyA;
+    const VecType* p2 = (nA <= nB) ? lsB : lsA;
     int s2 = (nA <= nB) ? nB : nA;
 
     if (s1 + s2 > GRADIENT_THRESHOLD) {
-        return convex_polygons_distance_gjk_gradient<VecType>(p1, s1, p2, s2, known_overlap);
+        return convex_linestrings_distance_gjk_gradient<VecType>(p1, s1, p2, s2, known_overlap);
     }
-    return convex_polygons_distance_gjk<VecType>(p1, s1, p2, s2, known_overlap);
+    return convex_linestrings_distance_gjk<VecType>(p1, s1, p2, s2, known_overlap);
 }
 
 template<class VecType, class Tracer = DefaultTracer>
 inline PenetrationResult<VecType> narrow_phase_penetration(
-    const VecType* polyA, int nA,
-    const VecType* polyB, int nB,
+    const VecType* lsA, int nA,
+    const VecType* lsB, int nB,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
@@ -90,15 +114,15 @@ inline PenetrationResult<VecType> narrow_phase_penetration(
 
     bool swapped = (nA > nB);
 
-    const VecType* p1 = swapped ? polyB : polyA;
+    const VecType* p1 = swapped ? lsB : lsA;
     int s1 = swapped ? nB : nA;
 
-    const VecType* p2 = swapped ? polyA : polyB;
+    const VecType* p2 = swapped ? lsA : lsB;
     int s2 = swapped ? nA : nB;
 
     auto res = (s1 + s2 > GRADIENT_THRESHOLD)
-        ? convex_polygons_penetration_gradient<VecType>(p1, s1, p2, s2)
-        : convex_polygons_penetration<VecType>(p1, s1, p2, s2);
+        ? convex_linestrings_penetration_gradient<VecType>(p1, s1, p2, s2)
+        : convex_linestrings_penetration<VecType>(p1, s1, p2, s2);
 
     if (swapped && res.intersect) {
         res.mtv = -res.mtv;
@@ -121,8 +145,9 @@ inline void append_poly_parts_to_sweep_with_aura(
     typename VecType::Scalar aura_multiplier
 ) {
     using Scalar = typename VecType::Scalar;
-    for (size_t part = 0; part < poly.convex_parts.size(); ++part) {
-        const auto& bounds = poly.convex_parts[part].bounding_circle;
+    // Updated to use line_parts
+    for (size_t part = 0; part < poly.line_parts.size(); ++part) {
+        const auto& bounds = poly.line_parts[part].bounding_circle;
         Scalar proj = bounds.center().dp(sweep_axis);
 
         Scalar r = static_cast<Scalar>(std::sqrt(static_cast<double>(bounds.square_radius()))) * axis_len_sqrt;
@@ -164,7 +189,6 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             std::pair<int, int> pair_id;
             bool reverse = false;
 
-            // SMART ROUTING LOGIC
             if (mode == SweepMode::Bipartite) {
                 if (group_i == group_j) continue;
                 reverse = (group_i == 1);
@@ -187,13 +211,14 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                 if (tracer) tracer->count_sweep_pair();
             }
 
+            // Updated to line_parts
             const auto* poly1_ptr = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
             const auto* poly2_ptr = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
             int part1_idx = reverse ? elements[j].part_idx : elements[i].part_idx;
             int part2_idx = reverse ? elements[i].part_idx : elements[j].part_idx;
 
-            const auto& circle1 = poly1_ptr->convex_parts[part1_idx].bounding_circle;
-            const auto& circle2 = poly2_ptr->convex_parts[part2_idx].bounding_circle;
+            const auto& circle1 = poly1_ptr->line_parts[part1_idx].bounding_circle;
+            const auto& circle2 = poly2_ptr->line_parts[part2_idx].bounding_circle;
 
             Scalar center_dist_sq = (circle1.center() - circle2.center()).len_sq();
             Scalar r1 = static_cast<Scalar>(std::sqrt(static_cast<double>(circle1.square_radius())));
@@ -225,24 +250,15 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             int n2 = poly2_ptr->get_part_size(part2_idx);
 
             {
-                // Decoupled pointer-based RAII Scope
                 TracerScope<Tracer> scope(tracer, pair_id.first, pair_id.second);
 
                 if constexpr (!std::is_same_v<Tracer, NullTracer>) {
                     if (tracer) tracer->count_gjk_eval();
                 }
 
+                // 1. Boundary Penetration Check
                 auto pen_res = narrow_phase_penetration<VecType, Tracer>(pts1, n1, pts2, n2, 24, tracer);
-                const bool hole_invalidation = is_invalidated_by_hole<VecType>(
-                    pts1, n1, *poly1_ptr, pts2, n2, *poly2_ptr);
-
-                if (hole_invalidation) {
-                    if constexpr (!std::is_same_v<Tracer, NullTracer>) {
-                        if (tracer) tracer->count_hole_invalidation();
-                    }
-                }
-
-                bool isValidCollision = pen_res.intersect && !hole_invalidation;
+                bool isValidCollision = pen_res.intersect;
 
                 ComplexDistanceResult<VecType> current_eval = {
                     pair_id.first, pair_id.second, part1_idx, part2_idx,
@@ -252,34 +268,47 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                     isValidCollision ? pen_res.mtv : VecType{}
                 };
 
+                // 2. No boundary crossing? Check if one is swallowed by the other!
                 if (!isValidCollision) {
-                    // We already calculated pen_res.intersect! Pass it directly so we don't
-                    // have to run convex_polygons_intersect_gjk redundantly inside distance.
-                    auto dist_res = narrow_phase_distance<VecType, Tracer>(
-                        pts1, n1, pts2, n2, pen_res.intersect, 24, tracer);
+                    // Only do containment checks if their strict master bounding boxes overlap
+                    if (center_dist_sq <= r_sum * r_sum) {
+                        bool contained = is_point_inside_solid_space(pts1[0], *poly2_ptr) ||
+                                         is_point_inside_solid_space(pts2[0], *poly1_ptr);
 
-                    if (dist_res.distance_sq > dynamic_threshold * dynamic_threshold) {
-                        continue;
+                        if (contained) {
+                            current_eval.intersect = true;
+                            current_eval.distance_sq = 0;
+                            // Max penalty to force the nesting solver to eject it
+                            current_eval.penetration_sq = std::numeric_limits<Scalar>::max();
+                            current_eval.mtv = VecType{}; // MTV is zero since edges don't touch
+                            isValidCollision = true;
+                        }
                     }
 
-                    const Scalar touch_eps = static_cast<Scalar>(1e-5);
-                    const Scalar touch_eps_sq = touch_eps * touch_eps;
+                    // 3. Still no collision? Safely evaluate distance between the boundaries
+                    if (!isValidCollision) {
+                        auto dist_res = narrow_phase_distance<VecType, Tracer>(
+                            pts1, n1, pts2, n2, false, 24, tracer);
 
-                    const bool kissing =
-                        !hole_invalidation
-                        && (dist_res.intersect || dist_res.distance_sq <= touch_eps_sq);
+                        if (dist_res.distance_sq > dynamic_threshold * dynamic_threshold) {
+                            continue;
+                        }
 
-                    if (kissing) {
-                        current_eval.intersect = true;
-                        current_eval.distance_sq = 0;
-                        current_eval.penetration_sq = 0;
-                        current_eval.mtv = VecType{};
-                        isValidCollision = true;
-                    } else {
-                        current_eval.distance_sq = dist_res.distance_sq;
+                        const Scalar touch_eps = static_cast<Scalar>(1e-5);
+                        const Scalar touch_eps_sq = touch_eps * touch_eps;
+
+                        if (dist_res.intersect || dist_res.distance_sq <= touch_eps_sq) {
+                            current_eval.intersect = true;
+                            current_eval.distance_sq = 0;
+                            current_eval.penetration_sq = 0;
+                            current_eval.mtv = VecType{};
+                        } else {
+                            current_eval.distance_sq = dist_res.distance_sq;
+                        }
                     }
                 }
 
+                // 4. Update the Active Pairs Tracker
                 if (is_new_pair) {
                     active_pairs.insert(it, {pair_id, current_eval});
                 } else {

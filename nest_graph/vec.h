@@ -353,6 +353,21 @@ class Vec {
     }
 };
 
+template <int K, class T>
+inline bool operator==(const Vec<K, T>& a, const Vec<K, T>& b) {
+    for (int i = 0; i < K; ++i) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+template <int K, class T>
+inline bool operator!=(const Vec<K, T>& a, const Vec<K, T>& b) {
+    return !(a == b);
+}
+
 template <class T, class... Targs>
 inline auto v(Targs... pos_values) {
     Vec<sizeof...(Targs), T> r;

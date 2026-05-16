@@ -2,74 +2,43 @@
 
 #include <cstddef>
 #include <vector>
-#include <algorithm>
 #include <cmath>
 
 #include "circle.h"
 
 
 template<class VecType>
-class ConvexPolygon {
-    public:
-
-    std::vector<VecType> points;
-    Circle<VecType> bounding_circle;
-
-    ConvexPolygon() {}
-    ConvexPolygon(const VecType* poly, int n)
-        : points(poly, poly+n) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        bounding_circle = compute_exact_bounding_circle<VecType>(
-            poly, n, gen
-        );
-    }
-};
-
-template<class VecType>
 class Polygon {
     typedef struct {
         std::size_t start_point;
         Circle<VecType> bounding_circle;
-    } ConvexPolygonEntry;
+    } LinePolygonEntry;
 
 public:
-    std::vector<ConvexPolygonEntry> convex_parts;
-    std::vector<VecType> poly_points;
-    std::vector<ConvexPolygonEntry> convex_holes;
-    std::vector<VecType> hole_points;
+    std::vector<LinePolygonEntry> line_parts;
+    std::vector<VecType> line_points;
     Circle<VecType> bounding_circle;
 
-    void append_convex_poly(const VecType* poly, int n) {
+    void append_line_poly(const VecType* line, int n) {
         std::random_device rd;
         std::mt19937 gen(rd());
-        convex_parts.push_back({
-            poly_points.size(),
-            compute_exact_bounding_circle<VecType>(poly, n, gen)
+        line_parts.push_back({
+            line_points.size(),
+            compute_exact_bounding_circle<VecType>(line, n, gen)
         });
-        poly_points.insert(poly_points.end(), poly, poly+n);
-    }
-
-    void append_convex_hole(const VecType* hole, int n) {
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        convex_holes.push_back({
-            hole_points.size(),
-            compute_exact_bounding_circle<VecType>(hole, n, gen)
-        });
-        hole_points.insert(hole_points.end(), hole, hole+n);
+        line_points.insert(line_points.end(), line, line+n);
     }
 
     void finalize() {
         std::random_device rd;
         std::mt19937 gen(rd());
         bounding_circle = compute_exact_bounding_circle<VecType>(
-            poly_points.data(),
-            static_cast<int>(poly_points.size()),
+            line_points.data(),
+            static_cast<int>(line_points.size()),
             gen
         );
-        poly_points.shrink_to_fit();
-        hole_points.shrink_to_fit();
+        line_points.shrink_to_fit();
+        line_parts.shrink_to_fit();
     }
 
     const Circle<VecType>& get_bounding_circle() const {
@@ -78,24 +47,13 @@ public:
 
     // Helpers to safely extract arrays and sizes for GJK
     int get_part_size(size_t part_idx) const {
-        if (part_idx + 1 < convex_parts.size()) {
-            return convex_parts[part_idx + 1].start_point - convex_parts[part_idx].start_point;
+        if (part_idx + 1 < line_parts.size()) {
+            return line_parts[part_idx + 1].start_point - line_parts[part_idx].start_point;
         }
-        return poly_points.size() - convex_parts[part_idx].start_point;
+        return line_points.size() - line_parts[part_idx].start_point;
     }
 
     const VecType* get_part_points(size_t part_idx) const {
-        return &poly_points[convex_parts[part_idx].start_point];
-    }
-
-    int get_hole_size(size_t hole_idx) const {
-        if (hole_idx + 1 < convex_holes.size()) {
-            return convex_holes[hole_idx + 1].start_point - convex_holes[hole_idx].start_point;
-        }
-        return hole_points.size() - convex_holes[hole_idx].start_point;
-    }
-
-    const VecType* get_hole_points(size_t hole_idx) const {
-        return &hole_points[convex_holes[hole_idx].start_point];
+        return &line_points[line_parts[part_idx].start_point];
     }
 };

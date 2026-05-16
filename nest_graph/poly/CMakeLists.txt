@@ -23,6 +23,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_poly_intersect.cc
     tests/test_poly_distance.cc
     tests/test_circle.cc
+    tests/test_decompose.cc
   )
   target_link_libraries(poly_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
   target_include_directories(poly_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -30,4 +31,5 @@ if(NEST_GRAPH_BUILD_TESTS)
 
   add_test(NAME poly.cpp.gjk COMMAND poly_cpp_tests)
   add_test(NAME poly.cpp.telemetry COMMAND poly_cpp_tests "[telemetry]")
+  add_test(NAME poly.cpp.decomposition COMMAND poly_cpp_tests "[decomposition]")
 endif()

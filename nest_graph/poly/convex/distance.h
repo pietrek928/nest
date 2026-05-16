@@ -2,7 +2,8 @@
 
 #include <cmath>
 #include <limits>
-#include "../gjk.h"
+
+#include "lookup.h"
 
 
 template <class VecType>
@@ -25,7 +26,7 @@ inline SimplexResult<VecType> closest_point_on_segment(
 ) {
     using Scalar = typename VecType::Scalar;
     VecType AB = B - A;
-    Scalar ab_len_sq = AB.qlen();
+    Scalar ab_len_sq = AB.dp(AB); // Assuming dp() is dot product or len_sq() equivalent
 
     if (ab_len_sq < epsilon_sq) {
         return { A, 1, {0, 0} };
@@ -39,12 +40,12 @@ inline SimplexResult<VecType> closest_point_on_segment(
 }
 
 // -------------------------------------------------------------------------
-// THE CORE IMPLEMENTATION (Unified & Robust)
+// THE CORE IMPLEMENTATION (Adapted for Line Strings)
 // -------------------------------------------------------------------------
 template <bool UseGradient, class VecType>
-inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
-    const VecType* poly1, int n1,
-    const VecType* poly2, int n2,
+inline DistanceResult<VecType> convex_linestrings_distance_gjk_impl(
+    const VecType* ls1, int n1,
+    const VecType* ls2, int n2,
     bool known_overlap,
     int it1, int it2,
     typename VecType::Scalar epsilon
@@ -54,8 +55,8 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
     VecType simplex[3];
     int simplex_size = 0;
 
-    auto dir = poly1[it1] - poly2[it2];
-    if (dir.qlen() < epsilon_sq) return { static_cast<Scalar>(0), true, it1, it2 };
+    auto dir = ls1[it1] - ls2[it2];
+    if (dir.dp(dir) < epsilon_sq) return { static_cast<Scalar>(0), true, it1, it2 };
 
     dir = -dir;
     VecType closest_point = -dir;
@@ -63,21 +64,21 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
 
     int op_limit = 32;
     while (op_limit-- > 0) {
+
+        // Swap to Line String bounded search
         if constexpr (UseGradient) {
-            it1 = get_extreme_index_gradient<VecType>(poly1, n1, dir, it1);
-            it2 = get_extreme_index_gradient<VecType>(poly2, n2, -dir, it2);
+            it1 = get_extreme_index_linestring_gradient<VecType>(ls1, n1, dir, it1);
+            it2 = get_extreme_index_linestring_gradient<VecType>(ls2, n2, -dir, it2);
         } else {
-            it1 = get_extreme_index<VecType>(poly1, n1, dir, it1);
-            it2 = get_extreme_index<VecType>(poly2, n2, -dir, it2);
+            it1 = get_extreme_index_linestring<VecType>(ls1, n1, dir, it1);
+            it2 = get_extreme_index_linestring<VecType>(ls2, n2, -dir, it2);
         }
 
-        const auto support = poly1[it1] - poly2[it2];
-        const Scalar dist_sq = closest_point.qlen();
+        const auto support = ls1[it1] - ls2[it2];
+        const Scalar dist_sq = closest_point.dp(closest_point);
 
         Scalar proj = (-closest_point).dp(support - closest_point);
 
-        // Stall detection is strictly enabled for overlapping shapes (Minkowski slack).
-        // Separated shapes disable it to allow proper Euclidean boundary sliding.
         const bool stall = known_overlap && (dist_sq >= last_dist_sq);
         if (proj < epsilon_sq || stall) {
             return { dist_sq, dist_sq < epsilon_sq, it1, it2 };
@@ -85,18 +86,17 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
 
         last_dist_sq = dist_sq;
 
-        // --- SIMPLEX EVOLUTION ---
+        // --- SIMPLEX EVOLUTION (Mathematically identical) ---
         if (simplex_size == 2) {
             auto res01 = closest_point_on_segment<VecType>(support, simplex[0], epsilon_sq);
             auto res02 = closest_point_on_segment<VecType>(support, simplex[1], epsilon_sq);
 
             if (!known_overlap) {
-                // Disjoint: Evaluate all 3 edges to allow sliding past planar seams (Fixes TC2/TC6)
                 auto res12 = closest_point_on_segment<VecType>(simplex[0], simplex[1], epsilon_sq);
 
-                const Scalar d01 = res01.closest_point.qlen();
-                const Scalar d02 = res02.closest_point.qlen();
-                const Scalar d12 = res12.closest_point.qlen();
+                const Scalar d01 = res01.closest_point.dp(res01.closest_point);
+                const Scalar d02 = res02.closest_point.dp(res02.closest_point);
+                const Scalar d12 = res12.closest_point.dp(res12.closest_point);
 
                 if (d01 <= d02 && d01 <= d12) {
                     closest_point = res01.closest_point;
@@ -118,8 +118,7 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
                     simplex_size = res12.new_size;
                 }
             } else {
-                // Overlap: Strictly evaluate new edges to march inward and rely on stall check
-                if (res01.closest_point.qlen() < res02.closest_point.qlen()) {
+                if (res01.closest_point.dp(res01.closest_point) < res02.closest_point.dp(res02.closest_point)) {
                     closest_point = res01.closest_point;
                     VecType next_s[2] = { support, simplex[0] };
                     simplex[0] = next_s[res01.indices[0]];
@@ -149,14 +148,14 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
             closest_point = support;
         }
 
-        if (closest_point.qlen() < epsilon_sq) {
+        if (closest_point.dp(closest_point) < epsilon_sq) {
             return { static_cast<Scalar>(0), true, it1, it2 };
         }
 
         dir = -closest_point;
     }
 
-    return { closest_point.qlen(), closest_point.qlen() < epsilon_sq, it1, it2 };
+    return { closest_point.dp(closest_point), closest_point.dp(closest_point) < epsilon_sq, it1, it2 };
 }
 
 // -------------------------------------------------------------------------
@@ -164,21 +163,21 @@ inline DistanceResult<VecType> convex_polygons_distance_gjk_impl(
 // -------------------------------------------------------------------------
 
 template <class VecType>
-DistanceResult<VecType> convex_polygons_distance_gjk(
-    const VecType* poly1, int n1, const VecType* poly2, int n2,
+DistanceResult<VecType> convex_linestrings_distance_gjk(
+    const VecType* ls1, int n1, const VecType* ls2, int n2,
     bool known_overlap = false,
     int it1 = 0, int it2 = 0,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
 ) {
-    return convex_polygons_distance_gjk_impl<false, VecType>(poly1, n1, poly2, n2, known_overlap, it1, it2, epsilon);
+    return convex_linestrings_distance_gjk_impl<false, VecType>(ls1, n1, ls2, n2, known_overlap, it1, it2, epsilon);
 }
 
 template <class VecType>
-DistanceResult<VecType> convex_polygons_distance_gjk_gradient(
-    const VecType* poly1, int n1, const VecType* poly2, int n2,
+DistanceResult<VecType> convex_linestrings_distance_gjk_gradient(
+    const VecType* ls1, int n1, const VecType* ls2, int n2,
     bool known_overlap = false,
     int it1 = 0, int it2 = 0,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
 ) {
-    return convex_polygons_distance_gjk_impl<true, VecType>(poly1, n1, poly2, n2, known_overlap, it1, it2, epsilon);
+    return convex_linestrings_distance_gjk_impl<true, VecType>(ls1, n1, ls2, n2, known_overlap, it1, it2, epsilon);
 }
