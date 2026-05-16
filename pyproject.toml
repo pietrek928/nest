@@ -1,5 +1,6 @@
 # Local dev (uv): uv venv && uv sync
-# Editable install: uv pip install -e .
+# Build/install extensions: uv pip install -e . --no-build-isolation
+# Tests: pytest tests/  (requires editable install so nest_graph.geometry._geometry is on the path)
 # Requires Python dev headers for the nanobind extensions (e.g. python3.12-dev).
 
 [project]
@@ -16,11 +17,21 @@ dependencies = [
     "tqdm",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest",
+]
+
 [build-system]
 requires = ["scikit-build-core>=0.9.0", "nanobind>=2.0"]
 build-backend = "scikit_build_core.build"
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.scikit-build]
+minimum-version = "0.9"
+build-dir = "build/{wheel_tag}"
 wheel.packages = ["nest_graph"]
 
 # Keep local venvs and CMake out of sdists (uv/pip unpack disallows .venv symlinks).

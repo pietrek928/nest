@@ -15,31 +15,7 @@ inline typename VecType::Scalar compute_turn_direction(
 ) {
     auto v1 = p2 - p1;
     auto v2 = p3 - p2;
-
-    typename VecType::Scalar v1_len_sq = v1.dp(v1);
-    if (v1_len_sq < epsilon * epsilon) {
-        return 0; // Avoid division by zero on degenerate edge lengths
-    }
-
-    // Project v2 onto v1 to find its parallel component
-    typename VecType::Scalar proj_factor = v2.dp(v1) / v1_len_sq;
-    auto v2_parallel = v1 * proj_factor;
-
-    // The remaining component is strictly perpendicular to the forward trajectory
-    auto v2_perp = v2 - v2_parallel;
-
-    // Compute the magnitude of the turn using purely dot products
-    typename VecType::Scalar turn_magnitude = v2_perp.dp(v2_perp);
-
-    // To determine if it turned "Left" or "Right" without coordinates, we evaluate
-    // the projection orientation. If the shape follows standard local orientation,
-    // we use a reference check, or default to returning the scalar differential.
-    // For your 2D nesting pipeline, this checks if the directional delta aligns positively.
-    if (v1.dp(v2) > 0) {
-        return turn_magnitude;
-    } else {
-        return -turn_magnitude;
-    }
+    return v1[0] * v2[1] - v1[1] * v2[0];
 }
 
 // -------------------------------------------------------------------------
@@ -48,8 +24,7 @@ inline typename VecType::Scalar compute_turn_direction(
 template <class VecType>
 inline void process_boundary_to_convex_segments(
     const std::vector<VecType>& loop,
-    bool is_hole,
-    Polygon<VecType>& out_mesh,
+    SolidGeometry<VecType>& out_mesh,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
 ) {
     int n = static_cast<int>(loop.size());
@@ -74,7 +49,7 @@ inline void process_boundary_to_convex_segments(
 
         typename VecType::Scalar turn = compute_turn_direction(p1, p2, p3, epsilon);
         int turn_sign = (turn > epsilon) ? 1 :
-                        ((turn < epsilon) ? -1 : 0);
+                        ((turn < -epsilon) ? -1 : 0);
 
         if (current_turn_sign == 0 && turn_sign != 0) {
             current_turn_sign = turn_sign;
@@ -82,21 +57,37 @@ inline void process_boundary_to_convex_segments(
 
         bool force_split = false;
 
+        // Split if the turn direction changes (e.g., from convex to concave)
         if (turn_sign != 0 && current_turn_sign != 0 && turn_sign != current_turn_sign) {
             force_split = true;
         }
 
-        if (is_hole || (current_turn_sign < 0)) {
+        // Split if it's a concave turn
+        if (current_turn_sign < 0) {
             force_split = true;
         }
 
+        // Also check if adding p3 would make the current segment concave internally
+        if (!force_split && current_segment.size() >= 2) {
+            const VecType& last_p1 = current_segment[current_segment.size() - 2];
+            const VecType& last_p2 = current_segment[current_segment.size() - 1];
+            typename VecType::Scalar internal_turn = compute_turn_direction(last_p1, last_p2, p3, epsilon);
+            int internal_turn_sign = (internal_turn > epsilon) ? 1 :
+                                     ((internal_turn < -epsilon) ? -1 : 0);
+            
+            if (internal_turn_sign < 0 || (internal_turn_sign != 0 && current_turn_sign != 0 && internal_turn_sign != current_turn_sign)) {
+                force_split = true;
+            }
+        }
+
         if (force_split) {
-            current_segment.push_back(p3);
+            // We don't push p3 here, because p2 is the last valid point of this convex segment.
+            // But to close the segment, we need to ensure it's a valid line string.
             out_mesh.append_line_poly(current_segment.data(), static_cast<int>(current_segment.size()));
 
             current_segment.clear();
             current_turn_sign = 0;
-            i++;
+            // We don't skip i++, so the next segment will start with p2 and p3 in the next iteration
         }
     }
 
@@ -109,19 +100,19 @@ inline void process_boundary_to_convex_segments(
 // FACTORY DISPATCHER
 // -------------------------------------------------------------------------
 template <class VecType>
-Polygon<VecType> decompose_complex_polygon(
+SolidGeometry<VecType> decompose_complex_polygon(
     const std::vector<std::vector<VecType>>& outer_boundaries,
     const std::vector<std::vector<VecType>>& holes
 ) {
-    Polygon<VecType> composed_mesh;
+    SolidGeometry<VecType> composed_mesh;
 
     for (const auto& outer : outer_boundaries) {
-        process_boundary_to_convex_segments<VecType>(outer, false, composed_mesh);
+        process_boundary_to_convex_segments<VecType>(outer, composed_mesh);
     }
 
-    for (const auto& hole : holes) {
-        process_boundary_to_convex_segments<VecType>(hole, true, composed_mesh);
-    }
+    // Note: Holes are intentionally NOT decomposed into the solid mesh.
+    // They represent empty space and are handled by the broad/narrow phase logic
+    // rather than being part of the solid convex parts.
 
     composed_mesh.finalize();
     return composed_mesh;

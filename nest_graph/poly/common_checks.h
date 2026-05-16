@@ -24,8 +24,8 @@ inline bool narrow_phase_contain(
 // -------------------------------------------------------------------------
 template<class VecType>
 inline bool is_invalidated_by_hole(
-    const VecType* ptsA, int nA, const Polygon<VecType>& polyA,
-    const VecType* ptsB, int nB, const Polygon<VecType>& polyB
+    const VecType* ptsA, int nA, const SolidGeometry<VecType>& polyA,
+    const VecType* ptsB, int nB, const SolidGeometry<VecType>& polyB
 ) {
     // Check if Part A is entirely swallowed by a hole in Poly B
     for (size_t hb = 0; hb < polyB.convex_holes.size(); ++hb) {

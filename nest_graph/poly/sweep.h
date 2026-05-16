@@ -21,28 +21,28 @@ struct PartSweepElement {
     typename VecType::Scalar min_proj;
     typename VecType::Scalar max_proj;
 
-    const Polygon<VecType>* poly_ptr; // NEW: Decouples element from its source vector
+    const SolidGeometry<VecType>* poly_ptr; // NEW: Decouples element from its source vector
     const Circle<VecType>* bounds;
 };
 
 template<class VecType>
-inline VecType compute_optimal_sweep_axis(const std::vector<Polygon<VecType>>& polygons) {
+inline VecType compute_optimal_sweep_axis(const std::vector<SolidGeometry<VecType>>& polygons) {
     using Scalar = typename VecType::Scalar;
 
     VecType optimal_axis{}; // Zero-initializes all N dimensions safely
 
-    if (polygons.empty() || polygons[0].convex_parts.empty()) {
+    if (polygons.empty() || polygons[0].line_parts.empty()) {
         optimal_axis.get_(0) = static_cast<Scalar>(1); // Safe fallback to primary axis
         return optimal_axis;
     }
 
     // 1. Initialize bounds using the very first circle center
-    VecType min_bounds = polygons[0].convex_parts[0].bounding_circle.center();
+    VecType min_bounds = polygons[0].line_parts[0].bounding_circle.center();
     VecType max_bounds = min_bounds;
 
     // 2. Expand bounds in N-dimensions using your vector ops
     for (const auto& poly : polygons) {
-        for (const auto& part : poly.convex_parts) {
+        for (const auto& part : poly.line_parts) {
             const auto& c = part.bounding_circle.center();
             min_bounds = min_bounds.min(c);
             max_bounds = max_bounds.max(c);
@@ -69,10 +69,10 @@ inline VecType compute_optimal_sweep_axis(const std::vector<Polygon<VecType>>& p
 
 template<class VecType>
 inline VecType compute_optimal_sweep_axis(
-    const std::vector<Polygon<VecType>>& set_a,
-    const std::vector<Polygon<VecType>>& set_b
+    const std::vector<SolidGeometry<VecType>>& set_a,
+    const std::vector<SolidGeometry<VecType>>& set_b
 ) {
-    std::vector<Polygon<VecType>> combined;
+    std::vector<SolidGeometry<VecType>> combined;
     combined.reserve(set_a.size() + set_b.size());
     combined.insert(combined.end(), set_a.begin(), set_a.end());
     combined.insert(combined.end(), set_b.begin(), set_b.end());

@@ -8,17 +8,17 @@
 #include <vec.h>
 
 using PolyTestVec2 = Vec<2, double>;
-using PolyTestPolygon2 = Polygon<PolyTestVec2>;
+using PolyTestSolidGeometry2 = SolidGeometry<PolyTestVec2>;
 
-inline PolyTestPolygon2 make_box(double cx, double cy, double half_w, double half_h) {
-    PolyTestPolygon2 poly;
+inline PolyTestSolidGeometry2 make_box(double cx, double cy, double half_w, double half_h) {
+    PolyTestSolidGeometry2 poly;
     std::vector<PolyTestVec2> ring{
         PolyTestVec2{{cx - half_w, cy - half_h}},
         PolyTestVec2{{cx + half_w, cy - half_h}},
         PolyTestVec2{{cx + half_w, cy + half_h}},
         PolyTestVec2{{cx - half_w, cy + half_h}},
     };
-    poly.append_convex_poly(ring.data(), static_cast<int>(ring.size()));
+    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
     poly.finalize();
     return poly;
 }

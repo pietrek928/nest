@@ -9,6 +9,7 @@
 #include <type_traits>
 
 #include "poly.h"
+#include "point_in_solid.h"
 #include "convex/distance.h"    // Updated to Line String GJK
 #include "convex/penetration.h" // Updated to Line String EPA
 #include "sweep.h"
@@ -48,31 +49,6 @@ struct PolyPairTracker {
     bool operator<(const PolyPairTracker& other) const { return pair_id < other.pair_id; }
     bool operator<(const std::pair<int, int>& id) const { return pair_id < id; }
 };
-
-// -------------------------------------------------------------------------
-// SOLID-SIDE CONTAINMENT CHECK
-// -------------------------------------------------------------------------
-template<class VecType>
-inline bool is_point_inside_solid_space(const VecType& pt, const Polygon<VecType>& poly) {
-    using Scalar = typename VecType::Scalar;
-    int crossings = 0;
-
-    for (size_t part = 0; part < poly.line_parts.size(); ++part) {
-        const VecType* pts = poly.get_part_points(part);
-        int n = poly.get_part_size(part);
-
-        for (int i = 0; i < n; ++i) {
-            const VecType& v1 = pts[i];
-            const VecType& v2 = pts[(i + 1) % n];
-
-            if (((v1[1] > pt[1]) != (v2[1] > pt[1])) &&
-                (pt[0] < (v2[0] - v1[0]) * (pt[1] - v1[1]) / (v2[1] - v1[1]) + v1[0])) {
-                crossings++;
-            }
-        }
-    }
-    return (crossings % 2) != 0;
-}
 
 // -------------------------------------------------------------------------
 // NARROW PHASE ROUTERS (Smart Dispatch & MTV Correction)
@@ -138,7 +114,7 @@ template<class VecType>
 inline void append_poly_parts_to_sweep_with_aura(
     int poly_idx,
     int group_id,
-    const Polygon<VecType>& poly,
+    const SolidGeometry<VecType>& poly,
     const VecType& sweep_axis,
     typename VecType::Scalar axis_len_sqrt,
     std::vector<PartSweepElement<VecType>>& out_elements,
@@ -343,7 +319,7 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
 
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<Polygon<VecType>>& polygons,
+    const std::vector<SolidGeometry<VecType>>& polygons,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
@@ -368,7 +344,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<Polygon<VecType>>& polygons,
+    const std::vector<SolidGeometry<VecType>>& polygons,
     const std::vector<int>& active_indices,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
@@ -402,8 +378,8 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<Polygon<VecType>>& setA,
-    const std::vector<Polygon<VecType>>& setB,
+    const std::vector<SolidGeometry<VecType>>& setA,
+    const std::vector<SolidGeometry<VecType>>& setB,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {

@@ -8,14 +8,14 @@
 
 
 template<class VecType>
-class Polygon {
+class SolidGeometry {
     typedef struct {
         std::size_t start_point;
         Circle<VecType> bounding_circle;
-    } LinePolygonEntry;
+    } LineSolidGeometryEntry;
 
 public:
-    std::vector<LinePolygonEntry> line_parts;
+    std::vector<LineSolidGeometryEntry> line_parts;
     std::vector<VecType> line_points;
     Circle<VecType> bounding_circle;
 

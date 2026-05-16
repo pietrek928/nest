@@ -1,13 +1,19 @@
-nanobind_add_module(poly_module poly_module.cc)
-target_link_libraries(poly_module PRIVATE nest_graph_headers)
-target_include_directories(poly_module PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+nanobind_add_module(_geometry geometry.cc)
+target_link_libraries(_geometry PRIVATE nest_graph_headers)
+target_include_directories(_geometry PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 
 if(DEFINED ENV{NEST_GRAPH_NATIVE})
-  target_compile_options(poly_module PRIVATE -march=native)
+  target_compile_options(_geometry PRIVATE -march=native)
 endif()
-target_compile_options(poly_module PRIVATE -O2 -g)
+target_compile_options(_geometry PRIVATE -O2 -g)
 
-install(TARGETS poly_module LIBRARY DESTINATION nest_graph)
+# Plain `cmake --build` (non-scikit-build): place the extension next to __init__.py
+# so `import nest_graph.geometry` works with pytest pythonpath = ["."].
+set_target_properties(_geometry PROPERTIES
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/nest_graph/geometry"
+)
+
+install(TARGETS _geometry LIBRARY DESTINATION nest_graph/geometry)
 
 if(NEST_GRAPH_BUILD_TESTS)
   include(FetchContent)

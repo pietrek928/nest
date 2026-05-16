@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "poly.h"
+#include "point_in_solid.h"
 #include "convex/intersect.h" // Updated to our new Line String GJK
 #include "sweep.h"
 #include "tracer.h"
@@ -44,33 +45,20 @@ inline bool narrow_phase_intersect(
     }
 }
 
-// -------------------------------------------------------------------------
-// SOLID-SIDE CONTAINMENT CHECK (Raycast Method)
-// -------------------------------------------------------------------------
-// Since you know the orientation (e.g., solid mass is on the "Inside-Left"),
-// a standard raycast perfectly handles both solid mass AND non-convex holes.
-// Odd number of crossings = Point is inside the solid mass!
 template<class VecType>
-inline bool is_point_inside_solid_space(const VecType& pt, const Polygon<VecType>& poly) {
-    using Scalar = typename VecType::Scalar;
-    int crossings = 0;
-
-    for (size_t part = 0; part < poly.line_parts.size(); ++part) {
-        const VecType* pts = poly.get_part_points(part);
-        int n = poly.get_part_size(part);
-
-        for (int i = 0; i < n; ++i) {
-            const VecType& v1 = pts[i];
-            const VecType& v2 = pts[(i + 1) % n];
-
-            // Horizontal raycast to the right (+x)
-            if (((v1[1] > pt[1]) != (v2[1] > pt[1])) &&
-                (pt[0] < (v2[0] - v1[0]) * (pt[1] - v1[1]) / (v2[1] - v1[1]) + v1[0])) {
-                crossings++;
-            }
+inline bool narrow_phase_contain(
+    const VecType* inner_pts, int inner_n,
+    const VecType* outer_pts, int outer_n
+) {
+    SolidGeometry<VecType> outer_sg;
+    outer_sg.append_line_poly(outer_pts, outer_n);
+    outer_sg.finalize();
+    for (int i = 0; i < inner_n; ++i) {
+        if (!is_point_inside_solid_space(inner_pts[i], outer_sg)) {
+            return false;
         }
     }
-    return (crossings % 2) != 0;
+    return true;
 }
 
 // -------------------------------------------------------------------------
@@ -83,8 +71,8 @@ inline std::pair<int, int> make_sorted_pair(int a, int b) {
 
 template<class VecType, class Tracer = DefaultTracer>
 inline bool check_part_vs_part(
-    const Polygon<VecType>& polyA, int a_idx,
-    const Polygon<VecType>& polyB, int b_idx,
+    const SolidGeometry<VecType>& polyA, int a_idx,
+    const SolidGeometry<VecType>& polyB, int b_idx,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
@@ -131,7 +119,7 @@ template<class VecType>
 inline void append_poly_parts_to_sweep(
     int poly_idx,
     int group_id,
-    const Polygon<VecType>& poly,
+    const SolidGeometry<VecType>& poly,
     const VecType& sweep_axis,
     typename VecType::Scalar axis_len_sqrt,
     std::vector<PartSweepElement<VecType>>& out_elements
@@ -250,7 +238,7 @@ inline std::vector<std::pair<int, int>> execute_part_sweep(
 
 template<class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<Polygon<VecType>>& polygons,
+    const std::vector<SolidGeometry<VecType>>& polygons,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
@@ -297,6 +285,132 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
                     if (is_point_inside_solid_space(ptA, polygons[j]) ||
                         is_point_inside_solid_space(ptB, polygons[i])) {
+                        collisions.push_back(pair_id);
+                    }
+                }
+            }
+        }
+    }
+
+    return collisions;
+}
+
+template<class VecType, class Tracer = DefaultTracer>
+std::vector<std::pair<int, int>> find_polygon_intersections(
+    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<int>& active_indices,
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    if (active_indices.empty() || polygons.size() < 2) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(polygons);
+
+    std::vector<PartSweepElement<VecType>> elements;
+    elements.reserve(polygons.size() * 4);
+
+    Scalar axis_sq = sweep_axis.len_sq();
+    if (axis_sq < static_cast<Scalar>(1e-8)) return {};
+    Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
+
+    std::vector<int> group_ids(polygons.size(), 0);
+    for (int idx : active_indices) {
+        if (idx >= 0 && idx < static_cast<int>(polygons.size())) {
+            group_ids[idx] = 1;
+        }
+    }
+
+    for (size_t i = 0; i < polygons.size(); ++i) {
+        append_poly_parts_to_sweep(
+            static_cast<int>(i), group_ids[i], polygons[i], sweep_axis, axis_len_sqrt, elements);
+    }
+
+    auto collisions = execute_part_sweep<VecType, Tracer>(elements, SweepMode::Subset, -1, tracer);
+
+    for (size_t i = 0; i < polygons.size(); ++i) {
+        for (size_t j = i + 1; j < polygons.size(); ++j) {
+            if (group_ids[i] == 0 && group_ids[j] == 0) continue;
+
+            auto pair_id = make_sorted_pair(static_cast<int>(i), static_cast<int>(j));
+
+            if (std::find(collisions.begin(), collisions.end(), pair_id) != collisions.end()) continue;
+
+            const auto& global_bcA = polygons[i].get_bounding_circle();
+            const auto& global_bcB = polygons[j].get_bounding_circle();
+            Scalar c_dist_sq = (global_bcA.center() - global_bcB.center()).len_sq();
+            Scalar r_sum = static_cast<Scalar>(std::sqrt(global_bcA.square_radius())) +
+                           static_cast<Scalar>(std::sqrt(global_bcB.square_radius()));
+
+            if (c_dist_sq <= r_sum * r_sum) {
+                if (polygons[i].line_parts.size() > 0 && polygons[j].line_parts.size() > 0) {
+                    const VecType& ptA = polygons[i].get_part_points(0)[0];
+                    const VecType& ptB = polygons[j].get_part_points(0)[0];
+
+                    if (is_point_inside_solid_space(ptA, polygons[j]) ||
+                        is_point_inside_solid_space(ptB, polygons[i])) {
+                        collisions.push_back(pair_id);
+                    }
+                }
+            }
+        }
+    }
+
+    return collisions;
+}
+
+template<class VecType, class Tracer = DefaultTracer>
+std::vector<std::pair<int, int>> find_polygon_intersections(
+    const std::vector<SolidGeometry<VecType>>& setA,
+    const std::vector<SolidGeometry<VecType>>& setB,
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    if (setA.empty() || setB.empty()) return {};
+
+    VecType sweep_axis = compute_optimal_sweep_axis(setA, setB);
+
+    std::vector<PartSweepElement<VecType>> elements;
+    elements.reserve((setA.size() + setB.size()) * 4);
+
+    Scalar axis_sq = sweep_axis.len_sq();
+    if (axis_sq < static_cast<Scalar>(1e-8)) return {};
+    Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
+
+    for (size_t i = 0; i < setA.size(); ++i) {
+        append_poly_parts_to_sweep(static_cast<int>(i), 0, setA[i], sweep_axis, axis_len_sqrt, elements);
+    }
+    for (size_t i = 0; i < setB.size(); ++i) {
+        append_poly_parts_to_sweep(
+            static_cast<int>(setA.size() + i),
+            1,
+            setB[i],
+            sweep_axis,
+            axis_len_sqrt,
+            elements);
+    }
+
+    auto collisions = execute_part_sweep<VecType, Tracer>(
+        elements, SweepMode::Bipartite, static_cast<int>(setA.size()), tracer);
+
+    for (size_t i = 0; i < setA.size(); ++i) {
+        for (size_t j = 0; j < setB.size(); ++j) {
+            std::pair<int, int> pair_id(static_cast<int>(i), static_cast<int>(j));
+
+            if (std::find(collisions.begin(), collisions.end(), pair_id) != collisions.end()) continue;
+
+            const auto& global_bcA = setA[i].get_bounding_circle();
+            const auto& global_bcB = setB[j].get_bounding_circle();
+            Scalar c_dist_sq = (global_bcA.center() - global_bcB.center()).len_sq();
+            Scalar r_sum = static_cast<Scalar>(std::sqrt(global_bcA.square_radius())) +
+                           static_cast<Scalar>(std::sqrt(global_bcB.square_radius()));
+
+            if (c_dist_sq <= r_sum * r_sum) {
+                if (setA[i].line_parts.size() > 0 && setB[j].line_parts.size() > 0) {
+                    const VecType& ptA = setA[i].get_part_points(0)[0];
+                    const VecType& ptB = setB[j].get_part_points(0)[0];
+
+                    if (is_point_inside_solid_space(ptA, setB[j]) ||
+                        is_point_inside_solid_space(ptB, setA[i])) {
                         collisions.push_back(pair_id);
                     }
                 }
