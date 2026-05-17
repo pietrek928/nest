@@ -4,16 +4,16 @@
 #include <cmath>
 #include <type_traits>
 
-#include "poly.h"
-#include "poly_containment.h"
-#include "poly_common.h"
-#include "poly_sweep_engine.h"
+#include "solid_geometry.h"
+#include "containment.h"
+#include "geometry_common.h"
+#include "sweep_engine.h"
 #include "convex/distance.h"
 #include "convex/penetration.h"
 #include "sweep.h"
 #include "tracer.h"
 
-// ComplexDistanceResult and execute_distance_sweep live in poly_sweep_engine.h
+// ComplexDistanceResult and execute_distance_sweep live in sweep_engine.h
 
 template <class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(

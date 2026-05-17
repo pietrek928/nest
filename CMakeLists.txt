@@ -25,5 +25,5 @@ if(NEST_GRAPH_BUILD_TESTS)
   enable_testing()
 endif()
 
-add_subdirectory(nest_graph/poly)
+add_subdirectory(nest_graph/geometry)
 add_subdirectory(nest_graph/elem_graph)

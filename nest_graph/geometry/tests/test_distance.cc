@@ -6,9 +6,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "poly/convex/penetration.h"
-#include "poly/poly_distance.h"
-#include "tests/poly_test_helpers.h"
+#include "geometry/convex/penetration.h"
+#include "geometry/polygon_distance.h"
+#include "tests/geometry_test_helpers.h"
 #include <vec.h>
 
 using Vec2 = PolyTestVec2;

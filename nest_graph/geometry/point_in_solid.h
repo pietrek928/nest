@@ -1,6 +1,6 @@
 #pragma once
 
-#include "poly.h"
+#include "solid_geometry.h"
 
 template<class VecType>
 inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<VecType>& poly) {

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 #include <cmath>
-#include "poly.h"
+#include "solid_geometry.h"
 
 
 template <class VecType>

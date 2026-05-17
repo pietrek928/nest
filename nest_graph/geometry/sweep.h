@@ -3,7 +3,7 @@
 #include <cmath>
 #include <vector>
 
-#include "poly.h"
+#include "solid_geometry.h"
 
 
 enum class SweepMode {

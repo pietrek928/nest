@@ -4,9 +4,9 @@
 #include <utility>
 #include <vector>
 
-#include "poly.h"
+#include "solid_geometry.h"
 #include "point_in_solid.h"
-#include "poly_common.h"
+#include "geometry_common.h"
 
 // Fallback when narrow-phase found no boundary crossings between any additive parts.
 // Uses the first vertex of each additive line part as an inside witness (holes skipped).

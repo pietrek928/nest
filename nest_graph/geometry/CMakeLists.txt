@@ -24,21 +24,21 @@ if(NEST_GRAPH_BUILD_TESTS)
   )
   FetchContent_MakeAvailable(Catch2)
 
-  add_executable(poly_cpp_tests
+  add_executable(geometry_cpp_tests
     tests/test_convex_gjk.cc
-    tests/test_poly_intersect.cc
-    tests/test_poly_distance.cc
+    tests/test_intersect.cc
+    tests/test_distance.cc
     tests/test_circle.cc
     tests/test_decompose.cc
     tests/test_highly_curved_linestrings.cc
     tests/test_point_in_solid_bug.cc
     tests/test_holes.cc
   )
-  target_link_libraries(poly_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
-  target_include_directories(poly_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-  target_compile_definitions(poly_cpp_tests PRIVATE NEST_GRAPH_DEFAULT_TRACER=DebugTracer)
+  target_link_libraries(geometry_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
+  target_include_directories(geometry_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_definitions(geometry_cpp_tests PRIVATE NEST_GRAPH_DEFAULT_TRACER=DebugTracer)
 
-  add_test(NAME poly.cpp.gjk COMMAND poly_cpp_tests)
-  add_test(NAME poly.cpp.telemetry COMMAND poly_cpp_tests "[telemetry]")
-  add_test(NAME poly.cpp.decomposition COMMAND poly_cpp_tests "[decomposition]")
+  add_test(NAME geometry.cpp.gjk COMMAND geometry_cpp_tests)
+  add_test(NAME geometry.cpp.telemetry COMMAND geometry_cpp_tests "[telemetry]")
+  add_test(NAME geometry.cpp.decomposition COMMAND geometry_cpp_tests "[decomposition]")
 endif()

@@ -1,7 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
-#include "poly/poly_intersect.h"
-#include "poly/decompose.h"
-#include "tests/poly_test_helpers.h"
+#include "geometry/polygon_intersect.h"
+#include "geometry/decompose.h"
+#include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
 using SolidGeometry2 = PolyTestSolidGeometry2;

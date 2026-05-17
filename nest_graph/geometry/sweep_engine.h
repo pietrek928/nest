@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "poly.h"
-#include "poly_common.h"
-#include "poly_containment.h"
+#include "solid_geometry.h"
+#include "geometry_common.h"
+#include "containment.h"
 #include "convex/distance.h"
 #include "convex/intersect.h"
 #include "convex/penetration.h"

@@ -8,9 +8,9 @@
 #include <vector>
 
 #include "decompose.h"
-#include "poly.h"
-#include "poly_distance.h"
-#include "poly_intersect.h"
+#include "solid_geometry.h"
+#include "polygon_distance.h"
+#include "polygon_intersect.h"
 #include <vec.h>
 
 namespace nb = nanobind;

@@ -4,10 +4,10 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "poly/convex/distance.h"
-#include "poly/convex/intersect.h"
-#include "poly/convex/penetration.h"
-#include "poly/poly_intersect.h"
+#include "geometry/convex/distance.h"
+#include "geometry/convex/intersect.h"
+#include "geometry/convex/penetration.h"
+#include "geometry/polygon_intersect.h"
 #include <vec.h>
 
 using Vec2 = Vec<2, double>;
