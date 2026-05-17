@@ -1,13 +1,10 @@
 #pragma once
 
+#include <bbox.h>
+#include <vec.h>
+
 
 using Tvertex = int;
 using Tscore = float;
-
-typedef struct BBox {
-    float xstart, xend, ystart, yend;
-} BBox;
-
-typedef struct Point {
-    float x, y;
-} Point;
+using Vec2f = Vec<2, float>;
+using BBox2f = BBox<2, float>;

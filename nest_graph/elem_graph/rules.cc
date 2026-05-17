@@ -17,37 +17,36 @@ T adjust_angle(T a) {
 }
 
 template <class Tgen, class Tdistrib>
-BBox mutate_random(const BBox &b, Tgen gen, Tdistrib &distrib) {
-    return {
-        .xstart = b.xstart + distrib(gen),
-        .xend = b.xend + distrib(gen),
-        .ystart = b.ystart + distrib(gen),
-        .yend = b.yend + distrib(gen)
-    };
+BBox2f mutate_random(const BBox2f &b, Tgen gen, Tdistrib &distrib) {
+    BBox2f r = b;
+    for (int k = 0; k < 2; ++k) {
+        r.start.get_(k) += distrib(gen);
+        r.end.get_(k) += distrib(gen);
+    }
+    return r;
 }
 
 template <class Tgen, class Tdistrib>
-BBox generate_random_bbox(Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y) {
+BBox2f generate_random_bbox(Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y) {
     auto x1 = distrib_x(gen);
     auto x2 = distrib_x(gen);
     auto y1 = distrib_y(gen);
     auto y2 = distrib_y(gen);
 
-    return {
-        .xstart = std::min(x1, x2),
-        .xend = std::max(x1, x2),
-        .ystart = std::min(y1, y2),
-        .yend = std::max(y1, y2)
-    };
+    return BBox2f(
+        Vec2f({std::min(x1, x2), std::min(y1, y2)}),
+        Vec2f({std::max(x1, x2), std::max(y1, y2)}));
 }
 
 template <class Tgen, class Tdistrib>
 PointPlaceRule mutate_random(
     const PointPlaceRule &p, Tgen gen, Tdistrib &distrib_pos, Tdistrib &distrib_w
 ) {
+    Vec2f pos = p.pos;
+    pos.get_(0) += distrib_pos(gen);
+    pos.get_(1) += distrib_pos(gen);
     return {
-        .x = p.x + distrib_pos(gen),
-        .y = p.y + distrib_pos(gen),
+        .pos = pos,
         .r = p.r + distrib_pos(gen),
         .w = p.w + distrib_w(gen),
         .group = p.group
@@ -60,8 +59,7 @@ PointPlaceRule generate_random_point_place_rule(
     Tdistrib &distrib_r, Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
     return {
-        .x = distrib_x(gen),
-        .y = distrib_y(gen),
+        .pos = Vec2f({distrib_x(gen), distrib_y(gen)}),
         .r = distrib_r(gen),
         .w = distrib_w(gen),
         .group = distrib_group(gen)
@@ -98,10 +96,13 @@ PointAngleRule mutate_random(
     const PointAngleRule &p, Tgen gen, Tdistrib &distrib_pos,
     Tdistrib &distrib_a, Tdistrib &distrib_w
 ) {
+    Vec2f pos = p.pos;
+    pos.get_(0) += distrib_pos(gen);
+    pos.get_(1) += distrib_pos(gen);
     return {
-        .x = p.x + distrib_pos(gen),
-        .y = p.y + distrib_pos(gen),
+        .pos = pos,
         .a = adjust_angle(p.a + distrib_a(gen)),
+        .r = p.r,
         .w = p.w + distrib_w(gen),
         .group = p.group
     };
@@ -114,9 +115,9 @@ PointAngleRule generate_random_point_angle_rule(
     Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
     return {
-        .x = distrib_x(gen),
-        .y = distrib_y(gen),
+        .pos = Vec2f({distrib_x(gen), distrib_y(gen)}),
         .a = adjust_angle(distrib_a(gen)),
+        .r = distrib_r(gen),
         .w = distrib_w(gen),
         .group = distrib_group(gen)
     };

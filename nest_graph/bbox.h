@@ -5,10 +5,10 @@
 
 template <int K, class T>
 class BBox {
-    Vec<K, T> start, end;
-
    public:
     using Scalar = T;
+
+    Vec<K, T> start, end;
 
     BBox() {}
 

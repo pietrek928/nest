@@ -3,27 +3,39 @@
 
 #include "elem_graph.h"
 #include "rules.h"
+#include "types.h"
 
 namespace nb = nanobind;
 
 NB_MODULE(_elem_graph, m) {
-    nb::class_<BBox>(m, "BBox")
+    nb::class_<Vec2f>(m, "Vec2")
+        .def(nb::init<float, float>())
+        .def_prop_rw(
+            "x",
+            [](const Vec2f& v) { return v[0]; },
+            [](Vec2f& v, float x) { v.get_(0) = x; })
+        .def_prop_rw(
+            "y",
+            [](const Vec2f& v) { return v[1]; },
+            [](Vec2f& v, float y) { v.get_(1) = y; })
+        .def("__getitem__", [](const Vec2f& v, int i) { return v[i]; })
+        .def("__setitem__", [](Vec2f& v, int i, float x) { v.get_(i) = x; })
+        .def("__len__", [](const Vec2f&) { return 2; });
+
+    nb::class_<BBox2f>(m, "BBox")
         .def(nb::init<>())
-        .def_rw("xstart", &BBox::xstart)
-        .def_rw("xend", &BBox::xend)
-        .def_rw("ystart", &BBox::ystart)
-        .def_rw("yend", &BBox::yend);
+        .def(nb::init<Vec2f, Vec2f>())
+        .def_rw("start", &BBox2f::start)
+        .def_rw("end", &BBox2f::end);
 
     nb::class_<ElemPlace>(m, "ElemPlace")
         .def(nb::init<>())
-        .def_rw("x", &ElemPlace::x)
-        .def_rw("y", &ElemPlace::y)
+        .def_rw("pos", &ElemPlace::pos)
         .def_rw("a", &ElemPlace::a);
 
     nb::class_<PointPlaceRule>(m, "PointPlaceRule")
         .def(nb::init<>())
-        .def_rw("x", &PointPlaceRule::x)
-        .def_rw("y", &PointPlaceRule::y)
+        .def_rw("pos", &PointPlaceRule::pos)
         .def_rw("r", &PointPlaceRule::r)
         .def_rw("w", &PointPlaceRule::w)
         .def_rw("group", &PointPlaceRule::group);
@@ -37,8 +49,7 @@ NB_MODULE(_elem_graph, m) {
 
     nb::class_<PointAngleRule>(m, "PointAngleRule")
         .def(nb::init<>())
-        .def_rw("x", &PointAngleRule::x)
-        .def_rw("y", &PointAngleRule::y)
+        .def_rw("pos", &PointAngleRule::pos)
         .def_rw("a", &PointAngleRule::a)
         .def_rw("r", &PointAngleRule::r)
         .def_rw("w", &PointAngleRule::w)

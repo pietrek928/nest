@@ -1,33 +1,93 @@
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple, Union
 
 from pydantic import BaseModel
 
 from . import _elem_graph as _m
 
+Vec2Like = Union["Vec2", Tuple[float, float], List[float]]
+BBoxLike = Union[
+    "BBox",
+    Tuple[float, float, float, float],
+    Tuple[Tuple[float, float], Tuple[float, float]],
+]
 
-class BBox(BaseModel):
-    xstart: float
-    xend: float
-    ystart: float
-    yend: float
 
-
-class Point(BaseModel):
+class Vec2(BaseModel):
     x: float
     y: float
+
+    @classmethod
+    def from_tuple(cls, t: Tuple[float, float]) -> "Vec2":
+        return cls(x=t[0], y=t[1])
+
+    def to_tuple(self) -> Tuple[float, float]:
+        return (self.x, self.y)
+
+    def to_native(self) -> _m.Vec2:
+        return _m.Vec2(self.x, self.y)
+
+
+class BBox(BaseModel):
+    start: Vec2
+    end: Vec2
+
+    @classmethod
+    def from_bounds(
+        cls, xmin: float, ymin: float, xmax: float, ymax: float
+    ) -> "BBox":
+        return cls(start=Vec2(x=xmin, y=ymin), end=Vec2(x=xmax, y=ymax))
+
+    @classmethod
+    def from_tuple(
+        cls,
+        t: Union[
+            Tuple[float, float, float, float],
+            Tuple[Tuple[float, float], Tuple[float, float]],
+        ],
+    ) -> "BBox":
+        if len(t) == 4 and isinstance(t[0], (int, float)):
+            return cls.from_bounds(t[0], t[1], t[2], t[3])
+        return cls(start=Vec2.from_tuple(t[0]), end=Vec2.from_tuple(t[1]))
+
+    def to_native(self) -> _m.BBox:
+        return _m.BBox(self.start.to_native(), self.end.to_native())
+
+
+def _coerce_vec2(v: Vec2Like) -> Vec2:
+    if isinstance(v, Vec2):
+        return v
+    if isinstance(v, (tuple, list)) and len(v) >= 2:
+        return Vec2.from_tuple((float(v[0]), float(v[1])))
+    if isinstance(v, _m.Vec2):
+        return Vec2(x=v.x, y=v.y)
+    raise TypeError(f"Expected Vec2 or (x, y) tuple, got {type(v).__name__}")
+
+
+def _coerce_bbox(v: BBoxLike) -> BBox:
+    if isinstance(v, BBox):
+        return v
+    if isinstance(v, (tuple, list)):
+        if len(v) == 4 and isinstance(v[0], (int, float)):
+            return BBox.from_bounds(float(v[0]), float(v[1]), float(v[2]), float(v[3]))
+        if len(v) == 2:
+            return BBox.from_tuple((tuple(v[0]), tuple(v[1])))
+    if isinstance(v, _m.BBox):
+        return BBox(
+            start=Vec2(x=v.start.x, y=v.start.y),
+            end=Vec2(x=v.end.x, y=v.end.y),
+        )
+    raise TypeError(f"Expected BBox, bounds 4-tuple, or (start, end), got {type(v).__name__}")
 
 
 class ElemPlace(BaseModel):
-    x: float
-    y: float
+    pos: Vec2
     a: float
 
 
 class PointPlaceRule(BaseModel):
-    x: float
-    y: float
+    pos: Vec2
     r: float
     w: float
     group: int
@@ -41,8 +101,7 @@ class BBoxPlaceRule(BaseModel):
 
 
 class PointAngleRule(BaseModel):
-    x: float
-    y: float
+    pos: Vec2
     a: float
     r: float
     w: float
@@ -64,42 +123,34 @@ class PlacementRuleSet:
     def append_rule(self, rule):
         if isinstance(rule, PointPlaceRule):
             pr = _m.PointPlaceRule()
-            pr.x = rule.x
-            pr.y = rule.y
+            pr.pos = rule.pos.to_native()
             pr.r = rule.r
             pr.w = rule.w
             pr.group = rule.group
-            self._obj.point_rules.append(pr)
+            self._obj.point_rules = list(self._obj.point_rules) + [pr]
         elif isinstance(rule, BBoxPlaceRule):
             br = _m.BBoxPlaceRule()
-            br.bbox.xstart = rule.bbox.xstart
-            br.bbox.xend = rule.bbox.xend
-            br.bbox.ystart = rule.bbox.ystart
-            br.bbox.yend = rule.bbox.yend
+            br.bbox = rule.bbox.to_native()
             br.r = rule.r
             br.w = rule.w
             br.group = rule.group
-            self._obj.bbox_rules.append(br)
+            self._obj.bbox_rules = list(self._obj.bbox_rules) + [br]
         elif isinstance(rule, PointAngleRule):
             par = _m.PointAngleRule()
-            par.x = rule.x
-            par.y = rule.y
+            par.pos = rule.pos.to_native()
             par.a = rule.a
             par.r = rule.r
             par.w = rule.w
             par.group = rule.group
-            self._obj.point_angle_rules.append(par)
+            self._obj.point_angle_rules = list(self._obj.point_angle_rules) + [par]
         elif isinstance(rule, BBoxAngleRule):
             bar = _m.BBoxAngleRule()
-            bar.bbox.xstart = rule.bbox.xstart
-            bar.bbox.xend = rule.bbox.xend
-            bar.bbox.ystart = rule.bbox.ystart
-            bar.bbox.yend = rule.bbox.yend
+            bar.bbox = rule.bbox.to_native()
             bar.a = rule.a
             bar.r = rule.r
             bar.w = rule.w
             bar.group = rule.group
-            self._obj.bbox_angle_rules.append(bar)
+            self._obj.bbox_angle_rules = list(self._obj.bbox_angle_rules) + [bar]
         else:
             raise ValueError(f"Unknown rule type {type(rule).__name__}")
 
@@ -122,24 +173,29 @@ class ElemGraph:
     def __init__(self, _obj: Optional[Any] = None):
         self._obj = _obj if _obj is not None else _m.ElemGraph()
 
-    def append_elem(self, group_id: int, center: Point, coord: BBox):
-        self._obj.group_id.append(group_id)
+    def append_elem(
+        self,
+        group_id: int,
+        center: Vec2Like,
+        coord: BBoxLike,
+    ):
+        center_v = _coerce_vec2(center)
+        coord_b = _coerce_bbox(coord)
         ep = _m.ElemPlace()
-        ep.x = center.x
-        ep.y = center.y
+        ep.pos = center_v.to_native()
         ep.a = 0.0
-        self._obj.elems.append(ep)
-        bb = _m.BBox()
-        bb.xstart = coord.xstart
-        bb.xend = coord.xend
-        bb.ystart = coord.ystart
-        bb.yend = coord.yend
-        self._obj.coords.append(bb)
-        self._obj.collisions.append([])
+        self._obj.group_id = list(self._obj.group_id) + [group_id]
+        self._obj.elems = list(self._obj.elems) + [ep]
+        self._obj.coords = list(self._obj.coords) + [coord_b.to_native()]
+        self._obj.collisions = list(self._obj.collisions) + [[]]
 
     def add_collision(self, group1: int, group2: int):
-        self._obj.collisions[group1].append(group2)
-        self._obj.collisions[group2].append(group1)
+        collisions = list(self._obj.collisions)
+        c1 = list(collisions[group1]) + [group2]
+        c2 = list(collisions[group2]) + [group1]
+        collisions[group1] = c1
+        collisions[group2] = c2
+        self._obj.collisions = collisions
 
 
 class ElemScores:
@@ -151,10 +207,7 @@ def augment_rules(
     rules: List[PlacementRuleSet], settings: RuleMutationSettings
 ) -> List[PlacementRuleSet]:
     ns = _m.RuleMutationSettings()
-    ns.box.xstart = settings.box.xstart
-    ns.box.xend = settings.box.xend
-    ns.box.ystart = settings.box.ystart
-    ns.box.yend = settings.box.yend
+    ns.box = settings.box.to_native()
     ns.dpos = settings.dpos
     ns.dw = settings.dw
     ns.da = settings.da

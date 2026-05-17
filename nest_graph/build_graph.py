@@ -14,7 +14,7 @@ from .utils import normalize_poly, transform_poly
 from .propose import propose_placements_point_cloud
 from .track_perf import show_performance
 from .elem_graph import (
-    ElemGraph, BBox, Point,
+    ElemGraph, BBox, Vec2,
     PointPlaceRule, BBoxPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings,
     nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
@@ -154,8 +154,8 @@ def make_polygon_graph(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np
                 bbox = poly_t.bounds
                 graph.append_elem(
                     i,
-                    Point(x=center[0], y=center[1]),
-                    BBox(xstart=bbox[0], ystart=bbox[1], xend=bbox[2], yend=bbox[3])
+                    center,
+                    bbox,
                 )
 
                 n = len(selected_polys)
@@ -280,7 +280,7 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
 def improve_rules(graphs, rules, n):
     new_rules = list(rules)
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox(xstart=0, ystart=0, xend=1.2, yend=1.1),
+        box=BBox.from_bounds(0, 0, 1.2, 1.1),
         dpos=.25,
         dw=.25,
         da=np.pi/4,
@@ -290,7 +290,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox(xstart=0, ystart=0, xend=1.2, yend=1.1),
+        box=BBox.from_bounds(0, 0, 1.2, 1.1),
         dpos=.05,
         dw=.05,
         da=np.pi/32,
@@ -300,7 +300,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox(xstart=0, ystart=0, xend=1.2, yend=1.1),
+        box=BBox.from_bounds(0, 0, 1.2, 1.1),
         dpos=.01,
         dw=.01,
         da=np.pi/64,
@@ -375,10 +375,10 @@ def main():
     graphs = []
     first_rule_set = PlacementRuleSet()
     first_rule_set.append_rule(PointPlaceRule(
-        x=0, y=0, r=.1, w=.1, group=0
+        pos=Vec2(x=0, y=0), r=.1, w=.1, group=0
     ))
     first_rule_set.append_rule(PointPlaceRule(
-        x=0, y=0, r=.1, w=.1, group=1
+        pos=Vec2(x=0, y=0), r=.1, w=.1, group=1
     ))
     rule_sets = [first_rule_set]
 
@@ -396,7 +396,7 @@ def main():
     r = .2
     rule_set = PlacementRuleSet()
     rule_set.append_rule(PointPlaceRule(
-        x=0, y=0, r=r, w=wrect, group=0
+        pos=Vec2(x=0, y=0), r=r, w=wrect, group=0
     ))
     # rule_set.append_point_rule(PointPlaceRule(
     #     x=0, y=0, r=r, w=wtriang, group=1
@@ -417,13 +417,13 @@ def main():
     #     x=0.7, y=0.7, r=r, w=wrect, group=0
     # ))
     rule_set.append_rule(PointPlaceRule(
-        x=0.7, y=0.7, r=r, w=wtriang, group=1
+        pos=Vec2(x=0.7, y=0.7), r=r, w=wtriang, group=1
     ))
     rule_set.append_rule(PointPlaceRule(
-        x=0, y=1.1, r=r, w=wtriang, group=1
+        pos=Vec2(x=0, y=1.1), r=r, w=wtriang, group=1
     ))
     rule_set.append_rule(PointPlaceRule(
-        x=1.2, y=0, r=r, w=wtriang, group=1
+        pos=Vec2(x=1.2, y=0), r=r, w=wtriang, group=1
     ))
     # rule_set.append_rule(PointAngleRule(
     #     x=0.7, y=0.7, r=r, a=np.pi/4, w=.1*wtriang, group=1
@@ -432,16 +432,16 @@ def main():
     #     x=0.7, y=0.7, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
     # ))
     rule_set.append_rule(PointAngleRule(
-        x=0, y=1.1, r=r, a=np.pi/4, w=.1*wtriang, group=1
+        pos=Vec2(x=0, y=1.1), r=r, a=np.pi/4, w=.1*wtriang, group=1
     ))
     rule_set.append_rule(PointAngleRule(
-        x=0, y=1.1, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
+        pos=Vec2(x=0, y=1.1), r=r, a=np.pi*5/4, w=.1*wtriang, group=1
     ))
     rule_set.append_rule(PointAngleRule(
-        x=1.2, y=0, r=r, a=np.pi/4, w=.1*wtriang, group=1
+        pos=Vec2(x=1.2, y=0), r=r, a=np.pi/4, w=.1*wtriang, group=1
     ))
     rule_set.append_rule(PointAngleRule(
-        x=1.2, y=0, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
+        pos=Vec2(x=1.2, y=0), r=r, a=np.pi*5/4, w=.1*wtriang, group=1
     ))
     video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
 

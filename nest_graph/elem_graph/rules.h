@@ -5,26 +5,28 @@
 #include "types.h"
 
 typedef struct PointPlaceRule {
-    float x, y, r, w;
+    Vec2f pos;
+    float r, w;
     Tvertex group;
 } PointPlaceRule;
 
 
 typedef struct BBoxPlaceRule {
-    BBox bbox;
+    BBox2f bbox;
     float r, w;
     Tvertex group;
 } BBoxPlaceRule;
 
 
 typedef struct PointAngleRule {
-    float x, y, a, r, w;
+    Vec2f pos;
+    float a, r, w;
     Tvertex group;
 } PointAngleRule;
 
 
 typedef struct BBoxAngleRule {
-    BBox bbox;
+    BBox2f bbox;
     float a, r, w;
     Tvertex group;
 } BBoxAngleRule;
@@ -42,7 +44,7 @@ typedef struct PlacementRuleSet {
 } PlacementRuleSet;
 
 typedef struct RuleMutationSettings {
-    BBox box;
+    BBox2f box;
     float dpos, dw, da;
     float insert_p, remove_p, mutate_p;
     Tvertex ngroups;

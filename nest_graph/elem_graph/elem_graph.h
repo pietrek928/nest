@@ -6,7 +6,8 @@
 
 
 typedef struct ElemPlace {
-    float x, y, a;
+    Vec2f pos;
+    float a;
 } ElemPlace;
 
 typedef struct ElemGroup {
@@ -17,7 +18,7 @@ typedef struct ElemGroup {
 typedef struct ElemGraph {
     std::vector<Tvertex> group_id;
     std::vector<ElemPlace> elems;
-    std::vector<BBox> coords;
+    std::vector<BBox2f> coords;
     std::vector<std::vector<Tvertex>> collisions;
 
     auto size() const { return group_id.size(); }
