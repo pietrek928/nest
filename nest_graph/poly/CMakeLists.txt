@@ -30,6 +30,9 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_poly_distance.cc
     tests/test_circle.cc
     tests/test_decompose.cc
+    tests/test_highly_curved_linestrings.cc
+    tests/test_point_in_solid_bug.cc
+    tests/test_holes.cc
   )
   target_link_libraries(poly_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
   target_include_directories(poly_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

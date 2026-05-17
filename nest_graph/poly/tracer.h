@@ -17,7 +17,6 @@ struct NullTracer {
     void count_sweep_pair() {}
     void count_circle_prune() {}
     void count_gjk_eval() {}
-    void count_hole_invalidation() {}
 };
 
 // -------------------------------------------------------------------------
@@ -31,7 +30,6 @@ struct DebugTracer {
     int stat_sweep_pairs = 0;
     int stat_circle_pruned = 0;
     int stat_gjk_evals = 0;
-    int stat_hole_invalidations = 0;
 
     void reset() {
         pair_stack.clear();
@@ -40,7 +38,6 @@ struct DebugTracer {
         stat_sweep_pairs = 0;
         stat_circle_pruned = 0;
         stat_gjk_evals = 0;
-        stat_hole_invalidations = 0;
     }
 
     void push_pair(int a, int b) {
@@ -62,14 +59,12 @@ struct DebugTracer {
     void count_sweep_pair() { stat_sweep_pairs++; }
     void count_circle_prune() { stat_circle_pruned++; }
     void count_gjk_eval() { stat_gjk_evals++; }
-    void count_hole_invalidation() { stat_hole_invalidations++; }
 
     void print_telemetry() const {
         std::cout << "[Physics Telemetry] "
                   << "Sweep Pairs: " << stat_sweep_pairs
                   << " | Circle Pruned: " << stat_circle_pruned
                   << " | GJK Evals: " << stat_gjk_evals
-                  << " | Hole Invalidations: " << stat_hole_invalidations
                   << "\n";
     }
 

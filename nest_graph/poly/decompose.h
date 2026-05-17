@@ -1,8 +1,17 @@
 #pragma once
 
+#include <algorithm>
 #include <vector>
 #include <cmath>
 #include "poly.h"
+
+
+template <class VecType>
+inline std::vector<VecType> reverse_ring(const std::vector<VecType>& ring) {
+    std::vector<VecType> out = ring;
+    std::reverse(out.begin(), out.end());
+    return out;
+}
 
 
 // Genuinely dimension-agnostic 2D turn evaluation.
@@ -25,6 +34,7 @@ template <class VecType>
 inline void process_boundary_to_convex_segments(
     const std::vector<VecType>& loop,
     SolidGeometry<VecType>& out_mesh,
+    bool subtractive = false,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
 ) {
     int n = static_cast<int>(loop.size());
@@ -80,10 +90,25 @@ inline void process_boundary_to_convex_segments(
             }
         }
 
+        // Split if the accumulated turn exceeds 90 degrees
+        // This is crucial for highly curved shapes like spirals, where the turn direction
+        // is constant but the total turn exceeds 180 degrees, breaking GJK's assumption
+        // that the support mapping has only one local maximum.
+        if (!force_split && current_segment.size() >= 2) {
+            const VecType& first_p1 = current_segment[0];
+            const VecType& first_p2 = current_segment[1];
+            VecType first_edge = first_p2 - first_p1;
+            VecType current_edge = p3 - p2;
+            if (first_edge.dp(current_edge) <= 0) {
+                force_split = true;
+            }
+        }
+
         if (force_split) {
             // We don't push p3 here, because p2 is the last valid point of this convex segment.
             // But to close the segment, we need to ensure it's a valid line string.
-            out_mesh.append_line_poly(current_segment.data(), static_cast<int>(current_segment.size()));
+            out_mesh.append_line_poly(
+                current_segment.data(), static_cast<int>(current_segment.size()), subtractive);
 
             current_segment.clear();
             current_turn_sign = 0;
@@ -92,7 +117,8 @@ inline void process_boundary_to_convex_segments(
     }
 
     if (current_segment.size() >= 2) {
-        out_mesh.append_line_poly(current_segment.data(), static_cast<int>(current_segment.size()));
+        out_mesh.append_line_poly(
+            current_segment.data(), static_cast<int>(current_segment.size()), subtractive);
     }
 }
 
@@ -107,12 +133,15 @@ SolidGeometry<VecType> decompose_complex_polygon(
     SolidGeometry<VecType> composed_mesh;
 
     for (const auto& outer : outer_boundaries) {
-        process_boundary_to_convex_segments<VecType>(outer, composed_mesh);
+        composed_mesh.add_boundary_ring(outer, /*subtractive=*/false);
+        process_boundary_to_convex_segments<VecType>(outer, composed_mesh, /*subtractive=*/false);
     }
 
-    // Note: Holes are intentionally NOT decomposed into the solid mesh.
-    // They represent empty space and are handled by the broad/narrow phase logic
-    // rather than being part of the solid convex parts.
+    for (const auto& hole : holes) {
+        auto reversed = reverse_ring(hole);
+        composed_mesh.add_boundary_ring(reversed, /*subtractive=*/true);
+        process_boundary_to_convex_segments<VecType>(reversed, composed_mesh, /*subtractive=*/true);
+    }
 
     composed_mesh.finalize();
     return composed_mesh;

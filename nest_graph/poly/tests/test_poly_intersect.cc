@@ -14,20 +14,6 @@ using SolidGeometry2 = PolyTestSolidGeometry2;
 
 namespace {
 
-SolidGeometry2 polygon_from_quad(std::initializer_list<std::initializer_list<double>> pts4) {
-    SolidGeometry2 poly;
-    std::vector<Vec2> ring;
-    ring.reserve(5);
-    for (const auto& p : pts4) {
-        auto it = p.begin();
-        ring.emplace_back(std::initializer_list<double>{*it, *++it});
-    }
-    if (!ring.empty()) ring.push_back(ring.front());
-    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
-    return poly;
-}
-
 // CCW rectangle with dense vertices along bottom edge [x0,x1] at y = y_lo (integer x step).
 SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_hi) {
     SolidGeometry2 poly;
@@ -39,31 +25,6 @@ SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_h
     ring.emplace_back(std::initializer_list<double>{static_cast<double>(x0), y_hi});
     if (!ring.empty()) ring.push_back(ring.front());
     poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
-    return poly;
-}
-
-SolidGeometry2 polygon_outer_with_square_hole(
-    double ox0, double oy0, double ox1, double oy1,
-    double hx0, double hy0, double hx1, double hy1
-) {
-    SolidGeometry2 poly;
-    std::vector<Vec2> outer{
-        Vec2{{ox0, oy0}},
-        Vec2{{ox1, oy0}},
-        Vec2{{ox1, oy1}},
-        Vec2{{ox0, oy1}},
-        Vec2{{ox0, oy0}},
-    };
-    std::vector<Vec2> hole{
-        Vec2{{hx0, hy0}},
-        Vec2{{hx1, hy0}},
-        Vec2{{hx1, hy1}},
-        Vec2{{hx0, hy1}},
-        Vec2{{hx0, hy0}},
-    };
-    poly.append_line_poly(outer.data(), static_cast<int>(outer.size()));
-    poly.append_line_poly(hole.data(), static_cast<int>(hole.size()));
     poly.finalize();
     return poly;
 }
@@ -108,58 +69,6 @@ SolidGeometry2 polygon_two_overlapping_parts_same_partner() {
     };
     poly.append_line_poly(bar_low.data(), static_cast<int>(bar_low.size()));
     poly.append_line_poly(bar_high.data(), static_cast<int>(bar_high.size()));
-    poly.finalize();
-    return poly;
-}
-
-SolidGeometry2 polygon_c_shape_three_parts() {
-    SolidGeometry2 poly;
-    std::vector<Vec2> bottom{
-        Vec2{{0.0, 0.0}},
-        Vec2{{10.0, 0.0}},
-        Vec2{{10.0, 2.0}},
-        Vec2{{0.0, 2.0}},
-        Vec2{{0.0, 0.0}},
-    };
-    std::vector<Vec2> back{
-        Vec2{{0.0, 2.0}},
-        Vec2{{2.0, 2.0}},
-        Vec2{{2.0, 8.0}},
-        Vec2{{0.0, 8.0}},
-        Vec2{{0.0, 2.0}},
-    };
-    std::vector<Vec2> top{
-        Vec2{{0.0, 8.0}},
-        Vec2{{10.0, 8.0}},
-        Vec2{{10.0, 10.0}},
-        Vec2{{0.0, 10.0}},
-        Vec2{{0.0, 8.0}},
-    };
-    poly.append_line_poly(bottom.data(), static_cast<int>(bottom.size()));
-    poly.append_line_poly(back.data(), static_cast<int>(back.size()));
-    poly.append_line_poly(top.data(), static_cast<int>(top.size()));
-    poly.finalize();
-    return poly;
-}
-
-SolidGeometry2 polygon_donut_with_square_hole() {
-    SolidGeometry2 poly;
-    std::vector<Vec2> outer{
-        Vec2{{20.0, 0.0}},
-        Vec2{{30.0, 0.0}},
-        Vec2{{30.0, 10.0}},
-        Vec2{{20.0, 10.0}},
-        Vec2{{20.0, 0.0}},
-    };
-    std::vector<Vec2> hole{
-        Vec2{{22.0, 2.0}},
-        Vec2{{28.0, 2.0}},
-        Vec2{{28.0, 8.0}},
-        Vec2{{22.0, 8.0}},
-        Vec2{{22.0, 2.0}},
-    };
-    poly.append_line_poly(outer.data(), static_cast<int>(outer.size()));
-    poly.append_line_poly(hole.data(), static_cast<int>(hole.size()));
     poly.finalize();
     return poly;
 }
@@ -246,13 +155,11 @@ TEST_CASE("narrow_phase_contain strict inside vs escaped vertex", "[poly_interse
     auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto inner_ok = polygon_from_quad({{1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
     REQUIRE(narrow_phase_contain<Vec2>(
-        inner_ok.get_part_points(0), inner_ok.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0)));
+        inner_ok.get_part_points(0), inner_ok.get_part_size(0), outer));
 
     auto inner_bad = polygon_from_quad({{1.5, 1.5}, {5.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
     REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        inner_bad.get_part_points(0), inner_bad.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0)));
+        inner_bad.get_part_points(0), inner_bad.get_part_size(0), outer));
 }
 
 TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][router]") {
@@ -262,16 +169,14 @@ TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][ro
     REQUIRE(outer.get_part_size(0) + dense_inside23.get_part_size(0) == 25);
 
     bool in23 = narrow_phase_contain<Vec2>(
-        dense_inside23.get_part_points(0), dense_inside23.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0));
+        dense_inside23.get_part_points(0), dense_inside23.get_part_size(0), outer);
 
     // Inner hull 22 + outer 4 = 26
     auto dense_inside26 = polygon_dense_bottom_rect(5, 24, 1.0, 3.0);
     REQUIRE(outer.get_part_size(0) + dense_inside26.get_part_size(0) == 28);
 
     bool in26 = narrow_phase_contain<Vec2>(
-        dense_inside26.get_part_points(0), dense_inside26.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0));
+        dense_inside26.get_part_points(0), dense_inside26.get_part_size(0), outer);
 
     REQUIRE(in23 == in26);
     REQUIRE(in23);
@@ -279,11 +184,9 @@ TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][ro
     auto dense_escape23 = polygon_dense_bottom_rect(5, 21, 5.5, 7.5);
     auto dense_escape26 = polygon_dense_bottom_rect(5, 24, 5.5, 7.5);
     REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0)));
+        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0), outer));
     REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0),
-        outer.get_part_points(0), outer.get_part_size(0)));
+        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0), outer));
 }
 
 TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sweep]") {
@@ -398,38 +301,6 @@ TEST_CASE("find_polygon_intersections diagonal sweep axis overlap", "[poly_inter
     REQUIRE_FALSE(hits.empty());
 }
 
-TEST_CASE("hole invalidation swallows probe fully inside hole", "[poly_intersect][holes]") {
-    auto shell = polygon_outer_with_square_hole(0, 0, 10, 10, 4, 4, 6, 6);
-    auto probe_inside_void = polygon_from_quad({
-        {4.25, 4.25},
-        {5.75, 4.25},
-        {5.75, 5.75},
-        {4.25, 5.75},
-    });
-    REQUIRE_FALSE(find_polygon_intersections<Vec2>({shell, probe_inside_void}).empty());
-}
-
-TEST_CASE("hole invalidation detects overlap with solid shell", "[poly_intersect][holes]") {
-    auto shell = polygon_outer_with_square_hole(0, 0, 10, 10, 4, 4, 6, 6);
-    auto probe_in_annulus = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    auto hits = find_polygon_intersections<Vec2>({shell, probe_in_annulus});
-    REQUIRE_FALSE(hits.empty());
-}
-
-TEST_CASE("hole invalidation symmetric host polygon", "[poly_intersect][holes]") {
-    auto shell_b = polygon_outer_with_square_hole(20, 0, 30, 10, 24, 4, 26, 6);
-    auto probe_b = polygon_from_quad({
-        {24.25, 4.25},
-        {25.75, 4.25},
-        {25.75, 5.75},
-        {24.25, 5.75},
-    });
-    REQUIRE_FALSE(find_polygon_intersections<Vec2>({shell_b, probe_b}).empty());
-
-    auto solid_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    REQUIRE(find_polygon_intersections<Vec2>({solid_a, shell_b}).empty());
-}
-
 TEST_CASE("stress intersect TC1 giant floor only P0 P1", "[poly_intersect][stress]") {
     DebugTracer tracer;
     tracer.reset();
@@ -477,8 +348,8 @@ TEST_CASE("stress intersect TC2 concave C trapped box donut no hits", "[poly_int
     auto donut = polygon_donut_with_square_hole();
     auto core = polygon_from_quad({{24, 4}, {26, 4}, {26, 6}, {24, 6}});
     std::vector<SolidGeometry2> polys = {c_shape, trapped, donut, core};
-    REQUIRE_FALSE(find_polygon_intersections<Vec2>(polys, &tracer).empty());
-    REQUIRE(tracer.stat_hole_invalidations >= 0);
+    auto hits = find_polygon_intersections<Vec2>(polys, &tracer);
+    REQUIRE(hits.empty());
     REQUIRE(tracer.stat_sweep_pairs > 0);
     REQUIRE(tracer.stat_gjk_evals > 0);
 }

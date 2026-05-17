@@ -16,20 +16,6 @@ using SolidGeometry2 = PolyTestSolidGeometry2;
 
 namespace {
 
-SolidGeometry2 polygon_from_quad(std::initializer_list<std::initializer_list<double>> pts4) {
-    SolidGeometry2 poly;
-    std::vector<Vec2> ring;
-    ring.reserve(5);
-    for (const auto& p : pts4) {
-        auto it = p.begin();
-        ring.emplace_back(std::initializer_list<double>{*it, *++it});
-    }
-    if (!ring.empty()) ring.push_back(ring.front());
-    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
-    return poly;
-}
-
 SolidGeometry2 polygon_from_ring(std::initializer_list<std::initializer_list<double>> pts) {
     SolidGeometry2 poly;
     std::vector<Vec2> ring;
@@ -39,58 +25,6 @@ SolidGeometry2 polygon_from_ring(std::initializer_list<std::initializer_list<dou
     }
     if (!ring.empty()) ring.push_back(ring.front());
     poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
-    return poly;
-}
-
-SolidGeometry2 polygon_c_shape_three_parts() {
-    SolidGeometry2 poly;
-    std::vector<Vec2> bottom{
-        Vec2{{0.0, 0.0}},
-        Vec2{{10.0, 0.0}},
-        Vec2{{10.0, 2.0}},
-        Vec2{{0.0, 2.0}},
-        Vec2{{0.0, 0.0}},
-    };
-    std::vector<Vec2> back{
-        Vec2{{0.0, 2.0}},
-        Vec2{{2.0, 2.0}},
-        Vec2{{2.0, 8.0}},
-        Vec2{{0.0, 8.0}},
-        Vec2{{0.0, 2.0}},
-    };
-    std::vector<Vec2> top{
-        Vec2{{0.0, 8.0}},
-        Vec2{{10.0, 8.0}},
-        Vec2{{10.0, 10.0}},
-        Vec2{{0.0, 10.0}},
-        Vec2{{0.0, 8.0}},
-    };
-    poly.append_line_poly(bottom.data(), static_cast<int>(bottom.size()));
-    poly.append_line_poly(back.data(), static_cast<int>(back.size()));
-    poly.append_line_poly(top.data(), static_cast<int>(top.size()));
-    poly.finalize();
-    return poly;
-}
-
-SolidGeometry2 polygon_donut_with_square_hole() {
-    SolidGeometry2 poly;
-    std::vector<Vec2> outer{
-        Vec2{{20.0, 0.0}},
-        Vec2{{30.0, 0.0}},
-        Vec2{{30.0, 10.0}},
-        Vec2{{20.0, 10.0}},
-        Vec2{{20.0, 0.0}},
-    };
-    std::vector<Vec2> hole{
-        Vec2{{22.0, 2.0}},
-        Vec2{{28.0, 2.0}},
-        Vec2{{28.0, 8.0}},
-        Vec2{{22.0, 8.0}},
-        Vec2{{22.0, 2.0}},
-    };
-    poly.append_line_poly(outer.data(), static_cast<int>(outer.size()));
-    poly.append_line_poly(hole.data(), static_cast<int>(hole.size()));
     poly.finalize();
     return poly;
 }
@@ -244,9 +178,8 @@ TEST_CASE("stress distance TC2 concave C gap and donut hole invalidation", "[pol
 
     const auto* r23 = find_distance_result(results, 2, 3);
     REQUIRE(r23 != nullptr);
-    REQUIRE(r23->intersect);
+    REQUIRE_FALSE(r23->intersect);
 
-    REQUIRE(tracer.stat_hole_invalidations >= 0);
     REQUIRE(tracer.stat_sweep_pairs > 0);
     REQUIRE(tracer.stat_gjk_evals > 0);
 }

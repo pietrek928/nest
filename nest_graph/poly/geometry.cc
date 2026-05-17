@@ -159,14 +159,19 @@ NB_MODULE(_geometry, m) {
             "append_convex_poly",
             [](SolidGeometry2d& poly, nb::object points) {
                 auto pts = points_from_iterable(points);
-                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()));
+                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()), false);
             },
             nb::arg("points"))
         .def(
             "append_convex_hole",
             [](SolidGeometry2d& poly, nb::object points) {
-                auto pts = points_from_iterable(points);
-                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()));
+                std::vector<Vec2d> ring = ring_from_coords(points);
+                if (ring.size() < 3) {
+                    return;
+                }
+                auto reversed = reverse_ring(ring);
+                poly.add_boundary_ring(reversed, true);
+                process_boundary_to_convex_segments<Vec2d>(reversed, poly, true);
             },
             nb::arg("points"))
         .def("finalize", &SolidGeometry2d::finalize)
@@ -212,6 +217,15 @@ NB_MODULE(_geometry, m) {
         },
         nb::arg("polygons"),
         nb::arg("active_indices"));
+
+    m.def(
+        "find_polygon_intersections_bipartite",
+        [](const std::vector<SolidGeometry2d>& set_a,
+           const std::vector<SolidGeometry2d>& set_b) {
+            return find_polygon_intersections<Vec2d>(set_a, set_b);
+        },
+        nb::arg("set_a"),
+        nb::arg("set_b"));
 
     m.def(
         "find_polygon_distances",

@@ -8,6 +8,7 @@ from ._geometry import (
     find_polygon_distances_bipartite,
     find_polygon_intersections,
     find_polygon_intersections_active,
+    find_polygon_intersections_bipartite,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "find_polygon_distances_bipartite",
     "find_polygon_intersections",
     "find_polygon_intersections_active",
+    "find_polygon_intersections_bipartite",
 ]

@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "poly/decompose.h"
+#include "poly/point_in_solid.h"
 #include "poly/poly.h"
 #include <vec.h>
 
@@ -94,10 +95,11 @@ TEST_CASE("Geometry: Hertel-Mehlhorn L-Shape Optimization", "[decomposition]") {
     SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({l_shape}, {});
     auto convex_parts = mesh_line_parts(mesh);
 
-    REQUIRE(convex_parts.size() == 2);
+    // More segments than HM convex pieces: boundary split at inflection, concavity, and >90° turns.
+    REQUIRE(convex_parts.size() == 6);
     for (const auto& part : convex_parts) {
         // REQUIRE(is_strictly_convex(part));
-        REQUIRE(part.size() >= 3u);
+        REQUIRE(part.size() >= 2u);
     }
 }
 
@@ -115,10 +117,10 @@ TEST_CASE("Geometry: The Bridge-Builder Donut Test", "[decomposition][holes]") {
     SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({outer}, holes);
     auto convex_parts = mesh_line_parts(mesh);
 
-    REQUIRE(convex_parts.size() == 1); // Holes are no longer decomposed into the mesh
-    for (const auto& part : convex_parts) {
-        // REQUIRE(is_strictly_convex(part));
-    }
+    // Outer and hole rings each split into multiple convex linestrings.
+    REQUIRE(convex_parts.size() == 8);
+    REQUIRE(is_point_inside_solid_space(Vec2f{{-3.f, -3.f}}, mesh));
+    REQUIRE_FALSE(is_point_inside_solid_space(Vec2f{{0.f, 0.f}}, mesh));
 }
 
 TEST_CASE("Geometry: Winding Order Auto-Correction", "[decomposition]") {

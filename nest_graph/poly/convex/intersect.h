@@ -55,6 +55,10 @@ inline IntersectResult convex_linestrings_intersect_gjk_impl(
         if (support.dp(dir) < 0) {
             return {false, it1, it2};
         }
+        
+        if (support.len_sq() < epsilon_sq) {
+            return {true, it1, it2};
+        }
 
         simplex[2] = simplex[1];
         simplex[1] = simplex[0];
@@ -98,7 +102,7 @@ inline IntersectResult convex_linestrings_intersect_gjk_impl(
         }
     }
 
-    return {true, it1, it2};
+    return {false, it1, it2};
 }
 
 // -------------------------------------------------------------------------
