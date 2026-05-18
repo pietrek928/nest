@@ -3,8 +3,8 @@
 
 #include <vector>
 
-#include "bbox.h"
-#include "vec.h"
+#include <bbox.h>
+#include <vec.h>
 
 template <int K, class T>
 class ConvexPolygon {

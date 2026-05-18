@@ -7,16 +7,11 @@
 #include <vector>
 
 
-float bbox_qdist(const BBox2f &a, const BBox2f &b) {
-    float dx = std::max(0.0f, std::max(a.start[0] - b.end[0], b.start[0] - a.end[0]));
-    float dy = std::max(0.0f, std::max(a.start[1] - b.end[1], b.start[1] - a.end[1]));
-    return dx * dx + dy * dy;
-}
-
-float bbox_qdist(const BBox2f &a, const Vec2f &p) {
-    float dx = std::max(0.0f, std::max(a.start[0] - p[0], p[0] - a.end[0]));
-    float dy = std::max(0.0f, std::max(a.start[1] - p[1], p[1] - a.end[1]));
-    return dx * dx + dy * dy;
+float circle_gap_sq(const Circle2f &a, const Circle2f &b) {
+    const float d = std::sqrt((a.c - b.c).len_sq());
+    const float gap =
+        std::max(0.0f, d - std::sqrt(a.r_sq) - std::sqrt(b.r_sq));
+    return gap * gap;
 }
 
 Tscore compute_score(const PointPlaceRule &p, const Vec2f &v) {
@@ -24,8 +19,8 @@ Tscore compute_score(const PointPlaceRule &p, const Vec2f &v) {
     return p.w * std::exp(-qdist / p.r);
 }
 
-Tscore compute_score(const BBoxPlaceRule &p, const BBox2f &bbox) {
-    float qdist = bbox_qdist(p.bbox, bbox) + 1.0f;
+Tscore compute_score(const CirclePlaceRule &p, const Circle2f &circle) {
+    float qdist = circle_gap_sq(p.circle, circle) + 1.0f;
     return p.w * std::exp(-qdist / p.r);
 }
 
@@ -37,11 +32,11 @@ Tscore compute_score(const PointAngleRule &p, const Vec2f &v, float a) {
     return p.w * std::exp(-qdist * adist / p.r);
 }
 
-Tscore compute_score(const BBoxAngleRule &p, const BBox2f &bbox, float a) {
+Tscore compute_score(const CircleAngleRule &p, const Circle2f &circle, float a) {
     float adist = std::abs(p.a - a);
     if (adist > 2 * (Tscore)M_PI) adist -= 2 * (Tscore)M_PI;
-    adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0;
-    float qdist = bbox_qdist(p.bbox, bbox) + 1.0;
+    adist = std::min(adist, 2 * (Tscore)M_PI - adist) + 1.0f;
+    float qdist = circle_gap_sq(p.circle, circle) + 1.0f;
     return p.w * std::exp(-qdist * adist / p.r);
 }
 
@@ -70,7 +65,7 @@ void compute_scores(
             scores_out[elem] += compute_score(p, g.elems[elem].pos);
         }
     }
-    for (const BBoxPlaceRule &p : rules.bbox_rules) {
+    for (const CirclePlaceRule &p : rules.circle_rules) {
         for (Tvertex elem : elems_by_group[p.group]) {
             scores_out[elem] += compute_score(p, g.coords[elem]);
         }
@@ -80,7 +75,7 @@ void compute_scores(
             scores_out[elem] += compute_score(p, g.elems[elem].pos, g.elems[elem].a);
         }
     }
-    for (const BBoxAngleRule &p : rules.bbox_angle_rules) {
+    for (const CircleAngleRule &p : rules.circle_angle_rules) {
         for (Tvertex elem : elems_by_group[p.group]) {
             scores_out[elem] += compute_score(p, g.coords[elem], g.elems[elem].a);
         }

@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 
-#include "bbox.h"
+#include <bbox.h>
 
 #define CONST_SWITCH_5(expr, var_name, ...)    \
     switch (expr) {                            \

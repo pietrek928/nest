@@ -6,7 +6,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "geometry/circle.h"
+#include <circle.h>
 #include <vec.h>
 
 using Vec2 = Vec<2, double>;

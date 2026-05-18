@@ -17,25 +17,24 @@ T adjust_angle(T a) {
 }
 
 template <class Tgen, class Tdistrib>
-BBox2f mutate_random(const BBox2f &b, Tgen gen, Tdistrib &distrib) {
-    BBox2f r = b;
-    for (int k = 0; k < 2; ++k) {
-        r.start.get_(k) += distrib(gen);
-        r.end.get_(k) += distrib(gen);
+Circle2f mutate_random(const Circle2f &c, Tgen gen, Tdistrib &distrib) {
+    Circle2f r = c;
+    r.c.get_(0) += distrib(gen);
+    r.c.get_(1) += distrib(gen);
+    r.r_sq += distrib(gen);
+    if (r.r_sq < 0.0f) {
+        r.r_sq = 0.0f;
     }
     return r;
 }
 
 template <class Tgen, class Tdistrib>
-BBox2f generate_random_bbox(Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y) {
-    auto x1 = distrib_x(gen);
-    auto x2 = distrib_x(gen);
-    auto y1 = distrib_y(gen);
-    auto y2 = distrib_y(gen);
-
-    return BBox2f(
-        Vec2f({std::min(x1, x2), std::min(y1, y2)}),
-        Vec2f({std::max(x1, x2), std::max(y1, y2)}));
+Circle2f generate_random_circle(
+    Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y, Tdistrib &distrib_r
+) {
+    const float rx = distrib_r(gen);
+    const float r_sq = rx * rx;
+    return Circle2f(Vec2f({distrib_x(gen), distrib_y(gen)}), r_sq);
 }
 
 template <class Tgen, class Tdistrib>
@@ -67,11 +66,11 @@ PointPlaceRule generate_random_point_place_rule(
 }
 
 template <class Tgen, class Tdistrib>
-BBoxPlaceRule mutate_random(
-    const BBoxPlaceRule &p, Tgen gen, Tdistrib &distrib_pos, Tdistrib &distrib_w
+CirclePlaceRule mutate_random(
+    const CirclePlaceRule &p, Tgen gen, Tdistrib &distrib_pos, Tdistrib &distrib_w
 ) {
     return {
-        .bbox = mutate_random(p.bbox, gen, distrib_pos),
+        .circle = mutate_random(p.circle, gen, distrib_pos),
         .r = p.r + distrib_pos(gen),
         .w = p.w + distrib_w(gen),
         .group = p.group
@@ -79,12 +78,12 @@ BBoxPlaceRule mutate_random(
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
-BBoxPlaceRule generate_random_bbox_place_rule(
+CirclePlaceRule generate_random_circle_place_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
     return {
-        .bbox = generate_random_bbox(gen, distrib_x, distrib_y),
+        .circle = generate_random_circle(gen, distrib_x, distrib_y, distrib_r),
         .r = distrib_r(gen),
         .w = distrib_w(gen),
         .group = distrib_group(gen)
@@ -124,12 +123,12 @@ PointAngleRule generate_random_point_angle_rule(
 }
 
 template <class Tgen, class Tdistrib>
-BBoxAngleRule mutate_random(
-    const BBoxAngleRule &p, Tgen gen,
+CircleAngleRule mutate_random(
+    const CircleAngleRule &p, Tgen gen,
     Tdistrib &distrib_pos, Tdistrib &distrib_a, Tdistrib &distrib_w
 ) {
     return {
-        .bbox = mutate_random(p.bbox, gen, distrib_pos),
+        .circle = mutate_random(p.circle, gen, distrib_pos),
         .a = adjust_angle(p.a + distrib_a(gen)),
         .r = p.r + distrib_pos(gen),
         .w = p.w + distrib_w(gen),
@@ -138,13 +137,13 @@ BBoxAngleRule mutate_random(
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
-BBoxAngleRule generate_random_bbox_angle_rule(
+CircleAngleRule generate_random_circle_angle_rule(
     Tgen gen, Tdistrib &distrib_x, Tdistrib &distrib_y,
     Tdistrib &distrib_r, Tdistrib &distrib_a,
     Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
     return {
-        .bbox = generate_random_bbox(gen, distrib_x, distrib_y),
+        .circle = generate_random_circle(gen, distrib_x, distrib_y, distrib_r),
         .a = adjust_angle(distrib_a(gen)),
         .r = distrib_r(gen),
         .w = distrib_w(gen),
@@ -165,11 +164,11 @@ PlacementRuleSet mutate_random(
             r.point_rules.push_back(p);
         }
     }
-    for (const BBoxPlaceRule &p : s.bbox_rules) {
+    for (const CirclePlaceRule &p : s.circle_rules) {
         if (distrib_select(gen) < 1.0) {
-            r.bbox_rules.push_back(mutate_random(p, gen, distrib_pos, distrib_w));
+            r.circle_rules.push_back(mutate_random(p, gen, distrib_pos, distrib_w));
         } else {
-            r.bbox_rules.push_back(p);
+            r.circle_rules.push_back(p);
         }
     }
     for (const PointAngleRule &p : s.point_angle_rules) {
@@ -179,11 +178,11 @@ PlacementRuleSet mutate_random(
             r.point_angle_rules.push_back(p);
         }
     }
-    for (const BBoxAngleRule &p : s.bbox_angle_rules) {
+    for (const CircleAngleRule &p : s.circle_angle_rules) {
         if (distrib_select(gen) < 1.0) {
-            r.bbox_angle_rules.push_back(mutate_random(p, gen, distrib_pos, distrib_a, distrib_w));
+            r.circle_angle_rules.push_back(mutate_random(p, gen, distrib_pos, distrib_a, distrib_w));
         } else {
-            r.bbox_angle_rules.push_back(p);
+            r.circle_angle_rules.push_back(p);
         }
     }
     return r;
@@ -202,7 +201,7 @@ PlacementRuleSet insert_random(
         ));
     }
     while (distrib_insert(gen) < 1.0) {
-        r.bbox_rules.push_back(generate_random_bbox_place_rule(
+        r.circle_rules.push_back(generate_random_circle_place_rule(
             gen, distrib_pos, distrib_pos, distrib_pos, distrib_w, distrib_group
         ));
     }
@@ -212,7 +211,7 @@ PlacementRuleSet insert_random(
         ));
     }
     while (distrib_insert(gen) < 1.0) {
-        r.bbox_angle_rules.push_back(generate_random_bbox_angle_rule(
+        r.circle_angle_rules.push_back(generate_random_circle_angle_rule(
             gen, distrib_pos, distrib_pos, distrib_pos, distrib_a, distrib_w, distrib_group
         ));
     }
@@ -229,9 +228,9 @@ PlacementRuleSet remove_random(
             r.point_rules.push_back(p);
         }
     }
-    for (const BBoxPlaceRule &p : s.bbox_rules) {
+    for (const CirclePlaceRule &p : s.circle_rules) {
         if (distrib_remove(gen) >= 1.0) {
-            r.bbox_rules.push_back(p);
+            r.circle_rules.push_back(p);
         }
     }
     for (const PointAngleRule &p : s.point_angle_rules) {
@@ -239,9 +238,9 @@ PlacementRuleSet remove_random(
             r.point_angle_rules.push_back(p);
         }
     }
-    for (const BBoxAngleRule &p : s.bbox_angle_rules) {
+    for (const CircleAngleRule &p : s.circle_angle_rules) {
         if (distrib_remove(gen) >= 1.0) {
-            r.bbox_angle_rules.push_back(p);
+            r.circle_angle_rules.push_back(p);
         }
     }
     return r;

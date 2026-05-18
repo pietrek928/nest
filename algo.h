@@ -11,7 +11,7 @@ using namespace std;
 
 #include "diff2.h"
 #include "utils.h"
-#include "vec.h"
+#include <vec.h>
 
 
 template <int K, class T>

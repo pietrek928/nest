@@ -1,7 +1,7 @@
 #ifndef __MAT_TRIANGLE_H_
 #define __MAT_TRIANGLE_H_
 
-#include "vec.h"
+#include <vec.h>
 
 template <int K, class T>
 class MatTriangle {

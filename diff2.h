@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "mat_triangle.h"
-#include "vec.h"
+#include <vec.h>
 
 template <int K, class T>
 class Diff2 {

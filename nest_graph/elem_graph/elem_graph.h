@@ -18,7 +18,7 @@ typedef struct ElemGroup {
 typedef struct ElemGraph {
     std::vector<Tvertex> group_id;
     std::vector<ElemPlace> elems;
-    std::vector<BBox2f> coords;
+    std::vector<Circle2f> coords;
     std::vector<std::vector<Tvertex>> collisions;
 
     auto size() const { return group_id.size(); }

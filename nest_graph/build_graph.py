@@ -14,8 +14,8 @@ from .utils import normalize_poly, transform_poly
 from .propose import propose_placements_point_cloud
 from .track_perf import show_performance
 from .elem_graph import (
-    ElemGraph, BBox, Vec2,
-    PointPlaceRule, BBoxPlaceRule, PointAngleRule, PlacementRuleSet,
+    ElemGraph, Circle, Vec2,
+    PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings,
     nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
     increase_selection_dfs, increase_score_dfs
@@ -280,7 +280,7 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
 def improve_rules(graphs, rules, n):
     new_rules = list(rules)
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox.from_bounds(0, 0, 1.2, 1.1),
+        region=Circle.from_bounds(0, 0, 1.2, 1.1),
         dpos=.25,
         dw=.25,
         da=np.pi/4,
@@ -290,7 +290,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox.from_bounds(0, 0, 1.2, 1.1),
+        region=Circle.from_bounds(0, 0, 1.2, 1.1),
         dpos=.05,
         dw=.05,
         da=np.pi/32,
@@ -300,7 +300,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        box=BBox.from_bounds(0, 0, 1.2, 1.1),
+        region=Circle.from_bounds(0, 0, 1.2, 1.1),
         dpos=.01,
         dw=.01,
         da=np.pi/64,

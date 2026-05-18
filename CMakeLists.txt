@@ -18,6 +18,7 @@ find_package(nanobind CONFIG REQUIRED)
 add_library(nest_graph_headers INTERFACE)
 target_include_directories(nest_graph_headers INTERFACE
   "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/nest_graph>"
+  "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/nest_graph/common>"
 )
 
 option(NEST_GRAPH_BUILD_TESTS "Build C++ unit tests (Catch2 via FetchContent)" OFF)

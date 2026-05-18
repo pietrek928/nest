@@ -1,7 +1,7 @@
 #ifndef __MAT_H_
 #define __MAT_H_
 
-#include "vec.h"
+#include <vec.h>
 
 template <int K, int N, class T>
 class Mat {

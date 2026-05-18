@@ -6,9 +6,9 @@
 #include <opencv2/opencv.hpp>
 #include <ostream>
 
-#include "bbox.h"
+#include <bbox.h>
 #include "diff2.h"
-#include "vec.h"
+#include <vec.h>
 
 template <class T>
 class PlaneMatcher {
