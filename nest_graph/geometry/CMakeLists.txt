@@ -33,6 +33,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_highly_curved_linestrings.cc
     tests/test_point_in_solid_bug.cc
     tests/test_holes.cc
+    tests/test_transform.cc
   )
   target_link_libraries(geometry_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
   target_include_directories(geometry_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

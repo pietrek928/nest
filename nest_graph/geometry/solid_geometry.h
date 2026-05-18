@@ -7,6 +7,22 @@
 #include "circle.h"
 
 
+namespace solid_geometry_detail {
+
+template <class VecType>
+inline VecType rotate_point_2d(
+    const VecType& p,
+    typename VecType::Scalar cos_a,
+    typename VecType::Scalar sin_a,
+    const VecType& origin) {
+    static_assert(VecType::dim == 2, "rotate_point_2d requires 2D vectors");
+    VecType d = p - origin;
+    return origin + VecType({cos_a * d[0] - sin_a * d[1], sin_a * d[0] + cos_a * d[1]});
+}
+
+}  // namespace solid_geometry_detail
+
+
 template<class VecType>
 class SolidGeometry {
     typedef struct {
@@ -82,5 +98,47 @@ public:
 
     const VecType* get_part_points(size_t part_idx) const {
         return &line_points[line_parts[part_idx].start_point];
+    }
+
+    SolidGeometry translate(const VecType& offset) const {
+        SolidGeometry out = *this;
+        for (auto& p : out.line_points) {
+            p += offset;
+        }
+        for (auto& ring : out.boundary_rings) {
+            for (auto& p : ring.points) {
+                p += offset;
+            }
+        }
+        for (auto& part : out.line_parts) {
+            part.bounding_circle.c += offset;
+        }
+        out.bounding_circle.c += offset;
+        return out;
+    }
+
+    SolidGeometry rotate(
+        typename VecType::Scalar angle,
+        const VecType& origin = VecType({0, 0})) const {
+        static_assert(VecType::dim == 2, "SolidGeometry::rotate requires 2D VecType");
+        using Scalar = typename VecType::Scalar;
+        const Scalar cos_a = std::cos(angle);
+        const Scalar sin_a = std::sin(angle);
+        SolidGeometry out = *this;
+        for (auto& p : out.line_points) {
+            p = solid_geometry_detail::rotate_point_2d(p, cos_a, sin_a, origin);
+        }
+        for (auto& ring : out.boundary_rings) {
+            for (auto& p : ring.points) {
+                p = solid_geometry_detail::rotate_point_2d(p, cos_a, sin_a, origin);
+            }
+        }
+        for (auto& part : out.line_parts) {
+            part.bounding_circle.c = solid_geometry_detail::rotate_point_2d(
+                part.bounding_circle.c, cos_a, sin_a, origin);
+        }
+        out.bounding_circle.c = solid_geometry_detail::rotate_point_2d(
+            out.bounding_circle.c, cos_a, sin_a, origin);
+        return out;
     }
 };

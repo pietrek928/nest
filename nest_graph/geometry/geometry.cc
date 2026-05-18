@@ -176,6 +176,42 @@ NB_MODULE(_geometry, m) {
             nb::arg("points"))
         .def("finalize", &SolidGeometry2d::finalize)
         .def(
+            "translate",
+            [](const SolidGeometry2d& g, double dx, double dy) {
+                return g.translate(Vec2d({dx, dy}));
+            },
+            nb::arg("dx"),
+            nb::arg("dy"))
+        .def(
+            "translate",
+            [](const SolidGeometry2d& g, nb::object offset) {
+                double x = 0.0;
+                double y = 0.0;
+                if (!read_xy(offset, x, y)) {
+                    throw nb::type_error(
+                        "translate(offset): expected a length-2 tuple or sequence");
+                }
+                return g.translate(Vec2d({x, y}));
+            },
+            nb::arg("offset"))
+        .def(
+            "rotate",
+            [](const SolidGeometry2d& g, double angle, nb::object origin) {
+                Vec2d o({0.0, 0.0});
+                if (!origin.is_none()) {
+                    double x = 0.0;
+                    double y = 0.0;
+                    if (!read_xy(origin, x, y)) {
+                        throw nb::type_error(
+                            "rotate(..., origin): expected a length-2 tuple or sequence");
+                    }
+                    o = Vec2d({x, y});
+                }
+                return g.rotate(angle, o);
+            },
+            nb::arg("angle"),
+            nb::arg("origin") = nb::none())
+        .def(
             "get_bounding_circle",
             [](const SolidGeometry2d& poly) {
                 const auto& c = poly.get_bounding_circle();
