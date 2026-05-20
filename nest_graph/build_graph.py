@@ -1,15 +1,17 @@
 # CFLAGS="-Wno-error=incompatible-pointer-types" pip install --force-reinstall --no-binary=shapely --upgrade shapely
 # pip install --force-reinstall --no-binary=rtree --upgrade rtree
 
-import numpy as np
 import cv2 as cv
+import numpy as np
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
+from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 from rtree.index import Index
 from tqdm import tqdm
-from typing import Tuple
+from typing import Iterator, NamedTuple, Tuple
 
+from .geometry import Geometry
 from .utils import normalize_poly, transform_poly
 from .propose import propose_placements_point_cloud
 from .track_perf import show_performance
@@ -27,6 +29,64 @@ sort_graph = show_performance(sort_graph)
 score_elems = show_performance(score_elems)
 # augment_rules = show_performance(augment_rules)
 score_rules = show_performance(score_rules)
+
+
+class Candidate(NamedTuple):
+    group_i: int
+    weight: float
+    t: np.ndarray
+    placed: Geometry
+
+
+def _poly_and_transforms(item):
+    if len(item) == 2:
+        return item[0], item[1], 1.0
+    return item[0], item[2], item[1]
+
+
+def _base_geometries(polygons) -> list[Geometry]:
+    return [
+        Geometry.from_convex_polygon(list(_poly_and_transforms(item)[0].exterior.coords)[:-1])
+        for item in polygons
+    ]
+
+
+def _iter_candidates(
+    board_geom: Geometry,
+    polygons,
+    *,
+    strict_board: bool = False,
+) -> Iterator[Candidate]:
+    bases = _base_geometries(polygons)
+    for i, item in enumerate(polygons):
+        _p, transforms, w = _poly_and_transforms(item)
+        base = bases[i]
+        for t in transforms:
+            placed = base.apply_transform(t)
+            if strict_board:
+                if not _placement_inside_board(board_geom, placed):
+                    continue
+            elif not board_geom.contains_point(*placed.center()):
+                continue
+            yield Candidate(i, w, t, placed)
+
+
+def _placement_inside_board(board_geom: Geometry, placed: Geometry) -> bool:
+    for x, y in placed.vertices():
+        if not board_geom.contains_point(x, y):
+            return False
+    return True
+
+
+def placement_board_score(
+    board: BaseGeometry,
+    board_geom: Geometry,
+    placed: Geometry,
+) -> float:
+    cx, cy = placed.center()
+    if not board_geom.contains_point(cx, cy):
+        return -board.distance(Point(cx, cy))
+    return 2.0 * board.boundary.distance(Point(cx, cy))
 
 
 def make_placement_base(base_shape, polys, exclude_p, exclude_dist=0):
@@ -58,7 +118,6 @@ class PolygonGroup(BaseModel):
     transforms: np.ndarray
 
 
-# TODO: make faster polygon operations, shapely lags
 def polygon_board_distance(b: BaseGeometry, p: Polygon):
     if b.contains(p):
         return b.exterior.distance(p) + b.exterior.distance(p.centroid)
@@ -83,89 +142,104 @@ def select_non_intersecting_polygons(polygons: np.ndarray):
 
 
 def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
+    board_geom = Geometry.from_shapely(b)
     result = [[] for _ in range(len(polygons))]
-    polys_transformed = []
-    for i, (p, w, transforms) in enumerate(polygons):
+    scored: list[tuple[float, int, np.ndarray, Geometry]] = []
+    bases = _base_geometries(polygons)
+
+    for i, item in enumerate(polygons):
+        _p, transforms, w = _poly_and_transforms(item)
+        base = bases[i]
         for t in transforms:
-            poly_t = transform_poly(p, t)
-            d = polygon_board_distance(b, poly_t)
-            if d > 0:
-                d += np.random.rand() * 1e-4
-                polys_transformed.append((poly_t.centroid.coords[0][0] + w, i, t, poly_t))
-    polys_transformed = sorted(polys_transformed, key=lambda x: x[0])
+            placed = base.apply_transform(t)
+            score = placement_board_score(b, board_geom, placed)
+            if score > 0:
+                scored.append((
+                    placed.center()[0] + w + np.random.rand() * 1e-4,
+                    i,
+                    t,
+                    placed,
+                ))
+
+    scored.sort(key=lambda x: x[0])
 
     idx = Index()
-    selected = []
-    for _, pnum, t, poly_t in polys_transformed:
-        intersects = False
-        for i in idx.intersection(poly_t.bounds):
-            if poly_t.intersects(selected[i]):
-                intersects = True
-                break
-        if not intersects:
-            idx.insert(len(selected), poly_t.bounds)
-            selected.append(poly_t)
+    selected_geoms: list[Geometry] = []
+    for _, pnum, t, placed in scored:
+        bbox = placed.bounds()
+        candidates = [selected_geoms[j] for j in idx.intersection(bbox)]
+        if not placed.intersects_any(candidates):
+            n = len(selected_geoms)
+            idx.insert(n, bbox)
+            selected_geoms.append(placed)
             result[pnum].append(t)
-    return tuple(
-        np.array(tt) for tt in result
-    )
+
+    return tuple(np.array(tt) for tt in result)
 
 
 def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
+    board_geom = Geometry.from_shapely(b)
     idx = Index()
-    selected = []
+    selected_geoms: list[Geometry] = []
     group_weights = []
 
-    for i, (p, w, transforms) in enumerate(polygons):
-        n = len(transforms)
-        for t in transforms:
-            poly_t = transform_poly(p, t)
-            if b.contains(poly_t):
-                selected.append(poly_t)
-                # group_weights.append(w / n)
-                group_weights.append(w)
+    for cand in _iter_candidates(board_geom, polygons, strict_board=True):
+        selected_geoms.append(cand.placed)
+        group_weights.append(cand.weight)
 
-    M = np.zeros((len(selected), len(selected)), dtype=np.float32)
-    for i, poly in enumerate(tqdm(selected)):
-        for j in idx.intersection(poly.bounds):
-            if poly.intersects(selected[j]):
+    M = np.zeros((len(selected_geoms), len(selected_geoms)), dtype=np.float32)
+    for i, placed in enumerate(tqdm(selected_geoms)):
+        bbox = placed.bounds()
+        for j in idx.intersection(bbox):
+            if placed.intersects(selected_geoms[j]):
                 M[i, j] = M[j, i] = 1
-        idx.insert(i, poly.bounds)
+        idx.insert(i, bbox)
         M[i, i] = -group_weights[i]
 
-    return M, selected
+    return M, selected_geoms
 
 
 @show_performance
-def make_polygon_graph(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
+def make_polygon_graph(b: BaseGeometry, polygons):
+    board_geom = Geometry.from_shapely(b)
     idx = Index()
     selected_polys = []
+    selected_geoms: list[Geometry] = []
     selected_group_id = []
     selected_transform = []
     graph = ElemGraph()
 
-    for i, (p, transforms) in enumerate(polygons):
-        # n = len(transforms)
+    for i, item in enumerate(polygons):
+        if len(item) == 2:
+            p, transforms = item
+        else:
+            p, _w, transforms = item
+        base = Geometry.from_convex_polygon(list(p.exterior.coords)[:-1])
         for t in transforms:
-            poly_t = transform_poly(p, t)
-            if b.contains(poly_t):
-                # group_weights.append(w / n)
-                center = poly_t.centroid.coords[0]
-                bbox = poly_t.bounds
-                graph.append_elem(
-                    i,
-                    center,
-                    bbox,
-                )
+            placed = base.apply_transform(t)
+            if not _placement_inside_board(board_geom, placed):
+                continue
+            candidates = [selected_geoms[j] for j in idx.intersection(placed.bounds())]
+            if placed.intersects_any(candidates):
+                continue
 
-                n = len(selected_polys)
-                for j in idx.intersection(bbox):
-                    if poly_t.intersects(selected_polys[j]):
-                        graph.add_collision(n, j)
-                selected_polys.append(poly_t)
-                selected_group_id.append(i)
-                selected_transform.append(t)
-                idx.insert(n, poly_t.bounds)
+            cx, cy = placed.center()
+            r = placed.radius()
+            graph.append_elem(
+                i,
+                Vec2(x=cx, y=cy),
+                Circle.from_center_radius(cx, cy, r),
+            )
+
+            n = len(selected_polys)
+            for j in idx.intersection(placed.bounds()):
+                if placed.intersects(selected_geoms[j]):
+                    graph.add_collision(n, j)
+            selected_polys.append(transform_poly(p, t))
+            selected_geoms.append(placed)
+            selected_group_id.append(i)
+            selected_transform.append(t)
+            idx.insert(n, placed.bounds())
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -276,11 +350,17 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
     return im
 
 
+def _rule_region(board: BaseGeometry) -> Circle:
+    xmin, ymin, xmax, ymax = board.bounds
+    return Circle.from_bounds(xmin, ymin, xmax, ymax)
+
+
 # @show_performance
-def improve_rules(graphs, rules, n):
+def improve_rules(graphs, rules, n, board: BaseGeometry | None = None):
+    region = _rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
     new_rules = list(rules)
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=Circle.from_bounds(0, 0, 1.2, 1.1),
+        region=region,
         dpos=.25,
         dw=.25,
         da=np.pi/4,
@@ -290,7 +370,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=Circle.from_bounds(0, 0, 1.2, 1.1),
+        region=region,
         dpos=.05,
         dw=.05,
         da=np.pi/32,
@@ -300,7 +380,7 @@ def improve_rules(graphs, rules, n):
         ngroups=2
     )))
     new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=Circle.from_bounds(0, 0, 1.2, 1.1),
+        region=region,
         dpos=.01,
         dw=.01,
         da=np.pi/64,
@@ -398,24 +478,6 @@ def main():
     rule_set.append_rule(PointPlaceRule(
         pos=Vec2(x=0, y=0), r=r, w=wrect, group=0
     ))
-    # rule_set.append_point_rule(PointPlaceRule(
-    #     x=0, y=0, r=r, w=wtriang, group=1
-    # ))
-    # rule_set.append_rule(PointPlaceRule(
-    #     x=1.2, y=0, r=r, w=wrect, group=0
-    # ))
-    # rule_set.append_rule(PointPlaceRule(
-    #     x=1.2, y=0, r=r, w=wtriang, group=1
-    # ))
-    # rule_set.append_rule(PointPlaceRule(
-    #     x=0, y=1.1, r=r, w=wrect, group=0
-    # ))
-    # rule_set.append_rule(PointPlaceRule(
-    #     x=0, y=1.1, r=r, w=wtriang, group=1
-    # ))
-    # rule_set.append_rule(PointPlaceRule(
-    #     x=0.7, y=0.7, r=r, w=wrect, group=0
-    # ))
     rule_set.append_rule(PointPlaceRule(
         pos=Vec2(x=0.7, y=0.7), r=r, w=wtriang, group=1
     ))
@@ -425,12 +487,6 @@ def main():
     rule_set.append_rule(PointPlaceRule(
         pos=Vec2(x=1.2, y=0), r=r, w=wtriang, group=1
     ))
-    # rule_set.append_rule(PointAngleRule(
-    #     x=0.7, y=0.7, r=r, a=np.pi/4, w=.1*wtriang, group=1
-    # ))
-    # rule_set.append_rule(PointAngleRule(
-    #     x=0.7, y=0.7, r=r, a=np.pi*5/4, w=.1*wtriang, group=1
-    # ))
     rule_set.append_rule(PointAngleRule(
         pos=Vec2(x=0, y=1.1), r=r, a=np.pi/4, w=.1*wtriang, group=1
     ))
@@ -474,10 +530,7 @@ def main():
         graphs.append(graph)
         graphs = graphs[-12:]
         for _ in range(8):
-            rule_sets = improve_rules(graphs, rule_sets, 64)
-        # M, polys = make_polygon_matrix(p_board, [(p1, 20, selected_t[0]), (p2, 12, selected_t[1])])
-        # print('------', M.shape, M.sum()/M.shape[0])
-        # v = optimize_polygons(M, np.zeros((M.shape[0], )))
+            rule_sets = improve_rules(graphs, rule_sets, 64, p_board)
         selected_polys = nest_by_graph(graph, rule_sets[:1])[0]
         old_len = len(selected_polys)
         graph_sorted = sort_graph(graph, rule_set)
@@ -505,16 +558,8 @@ def main():
         if len(history[1]) and len(selected_t[1]):
             history[1] = np.unique(np.concatenate([selected_t[1], history[1]]), axis=0)[5000:, :]
 
-    # selected_t = select_polygons_from_edges(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
-    # video.write(render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])]))
-    # video.write(render_selection(p_board, polys, v))
-    # cv.imwrite(f'/tmp/test_{it}.jpg', render_selection(p_board, polys, v))
-
     video.release()
 
-    # render
-    # im = render_placement(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
-    # cv.waitKey(0)
 
-test_placement()
+# test_placement()
 # main()

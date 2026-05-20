@@ -1,6 +1,7 @@
 # Local dev (uv): uv venv && uv sync
 # Build/install extensions: uv pip install -e . --no-build-isolation
-# Tests: pytest tests/  (requires editable install so nest_graph.geometry._geometry is on the path)
+# Tests: uv sync --extra test --no-install-project && uv run --no-sync pytest tests/
+# (requires pre-built extensions under build/ and nest_graph/*/*.so; python3-dev for rebuilds)
 # Requires Python dev headers for the nanobind extensions (e.g. python3.12-dev).
 
 [project]

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "decompose.h"
+#include "point_in_solid.h"
 #include "solid_geometry.h"
 #include "polygon_distance.h"
 #include "polygon_intersect.h"
@@ -53,6 +54,28 @@ static bool read_xy(nb::handle pt, double& x, double& y) {
         return true;
     }
     return false;
+}
+
+static bool read_transform(nb::handle t, double& x, double& y, double& angle) {
+    if (nb::isinstance<nb::tuple>(t) || nb::isinstance<nb::sequence>(t)) {
+        nb::sequence s = nb::borrow<nb::sequence>(t);
+        if (nb::len(s) < 3) {
+            return false;
+        }
+        x = nb::cast<double>(s[0]);
+        y = nb::cast<double>(s[1]);
+        angle = nb::cast<double>(s[2]);
+        return true;
+    }
+    return false;
+}
+
+static nb::tuple circle_bounds_tuple(const SolidGeometry2d& g) {
+    const auto& c = g.get_bounding_circle();
+    const double cx = c.center()[0];
+    const double cy = c.center()[1];
+    const double r = std::sqrt(static_cast<double>(c.square_radius()));
+    return nb::make_tuple(cx - r, cy - r, cx + r, cy + r);
 }
 
 static void append_coords(nb::handle coords, std::vector<Vec2d>& out) {
@@ -142,6 +165,20 @@ NB_MODULE(_geometry, m) {
     nb::class_<SolidGeometry2d>(m, "Geometry")
         .def(nb::init<>())
         .def_static(
+            "from_convex_polygon",
+            [](nb::object points) {
+                auto pts = points_from_iterable(points);
+                if (pts.size() < 3) {
+                    throw nb::value_error(
+                        "from_convex_polygon: need at least 3 distinct points");
+                }
+                SolidGeometry2d poly;
+                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()), false);
+                poly.finalize();
+                return poly;
+            },
+            nb::arg("points"))
+        .def_static(
             "from_shapely",
             [](nb::handle geom) {
                 std::vector<std::vector<Vec2d>> outers;
@@ -211,6 +248,79 @@ NB_MODULE(_geometry, m) {
             },
             nb::arg("angle"),
             nb::arg("origin") = nb::none())
+        .def(
+            "apply_transform",
+            [](const SolidGeometry2d& g, nb::args args) {
+                double x = 0.0;
+                double y = 0.0;
+                double angle = 0.0;
+                if (args.size() == 1 && read_transform(args[0], x, y, angle)) {
+                    return g.rotate(angle).translate(Vec2d({x, y}));
+                }
+                if (args.size() == 3) {
+                    x = nb::cast<double>(args[0]);
+                    y = nb::cast<double>(args[1]);
+                    angle = nb::cast<double>(args[2]);
+                    return g.rotate(angle).translate(Vec2d({x, y}));
+                }
+                throw nb::type_error(
+                    "apply_transform: expected (x, y, angle) or a length-3 sequence");
+            })
+        .def(
+            "center",
+            [](const SolidGeometry2d& g) {
+                const auto& c = g.get_bounding_circle();
+                auto cen = c.center();
+                return nb::make_tuple(cen[0], cen[1]);
+            })
+        .def(
+            "radius",
+            [](const SolidGeometry2d& g) {
+                return std::sqrt(
+                    static_cast<double>(g.get_bounding_circle().square_radius()));
+            })
+        .def("bounds", &circle_bounds_tuple)
+        .def(
+            "vertices",
+            [](const SolidGeometry2d& g) {
+                nb::list out;
+                for (const auto& p : g.line_points) {
+                    out.append(nb::make_tuple(p[0], p[1]));
+                }
+                return out;
+            })
+        .def(
+            "contains_point",
+            [](const SolidGeometry2d& g, double x, double y) {
+                return is_point_inside_solid_space(Vec2d({x, y}), g);
+            },
+            nb::arg("x"),
+            nb::arg("y"))
+        .def(
+            "intersects",
+            [](const SolidGeometry2d& a, const SolidGeometry2d& b) {
+                return !find_polygon_intersections<Vec2d>({a, b}).empty();
+            },
+            nb::arg("other"))
+        .def(
+            "intersects_any",
+            [](const SolidGeometry2d& a,
+               const std::vector<SolidGeometry2d>& others) {
+                if (others.empty()) {
+                    return false;
+                }
+                std::vector<SolidGeometry2d> batch;
+                batch.reserve(others.size() + 1);
+                batch.push_back(a);
+                batch.insert(batch.end(), others.begin(), others.end());
+                for (const auto& hit : find_polygon_intersections<Vec2d>(batch)) {
+                    if (hit.first == 0 || hit.second == 0) {
+                        return true;
+                    }
+                }
+                return false;
+            },
+            nb::arg("others"))
         .def(
             "get_bounding_circle",
             [](const SolidGeometry2d& poly) {
