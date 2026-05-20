@@ -35,8 +35,33 @@ TEST_CASE("Geometry API: from_convex_polygon", "[geometry_api]") {
         {0, 1},
     });
     REQUIRE_FALSE(g.line_points.empty());
+    REQUIRE(g.boundary_rings.size() == 1);
     const auto& c = g.get_bounding_circle();
     REQUIRE(c.square_radius() > 0.0);
+}
+
+TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]") {
+    SolidGeometry2 open_only;
+    std::vector<PolyTestVec2> open_pts{
+        {0, 0},
+        {1, 0},
+        {1, 1},
+        {0, 1},
+    };
+    open_only.append_line_poly(
+        open_pts.data(),
+        static_cast<int>(open_pts.size()),
+        false);
+    open_only.finalize();
+    REQUIRE(open_only.boundary_rings.empty());
+
+    SolidGeometry2 closed = polygon_from_quad({
+        {0, 0},
+        {1, 0},
+        {1, 1},
+        {0, 1},
+    });
+    REQUIRE(closed.boundary_rings.size() == 1);
 }
 
 TEST_CASE("Geometry API: apply_transform translate", "[geometry_api]") {

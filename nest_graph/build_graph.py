@@ -1,5 +1,4 @@
 # CFLAGS="-Wno-error=incompatible-pointer-types" pip install --force-reinstall --no-binary=shapely --upgrade shapely
-# pip install --force-reinstall --no-binary=rtree --upgrade rtree
 
 import cv2 as cv
 import numpy as np
@@ -7,15 +6,15 @@ from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
-from rtree.index import Index
 from tqdm import tqdm
 from typing import Iterator, NamedTuple, Tuple
 
-from .geometry import Geometry
+from .geometry import Geometry, find_polygon_intersections_bipartite
 from .utils import normalize_poly, transform_poly
 from .propose import propose_placements_point_cloud
 from .track_perf import show_performance
 from .elem_graph import (
+    _elem_graph,
     ElemGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings,
@@ -46,7 +45,7 @@ def _poly_and_transforms(item):
 
 def _base_geometries(polygons) -> list[Geometry]:
     return [
-        Geometry.from_convex_polygon(list(_poly_and_transforms(item)[0].exterior.coords)[:-1])
+        Geometry.from_shapely(_poly_and_transforms(item)[0])
         for item in polygons
     ]
 
@@ -76,6 +75,40 @@ def _placement_inside_board(board_geom: Geometry, placed: Geometry) -> bool:
         if not board_geom.contains_point(x, y):
             return False
     return True
+
+
+def _bounds_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]
+
+
+def _collision_partners_vs_existing(
+    placed: Geometry,
+    placed_bbox: tuple[float, float, float, float],
+    existing_geoms: list[Geometry],
+    existing_bboxes: list[tuple[float, float, float, float]],
+) -> list[int]:
+    if not existing_geoms:
+        return []
+    index_map: list[int] = []
+    candidates: list[Geometry] = []
+    for j, bb in enumerate(existing_bboxes):
+        if _bounds_overlap(placed_bbox, bb):
+            index_map.append(j)
+            candidates.append(existing_geoms[j])
+    if not candidates:
+        return []
+    hits = find_polygon_intersections_bipartite([placed], candidates)
+    return [index_map[k] for _i, k in hits]
+
+
+def _fill_collision_matrix(
+    M: np.ndarray,
+    geoms: list[Geometry],
+    bboxes: list[tuple[float, float, float, float]],
+) -> None:
+    for i, placed in enumerate(geoms):
+        for j in _collision_partners_vs_existing(placed, bboxes[i], geoms[:i], bboxes[:i]):
+            M[i, j] = M[j, i] = 1.0
 
 
 def placement_board_score(
@@ -127,17 +160,14 @@ def polygon_board_distance(b: BaseGeometry, p: Polygon):
 
 
 def select_non_intersecting_polygons(polygons: np.ndarray):
-    idx = Index()
-    selected = []
+    selected_geoms: list[Geometry] = []
+    selected: list = []
     for p in polygons:
-        intersects = False
-        for i in idx.intersection(p.bounds):
-            if p.intersects(selected[i]):
-                intersects = True
-                break
-        if not intersects:
-            idx.insert(len(selected), p.bounds)
-            selected.append(p)
+        geom = Geometry.from_shapely(p)
+        if geom.intersects_any(selected_geoms):
+            continue
+        selected_geoms.append(geom)
+        selected.append(p)
     return selected
 
 
@@ -163,14 +193,9 @@ def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, f
 
     scored.sort(key=lambda x: x[0])
 
-    idx = Index()
     selected_geoms: list[Geometry] = []
     for _, pnum, t, placed in scored:
-        bbox = placed.bounds()
-        candidates = [selected_geoms[j] for j in idx.intersection(bbox)]
-        if not placed.intersects_any(candidates):
-            n = len(selected_geoms)
-            idx.insert(n, bbox)
+        if not placed.intersects_any(selected_geoms):
             selected_geoms.append(placed)
             result[pnum].append(t)
 
@@ -179,7 +204,6 @@ def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, f
 
 def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
     board_geom = Geometry.from_shapely(b)
-    idx = Index()
     selected_geoms: list[Geometry] = []
     group_weights = []
 
@@ -187,13 +211,11 @@ def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, n
         selected_geoms.append(cand.placed)
         group_weights.append(cand.weight)
 
-    M = np.zeros((len(selected_geoms), len(selected_geoms)), dtype=np.float32)
-    for i, placed in enumerate(tqdm(selected_geoms)):
-        bbox = placed.bounds()
-        for j in idx.intersection(bbox):
-            if placed.intersects(selected_geoms[j]):
-                M[i, j] = M[j, i] = 1
-        idx.insert(i, bbox)
+    n = len(selected_geoms)
+    bboxes = [g.bounds() for g in selected_geoms]
+    M = np.zeros((n, n), dtype=np.float32)
+    _fill_collision_matrix(M, selected_geoms, bboxes)
+    for i in range(n):
         M[i, i] = -group_weights[i]
 
     return M, selected_geoms
@@ -202,44 +224,58 @@ def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, n
 @show_performance
 def make_polygon_graph(b: BaseGeometry, polygons):
     board_geom = Geometry.from_shapely(b)
-    idx = Index()
     selected_polys = []
     selected_geoms: list[Geometry] = []
+    selected_bboxes: list[tuple[float, float, float, float]] = []
     selected_group_id = []
     selected_transform = []
-    graph = ElemGraph()
+    group_ids: list[int] = []
+    elems: list = []
+    coords: list = []
+    collisions: list[list[int]] = []
+    bases = _base_geometries(polygons)
 
     for i, item in enumerate(polygons):
         if len(item) == 2:
             p, transforms = item
         else:
             p, _w, transforms = item
-        base = Geometry.from_convex_polygon(list(p.exterior.coords)[:-1])
+        base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
             if not _placement_inside_board(board_geom, placed):
                 continue
-            candidates = [selected_geoms[j] for j in idx.intersection(placed.bounds())]
-            if placed.intersects_any(candidates):
-                continue
+
+            bbox = placed.bounds()
+            n = len(selected_geoms)
+            collisions.append([])
 
             cx, cy = placed.center()
             r = placed.radius()
-            graph.append_elem(
-                i,
-                Vec2(x=cx, y=cy),
-                Circle.from_center_radius(cx, cy, r),
-            )
+            ep = _elem_graph.ElemPlace()
+            ep.pos = _elem_graph.Vec2(cx, cy)
+            ep.a = 0.0
+            group_ids.append(i)
+            elems.append(ep)
+            coords.append(_elem_graph.Circle(_elem_graph.Vec2(cx, cy), r * r))
 
-            n = len(selected_polys)
-            for j in idx.intersection(placed.bounds()):
-                if placed.intersects(selected_geoms[j]):
-                    graph.add_collision(n, j)
+            for j in _collision_partners_vs_existing(
+                placed, bbox, selected_geoms, selected_bboxes
+            ):
+                collisions[n].append(j)
+                collisions[j].append(n)
+
             selected_polys.append(transform_poly(p, t))
             selected_geoms.append(placed)
+            selected_bboxes.append(bbox)
             selected_group_id.append(i)
             selected_transform.append(t)
-            idx.insert(n, placed.bounds())
+
+    graph = ElemGraph()
+    graph._obj.group_id = group_ids
+    graph._obj.elems = elems
+    graph._obj.coords = coords
+    graph._obj.collisions = collisions
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -503,7 +539,8 @@ def main():
 
     history = [np.zeros((1, 3)), np.zeros((1, 3))]
 
-    for it in tqdm(tuple(range(256))):
+    n_iters = int(__import__('os').environ.get('NEST_BUILD_GRAPH_ITERS', '256'))
+    for it in tqdm(tuple(range(n_iters))):
         s0 = [
             np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
             history[0]
@@ -561,5 +598,5 @@ def main():
     video.release()
 
 
-# test_placement()
-# main()
+if __name__ == "__main__":
+    main()

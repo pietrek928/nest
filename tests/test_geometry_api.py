@@ -39,6 +39,8 @@ def test_apply_transform_matches_transform_poly():
     placed = base.apply_transform(*t)
     shapely_placed = transform_poly(p, t)
     geom_corners = list(placed.vertices())
+    if len(geom_corners) > 1 and geom_corners[0] == geom_corners[-1]:
+        geom_corners = geom_corners[:-1]
     shapely_corners = list(shapely_placed.exterior.coords)[:-1]
     assert len(geom_corners) == len(shapely_corners)
     for (gx, gy), (sx, sy) in zip(geom_corners, shapely_corners):

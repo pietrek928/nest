@@ -173,7 +173,17 @@ NB_MODULE(_geometry, m) {
                         "from_convex_polygon: need at least 3 distinct points");
                 }
                 SolidGeometry2d poly;
-                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()), false);
+                poly.add_boundary_ring(pts);
+                std::vector<Vec2d> closed = pts;
+                const Vec2d& first = closed.front();
+                const Vec2d& last = closed.back();
+                if (first[0] != last[0] || first[1] != last[1]) {
+                    closed.push_back(first);
+                }
+                poly.append_line_poly(
+                    closed.data(),
+                    static_cast<int>(closed.size()),
+                    false);
                 poly.finalize();
                 return poly;
             },
@@ -309,16 +319,7 @@ NB_MODULE(_geometry, m) {
                 if (others.empty()) {
                     return false;
                 }
-                std::vector<SolidGeometry2d> batch;
-                batch.reserve(others.size() + 1);
-                batch.push_back(a);
-                batch.insert(batch.end(), others.begin(), others.end());
-                for (const auto& hit : find_polygon_intersections<Vec2d>(batch)) {
-                    if (hit.first == 0 || hit.second == 0) {
-                        return true;
-                    }
-                }
-                return false;
+                return !find_polygon_intersections<Vec2d>({a}, others).empty();
             },
             nb::arg("others"))
         .def(

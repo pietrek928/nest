@@ -210,12 +210,9 @@ class ElemGraph:
         self._obj.collisions = list(self._obj.collisions) + [[]]
 
     def add_collision(self, group1: int, group2: int):
-        collisions = list(self._obj.collisions)
-        c1 = list(collisions[group1]) + [group2]
-        c2 = list(collisions[group2]) + [group1]
-        collisions[group1] = c1
-        collisions[group2] = c2
-        self._obj.collisions = collisions
+        coll = self._obj.collisions
+        coll[group1].append(group2)
+        coll[group2].append(group1)
 
 
 class ElemScores:
