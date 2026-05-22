@@ -151,42 +151,69 @@ TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][
     REQUIRE(ov26);
 }
 
-TEST_CASE("narrow_phase_contain strict inside vs escaped vertex", "[poly_intersect][router]") {
+TEST_CASE("narrow_phase_contain witness uses first vertex only", "[poly_intersect][router]") {
     auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto inner_ok = polygon_from_quad({{1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
     REQUIRE(narrow_phase_contain<Vec2>(
         inner_ok.get_part_points(0), inner_ok.get_part_size(0), outer));
 
-    auto inner_bad = polygon_from_quad({{1.5, 1.5}, {5.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
-    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        inner_bad.get_part_points(0), inner_bad.get_part_size(0), outer));
+    // Escaped vertex at (5.5, 1.5) but witness at (1.5, 1.5) is still inside.
+    auto inner_escaped = polygon_from_quad({{1.5, 1.5}, {5.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
+    REQUIRE(narrow_phase_contain<Vec2>(
+        inner_escaped.get_part_points(0), inner_escaped.get_part_size(0), outer));
 }
 
-TEST_CASE("narrow_phase_contain gradient threshold parity", "[poly_intersect][router]") {
+TEST_CASE("narrow_phase_contain witness false when rings are separated", "[poly_intersect][router]") {
+    auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
+    auto inner_far = polygon_from_quad({{10, 10}, {11, 10}, {11, 11}, {10, 11}});
+
+    const Vec2* in_pts = inner_far.get_part_points(0);
+    const int in_n = inner_far.get_part_size(0);
+    const Vec2* out_pts = outer.get_part_points(0);
+    const int out_n = outer.get_part_size(0);
+
+    REQUIRE_FALSE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
+    REQUIRE_FALSE(narrow_phase_contain<Vec2>(in_pts, in_n, outer));
+}
+
+TEST_CASE("narrow_phase_contain nesting may still GJK-intersect", "[poly_intersect][router]") {
+    auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
+    auto inner_ok = polygon_from_quad({{1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
+    const Vec2* in_pts = inner_ok.get_part_points(0);
+    const int in_n = inner_ok.get_part_size(0);
+    const Vec2* out_pts = outer.get_part_points(0);
+    const int out_n = outer.get_part_size(0);
+
+    REQUIRE(narrow_phase_contain<Vec2>(in_pts, in_n, outer));
+    REQUIRE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
+}
+
+TEST_CASE("narrow_phase_contain gradient threshold parity for witness", "[poly_intersect][router]") {
     auto outer = polygon_from_quad({{0, 0}, {25, 0}, {25, 6}, {0, 6}});
-    // Inner hull vertex counts 19 + outer 4 = 23
+    const Vec2* out_pts = outer.get_part_points(0);
+    const int out_n = outer.get_part_size(0);
+
     auto dense_inside23 = polygon_dense_bottom_rect(5, 21, 1.0, 3.0);
     REQUIRE(outer.get_part_size(0) + dense_inside23.get_part_size(0) == 25);
+    const Vec2* in23 = dense_inside23.get_part_points(0);
+    const int n23 = dense_inside23.get_part_size(0);
 
-    bool in23 = narrow_phase_contain<Vec2>(
-        dense_inside23.get_part_points(0), dense_inside23.get_part_size(0), outer);
-
-    // Inner hull 22 + outer 4 = 26
     auto dense_inside26 = polygon_dense_bottom_rect(5, 24, 1.0, 3.0);
     REQUIRE(outer.get_part_size(0) + dense_inside26.get_part_size(0) == 28);
+    const Vec2* in26 = dense_inside26.get_part_points(0);
+    const int n26 = dense_inside26.get_part_size(0);
 
-    bool in26 = narrow_phase_contain<Vec2>(
-        dense_inside26.get_part_points(0), dense_inside26.get_part_size(0), outer);
-
-    REQUIRE(in23 == in26);
-    REQUIRE(in23);
+    bool witness23 = narrow_phase_contain<Vec2>(in23, n23, outer);
+    bool witness26 = narrow_phase_contain<Vec2>(in26, n26, outer);
+    REQUIRE(witness23 == witness26);
+    REQUIRE(witness23);
 
     auto dense_escape23 = polygon_dense_bottom_rect(5, 21, 5.5, 7.5);
     auto dense_escape26 = polygon_dense_bottom_rect(5, 24, 5.5, 7.5);
-    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0), outer));
-    REQUIRE_FALSE(narrow_phase_contain<Vec2>(
-        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0), outer));
+    REQUIRE(narrow_phase_intersect<Vec2>(
+        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0), out_pts, out_n));
+    REQUIRE(narrow_phase_intersect<Vec2>(
+        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0), out_pts, out_n));
 }
 
 TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sweep]") {

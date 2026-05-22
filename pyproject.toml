@@ -1,13 +1,5 @@
-# Local dev (uv): uv venv && uv sync
-# Build/install extensions: uv pip install -e . --no-build-isolation
-# Tests: uv sync --extra test --no-install-project
-#   cmake --build build --target _geometry _elem_graph
-#   cp build/nest_graph/geometry/_geometry*.so nest_graph/geometry/
-#   cp build/nest_graph/elem_graph/_elem_graph*.so nest_graph/elem_graph/
-#   uv run --no-sync pytest tests/
-# Runtime tuning: docs/nest_config.md (NEST_* env vars for build_graph)
-# (python3-dev required to rebuild nanobind extensions)
-# Requires Python dev headers for the nanobind extensions (e.g. python3.12-dev).
+# Setup, build, and test: see README.md
+# Config reference: docs/nest_config.md
 
 [project]
 name = "nest_graph"

@@ -5,7 +5,6 @@
 #include <type_traits>
 
 #include "solid_geometry.h"
-#include "containment.h"
 #include "geometry_common.h"
 #include "sweep_engine.h"
 #include "convex/distance.h"
@@ -15,20 +14,19 @@
 
 // ComplexDistanceResult and execute_distance_sweep live in sweep_engine.h
 
+// -------------------------------------------------------------------------
+// NARROW PHASE ROUTERS
+// -------------------------------------------------------------------------
 template <class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(
-    const VecType* lsA,
-    int nA,
-    const VecType* lsB,
-    int nB,
+    const VecType* lsA, int nA,
+    const VecType* lsB, int nB,
     bool known_overlap,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
     if constexpr (!std::is_same_v<Tracer, NullTracer>) {
-        if (tracer) {
-            tracer->record_distance();
-        }
+        if (tracer) tracer->record_distance();
     }
 
     const VecType* p1 = (nA <= nB) ? lsA : lsB;
@@ -44,17 +42,13 @@ inline DistanceResult<VecType> narrow_phase_distance(
 
 template <class VecType, class Tracer = DefaultTracer>
 inline PenetrationResult<VecType> narrow_phase_penetration(
-    const VecType* lsA,
-    int nA,
-    const VecType* lsB,
-    int nB,
+    const VecType* lsA, int nA,
+    const VecType* lsB, int nB,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
     if constexpr (!std::is_same_v<Tracer, NullTracer>) {
-        if (tracer) {
-            tracer->record_penetration();
-        }
+        if (tracer) tracer->record_penetration();
     }
 
     const bool swapped = (nA > nB);
@@ -67,6 +61,7 @@ inline PenetrationResult<VecType> narrow_phase_penetration(
         ? convex_linestrings_penetration_gradient<VecType>(p1, s1, p2, s2)
         : convex_linestrings_penetration<VecType>(p1, s1, p2, s2);
 
+    // Flawless MTV inversion handling
     if (swapped && res.intersect) {
         res.mtv = -res.mtv;
     }
@@ -83,24 +78,19 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
-    using Scalar = typename VecType::Scalar;
-    if (polygons.size() < 2) {
-        return {};
-    }
+    if (polygons.size() < 2) return {};
 
-    const VecType sweep_axis = compute_optimal_sweep_axis(polygons);
+    auto ctx = prepare_sweep_axis<VecType>(polygons);
+
     std::vector<PartSweepElement<VecType>> elements;
+    // OPTIMIZATION: If SolidGeometry exposes line_parts, do exact capacity calculation
+    // size_t exact_capacity = 0; for(const auto& p : polygons) exact_capacity += p.line_parts.size();
+    // elements.reserve(exact_capacity);
     elements.reserve(polygons.size() * 4);
-
-    const Scalar axis_sq = sweep_axis.len_sq();
-    if (axis_sq < static_cast<Scalar>(1e-8)) {
-        return {};
-    }
-    const Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
 
     for (size_t i = 0; i < polygons.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i), 0, polygons[i], sweep_axis, axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(i), 0, polygons[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
     }
 
     return execute_distance_sweep<VecType, Tracer>(
@@ -114,20 +104,12 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
-    using Scalar = typename VecType::Scalar;
-    if (active_indices.empty() || polygons.size() < 2) {
-        return {};
-    }
+    if (active_indices.empty() || polygons.size() < 2) return {};
 
-    const VecType sweep_axis = compute_optimal_sweep_axis(polygons);
+    auto ctx = prepare_sweep_axis<VecType>(polygons);
+
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve(polygons.size() * 4);
-
-    const Scalar axis_sq = sweep_axis.len_sq();
-    if (axis_sq < static_cast<Scalar>(1e-8)) {
-        return {};
-    }
-    const Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
 
     std::vector<int> group_ids(polygons.size(), 0);
     for (int idx : active_indices) {
@@ -138,13 +120,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
     for (size_t i = 0; i < polygons.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i),
-            group_ids[i],
-            polygons[i],
-            sweep_axis,
-            axis_len_sqrt,
-            elements,
-            aura_multiplier);
+            static_cast<int>(i), group_ids[i], polygons[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
     }
 
     return execute_distance_sweep<VecType, Tracer>(
@@ -158,34 +134,20 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     Tracer* tracer = nullptr
 ) {
-    using Scalar = typename VecType::Scalar;
-    if (setA.empty() || setB.empty()) {
-        return {};
-    }
+    if (setA.empty() || setB.empty()) return {};
 
-    const VecType sweep_axis = compute_optimal_sweep_axis(setA, setB);
+    auto ctx = prepare_sweep_axis<VecType>(setA, setB);
+
     std::vector<PartSweepElement<VecType>> elements;
     elements.reserve((setA.size() + setB.size()) * 4);
 
-    const Scalar axis_sq = sweep_axis.len_sq();
-    if (axis_sq < static_cast<Scalar>(1e-8)) {
-        return {};
-    }
-    const Scalar axis_len_sqrt = static_cast<Scalar>(std::sqrt(static_cast<double>(axis_sq)));
-
     for (size_t i = 0; i < setA.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i), 0, setA[i], sweep_axis, axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(i), 0, setA[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
     }
     for (size_t i = 0; i < setB.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(setA.size() + i),
-            1,
-            setB[i],
-            sweep_axis,
-            axis_len_sqrt,
-            elements,
-            aura_multiplier);
+            static_cast<int>(setA.size() + i), 1, setB[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
     }
 
     return execute_distance_sweep<VecType, Tracer>(

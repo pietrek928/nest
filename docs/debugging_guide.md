@@ -4,15 +4,18 @@ This document contains useful Python snippets for debugging the C++ geometry eng
 
 ## 0. Building the Python Extension
 
+See [README.md](../README.md) for full setup. Short version:
+
 `pytest` imports `nest_graph.geometry._geometry` from the source tree (`nest_graph/geometry/_geometry.cpython-*.so`). After changing C++ headers under `nest_graph/geometry/`, rebuild that module or tests will run against stale code.
 
-**Preferred (when Python dev headers are available):**
+**Preferred:**
 
 ```bash
-uv pip install -e .
+uv pip install -e . --no-build-isolation
+uv run pytest tests/
 ```
 
-**Workaround (plain CMake in `build/`):** use this when editable install fails with `Could NOT find Python (missing: Development.Module)`:
+**Workaround (plain CMake in `build/`):** when editable install fails with `Could NOT find Python (missing: Development.Module)` — install `python3.12-dev` first if you can:
 
 ```bash
 mkdir -p build && cd build

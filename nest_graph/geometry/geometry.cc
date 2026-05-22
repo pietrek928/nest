@@ -12,6 +12,7 @@
 #include "solid_geometry.h"
 #include "polygon_distance.h"
 #include "polygon_intersect.h"
+#include "guide.h"
 #include <vec.h>
 
 namespace nb = nanobind;
@@ -19,6 +20,8 @@ namespace nb = nanobind;
 using Vec2d = Vec<2, double>;
 using SolidGeometry2d = SolidGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
+using GuidanceConfig2d = GuidanceConfig<Vec2d>;
+using PlacementGuidance2d = PlacementGuidance<Vec2d>;
 
 static bool nb_is_empty(nb::handle geom) {
     nb::object v = geom.attr("is_empty");
@@ -54,6 +57,19 @@ static bool read_xy(nb::handle pt, double& x, double& y) {
         return true;
     }
     return false;
+}
+
+static nb::tuple vec2d_to_tuple(const Vec2d& v) {
+    return nb::make_tuple(v[0], v[1]);
+}
+
+static Vec2d vec2d_from_tuple(nb::object o) {
+    double x = 0.0;
+    double y = 0.0;
+    if (!read_xy(o, x, y)) {
+        throw nb::type_error("expected a length-2 tuple or sequence for Vec2");
+    }
+    return Vec2d({x, y});
 }
 
 static bool read_transform(nb::handle t, double& x, double& y, double& angle) {
@@ -335,6 +351,42 @@ NB_MODULE(_geometry, m) {
             return "<nest_graph.geometry.Geometry>";
         });
 
+    nb::class_<GuidanceConfig2d>(m, "GuidanceConfig")
+        .def(nb::init<>())
+        .def_rw("use_target_attractor", &GuidanceConfig2d::use_target_attractor)
+        .def_rw("target_angle_rad", &GuidanceConfig2d::target_angle_rad)
+        .def_rw("use_gravity", &GuidanceConfig2d::use_gravity)
+        .def_rw("attraction_weight", &GuidanceConfig2d::attraction_weight)
+        .def_rw("alignment_weight", &GuidanceConfig2d::alignment_weight)
+        .def_rw("search_radius", &GuidanceConfig2d::search_radius)
+        .def_prop_rw(
+            "target_position",
+            [](const GuidanceConfig2d& c) { return vec2d_to_tuple(c.target_position); },
+            [](GuidanceConfig2d& c, nb::object o) {
+                c.target_position = vec2d_from_tuple(o);
+            })
+        .def_prop_rw(
+            "gravity_vector",
+            [](const GuidanceConfig2d& c) { return vec2d_to_tuple(c.gravity_vector); },
+            [](GuidanceConfig2d& c, nb::object o) {
+                c.gravity_vector = vec2d_from_tuple(o);
+            });
+
+    nb::class_<PlacementGuidance2d>(m, "PlacementGuidance")
+        .def_ro("is_penetrating", &PlacementGuidance2d::is_penetrating)
+        .def_ro("suggested_rotation_rad", &PlacementGuidance2d::suggested_rotation_rad)
+        .def_ro("clearance", &PlacementGuidance2d::clearance)
+        .def_prop_ro(
+            "ejection_vector",
+            [](const PlacementGuidance2d& g) {
+                return vec2d_to_tuple(g.ejection_vector);
+            })
+        .def_prop_ro(
+            "suggested_translation",
+            [](const PlacementGuidance2d& g) {
+                return vec2d_to_tuple(g.suggested_translation);
+            });
+
     nb::class_<DistanceResult2d>(m, "ComplexDistanceResult")
         .def_ro("polyA_idx", &DistanceResult2d::polyA_idx)
         .def_ro("polyB_idx", &DistanceResult2d::polyB_idx)
@@ -410,4 +462,23 @@ NB_MODULE(_geometry, m) {
         nb::arg("set_a"),
         nb::arg("set_b"),
         nb::arg("aura") = 0.5);
+
+    m.def(
+        "evaluate_local_placement",
+        [](int placed_poly_idx,
+           const std::vector<SolidGeometry2d>& polygons,
+           nb::object current_position,
+           nb::object config) {
+            Vec2d pos = vec2d_from_tuple(current_position);
+            GuidanceConfig2d cfg;
+            if (!config.is_none()) {
+                cfg = nb::cast<GuidanceConfig2d>(config);
+            }
+            return evaluate_local_placement<Vec2d>(
+                placed_poly_idx, polygons, pos, cfg);
+        },
+        nb::arg("placed_poly_idx"),
+        nb::arg("polygons"),
+        nb::arg("current_position"),
+        nb::arg("config") = nb::none());
 }

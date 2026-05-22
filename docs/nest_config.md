@@ -11,8 +11,10 @@ cfg = BuildGraphConfig.from_env()
 Run the demo loop:
 
 ```bash
-python -m nest_graph.build_graph
+uv run python -m nest_graph.build_graph
 ```
+
+See [README.md](../README.md) for setup and build instructions.
 
 ## Presets
 
@@ -30,12 +32,12 @@ Disable progress bar: `NEST_PROGRESS=0`.
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NEST_RANDOM_PER_ITER` | 128 | Random transforms per group per iteration |
-| `NEST_INITIAL_RANDOM` | 128 | Bootstrap `selected_t` size |
+| `NEST_RANDOM_PER_ITER` | 256 | Random transforms per group per iteration |
+| `NEST_INITIAL_RANDOM` | 256 | Bootstrap `selected_t` size |
 | `NEST_SELECTION_EXPAND_N` | 4 | `transform_selection` expansions |
 | `NEST_HISTORY_EXPAND_N` | 2 | `transform_history` expansions |
 | `NEST_HISTORY_MAX` | 512 | Max unique history rows kept (tail) |
-| `NEST_MAX_TRANSFORMS` | 600 | Subsample cap before graph build; `none` = no cap |
+| `NEST_MAX_TRANSFORMS` | 900 | Subsample cap before graph build; `none` = no cap |
 | `NEST_TRANSFORM_SX` / `SY` / `SA` | 1.5 / 1.5 / 2π | Random transform scale |
 | `NEST_SEED` | (unset) | RNG seed for reproducibility |
 | `NEST_SHUFFLE_PASSES` | 2 | Shuffled selection/history mix passes per group |

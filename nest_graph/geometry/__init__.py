@@ -3,6 +3,9 @@ from __future__ import annotations
 from ._geometry import (
     ComplexDistanceResult,
     Geometry,
+    GuidanceConfig,
+    PlacementGuidance,
+    evaluate_local_placement,
     find_polygon_distances,
     find_polygon_distances_active,
     find_polygon_distances_bipartite,
@@ -14,6 +17,9 @@ from ._geometry import (
 __all__ = [
     "ComplexDistanceResult",
     "Geometry",
+    "GuidanceConfig",
+    "PlacementGuidance",
+    "evaluate_local_placement",
     "find_polygon_distances",
     "find_polygon_distances_active",
     "find_polygon_distances_bipartite",

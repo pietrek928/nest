@@ -32,7 +32,6 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
     // --- PHASE 1: GJK (Find the Origin-Containing Simplex) ---
     auto dir = ls2[it2] - ls1[it1];
 
-    // Fallback if cached points perfectly overlap
     if (dir.qlen() < epsilon_sq) {
         dir = ls1[0] - ls1[n1 / 2];
     }
@@ -41,8 +40,6 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
     bool intersected = false;
 
     while (op_limit-- > 0) {
-
-        // Swap to bounded Line String gradient search
         if constexpr (UseGradient) {
             it1 = get_extreme_index_linestring_gradient<VecType>(ls1, n1, dir, it1);
             it2 = get_extreme_index_linestring_gradient<VecType>(ls2, n2, -dir, it2);
@@ -53,12 +50,10 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
 
         const auto support = ls1[it1] - ls2[it2];
 
-        // If the furthest point towards the origin doesn't cross it, they don't intersect
         if (support.dp(dir) < 0) {
             return { static_cast<Scalar>(0), false, VecType(), it1, it2 };
         }
 
-        // Duplicate point check
         for (int i = 0; i < simplex_size; ++i) {
             if ((support - simplex[i]).qlen() < epsilon_sq) {
                 return { static_cast<Scalar>(0), false, VecType(), it1, it2 };
@@ -86,7 +81,7 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
                 simplex_size = 2;
                 dir = AC_perp;
             } else {
-                intersected = true; // Origin is safely trapped!
+                intersected = true;
                 break;
             }
         } else if (simplex_size == 2) {
@@ -95,7 +90,7 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
             dir = triple_product(AB, AO, AB);
 
             if (dir.qlen() < epsilon_sq) {
-                intersected = true; // Origin lies EXACTLY on the segment
+                intersected = true;
                 break;
             }
         } else {
@@ -103,13 +98,8 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
         }
     }
 
-    if (!intersected) {
-        return { static_cast<Scalar>(0), false, VecType(), it1, it2 };
-    }
-
-    if (simplex_size < 3) {
-        return { static_cast<Scalar>(0), true, VecType(), it1, it2 };
-    }
+    if (!intersected) return { static_cast<Scalar>(0), false, VecType(), it1, it2 };
+    if (simplex_size < 3) return { static_cast<Scalar>(0), true, VecType(), it1, it2 };
 
     // --- PHASE 2: EPA (Expand the Polytope to find Penetration Vector) ---
     std::vector<VecType> polytope;
@@ -118,53 +108,79 @@ inline PenetrationResult<VecType> convex_linestrings_penetration_gjk_epa_impl(
     polytope.push_back(simplex[1]);
     polytope.push_back(simplex[2]);
 
+    // Robustness Fix: Calculate the true geometric centroid.
+    // The origin might be right on the edge, but the centroid is strictly trapped deep inside.
+    VecType centroid = (simplex[0] + simplex[1] + simplex[2]) * static_cast<Scalar>(1.0 / 3.0);
+
     int epa_limit = 32;
     while (epa_limit-- > 0) {
-        Scalar min_dist = std::numeric_limits<Scalar>::max();
+        Scalar min_dist_sq = std::numeric_limits<Scalar>::max();
         int min_index = 0;
         VecType min_normal;
+        Scalar min_n_len_sq = 1;
+        Scalar min_dot = 0;
 
+        // Optimization: Find the closest edge without using a single square root
         for (size_t i = 0; i < polytope.size(); ++i) {
-            int j = (static_cast<int>(i) + 1) % static_cast<int>(polytope.size());
+            size_t j = (i + 1 == polytope.size()) ? 0 : i + 1; // Faster wrap-around than %
             VecType A = polytope[i];
-            VecType B = polytope[static_cast<size_t>(j)];
+            VecType B = polytope[j];
             VecType AB = B - A;
-            VecType AO = -A;
 
-            VecType N = -triple_product(AB, AO, AB);
+            // Point towards the centroid to guarantee an "inward" vector
+            VecType ACentroid = centroid - A;
+
+            // Triple product yields normal pointing AWAY from centroid (Outward)
+            VecType N = -triple_product(AB, ACentroid, AB);
             Scalar n_len_sq = N.qlen();
 
             if (n_len_sq < epsilon_sq) {
                 return { static_cast<Scalar>(0), true, VecType(), it1, it2 };
             }
 
-            Scalar dist = A.dp(N) / std::sqrt(static_cast<double>(n_len_sq));
-            if (dist < min_dist) {
-                min_dist = dist;
+            // A.N gives the unnormalized projection. Force positive to counter float-drift.
+            Scalar dot = A.dp(N);
+            if (dot < 0) dot = -dot;
+
+            // Calculate squared distance: dist^2 = dot^2 / length^2
+            Scalar current_dist_sq = (dot * dot) / n_len_sq;
+
+            if (current_dist_sq < min_dist_sq) {
+                min_dist_sq = current_dist_sq;
                 min_index = static_cast<int>(i);
                 min_normal = N;
+                min_n_len_sq = n_len_sq;
+                min_dot = dot;
             }
         }
 
-        // Request a support point using the bounded line string search
+        // Only compute the expensive sqrt() ONCE per loop, for the winner
+        Scalar inv_len = static_cast<Scalar>(1.0) / std::sqrt(static_cast<double>(min_n_len_sq));
+        VecType normalized_n = min_normal * inv_len;
+        Scalar min_dist = min_dot * inv_len;
+
+        // Request support point
         int tmp_it1, tmp_it2;
         if constexpr (UseGradient) {
-            tmp_it1 = get_extreme_index_linestring_gradient<VecType>(ls1, n1, min_normal, it1);
-            tmp_it2 = get_extreme_index_linestring_gradient<VecType>(ls2, n2, -min_normal, it2);
+            tmp_it1 = get_extreme_index_linestring_gradient<VecType>(ls1, n1, normalized_n, it1);
+            tmp_it2 = get_extreme_index_linestring_gradient<VecType>(ls2, n2, -normalized_n, it2);
         } else {
-            tmp_it1 = get_extreme_index_linestring<VecType>(ls1, n1, min_normal, it1);
-            tmp_it2 = get_extreme_index_linestring<VecType>(ls2, n2, -min_normal, it2);
+            tmp_it1 = get_extreme_index_linestring<VecType>(ls1, n1, normalized_n, it1);
+            tmp_it2 = get_extreme_index_linestring<VecType>(ls2, n2, -normalized_n, it2);
         }
         VecType support = ls1[tmp_it1] - ls2[tmp_it2];
 
-        Scalar proj_dist = support.dp(min_normal) / std::sqrt(static_cast<double>(min_normal.qlen()));
+        // Degenerate Edge Guard: If the support point is identical to an existing edge vertex,
+        // inserting it creates a 0-length edge and crashes the next loop iteration.
+        if ((support - polytope[min_index]).qlen() < epsilon_sq) {
+            VecType mtv = -normalized_n * min_dist;
+            return { min_dist * min_dist, true, mtv, tmp_it1, tmp_it2 };
+        }
+
+        Scalar proj_dist = support.dp(normalized_n);
 
         if (proj_dist - min_dist < epsilon || epa_limit == 0) {
-            Scalar inv_len = static_cast<Scalar>(1.0) / static_cast<Scalar>(std::sqrt(static_cast<double>(min_normal.qlen())));
-            VecType normalized_n = min_normal * inv_len;
-
             VecType mtv = -normalized_n * min_dist;
-
             return { min_dist * min_dist, true, mtv, tmp_it1, tmp_it2 };
         }
 
