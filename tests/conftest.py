@@ -82,3 +82,34 @@ def small_transforms():
         return rng.uniform(-0.3, 0.3, (n, 3)) * [1.0, 1.0, 2 * np.pi]
 
     return _draw
+
+
+@pytest.fixture
+def build_graph_config():
+    """Small limits for fast CI / single-iteration smoke tests."""
+    from nest_graph.config import (
+        BuildGraphConfig,
+        OutputConfig,
+        ProposeConfig,
+        SamplingConfig,
+        SelectionConfig,
+    )
+
+    return BuildGraphConfig(
+        sampling=SamplingConfig(
+            random_per_iter=32,
+            initial_random=32,
+            max_transforms_per_group=80,
+            history_max=64,
+            seed=0,
+        ),
+        selection=SelectionConfig(improve_rules_rounds=1),
+        propose=ProposeConfig(
+            max_proposals=8,
+            candidate_pool=8,
+            point_cloud_particles=8,
+            point_cloud_iterations=12,
+            voronoi_max_sites=24,
+        ),
+        output=OutputConfig(n_iters=1, progress=False),
+    )

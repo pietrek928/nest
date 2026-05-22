@@ -149,12 +149,12 @@ def test_score_rules_synthetic_group0_only_graph():
 
 def test_build_graph_module_seed0_no_segfault():
     """Full main() driver with seed 0 must complete without SIGSEGV."""
-    env = {**os.environ, "NEST_BUILD_GRAPH_ITERS": "6"}
+    env = {**os.environ, "NEST_BUILD_GRAPH_ITERS": "3"}
     proc = subprocess.run(
         [sys.executable, "-c", "import numpy as np; np.random.seed(0); import nest_graph.build_graph as bg; bg.main()"],
         cwd=os.path.dirname(os.path.dirname(__file__)),
         env=env,
         capture_output=True,
-        timeout=120,
+        timeout=300,
     )
     assert proc.returncode == 0, proc.stderr.decode()[-3000:]

@@ -193,6 +193,9 @@ class ElemGraph:
     def __init__(self, _obj: Optional[Any] = None):
         self._obj = _obj if _obj is not None else _m.ElemGraph()
 
+    def reserve_elems(self, n: int) -> None:
+        self._obj.reserve_elems(n)
+
     def append_elem(
         self,
         group_id: int,
@@ -204,15 +207,10 @@ class ElemGraph:
         ep = _m.ElemPlace()
         ep.pos = center_v.to_native()
         ep.a = 0.0
-        self._obj.group_id = list(self._obj.group_id) + [group_id]
-        self._obj.elems = list(self._obj.elems) + [ep]
-        self._obj.coords = list(self._obj.coords) + [circle.to_native()]
-        self._obj.collisions = list(self._obj.collisions) + [[]]
+        self._obj.push_elem(group_id, ep, circle.to_native())
 
     def add_collision(self, group1: int, group2: int):
-        coll = self._obj.collisions
-        coll[group1].append(group2)
-        coll[group2].append(group1)
+        self._obj.add_collision_pair(group1, group2)
 
 
 class ElemScores:

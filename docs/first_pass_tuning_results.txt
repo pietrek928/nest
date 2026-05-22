@@ -1,0 +1,17 @@
+# Auto-generated 2026-05-21 21:01
+
+| preset | graph_nodes | edges | nest | dfs_sel | batch0 | batch1 | time_s |
+|--------|-------------|-------|------|---------|--------|--------|--------|
+| K_recommended | 96 | 492 | 19 | 20 | 900 | 900 | 0.85 |
+| F_fast_rules | 91 | 429 | 18 | 19 | 900 | 900 | 0.72 |
+| J_max_density | 89 | 442 | 17 | 19 | 1000 | 1000 | 0.68 |
+| E_shuffle_heavy | 87 | 382 | 17 | 19 | 900 | 900 | 0.89 |
+| B_lean_propose | 83 | 350 | 17 | 18 | 900 | 900 | 0.13 |
+| G_quality_rules | 83 | 377 | 18 | 18 | 900 | 900 | 0.68 |
+| A_current_defaults | 81 | 346 | 17 | 18 | 900 | 900 | 0.55 |
+| I_propose_shuffle | 81 | 340 | 18 | 18 | 900 | 900 | 0.67 |
+| C_propose_heavy | 78 | 320 | 17 | 17 | 900 | 900 | 1.05 |
+| D_high_random | 83 | 437 | 16 | 16 | 900 | 900 | 0.69 |
+| H_first_pass_combo | 61 | 218 | 14 | 14 | 750 | 750 | 0.60 |
+
+Best: K_recommended

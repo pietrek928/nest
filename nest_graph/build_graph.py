@@ -9,12 +9,21 @@ from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 from typing import Iterator, NamedTuple, Tuple
 
+from .config import (
+    BuildGraphConfig,
+    dedupe_transforms,
+    shuffle_transforms,
+    subsample_transforms,
+    trim_history,
+)
 from .geometry import Geometry, find_polygon_intersections_bipartite
 from .utils import normalize_poly, transform_poly
-from .propose import propose_placements_point_cloud
+from .propose import (
+    propose_placements_point_cloud,
+    proposed_transforms_for_groups,
+)
 from .track_perf import show_performance
 from .elem_graph import (
-    _elem_graph,
     ElemGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings,
@@ -35,6 +44,13 @@ class Candidate(NamedTuple):
     weight: float
     t: np.ndarray
     placed: Geometry
+
+
+class NestState(NamedTuple):
+    polys: list
+    group_id: list
+    transform: list
+    selected_indices: list
 
 
 def _poly_and_transforms(item):
@@ -75,6 +91,19 @@ def _placement_inside_board(board_geom: Geometry, placed: Geometry) -> bool:
         if not board_geom.contains_point(x, y):
             return False
     return True
+
+
+def _placement_valid(
+    board: BaseGeometry,
+    board_geom: Geometry,
+    placed: Geometry,
+    poly: Polygon,
+    t: np.ndarray,
+    board_check: str,
+) -> bool:
+    if board_check == "contains":
+        return bool(board.contains(transform_poly(poly, t)))
+    return _placement_inside_board(board_geom, placed)
 
 
 def _bounds_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
@@ -222,19 +251,22 @@ def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, n
 
 
 @show_performance
-def make_polygon_graph(b: BaseGeometry, polygons):
+def make_polygon_graph(
+    b: BaseGeometry,
+    polygons,
+    *,
+    board_check: str = "vertices",
+):
     board_geom = Geometry.from_shapely(b)
+    graph = ElemGraph()
     selected_polys = []
     selected_geoms: list[Geometry] = []
     selected_bboxes: list[tuple[float, float, float, float]] = []
     selected_group_id = []
     selected_transform = []
-    group_ids: list[int] = []
-    elems: list = []
-    coords: list = []
-    collisions: list[list[int]] = []
     bases = _base_geometries(polygons)
 
+    pending: list[tuple] = []
     for i, item in enumerate(polygons):
         if len(item) == 2:
             p, transforms = item
@@ -243,39 +275,28 @@ def make_polygon_graph(b: BaseGeometry, polygons):
         base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
-            if not _placement_inside_board(board_geom, placed):
+            if not _placement_valid(b, board_geom, placed, p, t, board_check):
                 continue
+            pending.append((i, p, t, placed))
 
-            bbox = placed.bounds()
-            n = len(selected_geoms)
-            collisions.append([])
-
-            cx, cy = placed.center()
-            r = placed.radius()
-            ep = _elem_graph.ElemPlace()
-            ep.pos = _elem_graph.Vec2(cx, cy)
-            ep.a = 0.0
-            group_ids.append(i)
-            elems.append(ep)
-            coords.append(_elem_graph.Circle(_elem_graph.Vec2(cx, cy), r * r))
-
-            for j in _collision_partners_vs_existing(
-                placed, bbox, selected_geoms, selected_bboxes
-            ):
-                collisions[n].append(j)
-                collisions[j].append(n)
-
-            selected_polys.append(transform_poly(p, t))
-            selected_geoms.append(placed)
-            selected_bboxes.append(bbox)
-            selected_group_id.append(i)
-            selected_transform.append(t)
-
-    graph = ElemGraph()
-    graph._obj.group_id = group_ids
-    graph._obj.elems = elems
-    graph._obj.coords = coords
-    graph._obj.collisions = collisions
+    graph.reserve_elems(len(pending))
+    for i, p, t, placed in pending:
+        bbox = placed.bounds()
+        n = len(selected_geoms)
+        graph.append_elem(
+            i,
+            Vec2(x=placed.center()[0], y=placed.center()[1]),
+            Circle.from_center_radius(*placed.center(), placed.radius()),
+        )
+        for j in _collision_partners_vs_existing(
+            placed, bbox, selected_geoms, selected_bboxes
+        ):
+            graph.add_collision(n, j)
+        selected_polys.append(transform_poly(p, t))
+        selected_geoms.append(placed)
+        selected_bboxes.append(bbox)
+        selected_group_id.append(i)
+        selected_transform.append(t)
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -306,6 +327,28 @@ def transforms_around(p: np.ndarray, s: Tuple[float, float, float], n: int):
         p + np.random.uniform(-1, 1, (p.shape[0], 3)) * [sx, sy, sa]
         for _ in range(n)
     ])
+
+
+def transform_shuffle_mix(
+    sel: np.ndarray,
+    hist: np.ndarray,
+    count: int,
+    rng: np.random.Generator,
+    scale: Tuple[float, float, float],
+) -> np.ndarray:
+    """Resample shuffled selection/history rows with fresh jitter."""
+    parts = [arr for arr in (sel, hist) if arr.shape[0] > 0]
+    if not parts or count <= 0:
+        return np.zeros((0, 3))
+    merged = np.concatenate(parts)
+    rng.shuffle(merged)
+    if merged.shape[0] >= count:
+        picked = merged[:count]
+    else:
+        extra = rng.integers(0, merged.shape[0], size=count - merged.shape[0])
+        picked = np.concatenate([merged, merged[extra]])
+    jitter = rng.uniform(-1, 1, (picked.shape[0], 3)) * scale
+    return picked + jitter
 
 
 def scale_coords(
@@ -391,48 +434,236 @@ def _rule_region(board: BaseGeometry) -> Circle:
     return Circle.from_bounds(xmin, ymin, xmax, ymax)
 
 
-# @show_performance
-def improve_rules(graphs, rules, n, board: BaseGeometry | None = None):
-    region = _rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
+def improve_rules(
+    graphs,
+    rules,
+    n: int,
+    board: BaseGeometry | None = None,
+    *,
+    mutation_presets: list[RuleMutationSettings] | None = None,
+    rule_score_penalty: float = 0.01,
+):
+    if mutation_presets is None:
+        region = _rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
+        ng = 2
+        mutation_presets = [
+            RuleMutationSettings(
+                region=region, dpos=0.25, dw=0.25, da=np.pi / 4,
+                insert_p=0.09, remove_p=0.02, mutate_p=0.1, ngroups=ng,
+            ),
+            RuleMutationSettings(
+                region=region, dpos=0.05, dw=0.05, da=np.pi / 32,
+                insert_p=0.04, remove_p=0.01, mutate_p=0.1, ngroups=ng,
+            ),
+            RuleMutationSettings(
+                region=region, dpos=0.01, dw=0.01, da=np.pi / 64,
+                insert_p=0.01, remove_p=0.001, mutate_p=0.1, ngroups=ng,
+            ),
+        ]
     new_rules = list(rules)
-    new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=region,
-        dpos=.25,
-        dw=.25,
-        da=np.pi/4,
-        insert_p=0.09,
-        remove_p=0.02,
-        mutate_p=0.1,
-        ngroups=2
-    )))
-    new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=region,
-        dpos=.05,
-        dw=.05,
-        da=np.pi/32,
-        insert_p=0.04,
-        remove_p=0.01,
-        mutate_p=0.1,
-        ngroups=2
-    )))
-    new_rules.extend(augment_rules(rules, RuleMutationSettings(
-        region=region,
-        dpos=.01,
-        dw=.01,
-        da=np.pi/64,
-        insert_p=0.01,
-        remove_p=0.001,
-        mutate_p=0.1,
-        ngroups=2
-    )))
+    for preset in mutation_presets:
+        new_rules.extend(augment_rules(rules, preset))
     scores = score_rules(graphs, new_rules)
     scored = []
     for s, r in zip(scores, new_rules):
-        scored.append((s - r.size() * .01, r))
+        scored.append((s - r.size() * rule_score_penalty, r))
     scored = sorted(scored, key=lambda x: x[0], reverse=True)
-    return [
-        v[1] for v in scored[:n]
-    ]
+    return [v[1] for v in scored[:n]]
+
+
+def _build_transform_batch(
+    cfg: BuildGraphConfig,
+    selected_t: tuple[np.ndarray, np.ndarray],
+    history: tuple[np.ndarray, np.ndarray],
+    rng: np.random.Generator,
+    *,
+    board: BaseGeometry | None = None,
+    parts: list[tuple[Polygon, int]] | None = None,
+    nest_state: NestState | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    sc = cfg.sampling
+    scale = sc.transform_scale
+    propose_by_group: dict[int, np.ndarray] = {}
+    if (
+        board is not None
+        and parts is not None
+        and cfg.propose.max_proposals > 0
+    ):
+        polys = nest_state.polys if nest_state is not None else []
+        selected = nest_state.selected_indices if nest_state is not None else []
+        propose_by_group = proposed_transforms_for_groups(
+            board,
+            parts,
+            polys,
+            selected,
+            cfg.propose,
+            min_dist=cfg.board_min_dist(),
+        )
+
+    def one_group(
+        group_id: int,
+        sel: np.ndarray,
+        hist: np.ndarray,
+    ) -> np.ndarray:
+        batch_parts: list[np.ndarray] = []
+        proposed = propose_by_group.get(group_id, np.zeros((0, 3)))
+        if proposed.shape[0] > 0:
+            batch_parts.append(proposed)
+        batch_parts.append(rng.uniform(-1, 1, (sc.random_per_iter, 3)) * scale)
+        if hist.shape[0] > 0:
+            batch_parts.append(hist)
+        if sel.shape[0] > 0:
+            batch_parts.append(sel)
+            batch_parts.extend(transform_selection(sel, sc.selection_expand_n))
+            batch_parts.extend(transform_history(hist, sc.history_expand_n))
+        if sc.shuffle_passes > 0 and (sel.shape[0] > 0 or hist.shape[0] > 0):
+            for _ in range(sc.shuffle_passes):
+                batch_parts.append(
+                    transform_shuffle_mix(
+                        sel, hist, sc.shuffle_per_pass, rng, sc.shuffle_scale,
+                    )
+                )
+        merged = dedupe_transforms(np.concatenate(batch_parts))
+        merged = shuffle_transforms(merged, rng)
+        return subsample_transforms(merged, sc.max_transforms_per_group, rng)
+
+    return (
+        one_group(0, selected_t[0], history[0]),
+        one_group(1, selected_t[1], history[1]),
+    )
+
+
+def _make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
+    rc = cfg.rules
+    r = rc.place_rule_radius
+    wrect = rc.weight_rect
+    wtri = rc.weight_tri
+    aw = rc.angle_rule_weight_scale * wtri
+    rule_set = PlacementRuleSet()
+    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=r, w=wrect, group=0))
+    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0.7, y=0.7), r=r, w=wtri, group=1))
+    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=1.1), r=r, w=wtri, group=1))
+    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=1.2, y=0), r=r, w=wtri, group=1))
+    rule_set.append_rule(PointAngleRule(pos=Vec2(x=0, y=1.1), r=r, a=np.pi / 4, w=aw, group=1))
+    rule_set.append_rule(PointAngleRule(pos=Vec2(x=0, y=1.1), r=r, a=np.pi * 5 / 4, w=aw, group=1))
+    rule_set.append_rule(PointAngleRule(pos=Vec2(x=1.2, y=0), r=r, a=np.pi / 4, w=aw, group=1))
+    rule_set.append_rule(PointAngleRule(pos=Vec2(x=1.2, y=0), r=r, a=np.pi * 5 / 4, w=aw, group=1))
+    return rule_set
+
+
+def _make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
+    first = PlacementRuleSet()
+    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=0))
+    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=1))
+    return [first]
+
+
+def run_build_graph(cfg: BuildGraphConfig) -> None:
+    rng = cfg.apply_seed()
+    sc = cfg.sampling
+    gc = cfg.graph
+    sel = cfg.selection
+    out = cfg.output
+
+    p_board = cfg.rules.board_polygon()
+    p1 = cfg.rules.rect_polygon()
+    p2 = cfg.rules.tri_polygon()
+
+    selected_t = (
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+    )
+    rule_sets = _make_seed_rule_sets(cfg)
+    rule_set = _make_demo_rule_set(cfg)
+    render_size = (out.render_size, out.render_size)
+    video = cv.VideoWriter(
+        out.video_path,
+        cv.VideoWriter_fourcc(*'mp4v'),
+        out.video_fps,
+        render_size,
+    )
+    history = (np.zeros((1, 3)), np.zeros((1, 3)))
+    graphs: list[ElemGraph] = []
+    nest_state: NestState | None = None
+    parts = [(p1, 0), (p2, 1)]
+    iters = tuple(range(out.n_iters))
+    if out.progress:
+        iters = tqdm(iters)
+
+    for _it in iters:
+        selected_t = _build_transform_batch(
+            cfg,
+            selected_t,
+            history,
+            rng,
+            board=p_board,
+            parts=parts,
+            nest_state=nest_state,
+        )
+        graph, polys, group_id, transform = make_polygon_graph(
+            p_board,
+            [(p1, selected_t[0]), (p2, selected_t[1])],
+            board_check=gc.board_check,
+        )
+        graphs.append(graph)
+        graphs = graphs[-gc.graphs_window:]
+        for _ in range(sel.improve_rules_rounds):
+            rule_sets = improve_rules(
+                graphs,
+                rule_sets,
+                sel.rules_kept,
+                p_board,
+                mutation_presets=cfg.rules.mutation_presets(),
+                rule_score_penalty=sel.rule_score_penalty,
+            )
+        selected_polys = nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0]
+        old_len = len(selected_polys)
+        graph_sorted = sort_graph(graph, rule_set)
+        graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
+        scores = score_elems(graph, rule_set)
+        for _ in range(sel.dfs_passes):
+            selected_polys = increase_selection_dfs(
+                graph_sorted_rev, selected_polys,
+                sel.dfs_max_tries, sel.dfs_min_collisions_loose,
+            )
+            selected_polys = increase_selection_dfs(
+                graph, selected_polys,
+                sel.dfs_max_tries, sel.dfs_min_collisions_tight,
+            )
+            selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, scores)
+            selected_polys = increase_selection_dfs(
+                graph_sorted, selected_polys,
+                sel.dfs_max_tries, sel.dfs_min_collisions_loose,
+            )
+            selected_polys = increase_score_dfs(graph_sorted, selected_polys, scores)
+        print(len(polys), old_len, ' -> ', len(selected_polys))
+        im = render_polys(p_board, [[polys[i] for i in selected_polys]], im_shape=render_size)
+        video.write(im)
+        cv.imwrite(out.snapshot_path, im)
+
+        selected_t = ([], [])
+        for i in selected_polys:
+            gi = group_id[i]
+            selected_t[gi].append(transform[i])
+        selected_t = tuple(np.array(t) for t in selected_t)
+        if len(history[0]) and len(selected_t[0]):
+            history = (
+                trim_history(history[0], selected_t[0], sc.history_max),
+                history[1],
+            )
+        if len(history[1]) and len(selected_t[1]):
+            history = (
+                history[0],
+                trim_history(history[1], selected_t[1], sc.history_max),
+            )
+        nest_state = NestState(
+            polys=polys,
+            group_id=group_id,
+            transform=transform,
+            selected_indices=list(selected_polys),
+        )
+
+    video.release()
 
 
 def transform_selection(s, n):
@@ -488,114 +719,7 @@ def test_placement():
 
 
 def main():
-    graphs = []
-    first_rule_set = PlacementRuleSet()
-    first_rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=0, y=0), r=.1, w=.1, group=0
-    ))
-    first_rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=0, y=0), r=.1, w=.1, group=1
-    ))
-    rule_sets = [first_rule_set]
-
-    p_board = Polygon([(0, 0), (1.2, 0), (0, 1.1)])
-    p1 = normalize_poly(Polygon([(0, 0), (.1, 0), (.1, .1), (0, .1)]))
-    p2 = normalize_poly(Polygon([(0, 0), (.15, 0), (0, .07)]))
-
-    selected_t = [
-        np.random.rand(128, 3) * [1.5, 1.5, 2 * np.pi],
-        np.random.rand(128, 3) * [1.5, 1.5, 2 * np.pi],
-    ]
-
-    wrect = 1
-    wtriang = 1
-    r = .2
-    rule_set = PlacementRuleSet()
-    rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=0, y=0), r=r, w=wrect, group=0
-    ))
-    rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=0.7, y=0.7), r=r, w=wtriang, group=1
-    ))
-    rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=0, y=1.1), r=r, w=wtriang, group=1
-    ))
-    rule_set.append_rule(PointPlaceRule(
-        pos=Vec2(x=1.2, y=0), r=r, w=wtriang, group=1
-    ))
-    rule_set.append_rule(PointAngleRule(
-        pos=Vec2(x=0, y=1.1), r=r, a=np.pi/4, w=.1*wtriang, group=1
-    ))
-    rule_set.append_rule(PointAngleRule(
-        pos=Vec2(x=0, y=1.1), r=r, a=np.pi*5/4, w=.1*wtriang, group=1
-    ))
-    rule_set.append_rule(PointAngleRule(
-        pos=Vec2(x=1.2, y=0), r=r, a=np.pi/4, w=.1*wtriang, group=1
-    ))
-    rule_set.append_rule(PointAngleRule(
-        pos=Vec2(x=1.2, y=0), r=r, a=np.pi*5/4, w=.1*wtriang, group=1
-    ))
-    video = cv.VideoWriter('test.mp4', cv.VideoWriter_fourcc(*'mp4v'), 5, (1024, 1024))
-
-    history = [np.zeros((1, 3)), np.zeros((1, 3))]
-
-    n_iters = int(__import__('os').environ.get('NEST_BUILD_GRAPH_ITERS', '256'))
-    for it in tqdm(tuple(range(n_iters))):
-        s0 = [
-            np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
-            history[0]
-        ]
-        if selected_t[0].shape[0] > 0:
-            s0.append(selected_t[0])
-            s0.extend(transform_selection(selected_t[0], 4))
-            s0.extend(transform_history(history[0], 2))
-
-        s1 = [
-            np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi],
-            history[1]
-        ]
-        if selected_t[1].shape[0] > 0:
-            s1.append(selected_t[1])
-            s1.extend(transform_selection(selected_t[1], 4))
-            s1.extend(transform_history(history[1], 2))
-
-        selected_t = [
-            np.concatenate(s0),
-            np.concatenate(s1),
-        ]
-        graph, polys, group_id, transform = make_polygon_graph(p_board, [(p1, selected_t[0]), (p2, selected_t[1])])
-        graphs.append(graph)
-        graphs = graphs[-12:]
-        for _ in range(8):
-            rule_sets = improve_rules(graphs, rule_sets, 64, p_board)
-        selected_polys = nest_by_graph(graph, rule_sets[:1])[0]
-        old_len = len(selected_polys)
-        graph_sorted = sort_graph(graph, rule_set)
-        graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
-        scores = score_elems(graph, rule_set)
-        for _ in range(2):
-            selected_polys = increase_selection_dfs(graph_sorted_rev, selected_polys, 8, 2)
-            selected_polys = increase_selection_dfs(graph, selected_polys, 8, 1)
-            selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, scores)
-            selected_polys = increase_selection_dfs(graph_sorted, selected_polys, 8, 2)
-            selected_polys = increase_score_dfs(graph_sorted, selected_polys, scores)
-        print(len(polys), old_len, ' -> ', len(selected_polys))
-        im = render_polys(p_board, [[
-            polys[i] for i in selected_polys
-        ]])
-        video.write(im)
-        cv.imwrite('test.jpg', im)
-
-        selected_t = [[], []]
-        for i in selected_polys:
-            selected_t[group_id[i]].append(transform[i])
-        selected_t = tuple(np.array(t) for t in selected_t)
-        if len(history[0]) and len(selected_t[0]):
-            history[0] = np.unique(np.concatenate([selected_t[0], history[0]]), axis=0)[5000:, :]
-        if len(history[1]) and len(selected_t[1]):
-            history[1] = np.unique(np.concatenate([selected_t[1], history[1]]), axis=0)[5000:, :]
-
-    video.release()
+    run_build_graph(BuildGraphConfig.from_env())
 
 
 if __name__ == "__main__":

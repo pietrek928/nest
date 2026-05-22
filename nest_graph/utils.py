@@ -17,13 +17,13 @@ def normalize_poly(p: BaseGeometry):
 def get_shape_exteriors(p: BaseGeometry):
     if p.is_empty:
         return ()
-    if p.geom_type.startswith('Multi'):
+    if p.geom_type in ('MultiPolygon', 'GeometryCollection'):
         return tuple(
             e for g in p.geoms for e in get_shape_exteriors(g)
         )
-    if hasattr(p, 'exterior'):
+    if p.geom_type == 'Polygon':
         return (p.exterior,)
-    return (p,)
+    return ()
 
 
 def get_shape_polygons_coords(g):

@@ -95,7 +95,35 @@ NB_MODULE(_elem_graph, m) {
         .def_rw("group_id", &ElemGraph::group_id)
         .def_rw("elems", &ElemGraph::elems)
         .def_rw("coords", &ElemGraph::coords)
-        .def_rw("collisions", &ElemGraph::collisions);
+        .def_rw("collisions", &ElemGraph::collisions)
+        .def(
+            "push_elem",
+            [](ElemGraph& g, int group_id, const ElemPlace& ep, const Circle2f& circle) {
+                g.group_id.push_back(group_id);
+                g.elems.push_back(ep);
+                g.coords.push_back(circle);
+                g.collisions.emplace_back();
+            },
+            nb::arg("group_id"),
+            nb::arg("elem"),
+            nb::arg("circle"))
+        .def(
+            "add_collision_pair",
+            [](ElemGraph& g, int i, int j) {
+                g.collisions[i].push_back(j);
+                g.collisions[j].push_back(i);
+            },
+            nb::arg("i"),
+            nb::arg("j"))
+        .def(
+            "reserve_elems",
+            [](ElemGraph& g, std::size_t n) {
+                g.group_id.reserve(n);
+                g.elems.reserve(n);
+                g.coords.reserve(n);
+                g.collisions.reserve(n);
+            },
+            nb::arg("n"));
 
     m.def(
         "augment_rules",

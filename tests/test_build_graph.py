@@ -9,12 +9,14 @@ from shapely.geometry import Point, Polygon
 from nest_graph.build_graph import (
     Geometry,
     _base_geometries,
+    _build_transform_batch,
     _poly_and_transforms,
     _rule_region,
     improve_rules,
     make_polygon_graph,
     make_polygon_matrix,
     placement_board_score,
+    run_build_graph,
     select_polygons_from_edges,
 )
 from nest_graph.elem_graph import PlacementRuleSet
@@ -88,24 +90,46 @@ def test_make_polygon_graph_accepts_disjoint_concave_pair(
     assert len(graph._obj.collisions[0]) == 0
 
 
-def test_make_polygon_graph_main_iteration_scale(nest_board, rect_poly, tri_poly):
-    """First main()-style iteration should build a dense graph, not a tiny independent set."""
-    rng = np.random.default_rng(0)
-    history = np.zeros((1, 3))
-    s0 = np.concatenate([
-        rng.uniform(-0.35, 0.35, (256, 3)) * [1.5, 1.5, 2 * np.pi],
-        history,
-    ])
-    s1 = np.concatenate([
-        rng.uniform(-0.35, 0.35, (256, 3)) * [1.5, 1.5, 2 * np.pi],
-        history,
-    ])
+def test_make_polygon_graph_main_iteration_scale(
+    nest_board, rect_poly, tri_poly, build_graph_config,
+):
+    """First-iteration batch should build a dense graph, not a tiny independent set."""
+    cfg = build_graph_config
+    cfg.sampling.random_per_iter = 256
+    cfg.sampling.max_transforms_per_group = None
+    rng = cfg.apply_seed()
+    history = (np.zeros((1, 3)), np.zeros((1, 3)))
+    selected_t = (
+        rng.uniform(-1, 1, (cfg.sampling.initial_random, 3)) * cfg.sampling.transform_scale,
+        rng.uniform(-1, 1, (cfg.sampling.initial_random, 3)) * cfg.sampling.transform_scale,
+    )
+    s0, s1 = _build_transform_batch(cfg, selected_t, history, rng)
     graph, polys, _gid, _trans = make_polygon_graph(
-        nest_board, [(rect_poly, s0), (tri_poly, s1)]
+        nest_board, [(rect_poly, s0), (tri_poly, s1)],
+        board_check=cfg.graph.board_check,
     )
     edges = sum(len(graph._obj.collisions[i]) for i in range(len(polys))) // 2
     assert len(polys) > 50
     assert edges > 100
+
+
+def test_run_build_graph_fast(tmp_path, build_graph_config):
+    cfg = build_graph_config
+    cfg.output.video_path = str(tmp_path / "out.mp4")
+    cfg.output.snapshot_path = str(tmp_path / "out.jpg")
+    run_build_graph(cfg)
+    assert (tmp_path / "out.jpg").is_file()
+
+
+def test_improve_rules_uses_config_presets(nest_board, build_graph_config):
+    rules = [PlacementRuleSet()]
+    presets = build_graph_config.rules.mutation_presets()
+    improved = improve_rules(
+        [], rules, 1, nest_board,
+        mutation_presets=presets,
+        rule_score_penalty=build_graph_config.selection.rule_score_penalty,
+    )
+    assert len(improved) >= 1
 
 
 def test_make_polygon_graph_keeps_overlapping_placements(nest_board, rect_poly, small_transforms):
