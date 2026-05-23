@@ -6,7 +6,7 @@ This document contains useful Python snippets for debugging the C++ geometry eng
 
 See [README.md](../README.md) for full setup. Short version:
 
-`pytest` imports `nest_graph.geometry._geometry` from the source tree (`nest_graph/geometry/_geometry.cpython-*.so`). After changing C++ headers under `nest_graph/geometry/`, rebuild that module or tests will run against stale code.
+`pytest` imports `nest_graph.geometry` from `nest_graph/geometry.cpython-*.so` at the package root. After changing C++ headers under `nest_graph/geometry/`, rebuild that module or tests will run against stale code.
 
 **Preferred:**
 
@@ -20,12 +20,12 @@ uv run pytest tests/
 ```bash
 mkdir -p build && cd build
 cmake .. -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build . --target _geometry
+cmake --build . --target geometry
 cd ..
 pytest tests/
 ```
 
-The `_geometry` target writes the `.so` next to `nest_graph/geometry/__init__.py`. C++ unit tests: `cmake --build build --target geometry_cpp_tests && ./build/nest_graph/geometry/geometry_cpp_tests`.
+The `geometry` target writes `nest_graph/geometry*.so`. C++ unit tests: `cmake --build build --target geometry_cpp_tests && ./build/nest_graph/geometry/geometry_cpp_tests`.
 
 **Polygon holes:** `decompose_complex_polygon` decomposes outer rings (additive) and hole rings (reversed winding, `is_subtractive` on each `line_part`). `is_point_inside_solid_space` uses signed ray crossings so hole interiors are void. Hole boundary segments are **not** swept as colliders (only additive `line_parts` enter broad-phase).
 

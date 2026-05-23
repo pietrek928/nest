@@ -7,7 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "geometry/convex/penetration.h"
-#include "geometry/polygon_distance.h"
+#include "geometry/distance/polygon_distance.h"
 #include "tests/geometry_test_helpers.h"
 #include <vec.h>
 

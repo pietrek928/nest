@@ -4,9 +4,9 @@
 #include <initializer_list>
 #include <vector>
 
-#include "geometry/decompose.h"
-#include "geometry/solid_geometry.h"
-#include "geometry/tracer.h"
+#include "geometry/solid/decompose.h"
+#include "geometry/solid/solid_geometry.h"
+#include "geometry/common/tracer.h"
 #include <vec.h>
 
 using PolyTestVec2 = Vec<2, double>;

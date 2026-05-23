@@ -1,8 +1,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 
-#include "geometry/point_in_solid.h"
-#include "geometry/polygon_intersect.h"
+#include "geometry/solid/point_in_solid.h"
+#include "geometry/intersect/polygon_intersect.h"
 #include "geometry/tests/geometry_test_helpers.h"
 
 using PolyTestVec2 = Vec<2, double>;

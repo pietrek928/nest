@@ -4,7 +4,7 @@
 #include <utility>
 
 #include <circle.h>
-#include "tracer.h"
+#include "common/tracer.h"
 
 #ifndef NEST_GRAPH_DEFAULT_TRACER
 #define NEST_GRAPH_DEFAULT_TRACER NullTracer

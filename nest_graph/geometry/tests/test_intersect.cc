@@ -5,7 +5,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include "geometry/polygon_intersect.h"
+#include "geometry/intersect/polygon_intersect.h"
 #include "tests/geometry_test_helpers.h"
 #include <vec.h>
 

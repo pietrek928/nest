@@ -4,9 +4,9 @@
 #include <utility>
 #include <vector>
 
-#include "solid_geometry.h"
-#include "point_in_solid.h"
-#include "geometry_common.h"
+#include "solid/solid_geometry.h"
+#include "solid/point_in_solid.h"
+#include "common/geometry_common.h"
 
 // PRECONDITION: convex inner ring and outer solid; inner/outer boundary segments do not cross.
 // Caller must establish this (e.g. check_part_vs_part_intersect == false on this part pair).

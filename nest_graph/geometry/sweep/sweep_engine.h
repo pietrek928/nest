@@ -7,12 +7,12 @@
 #include <utility>
 #include <vector>
 
-#include "solid_geometry.h"
-#include "geometry_common.h"
-#include "containment.h"
+#include "solid/solid_geometry.h"
+#include "common/geometry_common.h"
+#include "solid/containment.h"
 #include "convex/intersect.h"
-#include "sweep.h"
-#include "tracer.h"
+#include "sweep/sweep.h"
+#include "common/tracer.h"
 
 // -------------------------------------------------------------------------
 // Sweep element population

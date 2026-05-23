@@ -1,8 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
-#include "types.h"
+#include "types/types.h"
 
 typedef struct PointPlaceRule {
     Vec2f pos;
@@ -48,8 +49,10 @@ typedef struct RuleMutationSettings {
     float dpos, dw, da;
     float insert_p, remove_p, mutate_p;
     Tvertex ngroups;
+    int max_inserts_per_type = 3;
 } RuleMutationSettings;
 
 std::vector<PlacementRuleSet> augment_rules(
     const std::vector<PlacementRuleSet> &rules,
-    const RuleMutationSettings &settings);
+    const RuleMutationSettings &settings,
+    std::uint32_t seed = 0);

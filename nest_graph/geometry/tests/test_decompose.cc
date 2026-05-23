@@ -5,9 +5,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "geometry/decompose.h"
-#include "geometry/point_in_solid.h"
-#include "geometry/solid_geometry.h"
+#include "geometry/solid/decompose.h"
+#include "geometry/solid/point_in_solid.h"
+#include "geometry/solid/solid_geometry.h"
 #include <vec.h>
 
 using Vec2f = Vec<2, float>;

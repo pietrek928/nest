@@ -4,8 +4,8 @@
 #include <cmath>
 #include <algorithm>
 
-#include "solid_geometry.h"
-#include "polygon_distance.h"
+#include "solid/solid_geometry.h"
+#include "distance/polygon_distance.h"
 
 // -------------------------------------------------------------------------
 // CONFIGURATION & RESULT STRUCTURES

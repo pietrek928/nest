@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
-#include "geometry/point_in_solid.h"
-#include "geometry/decompose.h"
+#include "geometry/solid/point_in_solid.h"
+#include "geometry/solid/decompose.h"
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;

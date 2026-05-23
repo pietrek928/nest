@@ -1,19 +1,25 @@
-nanobind_add_module(_geometry geometry.cc)
-target_link_libraries(_geometry PRIVATE nest_graph_headers)
-target_include_directories(_geometry PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-
-if(DEFINED ENV{NEST_GRAPH_NATIVE})
-  target_compile_options(_geometry PRIVATE -march=native)
-endif()
-target_compile_options(_geometry PRIVATE -O2 -g)
-
-# Plain `cmake --build` (non-scikit-build): place the extension next to __init__.py
-# so `import nest_graph.geometry` works with pytest pythonpath = ["."].
-set_target_properties(_geometry PROPERTIES
-  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/nest_graph/geometry"
+nanobind_add_module(geometry
+  bindings/module.cc
+  bindings/api.cc
+  bindings/shapely.cc
+)
+target_link_libraries(geometry PRIVATE nest_graph_headers)
+target_include_directories(geometry PRIVATE
+  "${CMAKE_CURRENT_SOURCE_DIR}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/bindings"
 )
 
-install(TARGETS _geometry LIBRARY DESTINATION nest_graph/geometry)
+if(DEFINED ENV{NEST_GRAPH_NATIVE})
+  target_compile_options(geometry PRIVATE -march=native)
+endif()
+target_compile_options(geometry PRIVATE -O2 -g)
+
+# Extension is nest_graph.geometry (nest_graph/geometry*.so), not nest_graph.geometry._geometry.
+set_target_properties(geometry PROPERTIES
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/nest_graph"
+)
+
+install(TARGETS geometry LIBRARY DESTINATION nest_graph)
 
 if(NEST_GRAPH_BUILD_TESTS)
   include(FetchContent)

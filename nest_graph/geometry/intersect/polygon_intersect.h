@@ -4,11 +4,10 @@
 #include <cmath>
 #include <utility>
 
-#include "solid_geometry.h"
-#include "point_in_solid.h"
-#include "containment.h"
-#include "geometry_common.h"
-#include "sweep_engine.h"
+#include "solid/solid_geometry.h"
+#include "solid/containment.h"
+#include "common/geometry_common.h"
+#include "sweep/sweep_engine.h"
 #include "convex/intersect.h"
 
 // -------------------------------------------------------------------------

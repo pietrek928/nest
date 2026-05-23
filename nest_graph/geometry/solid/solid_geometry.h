@@ -7,8 +7,6 @@
 #include <circle.h>
 
 
-namespace solid_geometry_detail {
-
 template <class VecType>
 inline VecType rotate_point_2d(
     const VecType& p,
@@ -19,9 +17,6 @@ inline VecType rotate_point_2d(
     VecType d = p - origin;
     return origin + VecType({cos_a * d[0] - sin_a * d[1], sin_a * d[0] + cos_a * d[1]});
 }
-
-}  // namespace solid_geometry_detail
-
 
 template<class VecType>
 class SolidGeometry {
@@ -126,18 +121,18 @@ public:
         const Scalar sin_a = std::sin(angle);
         SolidGeometry out = *this;
         for (auto& p : out.line_points) {
-            p = solid_geometry_detail::rotate_point_2d(p, cos_a, sin_a, origin);
+            p = rotate_point_2d(p, cos_a, sin_a, origin);
         }
         for (auto& ring : out.boundary_rings) {
             for (auto& p : ring.points) {
-                p = solid_geometry_detail::rotate_point_2d(p, cos_a, sin_a, origin);
+                p = rotate_point_2d(p, cos_a, sin_a, origin);
             }
         }
         for (auto& part : out.line_parts) {
-            part.bounding_circle.c = solid_geometry_detail::rotate_point_2d(
+            part.bounding_circle.c = rotate_point_2d(
                 part.bounding_circle.c, cos_a, sin_a, origin);
         }
-        out.bounding_circle.c = solid_geometry_detail::rotate_point_2d(
+        out.bounding_circle.c = rotate_point_2d(
             out.bounding_circle.c, cos_a, sin_a, origin);
         return out;
     }

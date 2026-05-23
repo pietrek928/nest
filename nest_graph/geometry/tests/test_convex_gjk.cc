@@ -7,7 +7,7 @@
 #include "geometry/convex/distance.h"
 #include "geometry/convex/intersect.h"
 #include "geometry/convex/penetration.h"
-#include "geometry/polygon_intersect.h"
+#include "geometry/intersect/polygon_intersect.h"
 #include <vec.h>
 
 using Vec2 = Vec<2, double>;

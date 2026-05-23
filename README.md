@@ -44,7 +44,7 @@ Outputs `test.mp4` and `test.jpg` in the current directory by default.
 
 ### Recommended: editable install with uv
 
-Scikit-build runs CMake and installs `_geometry` and `_elem_graph` into the package tree — no manual copying of `.so` files.
+Scikit-build runs CMake and installs `geometry` and `elem_graph` extensions into the package tree — no manual copying of `.so` files.
 
 ```bash
 uv sync --extra test
@@ -77,16 +77,15 @@ sudo apt install python3.12-dev   # match your Python minor version
 # Or configure CMake manually:
 mkdir -p build && cd build
 cmake .. -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build . --target _geometry _elem_graph
+cmake --build . --target geometry elem_graph
 cd ..
 ```
 
 For a one-off run without reinstalling, copy artifacts into the tree:
 
 ```bash
-cmake --build build --target _geometry _elem_graph
-cp build/nest_graph/geometry/_geometry*.so nest_graph/geometry/
-cp build/nest_graph/elem_graph/_elem_graph*.so nest_graph/elem_graph/
+cmake --build build --target geometry elem_graph
+# Extensions land in nest_graph/ (nest_graph/geometry*.so, nest_graph/elem_graph*.so)
 ```
 
 Prefer fixing `python3-dev` and using `uv pip install -e .` so paths stay consistent.
@@ -132,7 +131,7 @@ cd build && ctest --output-on-failure
 After header-only changes under `nest_graph/geometry/`, incremental rebuild:
 
 ```bash
-cmake --build build --target geometry_cpp_tests _geometry
+cmake --build build --target geometry_cpp_tests geometry
 uv pip install -e . --no-build-isolation   # refresh Python .so if needed
 ```
 
@@ -181,8 +180,10 @@ nest_graph/
   config.py           # Pydantic config + NEST_* env loading
   propose.py          # placement proposers (erosion, voronoi, raycast, PSO)
   utils.py            # Shapely helpers, transform_poly
-  geometry/           # C++ extension: intersection, distance, penetration (GJK/EPA)
-  elem_graph/         # C++ extension: nest_by_graph, rules, DFS
+  geometry*.so        # C++ extension (import nest_graph.geometry)
+  geometry/           # C++ sources: solid/, convex/, intersect/, distance/, sweep/, guide/, bindings/
+  elem_graph*.so      # C++ extension (import nest_graph.elem_graph)
+  elem_graph/         # C++ sources: rules/, graph/, scoring/, selection/, refine/, bindings/
 docs/
   nest_config.md      # env var reference
   first_pass_tuning.md
@@ -213,7 +214,7 @@ flowchart LR
 ## Debugging
 
 - Geometry engine notes and matplotlib snippets: [docs/debugging_guide.md](docs/debugging_guide.md)
-- Stale `.so` after C++ edits → rebuild with `uv pip install -e .` or `cmake --build build --target _geometry`
+- Stale `.so` after C++ edits → rebuild with `uv pip install -e .` or `cmake --build build --target geometry`
 
 ## License
 

@@ -4,13 +4,13 @@
 #include <cmath>
 #include <type_traits>
 
-#include "solid_geometry.h"
-#include "geometry_common.h"
-#include "sweep_engine.h"
+#include "solid/solid_geometry.h"
+#include "common/geometry_common.h"
+#include "sweep/sweep_engine.h"
 #include "convex/distance.h"
 #include "convex/penetration.h"
-#include "sweep.h"
-#include "tracer.h"
+#include "sweep/sweep.h"
+#include "common/tracer.h"
 
 // ComplexDistanceResult and execute_distance_sweep live in sweep_engine.h
 
