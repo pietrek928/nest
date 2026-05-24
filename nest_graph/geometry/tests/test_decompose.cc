@@ -13,8 +13,6 @@
 using Vec2f = Vec<2, float>;
 using SolidGeometry2f = SolidGeometry<Vec2f>;
 
-namespace {
-
 void log_poly_xy_stderr(const char* tag, const std::vector<Vec2f>& poly) {
     if (!std::getenv("NEST_DECOMPOSE_DEBUG")) {
         return;
@@ -84,8 +82,6 @@ void require_loads_into_solid_geometry(const std::vector<std::vector<Vec2f>>& pa
     }
     REQUIRE(total == poly.line_points.size());
 }
-
-} // namespace
 
 TEST_CASE("Geometry: Hertel-Mehlhorn L-Shape Optimization", "[decomposition]") {
     std::vector<Vec2f> l_shape = {

@@ -112,15 +112,21 @@ Without uv (editable install + activated venv):
 pytest tests/
 ```
 
-### C++ geometry unit tests (Catch2)
+### C++ unit tests (Catch2)
 
 Not built by `pip install -e .` by default. Enable once:
 
 ```bash
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build build --target geometry_cpp_tests
+cmake --build build --target geometry_cpp_tests elem_graph_cpp_tests
 ./build/nest_graph/geometry/geometry_cpp_tests
+./build/nest_graph/elem_graph/elem_graph_cpp_tests
 ```
+
+| Target | Location | Covers |
+|--------|----------|--------|
+| `geometry_cpp_tests` | `nest_graph/geometry/tests/` | Intersect, distance, solids |
+| `elem_graph_cpp_tests` | `nest_graph/elem_graph/tests/` | Selection, DFS refine |
 
 Or via CTest:
 
@@ -183,7 +189,7 @@ nest_graph/
   geometry*.so        # C++ extension (import nest_graph.geometry)
   geometry/           # C++ sources: solid/, convex/, intersect/, distance/, sweep/, guide/, bindings/
   elem_graph*.so      # C++ extension (import nest_graph.elem_graph)
-  elem_graph/         # C++ sources: rules/, graph/, scoring/, selection/, refine/, bindings/
+  elem_graph/         # C++ sources: rules/, graph/, scoring/, selection/, refine/, bindings/, tests/
 docs/
   nest_config.md      # env var reference
   first_pass_tuning.md
@@ -209,7 +215,8 @@ flowchart LR
 2. `make_polygon_graph` — keep all board-valid placements; add collision edges.
 3. Evolve placement rule sets on recent graphs.
 4. `nest_by_graph` — greedy rule-scored independent set.
-5. DFS passes to grow selection; feed transforms into the next iteration.
+5. DFS passes to grow selection (collision-free); final selection is pruned to an independent set before render. See [docs/nest_config.md](docs/nest_config.md).
+6. Feed selected transforms into the next iteration.
 
 ## Debugging
 

@@ -7,10 +7,50 @@
 
 #include "internal/internal.h"
 
-namespace {
+constexpr int kDefaultMinCollisionsLoose = 2;
+constexpr int kDefaultMinCollisionsTight = 1;
 
-bool vertex_in_graph(Tvertex v, int n) {
-    return v >= 0 && v < n;
+bool selection_independent(
+    const ElemGraph &g, const std::vector<unsigned char> &selected
+) {
+    const int n = static_cast<int>(g.size());
+    for (int v = 0; v < n; ++v) {
+        if (!selected[static_cast<std::size_t>(v)]) {
+            continue;
+        }
+        for (Tvertex u : g.collisions[static_cast<std::size_t>(v)]) {
+            if (u > v && vertex_in_graph(u, n) && selected[static_cast<std::size_t>(u)]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void update_best_independent(
+    const ElemGraph &g,
+    const std::vector<unsigned char> &selected,
+    const std::vector<Tscore> &scores,
+    std::vector<unsigned char> &best_selected,
+    float &best_sum,
+    int &best_count
+) {
+    if (!selection_independent(g, selected)) {
+        return;
+    }
+    const int n = static_cast<int>(g.size());
+    const float sum = sum_selected_scores(scores.data(), selected.data(), n);
+    int count = 0;
+    for (int i = 0; i < n; ++i) {
+        if (selected[static_cast<std::size_t>(i)]) {
+            count++;
+        }
+    }
+    if (count > best_count || (count == best_count && sum > best_sum + 1e-6f)) {
+        best_selected = selected;
+        best_sum = sum;
+        best_count = count;
+    }
 }
 
 void select_node(
@@ -112,6 +152,49 @@ bool increase_path_dfs(
     return true;
 }
 
+void run_growth_pass(
+    const ElemGraph &g,
+    const std::vector<Tscore> &scores,
+    int max_tries,
+    int min_collisions,
+    std::vector<unsigned char> &selected,
+    std::vector<int> &selected_collisions,
+    std::vector<unsigned char> &best_selected,
+    float &best_sum,
+    int &best_count
+) {
+    if (max_tries <= 0) {
+        return;
+    }
+    const int n = static_cast<int>(g.size());
+    std::vector<int> mark(n, 0);
+    std::vector<Tvertex> nodes(n);
+    for (int i = 0; i < n; ++i) {
+        nodes[i] = i;
+    }
+
+    std::mt19937 rng(std::random_device{}());
+    int tries = max_tries;
+    do {
+        std::shuffle(nodes.begin(), nodes.end(), rng);
+        std::fill(mark.begin(), mark.end(), 0);
+        for (Tvertex v : nodes) {
+            if (selected[static_cast<std::size_t>(v)]) {
+                continue;
+            }
+            if (selected_collisions[v] > min_collisions) {
+                continue;
+            }
+            if (increase_path_dfs(
+                    v, &g.collisions[0], mark.data(), selected.data(),
+                    selected_collisions.data(), n)) {
+                tries = max_tries;
+            }
+        }
+        update_best_independent(g, selected, scores, best_selected, best_sum, best_count);
+    } while (--tries);
+}
+
 float score_path_dfs(
     Tvertex node,
     const std::vector<Tvertex> *collisions,
@@ -137,7 +220,19 @@ float score_path_dfs(
     path_delta += scores[node];
 
     if (!selected_collisions[node]) {
-        if (path_delta > best_delta) {
+        bool independent = true;
+        for (int v = 0; v < n && independent; ++v) {
+            if (!selected[v]) {
+                continue;
+            }
+            for (Tvertex u : collisions[v]) {
+                if (u > v && vertex_in_graph(u, n) && selected[u]) {
+                    independent = false;
+                    break;
+                }
+            }
+        }
+        if (independent && path_delta > best_delta) {
             best_delta = path_delta;
             best_selected.assign(selected, selected + n);
         }
@@ -231,8 +326,6 @@ bool try_refine_root(
     return false;
 }
 
-}  // namespace
-
 std::vector<Tvertex> refine_selection_dfs(
     const ElemGraph &g,
     const std::vector<Tvertex> &selected_nodes,
@@ -259,13 +352,23 @@ std::vector<Tvertex> refine_selection_dfs(
     recompute_selected_collisions(
         g.collisions, selected.data(), selected_collisions.data(), n);
 
+    std::vector<unsigned char> best_independent(n, 0);
+    float best_sum = -1e30f;
+    int best_count = -1;
+    update_best_independent(
+        g, selected, scores, best_independent, best_sum, best_count);
+
+    run_growth_pass(
+        g, scores, options.max_tries, options.min_collisions, selected,
+        selected_collisions, best_independent, best_sum, best_count);
+
     float selected_sum =
         sum_selected_scores(scores.data(), selected.data(), n);
 
     std::mt19937 rng(
         options.seed != 0 ? options.seed : std::random_device{}());
 
-    const int max_root_coll = std::max(1, options.max_root_collisions);
+    const int max_root_coll = std::max(0, options.max_root_collisions);
 
     for (int i = 0; i < n; ++i) {
         nodes[i] = i;
@@ -295,6 +398,8 @@ std::vector<Tvertex> refine_selection_dfs(
                     v, g, scores, options, baseline_sum, selected, backup,
                     best_selected, mark, selected_collisions, selected_sum)) {
                 improved = true;
+                update_best_independent(
+                    g, selected, scores, best_independent, best_sum, best_count);
             }
             std::fill(mark.begin(), mark.end(), 0);
         }
@@ -311,9 +416,21 @@ std::vector<Tvertex> refine_selection_dfs(
                         v, g, scores, options, baseline_sum, selected, backup,
                         best_selected, mark, selected_collisions, selected_sum)) {
                     improved = true;
+                    update_best_independent(
+                        g, selected, scores, best_independent, best_sum, best_count);
                 }
                 std::fill(mark.begin(), mark.end(), 0);
             }
+        }
+    }
+
+    if (!selection_independent(g, selected) && best_count >= 0) {
+        selected = best_independent;
+    } else {
+        update_best_independent(
+            g, selected, scores, best_independent, best_sum, best_count);
+        if (best_count >= 0) {
+            selected = best_independent;
         }
     }
 
@@ -326,59 +443,26 @@ std::vector<Tvertex> refine_selection_dfs(
     return result;
 }
 
+std::vector<Tvertex> refine_selection(
+    const ElemGraph &g,
+    const std::vector<Tvertex> &selected_nodes,
+    const std::vector<Tscore> &scores,
+    const RefineSelectionOptions &options
+) {
+    return refine_selection_dfs(g, selected_nodes, scores, options);
+}
+
 std::vector<Tvertex> increase_selection_dfs(
     const ElemGraph &g,
     const std::vector<Tvertex> &selected_nodes,
-    int max_tries,
-    int min_collisions
+    int max_tries
 ) {
-    std::random_device rd;
-    std::mt19937 rand_gen(rd());
-
-    const auto n = static_cast<int>(g.size());
-    std::vector<unsigned char> selected(n);
-    std::vector<int> mark(n), selected_collisions(n);
-    std::vector<Tvertex> nodes(n);
-
-    std::fill(selected.begin(), selected.end(), 0);
-    for (Tvertex v : selected_nodes) {
-        if (vertex_in_graph(v, n)) {
-            selected[v] = 1;
-        }
-    }
-
-    for (Tvertex i = 0; i < n; i++) {
-        nodes[i] = i;
-        selected_collisions[i] = 0;
-        for (Tvertex v : g.collisions[i]) {
-            if (vertex_in_graph(v, n) && selected[v]) {
-                selected_collisions[i]++;
-            }
-        }
-    }
-
-    int tries = max_tries;
-    do {
-        std::shuffle(nodes.begin(), nodes.end(), rand_gen);
-        std::fill(mark.begin(), mark.end(), 0);
-        for (Tvertex v : nodes) {
-            if (!selected[v] && selected_collisions[v] <= min_collisions) {
-                if (increase_path_dfs(
-                        v, &g.collisions[0], mark.data(), selected.data(),
-                        selected_collisions.data(), n)) {
-                    tries = max_tries;
-                }
-            }
-        }
-    } while (--tries);
-
-    std::vector<Tvertex> r;
-    for (Tvertex i = 0; i < n; i++) {
-        if (selected[i]) {
-            r.push_back(i);
-        }
-    }
-    return r;
+    RefineSelectionOptions opts;
+    opts.max_tries = max_tries;
+    opts.min_collisions = kDefaultMinCollisionsLoose;
+    opts.max_passes = 0;
+    opts.max_root_collisions = kDefaultMinCollisionsLoose;
+    return refine_selection_dfs(g, selected_nodes, std::vector<Tscore>(g.size(), 1.0f), opts);
 }
 
 std::vector<Tvertex> increase_score_dfs(

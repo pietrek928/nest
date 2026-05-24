@@ -84,10 +84,10 @@ def run_iteration():
     gsr = sort_graph(graph, rule_set, reverse=True)
     sc = score_elems(graph, rule_set)
     for _ in range(2):
-        sel = increase_selection_dfs(gsr, sel, 8, 2)
-        sel = increase_selection_dfs(gs, sel, 8, 1)
+        sel = increase_selection_dfs(gsr, sel, 8)
+        sel = increase_selection_dfs(gs, sel, 8)
         sel = increase_score_dfs(gsr, sel, sc)
-        sel = increase_selection_dfs(gs, sel, 8, 2)
+        sel = increase_selection_dfs(gs, sel, 8)
         sel = increase_score_dfs(gs, sel, sc)
     selected_t = [[], []]
     for i in sel:
@@ -105,9 +105,9 @@ for _ in range(3):
 
 print("iter 4 graph")
 g4 = run_iteration()
-n = len(g4._obj.group_id)
+n = len(g4.group_id)
 print("nodes", n)
-for i, cs in enumerate(g4._obj.collisions):
+for i, cs in enumerate(g4.collisions):
     for j in cs:
         if j < 0 or j >= n:
             raise SystemExit(f"bad collision {i} -> {j}")

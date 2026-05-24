@@ -40,8 +40,22 @@ struct RefineSelectionOptions {
     int max_depth = 64;
     std::uint32_t seed = 0;
     bool explore_shuffle = false;
-    int beam_width = 1;
+    int beam_width = 2;
     int max_root_collisions = 2;
+    int max_tries = 0;
+    int min_collisions = 0;
+};
+
+struct FinalizeSelectionOptions {
+    int repair_passes = 8;
+    int max_exact_component_size = 18;
+};
+
+struct FinalizeSelectionStats {
+    int repair_passes_used = 0;
+    int optimal_components = 0;
+    int greedy_fallback_components = 0;
+    int nodes_dropped = 0;
 };
 
 struct ScoreRulesOptions {
@@ -82,8 +96,7 @@ std::vector<Tvertex> refine_selection_dfs(
 std::vector<Tvertex> increase_selection_dfs(
     const ElemGraph &g,
     const std::vector<Tvertex> &selected_nodes,
-    int max_tries,
-    int min_collisions);
+    int max_tries);
 
 std::vector<Tvertex> increase_score_dfs(
     const ElemGraph &g,
@@ -91,3 +104,20 @@ std::vector<Tvertex> increase_score_dfs(
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options = RefineSelectionOptions{}
 );
+
+std::vector<Tvertex> refine_selection(
+    const ElemGraph &g,
+    const std::vector<Tvertex> &selected_nodes,
+    const std::vector<Tscore> &scores,
+    const RefineSelectionOptions &options = RefineSelectionOptions{}
+);
+
+std::vector<Tvertex> finalize_selection(
+    const ElemGraph &g,
+    const std::vector<Tvertex> &selected_nodes,
+    const std::vector<Tscore> &scores,
+    const FinalizeSelectionOptions &options = FinalizeSelectionOptions{},
+    FinalizeSelectionStats *stats = nullptr);
+
+bool selection_is_independent(
+    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes);

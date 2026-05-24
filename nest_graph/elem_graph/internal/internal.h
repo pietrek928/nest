@@ -22,6 +22,10 @@ inline void accumulate_score(Tscore &dst, Tscore add, ScoreAggregation agg) {
     }
 }
 
+inline bool vertex_in_graph(Tvertex v, int n) {
+    return v >= 0 && v < n;
+}
+
 bool group_has_elems(
     const std::vector<std::vector<Tvertex>> &elems_by_group, Tvertex group);
 

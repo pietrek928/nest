@@ -14,8 +14,6 @@
 using Vec2 = PolyTestVec2;
 using SolidGeometry2 = PolyTestSolidGeometry2;
 
-namespace {
-
 SolidGeometry2 polygon_from_ring(std::initializer_list<std::initializer_list<double>> pts) {
     SolidGeometry2 poly;
     std::vector<Vec2> ring;
@@ -96,8 +94,6 @@ void assert_tc5_subset_distance_and_narrow_phase(
     REQUIRE(tracer.saw_penetration_pair(0, 2));
     REQUIRE(tracer.saw_penetration_pair(1, 2));
 }
-
-} // namespace
 
 TEST_CASE("stress distance TC1 giant floor aura and P3 pruning", "[poly_distance][stress]") {
     DebugTracer tracer;

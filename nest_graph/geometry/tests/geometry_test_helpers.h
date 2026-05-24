@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdlib>
 #include <initializer_list>
 #include <vector>
@@ -11,6 +12,10 @@
 
 using PolyTestVec2 = Vec<2, double>;
 using PolyTestSolidGeometry2 = SolidGeometry<PolyTestVec2>;
+
+inline bool polytest_near(double a, double b, double tol = 1e-9) {
+    return std::abs(a - b) < tol;
+}
 
 // Single closed ring: one line part for GJK plus a boundary ring for point-in-solid.
 inline PolyTestSolidGeometry2 polygon_from_quad(

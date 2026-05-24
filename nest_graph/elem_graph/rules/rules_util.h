@@ -18,6 +18,22 @@ inline void append_circle_angle_rule(PlacementRuleSet &s, const CircleAngleRule 
     s.circle_angle_rules.push_back(r);
 }
 
+inline void append_rule(PlacementRuleSet &s, const PointPlaceRule &r) {
+    append_point_place_rule(s, r);
+}
+
+inline void append_rule(PlacementRuleSet &s, const CirclePlaceRule &r) {
+    append_circle_place_rule(s, r);
+}
+
+inline void append_rule(PlacementRuleSet &s, const PointAngleRule &r) {
+    append_point_angle_rule(s, r);
+}
+
+inline void append_rule(PlacementRuleSet &s, const CircleAngleRule &r) {
+    append_circle_angle_rule(s, r);
+}
+
 inline void append_point_place_rule_at(
     PlacementRuleSet &s, const Vec2f &pos, float r, float w, Tvertex group) {
     s.point_rules.push_back(PointPlaceRule{pos, r, w, group});

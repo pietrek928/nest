@@ -116,7 +116,7 @@ def test_propose_adds_graph_nodes_without_cap(
     graph_on, _, _, _ = make_polygon_graph(
         nest_board, [(rect_poly, batch_on[0]), (tri_poly, batch_on[1])],
     )
-    assert len(graph_on._obj.elems) >= len(graph_off._obj.elems)
+    assert len(graph_on.elems) >= len(graph_off.elems)
 
 
 def test_default_config_first_pass_tuned():

@@ -5,8 +5,6 @@
 #include <cmath>
 #include <string>
 
-namespace {
-
 PyObject *steal_attr(PyObject *obj, const char *name) {
     PyObject *value = PyObject_GetAttrString(obj, name);
     if (!value) {
@@ -67,8 +65,6 @@ void collect_polygon_rings(
     }
     Py_DECREF(interiors);
 }
-
-}  // namespace
 
 bool read_xy(nb::handle pt, double &x, double &y) {
     if (nb::isinstance<nb::tuple>(pt)) {

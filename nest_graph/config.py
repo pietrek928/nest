@@ -1,7 +1,5 @@
 """Configuration for nest_graph build / nesting loops."""
 
-from __future__ import annotations
-
 import os
 from typing import Literal, Optional
 
@@ -82,9 +80,7 @@ class SelectionConfig(BaseModel):
     rules_kept: int = 64
     rule_score_penalty: float = 0.01
     dfs_max_tries: int = 8
-    dfs_min_collisions_loose: int = 2
-    dfs_min_collisions_tight: int = 1
-    dfs_passes: int = 2
+    dfs_passes: int = 4
     nest_rule_sets_used: int = 1
 
 
@@ -233,8 +229,6 @@ class BuildGraphConfig(BaseModel):
                 rules_kept=_env_int("NEST_RULES_KEPT", 64),
                 rule_score_penalty=_env_float("NEST_RULE_SIZE_PENALTY", 0.01),
                 dfs_max_tries=_env_int("NEST_DFS_MAX_TRIES", 8),
-                dfs_min_collisions_loose=_env_int("NEST_DFS_MIN_COLLISIONS_LOOSE", 2),
-                dfs_min_collisions_tight=_env_int("NEST_DFS_MIN_COLLISIONS_TIGHT", 1),
                 dfs_passes=_env_int("NEST_DFS_PASSES", 2),
                 nest_rule_sets_used=_env_int("NEST_NEST_RULE_SETS", 1),
             ),
@@ -280,6 +274,22 @@ def subsample_transforms(
         return transforms
     idx = rng.choice(transforms.shape[0], size=max_n, replace=False)
     return transforms[idx]
+
+
+def _make_select_options(mode: str, local_swap: bool, aggregation: str):
+    """Build SelectOptions for elem_graph tests and benchmarks."""
+    from nest_graph.elem_graph import ScoreAggregation, SelectMode, SelectOptions
+
+    opts = SelectOptions()
+    if mode == "weighted_greedy":
+        opts.mode = SelectMode.WeightedGreedy
+    else:
+        opts.mode = SelectMode.GreedyScore
+    opts.local_swap = local_swap
+    opts.aggregation = (
+        ScoreAggregation.Sum if aggregation == "sum" else ScoreAggregation.Max
+    )
+    return opts
 
 
 def trim_history(

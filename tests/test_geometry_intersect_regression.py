@@ -98,5 +98,5 @@ def test_make_polygon_graph_no_overlaps_without_collision_edge(nest_board, rect_
     for i in range(len(polys)):
         for j in range(i + 1, len(polys)):
             if polys[i].intersects(polys[j]):
-                assert j in graph._obj.collisions[i]
-                assert i in graph._obj.collisions[j]
+                assert j in graph.collisions[i]
+                assert i in graph.collisions[j]

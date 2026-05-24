@@ -5,8 +5,6 @@
 #include <random>
 #include <vector>
 
-namespace {
-
 template <class T>
 T adjust_angle(T a) {
     if (a < 0) {
@@ -43,8 +41,6 @@ float default_rule_radius(const Circle2f &region) {
     return std::sqrt(std::max(region.r_sq, 1e-12f)) * 0.05f;
 }
 
-}  // namespace
-
 template <class Tgen, class Tdistrib>
 Circle2f mutate_random_circle(
     const Circle2f &c, const Circle2f &region, Tgen &gen, Tdistrib &distrib_pos
@@ -74,12 +70,11 @@ PointPlaceRule mutate_random(
 ) {
     Vec2f pos = clamp_to_region(
         p.pos + Vec2f({distrib_pos(gen), distrib_pos(gen)}), region);
-    return {
-        .pos = pos,
-        .r = std::max(p.r + distrib_pos(gen), 1e-6f),
-        .w = p.w + distrib_w(gen),
-        .group = p.group,
-    };
+    return PointPlaceRule(
+        pos,
+        std::max(p.r + distrib_pos(gen), 1e-6f),
+        p.w + distrib_w(gen),
+        p.group);
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
@@ -87,12 +82,11 @@ PointPlaceRule generate_random_point_place_rule(
     const Circle2f &region, Tgen &gen, Tdistrib &distrib_r,
     Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
-    return {
-        .pos = sample_pos_in_region(region, gen),
-        .r = std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        .w = distrib_w(gen),
-        .group = distrib_group(gen),
-    };
+    return PointPlaceRule(
+        sample_pos_in_region(region, gen),
+        std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
+        distrib_w(gen),
+        distrib_group(gen));
 }
 
 template <class Tgen, class Tdistrib>
@@ -100,12 +94,11 @@ CirclePlaceRule mutate_random(
     const CirclePlaceRule &p, const Circle2f &region, Tgen &gen,
     Tdistrib &distrib_pos, Tdistrib &distrib_w
 ) {
-    return {
-        .circle = mutate_random_circle(p.circle, region, gen, distrib_pos),
-        .r = std::max(p.r + distrib_pos(gen), 1e-6f),
-        .w = p.w + distrib_w(gen),
-        .group = p.group,
-    };
+    return CirclePlaceRule(
+        mutate_random_circle(p.circle, region, gen, distrib_pos),
+        std::max(p.r + distrib_pos(gen), 1e-6f),
+        p.w + distrib_w(gen),
+        p.group);
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
@@ -113,12 +106,11 @@ CirclePlaceRule generate_random_circle_place_rule(
     const Circle2f &region, Tgen &gen, Tdistrib &distrib_r,
     Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
-    return {
-        .circle = generate_random_circle(region, gen, distrib_r),
-        .r = std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        .w = distrib_w(gen),
-        .group = distrib_group(gen),
-    };
+    return CirclePlaceRule(
+        generate_random_circle(region, gen, distrib_r),
+        std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
+        distrib_w(gen),
+        distrib_group(gen));
 }
 
 template <class Tgen, class Tdistrib>
@@ -128,13 +120,12 @@ PointAngleRule mutate_random(
 ) {
     Vec2f pos = clamp_to_region(
         p.pos + Vec2f({distrib_pos(gen), distrib_pos(gen)}), region);
-    return {
-        .pos = pos,
-        .a = adjust_angle(p.a + distrib_a(gen)),
-        .r = std::max(p.r, 1e-6f),
-        .w = p.w + distrib_w(gen),
-        .group = p.group,
-    };
+    return PointAngleRule(
+        pos,
+        adjust_angle(p.a + distrib_a(gen)),
+        std::max(p.r, 1e-6f),
+        p.w + distrib_w(gen),
+        p.group);
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
@@ -142,13 +133,12 @@ PointAngleRule generate_random_point_angle_rule(
     const Circle2f &region, Tgen &gen, Tdistrib &distrib_r,
     Tdistrib &distrib_a, Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
-    return {
-        .pos = sample_pos_in_region(region, gen),
-        .a = adjust_angle(distrib_a(gen)),
-        .r = std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        .w = distrib_w(gen),
-        .group = distrib_group(gen),
-    };
+    return PointAngleRule(
+        sample_pos_in_region(region, gen),
+        adjust_angle(distrib_a(gen)),
+        std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
+        distrib_w(gen),
+        distrib_group(gen));
 }
 
 template <class Tgen, class Tdistrib>
@@ -156,13 +146,12 @@ CircleAngleRule mutate_random(
     const CircleAngleRule &p, const Circle2f &region, Tgen &gen,
     Tdistrib &distrib_pos, Tdistrib &distrib_a, Tdistrib &distrib_w
 ) {
-    return {
-        .circle = mutate_random_circle(p.circle, region, gen, distrib_pos),
-        .a = adjust_angle(p.a + distrib_a(gen)),
-        .r = std::max(p.r + distrib_pos(gen), 1e-6f),
-        .w = p.w + distrib_w(gen),
-        .group = p.group,
-    };
+    return CircleAngleRule(
+        mutate_random_circle(p.circle, region, gen, distrib_pos),
+        adjust_angle(p.a + distrib_a(gen)),
+        std::max(p.r + distrib_pos(gen), 1e-6f),
+        p.w + distrib_w(gen),
+        p.group);
 }
 
 template <class Tgen, class Tdistrib, class Tdistrib_group>
@@ -170,13 +159,12 @@ CircleAngleRule generate_random_circle_angle_rule(
     const Circle2f &region, Tgen &gen, Tdistrib &distrib_r,
     Tdistrib &distrib_a, Tdistrib &distrib_w, Tdistrib_group &distrib_group
 ) {
-    return {
-        .circle = generate_random_circle(region, gen, distrib_r),
-        .a = adjust_angle(distrib_a(gen)),
-        .r = std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        .w = distrib_w(gen),
-        .group = distrib_group(gen),
-    };
+    return CircleAngleRule(
+        generate_random_circle(region, gen, distrib_r),
+        adjust_angle(distrib_a(gen)),
+        std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
+        distrib_w(gen),
+        distrib_group(gen));
 }
 
 template <class Tgen, class Tdistrib>

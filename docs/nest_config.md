@@ -52,16 +52,16 @@ Disable progress bar: `NEST_PROGRESS=0`.
 
 ## Selection / DFS
 
-| Variable | Default |
-|----------|---------|
-| `NEST_IMPROVE_ROUNDS` | 4 |
-| `NEST_RULES_KEPT` | 64 |
-| `NEST_RULE_SIZE_PENALTY` | 0.01 |
-| `NEST_DFS_MAX_TRIES` | 8 |
-| `NEST_DFS_MIN_COLLISIONS_LOOSE` | 2 |
-| `NEST_DFS_MIN_COLLISIONS_TIGHT` | 1 |
-| `NEST_DFS_PASSES` | 2 |
-| `NEST_NEST_RULE_SETS` | 1 |
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `NEST_IMPROVE_ROUNDS` | 4 | Rule-mutation rounds per iteration |
+| `NEST_RULES_KEPT` | 64 | Top rule sets kept after scoring |
+| `NEST_RULE_SIZE_PENALTY` | 0.01 | Penalty per rule in rule-set score |
+| `NEST_DFS_MAX_TRIES` | 8 | Retries per DFS growth pass |
+| `NEST_DFS_PASSES` | 2 | Repeat selection/score DFS block per iteration |
+| `NEST_NEST_RULE_SETS` | 1 | Rule sets passed to `nest_by_graph` |
+
+Rendered placements are always collision-free: DFS refinement only adds non-colliding nodes, and the build loop prunes the final selection to an independent set before drawing.
 
 ## Placement proposals (`propose.py`)
 

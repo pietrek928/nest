@@ -1,8 +1,8 @@
 #include <nanobind/nanobind.h>
+namespace nb = nanobind;
 
 #include "bindings.h"
 
-namespace nb = nanobind;
 
 NB_MODULE(elem_graph, m) {
     bind_elem_graph_types(m);

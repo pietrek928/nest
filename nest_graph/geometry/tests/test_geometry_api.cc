@@ -8,24 +8,16 @@
 using PolyTestVec2 = Vec<2, double>;
 using SolidGeometry2 = PolyTestSolidGeometry2;
 
-namespace {
-
 constexpr double kTol = 1e-6;
-
-bool near(double a, double b) {
-    return std::abs(a - b) < kTol;
-}
 
 PolyTestVec2 find_corner(const SolidGeometry2& g, double x, double y) {
     for (const auto& p : g.line_points) {
-        if (near(p[0], x) && near(p[1], y)) {
+        if (polytest_near(p[0], x, kTol) && polytest_near(p[1], y, kTol)) {
             return p;
         }
     }
     return PolyTestVec2({-1e9, -1e9});
 }
-
-}  // namespace
 
 TEST_CASE("Geometry API: from_convex_polygon", "[geometry_api]") {
     SolidGeometry2 g = polygon_from_quad({
@@ -72,8 +64,8 @@ TEST_CASE("Geometry API: apply_transform translate", "[geometry_api]") {
         {0, 1},
     });
     SolidGeometry2 moved = g.translate(PolyTestVec2({2.0, 3.0}));
-    REQUIRE(near(find_corner(moved, 2.0, 3.0)[0], 2.0));
-    REQUIRE(near(find_corner(moved, 3.0, 4.0)[0], 3.0));
+    REQUIRE(polytest_near(find_corner(moved, 2.0, 3.0)[0], 2.0));
+    REQUIRE(polytest_near(find_corner(moved, 3.0, 4.0)[0], 3.0));
 }
 
 TEST_CASE("Geometry API: apply_transform rotate 90 degrees", "[geometry_api]") {
@@ -85,7 +77,7 @@ TEST_CASE("Geometry API: apply_transform rotate 90 degrees", "[geometry_api]") {
     });
     const double half_pi = 0.5 * M_PI;
     SolidGeometry2 rotated = g.rotate(half_pi);
-    REQUIRE(near(find_corner(rotated, 0.0, 1.0)[1], 1.0));
+    REQUIRE(polytest_near(find_corner(rotated, 0.0, 1.0)[1], 1.0));
 }
 
 TEST_CASE("Geometry API: rotate then translate matches placement order", "[geometry_api]") {
@@ -98,7 +90,7 @@ TEST_CASE("Geometry API: rotate then translate matches placement order", "[geome
     SolidGeometry2 chained = g.rotate(0.25).translate(PolyTestVec2({1.0, 2.0}));
     SolidGeometry2 placed = g.rotate(0.25);
     placed = placed.translate(PolyTestVec2({1.0, 2.0}));
-    REQUIRE(near(
+    REQUIRE(polytest_near(
         find_corner(chained, find_corner(placed, 0, 0)[0], find_corner(placed, 0, 0)[1])[0],
         find_corner(placed, 0, 0)[0]));
 }
@@ -114,9 +106,9 @@ TEST_CASE("Geometry API: bounding circle bounds consistency", "[geometry_api]") 
     const double cx = c.center()[0];
     const double cy = c.center()[1];
     const double r = std::sqrt(c.square_radius());
-    REQUIRE(near(cx, 1.0));
-    REQUIRE(near(cy, 1.0));
-    REQUIRE(near(r, std::sqrt(2.0)));
+    REQUIRE(polytest_near(cx, 1.0));
+    REQUIRE(polytest_near(cy, 1.0));
+    REQUIRE(polytest_near(r, std::sqrt(2.0)));
 }
 
 TEST_CASE("Geometry API: contains_point triangle", "[geometry_api]") {

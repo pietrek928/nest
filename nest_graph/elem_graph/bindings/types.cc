@@ -1,6 +1,7 @@
 #include <cmath>
 
 #include <nanobind/nanobind.h>
+namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
@@ -32,10 +33,17 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("seed", &RefineSelectionOptions::seed)
         .def_rw("explore_shuffle", &RefineSelectionOptions::explore_shuffle)
         .def_rw("beam_width", &RefineSelectionOptions::beam_width)
-        .def_rw("max_root_collisions", &RefineSelectionOptions::max_root_collisions);
+        .def_rw("max_root_collisions", &RefineSelectionOptions::max_root_collisions)
+        .def_rw("max_tries", &RefineSelectionOptions::max_tries)
+        .def_rw("min_collisions", &RefineSelectionOptions::min_collisions);
+
+    nb::class_<FinalizeSelectionOptions>(m, "FinalizeSelectionOptions")
+        .def(nb::init<>())
+        .def_rw("repair_passes", &FinalizeSelectionOptions::repair_passes)
+        .def_rw("max_exact_component_size", &FinalizeSelectionOptions::max_exact_component_size);
 
     nb::class_<Vec2f>(m, "Vec2")
-        .def(nb::init<float, float>())
+        .def(nb::init<float, float>(), nb::arg("x"), nb::arg("y"))
         .def_prop_rw(
             "x",
             [](const Vec2f &v) { return v[0]; },
@@ -88,21 +96,37 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("a", &ElemPlace::a);
 
     nb::class_<PointPlaceRule>(m, "PointPlaceRule")
-        .def(nb::init<>())
+        .def(
+            nb::init<Vec2f, float, float, int>(),
+            nb::arg("pos"),
+            nb::arg("r"),
+            nb::arg("w"),
+            nb::arg("group"))
         .def_rw("pos", &PointPlaceRule::pos)
         .def_rw("r", &PointPlaceRule::r)
         .def_rw("w", &PointPlaceRule::w)
         .def_rw("group", &PointPlaceRule::group);
 
     nb::class_<CirclePlaceRule>(m, "CirclePlaceRule")
-        .def(nb::init<>())
+        .def(
+            nb::init<Circle2f, float, float, int>(),
+            nb::arg("circle"),
+            nb::arg("r"),
+            nb::arg("w"),
+            nb::arg("group"))
         .def_rw("circle", &CirclePlaceRule::circle)
         .def_rw("r", &CirclePlaceRule::r)
         .def_rw("w", &CirclePlaceRule::w)
         .def_rw("group", &CirclePlaceRule::group);
 
     nb::class_<PointAngleRule>(m, "PointAngleRule")
-        .def(nb::init<>())
+        .def(
+            nb::init<Vec2f, float, float, float, int>(),
+            nb::arg("pos"),
+            nb::arg("a"),
+            nb::arg("r"),
+            nb::arg("w"),
+            nb::arg("group"))
         .def_rw("pos", &PointAngleRule::pos)
         .def_rw("a", &PointAngleRule::a)
         .def_rw("r", &PointAngleRule::r)
@@ -110,7 +134,13 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("group", &PointAngleRule::group);
 
     nb::class_<CircleAngleRule>(m, "CircleAngleRule")
-        .def(nb::init<>())
+        .def(
+            nb::init<Circle2f, float, float, float, int>(),
+            nb::arg("circle"),
+            nb::arg("a"),
+            nb::arg("r"),
+            nb::arg("w"),
+            nb::arg("group"))
         .def_rw("circle", &CircleAngleRule::circle)
         .def_rw("a", &CircleAngleRule::a)
         .def_rw("r", &CircleAngleRule::r)
@@ -124,6 +154,24 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("point_angle_rules", &PlacementRuleSet::point_angle_rules)
         .def_rw("circle_angle_rules", &PlacementRuleSet::circle_angle_rules)
         .def("size", [](const PlacementRuleSet &s) { return s.size(); })
+        .def(
+            "append_rule",
+            [](PlacementRuleSet &s, nb::handle rule) {
+                if (nb::isinstance<PointPlaceRule>(rule)) {
+                    append_rule(s, nb::cast<PointPlaceRule>(rule));
+                } else if (nb::isinstance<CirclePlaceRule>(rule)) {
+                    append_rule(s, nb::cast<CirclePlaceRule>(rule));
+                } else if (nb::isinstance<PointAngleRule>(rule)) {
+                    append_rule(s, nb::cast<PointAngleRule>(rule));
+                } else if (nb::isinstance<CircleAngleRule>(rule)) {
+                    append_rule(s, nb::cast<CircleAngleRule>(rule));
+                } else {
+                    throw nb::type_error(
+                        "append_rule: expected PointPlaceRule, CirclePlaceRule, "
+                        "PointAngleRule, or CircleAngleRule");
+                }
+            },
+            nb::arg("rule"))
         .def("append_point", &append_point_place_rule)
         .def(
             "append_point_at",
@@ -160,7 +208,16 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("group"));
 
     nb::class_<RuleMutationSettings>(m, "RuleMutationSettings")
-        .def(nb::init<>())
+        .def(
+            nb::init<Circle2f, float, float, float, float, float, float, int>(),
+            nb::arg("region"),
+            nb::arg("dpos"),
+            nb::arg("dw"),
+            nb::arg("da"),
+            nb::arg("insert_p"),
+            nb::arg("remove_p"),
+            nb::arg("mutate_p"),
+            nb::arg("ngroups"))
         .def_rw("region", &RuleMutationSettings::region)
         .def_rw("dpos", &RuleMutationSettings::dpos)
         .def_rw("dw", &RuleMutationSettings::dw)
@@ -198,6 +255,17 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("elem"),
             nb::arg("circle"))
         .def(
+            "append_elem",
+            [](ElemGraph &g, int group_id, Vec2f pos, Circle2f circle) {
+                g.group_id.push_back(group_id);
+                g.elems.push_back(ElemPlace{pos, 0.0f});
+                g.coords.push_back(circle);
+                g.collisions.emplace_back();
+            },
+            nb::arg("group_id"),
+            nb::arg("pos"),
+            nb::arg("circle"))
+        .def(
             "append_elem_at",
             [](ElemGraph &g, int group_id, float x, float y, float a,
                float cx, float cy, float r_sq) {
@@ -215,6 +283,14 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("r_sq"))
         .def(
             "add_collision_pair",
+            [](ElemGraph &g, int i, int j) {
+                g.collisions[i].push_back(j);
+                g.collisions[j].push_back(i);
+            },
+            nb::arg("i"),
+            nb::arg("j"))
+        .def(
+            "add_collision",
             [](ElemGraph &g, int i, int j) {
                 g.collisions[i].push_back(j);
                 g.collisions[j].push_back(i);

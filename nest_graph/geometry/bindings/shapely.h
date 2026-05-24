@@ -1,12 +1,12 @@
 #pragma once
 
 #include <nanobind/nanobind.h>
+namespace nb = nanobind;
 #include <string>
 #include <vector>
 
 #include <vec.h>
 
-namespace nb = nanobind;
 
 using Vec2d = Vec<2, double>;
 

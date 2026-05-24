@@ -1,17 +1,13 @@
-# Auto-generated 2026-05-21 21:01
+# Auto-generated 2026-05-23 20:37
+# preset=J_max_density seeds=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-| preset | graph_nodes | edges | nest | dfs_sel | batch0 | batch1 | time_s |
-|--------|-------------|-------|------|---------|--------|--------|--------|
-| K_recommended | 96 | 492 | 19 | 20 | 900 | 900 | 0.85 |
-| F_fast_rules | 91 | 429 | 18 | 19 | 900 | 900 | 0.72 |
-| J_max_density | 89 | 442 | 17 | 19 | 1000 | 1000 | 0.68 |
-| E_shuffle_heavy | 87 | 382 | 17 | 19 | 900 | 900 | 0.89 |
-| B_lean_propose | 83 | 350 | 17 | 18 | 900 | 900 | 0.13 |
-| G_quality_rules | 83 | 377 | 18 | 18 | 900 | 900 | 0.68 |
-| A_current_defaults | 81 | 346 | 17 | 18 | 900 | 900 | 0.55 |
-| I_propose_shuffle | 81 | 340 | 18 | 18 | 900 | 900 | 0.67 |
-| C_propose_heavy | 78 | 320 | 17 | 17 | 900 | 900 | 1.05 |
-| D_high_random | 83 | 437 | 16 | 16 | 900 | 900 | 0.69 |
-| H_first_pass_combo | 61 | 218 | 14 | 14 | 750 | 750 | 0.60 |
-
-Best: K_recommended
+| mode | nest_sel | dfs_raw | dfs_final | Δnest | dropped | score_sum | time_s |
+|------|----------|---------|-----------|-------|---------|-----------|--------|
+| nest_only | 19.6 | 19.6 | 19.6 | +0.0 | 0.0 | 0.05 | 0.77 |
+| head_pipeline | 19.3 | 20.2 | 20.2 | +0.9 | 0.0 | 0.05 | 0.96 |
+| strict_no_prune | 19.4 | 19.4 | 19.4 | +0.0 | 0.0 | 0.04 | 0.91 |
+| strict_prune | 20.7 | 20.7 | 20.7 | +0.0 | 0.0 | 0.05 | 1.01 |
+| legacy_alternating | 20.7 | 21.5 | 21.5 | +0.8 | 0.0 | 0.05 | 0.99 |
+| merged_loose_tight | 19.4 | 20.6 | 20.6 | +1.2 | 0.0 | 0.05 | 0.87 |
+| merged_single_pass | 19.1 | 20.2 | 20.2 | +1.1 | 0.0 | 0.05 | 0.93 |
+| high_pass_loose | 19.9 | 20.9 | 20.9 | +1.0 | 0.0 | 0.05 | 0.90 |

@@ -1,4 +1,5 @@
 #include <nanobind/nanobind.h>
+namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
@@ -68,8 +69,7 @@ void bind_elem_graph_api(nb::module_ &m) {
         &increase_selection_dfs,
         nb::arg("g"),
         nb::arg("selected_nodes"),
-        nb::arg("max_tries"),
-        nb::arg("min_collisions"));
+        nb::arg("max_tries"));
 
     m.def(
         "increase_score_dfs",
@@ -83,4 +83,31 @@ void bind_elem_graph_api(nb::module_ &m) {
         nb::arg("selected_nodes"),
         nb::arg("scores"),
         nb::arg("options") = RefineSelectionOptions{});
+
+    m.def(
+        "refine_selection",
+        &refine_selection,
+        nb::arg("g"),
+        nb::arg("selected_nodes"),
+        nb::arg("scores"),
+        nb::arg("options") = RefineSelectionOptions{});
+
+    m.def(
+        "finalize_selection",
+        [](const ElemGraph &g,
+           const std::vector<Tvertex> &selected,
+           const std::vector<Tscore> &scores,
+           const FinalizeSelectionOptions &options) {
+            return ::finalize_selection(g, selected, scores, options, nullptr);
+        },
+        nb::arg("g"),
+        nb::arg("selected_nodes"),
+        nb::arg("scores"),
+        nb::arg("options") = FinalizeSelectionOptions{});
+
+    m.def(
+        "selection_is_independent",
+        &selection_is_independent,
+        nb::arg("g"),
+        nb::arg("selected_nodes"));
 }

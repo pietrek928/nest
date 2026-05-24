@@ -5,8 +5,6 @@
 #include "graph/graph_index.h"
 #include "scoring/scoring.h"
 
-namespace {
-
 void sort_collision_lists_by_score(
     const ElemGraph &g,
     const std::vector<Tscore> &scores,
@@ -280,8 +278,6 @@ void select_elems_two_swap(
         }
     }
 }
-
-}  // namespace
 
 void select_elems(
     const ElemGraph &g,

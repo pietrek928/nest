@@ -26,9 +26,10 @@ from .track_perf import show_performance
 from .elem_graph import (
     ElemGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
-    RuleMutationSettings,
+    RuleMutationSettings, RefineSelectionOptions, FinalizeSelectionOptions,
     nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
-    increase_selection_dfs, increase_score_dfs
+    increase_selection_dfs, increase_score_dfs,
+    refine_selection, finalize_selection, selection_is_independent,
 )
 
 # Track performance
@@ -551,6 +552,168 @@ def _make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
     return rule_set
 
 
+def prune_selection_to_independent_set(
+    graph: ElemGraph,
+    selected: list[int],
+    scores: list[float] | None = None,
+) -> list[int]:
+    """Greedy MIS fallback (prefer finalize_selection for score-optimal drops)."""
+    if not selected:
+        return []
+    order = list(selected)
+    if scores is not None and len(scores) == len(graph.group_id):
+        order.sort(key=lambda v: scores[v], reverse=True)
+    kept: list[int] = []
+    kept_set: set[int] = set()
+    for v in order:
+        if any(u in kept_set for u in graph.collisions[v]):
+            continue
+        kept.append(v)
+        kept_set.add(v)
+    return kept
+
+
+def _loose_refine_options(max_tries: int = 0) -> RefineSelectionOptions:
+    opts = RefineSelectionOptions()
+    opts.max_tries = max_tries
+    opts.min_collisions = 2
+    opts.max_root_collisions = 2
+    opts.max_passes = 32
+    opts.beam_width = 2
+    return opts
+
+
+def _tight_refine_options() -> RefineSelectionOptions:
+    opts = RefineSelectionOptions()
+    opts.min_collisions = 1
+    opts.max_root_collisions = 1
+    opts.max_passes = 32
+    opts.beam_width = 2
+    return opts
+
+
+def _strict_refine_options(max_tries: int = 0) -> RefineSelectionOptions:
+    opts = RefineSelectionOptions()
+    opts.max_tries = max_tries
+    opts.min_collisions = 0
+    opts.max_root_collisions = 0
+    opts.max_passes = 32
+    opts.beam_width = 2
+    return opts
+
+
+def _head_loose_refine_options(max_tries: int) -> RefineSelectionOptions:
+    """HEAD-style score DFS: allow transient overlaps during search."""
+    opts = RefineSelectionOptions()
+    opts.max_tries = max_tries
+    opts.min_collisions = 2
+    opts.max_root_collisions = 2
+    opts.max_passes = 32
+    return opts
+
+
+def selection_score_sum(scores: list[float], selected: list[int]) -> float:
+    return float(sum(scores[v] for v in selected))
+
+
+def apply_dfs_refinement(
+    graph: ElemGraph,
+    rule_set: PlacementRuleSet,
+    selected: list[int],
+    scores: list[float],
+    *,
+    dfs_passes: int,
+    dfs_max_tries: int,
+    mode: str = "merged_loose_tight",
+) -> tuple[list[int], list[int], float]:
+    """Refine selection; return (pre_finalize, final, score_sum_final)."""
+    selected = list(selected)
+    graph_sorted = sort_graph(graph, rule_set)
+    graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
+    pre_finalize = selected
+
+    if mode == "nest_only":
+        return selected, selected, selection_score_sum(scores, selected)
+
+    if mode == "legacy_alternating":
+        for _ in range(dfs_passes):
+            selected = list(increase_selection_dfs(
+                graph_sorted_rev, selected, dfs_max_tries,
+            ))
+            selected = list(increase_selection_dfs(graph, selected, dfs_max_tries))
+            selected = list(increase_score_dfs(graph_sorted_rev, selected, scores))
+            selected = list(increase_selection_dfs(
+                graph_sorted, selected, dfs_max_tries,
+            ))
+            selected = list(increase_score_dfs(graph_sorted, selected, scores))
+        pre_finalize = selected
+        final = list(finalize_selection(graph, selected, scores))
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode == "head_pipeline":
+        loose = _head_loose_refine_options(dfs_max_tries)
+        tight = RefineSelectionOptions()
+        tight.min_collisions = 1
+        tight.max_root_collisions = 2
+        for _ in range(dfs_passes):
+            selected = list(increase_selection_dfs(
+                graph_sorted_rev, selected, dfs_max_tries,
+            ))
+            selected = list(increase_selection_dfs(graph, selected, dfs_max_tries))
+            selected = list(increase_score_dfs(
+                graph_sorted_rev, selected, scores, loose,
+            ))
+            selected = list(increase_selection_dfs(
+                graph_sorted, selected, dfs_max_tries,
+            ))
+            selected = list(increase_score_dfs(graph_sorted, selected, scores, tight))
+        pre_finalize = selected
+        return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
+
+    if mode == "strict_no_prune":
+        strict = _strict_refine_options(dfs_max_tries)
+        for _ in range(dfs_passes):
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
+            selected = list(refine_selection(graph, selected, scores, strict))
+        pre_finalize = selected
+        return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
+
+    if mode == "strict_prune":
+        strict = _strict_refine_options(dfs_max_tries)
+        for _ in range(dfs_passes):
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
+            selected = list(refine_selection(graph, selected, scores, strict))
+        pre_finalize = selected
+        final = prune_selection_to_independent_set(graph, selected, scores)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    loose = _loose_refine_options(dfs_max_tries)
+    tight = _tight_refine_options()
+
+    if mode == "merged_single_pass":
+        for _ in range(dfs_passes):
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+            pre_finalize = selected
+            final = list(finalize_selection(graph, selected, scores))
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode == "high_pass_loose":
+        for _ in range(dfs_passes):
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+            selected = list(refine_selection(graph, selected, scores, tight))
+        pre_finalize = selected
+        final = list(finalize_selection(graph, selected, scores))
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    # merged_loose_tight (default) and loose_internal_strict_final
+    for _ in range(dfs_passes):
+        selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+        selected = list(refine_selection(graph, selected, scores, tight))
+    pre_finalize = selected
+    final = list(finalize_selection(graph, selected, scores))
+    return pre_finalize, final, selection_score_sum(scores, final)
+
+
 def _make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
     first = PlacementRuleSet()
     first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=0))
@@ -618,24 +781,17 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             )
         selected_polys = nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0]
         old_len = len(selected_polys)
-        graph_sorted = sort_graph(graph, rule_set)
-        graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
         scores = score_elems(graph, rule_set)
-        for _ in range(sel.dfs_passes):
-            selected_polys = increase_selection_dfs(
-                graph_sorted_rev, selected_polys,
-                sel.dfs_max_tries, sel.dfs_min_collisions_loose,
-            )
-            selected_polys = increase_selection_dfs(
-                graph, selected_polys,
-                sel.dfs_max_tries, sel.dfs_min_collisions_tight,
-            )
-            selected_polys = increase_score_dfs(graph_sorted_rev, selected_polys, scores)
-            selected_polys = increase_selection_dfs(
-                graph_sorted, selected_polys,
-                sel.dfs_max_tries, sel.dfs_min_collisions_loose,
-            )
-            selected_polys = increase_score_dfs(graph_sorted, selected_polys, scores)
+        _, selected_polys, _ = apply_dfs_refinement(
+            graph,
+            rule_set,
+            list(selected_polys),
+            scores,
+            dfs_passes=sel.dfs_passes,
+            dfs_max_tries=sel.dfs_max_tries,
+            mode="merged_loose_tight",
+        )
+        assert selection_is_independent(graph, selected_polys)
         print(len(polys), old_len, ' -> ', len(selected_polys))
         im = render_polys(p_board, [[polys[i] for i in selected_polys]], im_shape=render_size)
         video.write(im)

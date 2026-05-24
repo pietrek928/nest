@@ -106,10 +106,10 @@ def test_score_rules_seed0_iter4_graph_regression():
         gsr = sort_graph(graph, rule_set, reverse=True)
         sc = score_elems(graph, rule_set)
         for _ in range(2):
-            sel = increase_selection_dfs(gsr, sel, 8, 2)
-            sel = increase_selection_dfs(gs, sel, 8, 1)
+            sel = increase_selection_dfs(gsr, sel, 8)
+            sel = increase_selection_dfs(gs, sel, 8)
             sel = increase_score_dfs(gsr, sel, sc)
-            sel = increase_selection_dfs(gs, sel, 8, 2)
+            sel = increase_selection_dfs(gs, sel, 8)
             sel = increase_score_dfs(gs, sel, sc)
         selected_t = [[], []]
         for i in sel:

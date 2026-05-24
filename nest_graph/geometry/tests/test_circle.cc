@@ -12,8 +12,6 @@
 using Vec2 = Vec<2, double>;
 using Circle2 = Circle<Vec2>;
 
-namespace {
-
 bool circle_contains_points(const Circle2& c, const std::vector<Vec2>& pts, double tol = 1e-7) {
     for (const auto& p : pts) {
         if (!c.is_inside(p, tol)) {
@@ -28,8 +26,6 @@ void expect_circle_near(const Circle2& a, const Circle2& b, double tol = 1e-9) {
     REQUIRE(a.center()[1] == Catch::Approx(b.center()[1]).margin(tol));
     REQUIRE(a.square_radius() == Catch::Approx(b.square_radius()).margin(tol));
 }
-
-} // namespace
 
 TEST_CASE("Circle default and explicit ctor accessors", "[circle]") {
     Circle2 d;

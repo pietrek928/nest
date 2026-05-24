@@ -6,24 +6,16 @@
 using PolyTestVec2 = Vec<2, double>;
 using SolidGeometry2 = PolyTestSolidGeometry2;
 
-namespace {
-
 constexpr double kTol = 1e-9;
-
-bool near(double a, double b) {
-    return std::abs(a - b) < kTol;
-}
 
 PolyTestVec2 find_point(const SolidGeometry2& g, double x, double y) {
     for (const auto& p : g.line_points) {
-        if (near(p[0], x) && near(p[1], y)) {
+        if (polytest_near(p[0], x, kTol) && polytest_near(p[1], y, kTol)) {
             return p;
         }
     }
     return PolyTestVec2({-1e9, -1e9});
 }
-
-}  // namespace
 
 TEST_CASE("SolidGeometry: translate moves line points", "[transform]") {
     SolidGeometry2 square = polygon_from_quad({
@@ -52,10 +44,10 @@ TEST_CASE("SolidGeometry: rotate 90 degrees about origin", "[transform]") {
     const double half_pi = 0.5 * M_PI;
     SolidGeometry2 rotated = square.rotate(half_pi);
 
-    REQUIRE(near(find_point(rotated, 0.0, 1.0)[0], 0.0));
-    REQUIRE(near(find_point(rotated, 0.0, 1.0)[1], 1.0));
-    REQUIRE(near(find_point(rotated, 0.0, 0.0)[0], 0.0));
-    REQUIRE(near(find_point(rotated, 0.0, 0.0)[1], 0.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 1.0)[0], 0.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 1.0)[1], 1.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[0], 0.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[1], 0.0));
 }
 
 TEST_CASE("SolidGeometry: rotate about arbitrary origin", "[transform]") {
@@ -70,10 +62,10 @@ TEST_CASE("SolidGeometry: rotate about arbitrary origin", "[transform]") {
     const double angle = M_PI;
     SolidGeometry2 rotated = square.rotate(angle, origin);
 
-    REQUIRE(near(find_point(rotated, 2.0, 2.0)[0], 2.0));
-    REQUIRE(near(find_point(rotated, 2.0, 2.0)[1], 2.0));
-    REQUIRE(near(find_point(rotated, 0.0, 0.0)[0], 0.0));
-    REQUIRE(near(find_point(rotated, 0.0, 0.0)[1], 0.0));
+    REQUIRE(polytest_near(find_point(rotated, 2.0, 2.0)[0], 2.0));
+    REQUIRE(polytest_near(find_point(rotated, 2.0, 2.0)[1], 2.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[0], 0.0));
+    REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[1], 0.0));
 }
 
 TEST_CASE("SolidGeometry: translate preserves boundary ring metadata", "[transform]") {
@@ -101,8 +93,8 @@ TEST_CASE("SolidGeometry: translate preserves boundary ring metadata", "[transfo
     for (const auto& ring : moved.boundary_rings) {
         if (ring.is_subtractive && ring.points.size() == 4) {
             found_subtractive = true;
-            REQUIRE(near(ring.points[0][0], 11.0));
-            REQUIRE(near(ring.points[0][1], -4.0));
+            REQUIRE(polytest_near(ring.points[0][0], 11.0));
+            REQUIRE(polytest_near(ring.points[0][1], -4.0));
         }
     }
     REQUIRE(found_subtractive);

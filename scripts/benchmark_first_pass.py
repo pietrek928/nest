@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Benchmark first-iteration nesting quality for parameter tuning."""
+"""Benchmark first-iteration nesting quality and DFS refinement modes."""
 
-from __future__ import annotations
-
+import argparse
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,40 +14,62 @@ from nest_graph.build_graph import (
     _build_transform_batch,
     _make_demo_rule_set,
     _make_seed_rule_sets,
+    apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
 )
 from nest_graph.config import BuildGraphConfig, ProposeConfig, SamplingConfig, SelectionConfig
-from nest_graph.elem_graph import (
-    increase_score_dfs,
-    increase_selection_dfs,
-    nest_by_graph,
-    score_elems,
-    sort_graph,
+from nest_graph.elem_graph import nest_by_graph, selection_is_independent
+
+
+DFS_MODES = (
+    "nest_only",
+    "head_pipeline",
+    "strict_no_prune",
+    "strict_prune",
+    "legacy_alternating",
+    "merged_loose_tight",
+    "merged_single_pass",
+    "high_pass_loose",
 )
 
 
 @dataclass
 class FirstPassMetrics:
-    name: str
+    mode: str
+    seed: int
     graph_nodes: int
     collision_edges: int
-    selected_nest: int
-    selected_dfs: int
-    batch_g0: int
-    batch_g1: int
+    nest_sel: int
+    dfs_sel_raw: int
+    dfs_sel_final: int
+    score_sum_final: float
+    prune_dropped: int
     time_s: float
+    independent: bool
 
 
 def _collision_edge_count(graph, n: int) -> int:
-    return sum(len(graph._obj.collisions[i]) for i in range(n)) // 2
+    return sum(len(graph.collisions[i]) for i in range(n)) // 2
 
 
-def run_first_pass(cfg: BuildGraphConfig, seed: int = 0) -> FirstPassMetrics:
+def run_first_pass(
+    cfg: BuildGraphConfig,
+    *,
+    seed: int = 0,
+    mode: str = "merged_loose_tight",
+    dfs_passes: int | None = None,
+) -> FirstPassMetrics:
+    if mode not in DFS_MODES:
+        raise ValueError(f"unknown mode {mode!r}; choose from {DFS_MODES}")
+
     rng = np.random.default_rng(seed)
     sc = cfg.sampling
     sel = cfg.selection
     gc = cfg.graph
+    passes = dfs_passes if dfs_passes is not None else sel.dfs_passes
+    if mode == "high_pass_loose":
+        passes = max(passes, 16)
 
     p_board = cfg.rules.board_polygon()
     p1 = cfg.rules.rect_polygon()
@@ -68,7 +89,7 @@ def run_first_pass(cfg: BuildGraphConfig, seed: int = 0) -> FirstPassMetrics:
         cfg, selected_t, history, rng,
         board=p_board, parts=parts, nest_state=None,
     )
-    graph, polys, group_id, transform = make_polygon_graph(
+    graph, polys, _group_id, _transform = make_polygon_graph(
         p_board,
         [(p1, selected_t[0]), (p2, selected_t[1])],
         board_check=gc.board_check,
@@ -80,37 +101,43 @@ def run_first_pass(cfg: BuildGraphConfig, seed: int = 0) -> FirstPassMetrics:
             mutation_presets=cfg.rules.mutation_presets(),
             rule_score_penalty=sel.rule_score_penalty,
         )
-    selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
-    graph_sorted = sort_graph(graph, rule_set)
-    graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
-    scores = score_elems(graph, rule_set)
-    for _ in range(sel.dfs_passes):
-        selected = list(increase_selection_dfs(
-            graph_sorted_rev, selected,
-            sel.dfs_max_tries, sel.dfs_min_collisions_loose,
-        ))
-        selected = list(increase_selection_dfs(
-            graph, selected,
-            sel.dfs_max_tries, sel.dfs_min_collisions_tight,
-        ))
-        selected = list(increase_score_dfs(graph_sorted_rev, selected, scores))
-        selected = list(increase_selection_dfs(
-            graph_sorted, selected,
-            sel.dfs_max_tries, sel.dfs_min_collisions_loose,
-        ))
-        selected = list(increase_score_dfs(graph_sorted, selected, scores))
-    elapsed = time.perf_counter() - t0
+    from nest_graph.elem_graph import score_elems
 
+    scores = score_elems(graph, rule_set)
+    selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
+    nest_sel = len(selected)
+
+    if mode == "nest_only":
+        raw, final, score_sum = selected, selected, sum(scores[v] for v in selected)
+    else:
+        raw, final, score_sum = apply_dfs_refinement(
+            graph,
+            rule_set,
+            selected,
+            scores,
+            dfs_passes=passes,
+            dfs_max_tries=sel.dfs_max_tries,
+            mode=mode,
+        )
+
+    elapsed = time.perf_counter() - t0
     n = len(polys)
+    indep = selection_is_independent(graph, final)
+    if not indep:
+        raise AssertionError(f"mode={mode} seed={seed}: final selection overlaps")
+
     return FirstPassMetrics(
-        name="",
+        mode=mode,
+        seed=seed,
         graph_nodes=n,
         collision_edges=_collision_edge_count(graph, n),
-        selected_nest=len(nest_by_graph(graph, rule_sets[:1])[0]),
-        selected_dfs=len(selected),
-        batch_g0=selected_t[0].shape[0],
-        batch_g1=selected_t[1].shape[0],
+        nest_sel=nest_sel,
+        dfs_sel_raw=len(raw),
+        dfs_sel_final=len(final),
+        score_sum_final=score_sum,
+        prune_dropped=len(raw) - len(final),
         time_s=elapsed,
+        independent=indep,
     )
 
 
@@ -127,109 +154,93 @@ def _cfg(
     return name, BuildGraphConfig(sampling=s, propose=p, selection=sel)
 
 
-PRESETS: list[tuple[str, BuildGraphConfig]] = [
-    _cfg("A_current_defaults"),
-    _cfg("B_lean_propose", propose={
-        "use_voronoi": False, "use_point_cloud": False,
-        "max_proposals": 10, "candidate_pool": 10,
-    }),
-    _cfg("C_propose_heavy", propose={
-        "max_proposals": 18, "candidate_pool": 16,
-        "use_point_cloud": True, "point_cloud_particles": 10,
-        "point_cloud_iterations": 12,
-    }),
-    _cfg("D_high_random", sampling={
-        "random_per_iter": 192, "initial_random": 192,
-        "max_transforms_per_group": 900,
-    }),
-    _cfg("E_shuffle_heavy", sampling={
-        "shuffle_passes": 3, "shuffle_per_pass": 48,
-        "shuffle_scale": (0.15, 0.15, 0.6),
-    }),
-    _cfg("F_fast_rules", selection={
-        "improve_rules_rounds": 2, "dfs_passes": 2,
-    }),
-    _cfg("G_quality_rules", selection={
-        "improve_rules_rounds": 6, "dfs_passes": 2,
-    }),
-    _cfg("H_first_pass_combo", sampling={
-        "random_per_iter": 160, "initial_random": 160,
-        "max_transforms_per_group": 750,
-        "shuffle_passes": 2, "shuffle_per_pass": 40,
-    }, propose={
-        "max_proposals": 16, "candidate_pool": 14,
-        "use_voronoi": True, "use_point_cloud": False,
-        "erosion_num_angles": 8, "raycast_num_rays": 10,
-    }, selection={"improve_rules_rounds": 4}),
-    _cfg("I_propose_shuffle", sampling={
-        "random_per_iter": 128, "shuffle_passes": 3, "shuffle_per_pass": 40,
-    }, propose={
-        "max_proposals": 14, "candidate_pool": 12,
-        "use_point_cloud": False,
-    }),
-    _cfg("J_max_density", sampling={
-        "random_per_iter": 256, "initial_random": 256,
-        "max_transforms_per_group": 1000,
-        "shuffle_passes": 2, "shuffle_per_pass": 32,
-    }, propose={
-        "max_proposals": 20, "candidate_pool": 16,
-        "use_voronoi": True, "use_point_cloud": False,
-    }, selection={"improve_rules_rounds": 4}),
-    _cfg("K_recommended", sampling={
-        "random_per_iter": 192, "initial_random": 256,
-        "max_transforms_per_group": 900,
-        "shuffle_passes": 2, "shuffle_per_pass": 36,
-        "shuffle_scale": (0.14, 0.14, 0.55),
-    }, propose={
-        "max_proposals": 18, "candidate_pool": 14,
-        "use_voronoi": True, "use_point_cloud": False,
-        "erosion_num_angles": 8, "raycast_num_rays": 10,
-    }, selection={"improve_rules_rounds": 4}),
-]
+J_MAX_DENSITY = _cfg("J_max_density", sampling={
+    "random_per_iter": 256, "initial_random": 256,
+    "max_transforms_per_group": 1000,
+    "shuffle_passes": 2, "shuffle_per_pass": 32,
+}, propose={
+    "max_proposals": 20, "candidate_pool": 16,
+    "use_voronoi": True, "use_point_cloud": False,
+}, selection={"improve_rules_rounds": 4})
 
 
-def _format_table(rows: list[FirstPassMetrics]) -> str:
-    lines = [
-        "| preset | graph_nodes | edges | nest | dfs_sel | batch0 | batch1 | time_s |",
-        "|--------|-------------|-------|------|---------|--------|--------|--------|",
-    ]
+def _format_mode_table(rows: list[FirstPassMetrics]) -> str:
+    by_mode: dict[str, list[FirstPassMetrics]] = {}
     for r in rows:
+        by_mode.setdefault(r.mode, []).append(r)
+
+    lines = [
+        "| mode | nest_sel | dfs_raw | dfs_final | Δnest | dropped | score_sum | time_s |",
+        "|------|----------|---------|-----------|-------|---------|-----------|--------|",
+    ]
+    for mode in DFS_MODES:
+        if mode not in by_mode:
+            continue
+        agg = by_mode[mode]
+        nest = float(np.mean([a.nest_sel for a in agg]))
+        raw = float(np.mean([a.dfs_sel_raw for a in agg]))
+        final = float(np.mean([a.dfs_sel_final for a in agg]))
+        dropped = float(np.mean([a.prune_dropped for a in agg]))
+        score = float(np.mean([a.score_sum_final for a in agg]))
+        t = float(np.mean([a.time_s for a in agg]))
         lines.append(
-            f"| {r.name} | {r.graph_nodes} | {r.collision_edges} | "
-            f"{r.selected_nest} | {r.selected_dfs} | {r.batch_g0} | {r.batch_g1} | {r.time_s:.2f} |"
+            f"| {mode} | {nest:.1f} | {raw:.1f} | {final:.1f} | "
+            f"{final - nest:+.1f} | {dropped:.1f} | {score:.2f} | {t:.2f} |"
         )
     return "\n".join(lines)
 
 
 def main() -> None:
-    seeds = (0, 1, 2)
-    rows: list[FirstPassMetrics] = []
-    for name, cfg in PRESETS:
-        agg = []
-        for seed in seeds:
-            m = run_first_pass(cfg, seed=seed)
-            m.name = name
-            agg.append(m)
-        rows.append(FirstPassMetrics(
-            name=name,
-            graph_nodes=int(np.mean([a.graph_nodes for a in agg])),
-            collision_edges=int(np.mean([a.collision_edges for a in agg])),
-            selected_nest=int(np.mean([a.selected_nest for a in agg])),
-            selected_dfs=int(np.mean([a.selected_dfs for a in agg])),
-            batch_g0=int(np.mean([a.batch_g0 for a in agg])),
-            batch_g1=int(np.mean([a.batch_g1 for a in agg])),
-            time_s=float(np.mean([a.time_s for a in agg])),
-        ))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--modes",
+        nargs="*",
+        default=list(DFS_MODES),
+        choices=DFS_MODES,
+        help="DFS pipeline modes to benchmark",
+    )
+    parser.add_argument("--seeds", type=int, nargs="*", default=list(range(10)))
+    parser.add_argument("--dfs-passes", type=int, default=None)
+    parser.add_argument(
+        "--git-spot-check",
+        action="store_true",
+        help="Also run high_pass_loose with dfs_passes=16 on seeds 0..2",
+    )
+    args = parser.parse_args()
 
-    rows.sort(key=lambda r: (r.selected_dfs, r.graph_nodes), reverse=True)
-    table = _format_table(rows)
-    print(table)
-    best = rows[0]
-    print(f"\nBest by dfs_sel: {best.name} (dfs={best.selected_dfs}, time={best.time_s:.2f}s)")
+    _name, cfg = J_MAX_DENSITY
+    rows: list[FirstPassMetrics] = []
+    for mode in args.modes:
+        for seed in args.seeds:
+            m = run_first_pass(
+                cfg,
+                seed=seed,
+                mode=mode,
+                dfs_passes=args.dfs_passes,
+            )
+            rows.append(m)
+            print(
+                f"seed={seed} mode={mode}: nest={m.nest_sel} "
+                f"raw={m.dfs_sel_raw} final={m.dfs_sel_final} "
+                f"dropped={m.prune_dropped} score={m.score_sum_final:.2f} "
+                f"t={m.time_s:.2f}s"
+            )
+
+    if args.git_spot_check:
+        for seed in (0, 1, 2):
+            m = run_first_pass(
+                cfg, seed=seed, mode="high_pass_loose", dfs_passes=16,
+            )
+            m.mode = "high_pass_loose_p16"
+            rows.append(m)
+
+    table = _format_mode_table(rows)
+    print("\n" + table)
 
     out_path = Path(__file__).resolve().parents[1] / "docs" / "first_pass_tuning_results.txt"
     out_path.write_text(
-        f"# Auto-generated {time.strftime('%Y-%m-%d %H:%M')}\n\n{table}\n\nBest: {best.name}\n",
+        f"# Auto-generated {time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"# preset={_name} seeds={list(args.seeds)}\n\n{table}\n",
         encoding="utf-8",
     )
     print(f"\nWrote {out_path}")

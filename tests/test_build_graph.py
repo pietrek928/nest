@@ -8,10 +8,14 @@ from shapely.geometry import Point, Polygon
 
 from nest_graph.build_graph import (
     Geometry,
+    find_polygon_intersections_bipartite,
     _base_geometries,
     _build_transform_batch,
+    _make_demo_rule_set,
+    _make_seed_rule_sets,
     _poly_and_transforms,
     _rule_region,
+    apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
     make_polygon_matrix,
@@ -19,8 +23,11 @@ from nest_graph.build_graph import (
     run_build_graph,
     select_polygons_from_edges,
 )
-from nest_graph.elem_graph import PlacementRuleSet
+from nest_graph.config import SelectionConfig
+from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph, score_elems
 from nest_graph.utils import transform_poly
+
+from tests.nest_invariants import assert_selected_non_overlapping
 
 
 
@@ -28,7 +35,7 @@ from nest_graph.utils import transform_poly
 def _collision_edges(graph, n_nodes: int) -> set[tuple[int, int]]:
     edges = set()
     for i in range(n_nodes):
-        for j in graph._obj.collisions[i]:
+        for j in graph.collisions[i]:
             a, b = min(i, j), max(i, j)
             edges.add((a, b))
     return edges
@@ -72,8 +79,8 @@ def test_make_polygon_graph_no_hidden_overlaps(nest_board, rect_poly, tri_poly, 
     for i in range(len(polys)):
         for j in range(i + 1, len(polys)):
             if polys[i].intersects(polys[j]):
-                assert j in graph._obj.collisions[i]
-                assert i in graph._obj.collisions[j]
+                assert j in graph.collisions[i]
+                assert i in graph.collisions[j]
 
 
 def test_make_polygon_graph_accepts_disjoint_concave_pair(
@@ -87,7 +94,7 @@ def test_make_polygon_graph_accepts_disjoint_concave_pair(
     )
     assert len(polys) == 2
     assert not polys[0].intersects(polys[1])
-    assert len(graph._obj.collisions[0]) == 0
+    assert len(graph.collisions[0]) == 0
 
 
 def test_make_polygon_graph_main_iteration_scale(
@@ -108,7 +115,7 @@ def test_make_polygon_graph_main_iteration_scale(
         nest_board, [(rect_poly, s0), (tri_poly, s1)],
         board_check=cfg.graph.board_check,
     )
-    edges = sum(len(graph._obj.collisions[i]) for i in range(len(polys))) // 2
+    edges = sum(len(graph.collisions[i]) for i in range(len(polys))) // 2
     assert len(polys) > 50
     assert edges > 100
 
@@ -142,7 +149,7 @@ def test_make_polygon_graph_keeps_overlapping_placements(nest_board, rect_poly, 
     assert len(polys) == len(legacy_polys)
     assert len(polys) >= 1
     assert len(legacy_edges) > 0
-    assert sum(len(graph._obj.collisions[i]) for i in range(len(polys))) > 0
+    assert sum(len(graph.collisions[i]) for i in range(len(polys))) > 0
 
 
 def test_make_polygon_graph_collision_parity(nest_board, rect_poly, tri_poly, small_transforms):
@@ -159,7 +166,7 @@ def test_make_polygon_graph_collision_parity(nest_board, rect_poly, tri_poly, sm
 
     assert len(polys) == len(legacy_polys)
     assert set(map(tuple, transform)) == set(map(tuple, legacy_t))
-    assert len(graph._obj.elems) == len(legacy_polys)
+    assert len(graph.elems) == len(legacy_polys)
     assert _collision_edges(graph, len(polys)) == set(legacy_edges)
 
 
@@ -168,11 +175,11 @@ def test_make_polygon_graph_elem_graph_fields(nest_board, rect_poly, small_trans
     graph, polys, _gid, _t = make_polygon_graph(nest_board, [(rect_poly, transforms[0])])
     board_geom = Geometry.from_shapely(nest_board)
 
-    for i, ep in enumerate(graph._obj.elems):
-        circle = graph._obj.coords[i]
+    for i, ep in enumerate(graph.elems):
+        circle = graph.coords[i]
         assert circle.r_sq > 0
         assert board_geom.contains_point(ep.pos.x, ep.pos.y)
-    assert len(polys) == len(graph._obj.elems)
+    assert len(polys) == len(graph.elems)
 
 
 def _select_polygons_from_edges_reference(b, polygons):
@@ -288,3 +295,86 @@ def test_placement_board_score_positive_inside(nest_board, rect_poly):
     placed = base.apply_transform((0.5, 0.5, 0.0))
     score = placement_board_score(nest_board, board_geom, placed)
     assert score > 0
+
+
+def _refine_selection_like_build_graph(graph, rule_sets, rule_set, sel: SelectionConfig):
+    selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
+    scores = score_elems(graph, rule_set)
+    _raw, final, _score = apply_dfs_refinement(
+        graph,
+        rule_set,
+        selected,
+        scores,
+        dfs_passes=sel.dfs_passes,
+        dfs_max_tries=sel.dfs_max_tries,
+        mode="merged_loose_tight",
+    )
+    return final
+
+
+def test_nest_by_graph_selected_independent(
+    nest_board, rect_poly, tri_poly, small_transforms, build_graph_config,
+):
+    transforms = (
+        small_transforms(24, seed=11),
+        small_transforms(24, seed=12),
+    )
+    graph, polys, _gid, _trans = make_polygon_graph(
+        nest_board, [(rect_poly, transforms[0]), (tri_poly, transforms[1])]
+    )
+    rule_sets = _make_seed_rule_sets(build_graph_config)
+    selected = nest_by_graph(graph, rule_sets[:1])[0]
+    assert_selected_non_overlapping(graph, polys, selected)
+
+
+def test_build_graph_output_no_overlap_strict_dfs(
+    nest_board, rect_poly, tri_poly, build_graph_config,
+):
+    cfg = build_graph_config
+    rng = cfg.apply_seed()
+    sc = cfg.sampling
+    selected_t = (
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+    )
+    history = (np.zeros((1, 3)), np.zeros((1, 3)))
+    parts = [(cfg.rules.rect_polygon(), 0), (cfg.rules.tri_polygon(), 1)]
+    selected_t = _build_transform_batch(
+        cfg, selected_t, history, rng, board=nest_board, parts=parts,
+    )
+    graph, polys, gid, trans = make_polygon_graph(
+        nest_board,
+        [(rect_poly, selected_t[0]), (tri_poly, selected_t[1])],
+        board_check=cfg.graph.board_check,
+    )
+    rule_sets = _make_seed_rule_sets(cfg)
+    rule_set = _make_demo_rule_set(cfg)
+    selected = _refine_selection_like_build_graph(graph, rule_sets, rule_set, cfg.selection)
+    bases = _base_geometries([(rect_poly, selected_t[0]), (tri_poly, selected_t[1])])
+    geom_bases = [bases[gid[i]] for i in range(len(polys))]
+    assert_selected_non_overlapping(
+        graph, polys, selected, bases=geom_bases, transforms=trans,
+    )
+
+
+def test_make_polygon_graph_geometry_shapely_edge_parity(
+    nest_board, rect_poly, tri_poly, small_transforms,
+):
+    """Every Shapely overlap among placements must have a collision edge."""
+    transforms = (
+        small_transforms(16, seed=21),
+        small_transforms(16, seed=22),
+    )
+    graph, polys, gid, trans = make_polygon_graph(
+        nest_board, [(rect_poly, transforms[0]), (tri_poly, transforms[1])]
+    )
+    bases = _base_geometries([(rect_poly, transforms[0]), (tri_poly, transforms[1])])
+    for i in range(len(polys)):
+        for j in range(i + 1, len(polys)):
+            if polys[i].intersects(polys[j]):
+                assert j in graph.collisions[i]
+                assert i in graph.collisions[j]
+                g_i = bases[gid[i]].apply_transform(trans[i])
+                g_j = bases[gid[j]].apply_transform(trans[j])
+                hits = find_polygon_intersections_bipartite([g_i], [g_j])
+                assert hits == [(0, 0)], f"geometry miss for nodes {i}, {j}"

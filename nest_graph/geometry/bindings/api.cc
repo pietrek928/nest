@@ -2,6 +2,7 @@
 #include <vector>
 
 #include <nanobind/nanobind.h>
+namespace nb = nanobind;
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
@@ -16,14 +17,10 @@
 #include "solid/point_in_solid.h"
 #include "solid/solid_geometry.h"
 
-namespace nb = nanobind;
-
 using SolidGeometry2d = SolidGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
 using GuidanceConfig2d = GuidanceConfig<Vec2d>;
 using PlacementGuidance2d = PlacementGuidance<Vec2d>;
-
-namespace {
 
 nb::tuple circle_bounds_tuple(const SolidGeometry2d &g) {
     const auto &c = g.get_bounding_circle();
@@ -32,8 +29,6 @@ nb::tuple circle_bounds_tuple(const SolidGeometry2d &g) {
     const double r = std::sqrt(static_cast<double>(c.square_radius()));
     return nb::make_tuple(cx - r, cy - r, cx + r, cy + r);
 }
-
-}  // namespace
 
 void bind_geometry(nb::module_ &m) {
     nb::class_<SolidGeometry2d>(m, "Geometry")

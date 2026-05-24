@@ -12,8 +12,6 @@
 using Vec2 = PolyTestVec2;
 using SolidGeometry2 = PolyTestSolidGeometry2;
 
-namespace {
-
 // CCW rectangle with dense vertices along bottom edge [x0,x1] at y = y_lo (integer x step).
 SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_hi) {
     SolidGeometry2 poly;
@@ -72,8 +70,6 @@ SolidGeometry2 polygon_two_overlapping_parts_same_partner() {
     poly.finalize();
     return poly;
 }
-
-} // namespace
 
 TEST_CASE("narrow_phase_intersect disjoint convex", "[poly_intersect][router]") {
     auto sq_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});

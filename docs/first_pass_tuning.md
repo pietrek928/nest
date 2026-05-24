@@ -1,55 +1,66 @@
 # First-pass parameter tuning (2026-05-20)
 
-Benchmark: one full iteration of the demo board (rect + tri), seeds `0..2`, metric **`dfs_sel`** = placements after `nest_by_graph` + DFS refinement.
+Benchmark: one full iteration of the demo board (rect + tri), preset **J_max_density**, seeds `0..9`.
 
-Run: `PYTHONPATH=. python scripts/benchmark_first_pass.py`
-
-## Results (mean over 3 seeds)
-
-| preset | graph_nodes | collision_edges | nest_sel | **dfs_sel** | batch/g0 | batch/g1 | time_s | notes |
-|--------|-------------|-----------------|----------|-------------|----------|----------|--------|-------|
-| **J_max_density** | **94** | **480** | **19** | **20** | 1000 | 1000 | **0.47** | **Winner — now default** |
-| K_recommended | 96 | 515 | 17 | 18 | 900 | 900 | 0.50 | Slightly leaner cap |
-| D_high_random | 64 | 200 | 17 | 18 | 900 | 900 | 0.94 | High random, no propose boost |
-| C_propose_heavy | 62 | 216 | 15 | 16 | 600 | 600 | 0.76 | + point_cloud (slow) |
-| E_shuffle_heavy | 60 | 227 | 16 | 16 | 600 | 600 | 0.90 | shuffle 3×48 only |
-| G_quality_rules | 59 | 225 | 15 | 15 | 600 | 600 | 0.95 | improve_rules=6 |
-| H_first_pass_combo | 56 | 174 | 13 | 14 | 750 | 750 | 0.44 | Mid propose, no PSO |
-| I_propose_shuffle | 53 | 172 | 14 | 14 | 600 | 600 | 0.43 | shuffle + propose |
-| A_current_defaults (old) | 51 | 144 | 13 | 14 | 600 | 600 | 0.90 | pre-tuning baseline |
-| F_fast_rules | 53 | 203 | 12 | 13 | 600 | 600 | 0.90 | improve_rules=2 |
-| B_lean_propose | 58 | 246 | 12 | 12 | 600 | 600 | 0.06 | erosion+raycast only |
-
-## Adopted defaults (`J_max_density`)
-
-| Parameter | Old | New |
-|-----------|-----|-----|
-| `initial_random` | 128 | **256** |
-| `random_per_iter` | 128 | **256** |
-| `max_transforms_per_group` | 600 | **900** |
-| `propose.max_proposals` | 12 | **20** |
-| `propose.candidate_pool` | 12 | **16** |
-| `propose.use_point_cloud` | true | **false** (PSO costly; little gain vs voronoi) |
-| `shuffle_passes` / `shuffle_per_pass` | 2 / 32 | unchanged |
-
-## Takeaways
-
-1. **First iteration** is dominated by `initial_random` + `random_per_iter` + transform cap — larger batches (~900–1000) yield denser graphs and ~50% more DFS-selected parts (14 → 20).
-2. **Propose** (erosion + raycast + voronoi, no PSO) adds diversity at low cost when paired with large batches.
-3. **Shuffle** helps later iterations more than pass 1; kept at 2×32 as cheap insurance.
-4. **Point-cloud PSO** did not beat `J` on dfs_sel; left off by default (`use_point_cloud=false`).
-
-## Reproduce
+Run all DFS modes:
 
 ```bash
 PYTHONPATH=. python scripts/benchmark_first_pass.py
 ```
 
-Single seed spot-check:
+Spot-check with 16 DFS passes (historical `74db5db` used 16 outer passes):
+
+```bash
+PYTHONPATH=. python scripts/benchmark_first_pass.py --git-spot-check
+```
+
+## DFS pipeline comparison (mean over 10 seeds)
+
+| mode | nest_sel | dfs_raw | dfs_final | Δnest | dropped | score_sum | time_s |
+|------|----------|---------|-----------|-------|---------|-----------|--------|
+| nest_only | 19.6 | 19.6 | 19.6 | +0.0 | 0.0 | 0.05 | 0.77 |
+| **merged_loose_tight** | 19.4 | 20.6 | **20.6** | **+1.2** | **0.0** | 0.05 | 0.87 |
+| merged_single_pass | 19.1 | 20.2 | 20.2 | +1.1 | 0.0 | 0.05 | 0.93 |
+| legacy_alternating | 20.7 | 21.5 | 21.5 | +0.8 | 0.0 | 0.05 | 0.99 |
+| head_pipeline | 19.3 | 20.2 | 20.2 | +0.9 | 0.0 | 0.05 | 0.96 |
+| high_pass_loose (16 passes) | 19.9 | 20.9 | 20.9 | +1.0 | 0.0 | 0.05 | 0.90 |
+| strict_no_prune | 19.4 | 19.4 | 19.4 | +0.0 | 0.0 | 0.04 | 0.91 |
+| strict_prune | 20.7 | 20.7 | 20.7 | +0.0 | 0.0 | 0.05 | 1.01 |
+
+All modes assert `selection_is_independent` on **final** output.
+
+## Findings
+
+1. **`nest_by_graph` alone** adds no refinement (+0 vs nest); graph DFS still matters on dense graphs.
+2. **Merged pipeline** (`refine_selection` loose→tight + `finalize_selection`) matches or beats legacy 5-call alternation with **zero post-finalize drops** on these seeds — convergence + finalize repair/MIS works without greedy prune.
+3. **Strict search** (`min_collisions=0`, `max_root_collisions=0`) cannot grow selection; confirms transient overlap during loose search helps exploration.
+4. **`head_pipeline`** (legacy 5-call, no finalize) can return overlapping sets in metrics (`dfs_raw == dfs_final`); merged pipeline is the shipped default.
+5. **`dfs_passes`** default raised **2 → 4** after merge (cheaper per pass). Historical **128 → 16 → 2** pass reduction was the largest budget cut; `high_pass_loose` at 16 passes is only marginally above merged×4 on this benchmark (+0.3 parts mean).
+
+## Shipped defaults
+
+| Item | Value |
+|------|-------|
+| Pipeline | `merged_loose_tight` in `run_build_graph` |
+| `dfs_passes` | **4** |
+| Internal loose caps | `min_collisions=2`, `max_root_collisions=2` (C++) |
+| Internal tight caps | `min_collisions=1`, `max_root_collisions=1` |
+| Finalize | `finalize_selection` (repair → exact weighted MIS ≤18 nodes) |
+
+## Preset tuning (J_max_density, seeds 0–2, prior run)
+
+| preset | graph_nodes | nest_sel | dfs_sel | time_s |
+|--------|-------------|----------|---------|--------|
+| J_max_density | 94 | 19 | 20 | 0.47 |
+
+See `docs/first_pass_tuning_results.txt` for latest auto-generated tables.
+
+## Reproduce
 
 ```python
 from nest_graph.config import BuildGraphConfig
 from scripts.benchmark_first_pass import run_first_pass
-m = run_first_pass(BuildGraphConfig(), seed=0)
-print(m.selected_dfs, m.graph_nodes, m.time_s)
+
+m = run_first_pass(BuildGraphConfig(), seed=0, mode="merged_loose_tight")
+print(m.nest_sel, m.dfs_sel_final, m.prune_dropped, m.score_sum_final)
 ```
