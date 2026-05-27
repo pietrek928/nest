@@ -1,0 +1,11 @@
+# Propose strategy benchmark
+
+| strategy | scenario | valid | clearance_mean | clearance_min | graph+ | Δnodes | time_s |
+|----------|----------|-------|----------------|---------------|--------|--------|--------|
+| shipped | partial_pack | 12.0 | 0.0940 | 0.0627 | 12.0 | +12.0 | 0.293 |
+
+## Raw rows (JSON lines)
+
+{"strategy": "shipped", "scenario": "partial_pack", "seed": 0, "valid_count": 12, "top_clearance_mean": 0.09317281666483433, "top_clearance_min": 0.0616232374009192, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 0.28765819396357983}
+{"strategy": "shipped", "scenario": "partial_pack", "seed": 1, "valid_count": 12, "top_clearance_mean": 0.09325828063156173, "top_clearance_min": 0.06540179915421683, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 0.2965460659470409}
+{"strategy": "shipped", "scenario": "partial_pack", "seed": 2, "valid_count": 12, "top_clearance_mean": 0.09544807894992108, "top_clearance_min": 0.061168419389126684, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 0.29387664201203734}

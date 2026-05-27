@@ -1,0 +1,13 @@
+# Nest pipeline benchmark 2026-05-26 11:30
+# seeds=[0, 1, 2] iters=2
+
+| propose | dfs_mode | parts_final | graph_nodes | border_err_min | score_sum | time_s |
+|---------|----------|-------------|-------------|----------------|-----------|--------|
+| shipped | legacy_dfs_budget | 38.7 | 1354 | 0.0004 | 0.09 | 35.07 |
+| shipped | merged_loose_finalize_end | 38.3 | 1260 | 0.0028 | 0.09 | 24.98 |
+| shipped | merged_loose_tight_finalize_end | 37.3 | 1219 | 0.0010 | 0.09 | 27.20 |
+
+## Ranking by mean parts_final
+- **38.7** — `shipped` + `legacy_dfs_budget`
+- **38.3** — `shipped` + `merged_loose_finalize_end`
+- **37.3** — `shipped` + `merged_loose_tight_finalize_end`

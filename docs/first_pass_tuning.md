@@ -41,7 +41,7 @@ All modes assert `selection_is_independent` on **final** output.
 
 | Item | Value |
 |------|-------|
-| Pipeline | `merged_loose_tight` in `run_build_graph` |
+| Pipeline | `selection.dfs_mode` → `apply_dfs_refinement` (default **`merged_single_pass`**) |
 | `dfs_passes` | **4** |
 | Internal loose caps | `min_collisions=2`, `max_root_collisions=2` (C++) |
 | Internal tight caps | `min_collisions=1`, `max_root_collisions=1` |
@@ -54,6 +54,14 @@ All modes assert `selection_is_independent` on **final** output.
 | J_max_density | 94 | 19 | 20 | 0.47 |
 
 See `docs/first_pass_tuning_results.txt` for latest auto-generated tables.
+
+## Propose presets (gap-fitting spot-check)
+
+```bash
+PYTHONPATH=. python scripts/benchmark_first_pass.py --seeds 0 1 2 --propose-preset shipped
+```
+
+See [propose_benchmark.md](propose_benchmark.md) for isolated propose benchmarks and [nest_pipeline_benchmark.md](nest_pipeline_benchmark.md) for multi-iteration end-to-end comparison.
 
 ## Reproduce
 

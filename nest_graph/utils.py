@@ -1,4 +1,5 @@
 from shapely import Polygon
+from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 from shapely.affinity import translate, rotate
 from typing import Tuple
@@ -22,7 +23,9 @@ def get_shape_exteriors(p: BaseGeometry):
             e for g in p.geoms for e in get_shape_exteriors(g)
         )
     if p.geom_type == 'Polygon':
-        return (p.exterior,)
+        if p.exterior.is_empty or p.exterior.length <= 0:
+            return ()
+        return (LineString(p.exterior.coords),)
     return ()
 
 

@@ -11,7 +11,6 @@ from nest_graph.build_graph import (
     find_polygon_intersections_bipartite,
     _base_geometries,
     _build_transform_batch,
-    _make_demo_rule_set,
     _make_seed_rule_sets,
     _poly_and_transforms,
     _rule_region,
@@ -25,6 +24,7 @@ from nest_graph.build_graph import (
 )
 from nest_graph.config import SelectionConfig
 from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph, score_elems
+from nest_graph.placement_scene import board_placement_valid
 from nest_graph.utils import transform_poly
 
 from tests.nest_invariants import assert_selected_non_overlapping
@@ -46,21 +46,23 @@ def _make_polygon_graph_shapely(b, polygons):
     selected_group_id = []
     selected_transform = []
     graph_edges = []
+    bases = _base_geometries(polygons)
 
     for i, item in enumerate(polygons):
         if len(item) == 2:
             p, transforms = item
         else:
             p, _w, transforms = item
+        base = bases[i]
         for t in transforms:
-            poly_t = transform_poly(p, t)
-            if not b.contains(poly_t):
+            placed = base.apply_transform(t)
+            if not board_placement_valid(b, base, placed):
                 continue
             n = len(selected_polys)
             for j in range(n):
-                if poly_t.intersects(selected_polys[j]):
+                if selected_polys[j].intersects(transform_poly(p, t)):
                     graph_edges.append((min(n, j), max(n, j)))
-            selected_polys.append(poly_t)
+            selected_polys.append(transform_poly(p, t))
             selected_group_id.append(i)
             selected_transform.append(t)
 
@@ -113,7 +115,6 @@ def test_make_polygon_graph_main_iteration_scale(
     s0, s1 = _build_transform_batch(cfg, selected_t, history, rng)
     graph, polys, _gid, _trans = make_polygon_graph(
         nest_board, [(rect_poly, s0), (tri_poly, s1)],
-        board_check=cfg.graph.board_check,
     )
     edges = sum(len(graph.collisions[i]) for i in range(len(polys))) // 2
     assert len(polys) > 50
@@ -131,10 +132,15 @@ def test_run_build_graph_fast(tmp_path, build_graph_config):
 def test_improve_rules_uses_config_presets(nest_board, build_graph_config):
     rules = [PlacementRuleSet()]
     presets = build_graph_config.rules.mutation_presets()
+    sel = build_graph_config.selection
+    from nest_graph.config import score_rules_options
+
     improved = improve_rules(
         [], rules, 1, nest_board,
         mutation_presets=presets,
-        rule_score_penalty=build_graph_config.selection.rule_score_penalty,
+        rule_score_penalty=sel.rule_score_penalty,
+        score_options=score_rules_options(sel),
+        max_rules_per_set=build_graph_config.rules.max_rules_per_set,
     )
     assert len(improved) >= 1
 
@@ -229,16 +235,18 @@ def test_select_polygons_from_edges_parity(nest_board, rect_poly, tri_poly, smal
 def _make_polygon_matrix_shapely(b, polygons):
     selected = []
     group_weights = []
-    for item in polygons:
+    bases = _base_geometries(polygons)
+    for i, item in enumerate(polygons):
         if len(item) == 2:
-            p, transforms = item
+            _p, transforms = item
             w = 1.0
         else:
-            p, w, transforms = item
+            _p, w, transforms = item
+        base = bases[i]
         for t in transforms:
-            poly_t = transform_poly(p, t)
-            if b.contains(poly_t):
-                selected.append(poly_t)
+            placed = base.apply_transform(t)
+            if board_placement_valid(b, base, placed):
+                selected.append(transform_poly(_p, t))
                 group_weights.append(w)
 
     n = len(selected)
@@ -297,17 +305,18 @@ def test_placement_board_score_positive_inside(nest_board, rect_poly):
     assert score > 0
 
 
-def _refine_selection_like_build_graph(graph, rule_sets, rule_set, sel: SelectionConfig):
+def _refine_selection_like_build_graph(graph, rule_sets, sel: SelectionConfig):
+    from nest_graph.build_graph import active_rule_set
+
+    active = active_rule_set(rule_sets)
     selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
-    scores = score_elems(graph, rule_set)
+    scores = score_elems(graph, active)
     _raw, final, _score = apply_dfs_refinement(
         graph,
-        rule_set,
+        active,
         selected,
         scores,
-        dfs_passes=sel.dfs_passes,
-        dfs_max_tries=sel.dfs_max_tries,
-        mode="merged_loose_tight",
+        selection=sel,
     )
     return final
 
@@ -345,11 +354,9 @@ def test_build_graph_output_no_overlap_strict_dfs(
     graph, polys, gid, trans = make_polygon_graph(
         nest_board,
         [(rect_poly, selected_t[0]), (tri_poly, selected_t[1])],
-        board_check=cfg.graph.board_check,
     )
     rule_sets = _make_seed_rule_sets(cfg)
-    rule_set = _make_demo_rule_set(cfg)
-    selected = _refine_selection_like_build_graph(graph, rule_sets, rule_set, cfg.selection)
+    selected = _refine_selection_like_build_graph(graph, rule_sets, cfg.selection)
     bases = _base_geometries([(rect_poly, selected_t[0]), (tri_poly, selected_t[1])])
     geom_bases = [bases[gid[i]] for i in range(len(polys))]
     assert_selected_non_overlapping(

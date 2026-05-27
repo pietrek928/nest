@@ -2,7 +2,12 @@ import numpy as np
 import pytest
 
 from nest_graph.build_graph import dedupe_rule_sets, improve_rules
-from nest_graph.config import BuildGraphConfig, RulesConfig, _make_rule_mutation_settings
+from nest_graph.config import (
+    BuildGraphConfig,
+    RulesConfig,
+    _make_rule_mutation_settings,
+    score_rules_options,
+)
 from nest_graph.elem_graph import (
     Circle,
     PlacementRuleSet,
@@ -110,17 +115,48 @@ def test_score_rules_latest_graph_only(nest_board, rect_poly, small_transforms):
 def test_improve_rules_elitist_smoke(nest_board, build_graph_config):
     rules = [PlacementRuleSet()]
     presets = build_graph_config.rules.mutation_presets()
+    sel = build_graph_config.selection
     improved = improve_rules(
         [],
         rules,
         2,
         nest_board,
         mutation_presets=presets,
-        rule_score_penalty=build_graph_config.selection.rule_score_penalty,
+        rule_score_penalty=sel.rule_score_penalty,
         elite_count=1,
         seed=0,
+        score_options=score_rules_options(sel),
+        max_rules_per_set=build_graph_config.rules.max_rules_per_set,
     )
     assert 1 <= len(improved) <= 2
+
+
+def test_improve_rules_beats_seed_on_graph(
+    nest_board, rect_poly, small_transforms, build_graph_config,
+):
+    transforms = small_transforms(16, seed=3)
+    graph, _, _, _ = make_polygon_graph(nest_board, [(rect_poly, transforms)])
+    seed_rules = PlacementRuleSet()
+    seed_rules.append_point_at(Vec2(0.5, 0.5), 0.2, 1.0, 0)
+    sel = build_graph_config.selection
+    improved = improve_rules(
+        [graph],
+        [seed_rules],
+        1,
+        nest_board,
+        mutation_presets=build_graph_config.rules.mutation_presets(),
+        rule_score_penalty=sel.rule_score_penalty,
+        elite_count=1,
+        seed=1,
+        score_options=score_rules_options(sel),
+        max_rules_per_set=build_graph_config.rules.max_rules_per_set,
+    )
+    assert len(improved) == 1
+    assert improved[0].size() <= build_graph_config.rules.max_rules_per_set
+    opts = score_rules_options(sel)
+    seed_score = score_rules([graph], [seed_rules], opts)[0]
+    best_score = score_rules([graph], improved, opts)[0]
+    assert best_score >= seed_score
 
 
 def test_mutation_presets_include_max_inserts():

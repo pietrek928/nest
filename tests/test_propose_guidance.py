@@ -10,7 +10,7 @@ from nest_graph.propose import (
     evaluate_ray_placement,
     proposed_transforms_for_groups,
 )
-from nest_graph.build_graph import _placement_valid
+from nest_graph.placement_scene import board_placement_valid
 from nest_graph.geometry import Geometry
 
 
@@ -101,15 +101,13 @@ def test_proposed_transforms_board_valid(nest_board, rect_poly, tri_poly, build_
         min_dist=cfg.board_min_dist(),
         pt_push=Point(nest_board.centroid),
     )
-    board_geom = Geometry.from_shapely(nest_board)
     for group_id, part in ((0, rect_poly), (1, tri_poly)):
         arr = proposals[group_id]
         assert arr.ndim == 2 and arr.shape[1] == 3
+        part_geom = Geometry.from_shapely(part)
         for t in arr:
-            placed = Geometry.from_shapely(part).apply_transform(t)
-            assert _placement_valid(
-                nest_board, board_geom, placed, part, t, "vertices",
-            )
+            placed = part_geom.apply_transform(t)
+            assert board_placement_valid(nest_board, part_geom, placed)
 
 
 def test_propose_geometry_validation(board):

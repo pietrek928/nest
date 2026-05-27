@@ -206,11 +206,17 @@ void bind_geometry(nb::module_ &m) {
 
     nb::class_<GuidanceConfig2d>(m, "GuidanceConfig")
         .def(nb::init<>())
+        .def_rw("minimum_placing_distance", &GuidanceConfig2d::minimum_placing_distance)
+        .def_rw("max_alternative_angles", &GuidanceConfig2d::max_alternative_angles)
+        .def_rw("slide_escape_multiplier", &GuidanceConfig2d::slide_escape_multiplier)
         .def_rw("use_target_attractor", &GuidanceConfig2d::use_target_attractor)
         .def_rw("target_angle_rad", &GuidanceConfig2d::target_angle_rad)
         .def_rw("use_gravity", &GuidanceConfig2d::use_gravity)
+        .def_rw("use_hole_seeking", &GuidanceConfig2d::use_hole_seeking)
+        .def_rw("hole_seeking_weight", &GuidanceConfig2d::hole_seeking_weight)
         .def_rw("attraction_weight", &GuidanceConfig2d::attraction_weight)
         .def_rw("alignment_weight", &GuidanceConfig2d::alignment_weight)
+        .def_rw("escape_radius_multiplier", &GuidanceConfig2d::escape_radius_multiplier)
         .def_rw("search_radius", &GuidanceConfig2d::search_radius)
         .def_prop_rw(
             "target_position",
@@ -238,6 +244,24 @@ void bind_geometry(nb::module_ &m) {
             "suggested_translation",
             [](const PlacementGuidance2d &g) {
                 return vec2d_to_tuple(g.suggested_translation);
+            })
+        .def_prop_ro(
+            "alternative_translations",
+            [](const PlacementGuidance2d &g) {
+                nb::list out;
+                for (const auto &v : g.alternative_translations) {
+                    out.append(vec2d_to_tuple(v));
+                }
+                return out;
+            })
+        .def_prop_ro(
+            "alternative_rotations",
+            [](const PlacementGuidance2d &g) {
+                nb::list out;
+                for (const auto &a : g.alternative_rotations) {
+                    out.append(static_cast<double>(a));
+                }
+                return out;
             });
 
     nb::class_<DistanceResult2d>(m, "ComplexDistanceResult")

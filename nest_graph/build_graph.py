@@ -11,12 +11,21 @@ from typing import Iterator, NamedTuple, Tuple
 
 from .config import (
     BuildGraphConfig,
+    SelectionConfig,
     dedupe_transforms,
+    expand_structured_transforms,
+    score_rules_options,
     shuffle_transforms,
     subsample_transforms,
     trim_history,
 )
-from .geometry import Geometry, find_polygon_intersections_bipartite
+from .geometry import Geometry, GuidanceConfig, find_polygon_intersections_bipartite
+from .placement_scene import (
+    PlacementScene,
+    guidance_config_for_scene,
+    is_valid_placement,
+)
+from .board import board_context_from_geometry
 from .utils import normalize_poly, transform_poly
 from .propose import (
     propose_placements_point_cloud,
@@ -28,6 +37,7 @@ from .elem_graph import (
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings, RefineSelectionOptions, FinalizeSelectionOptions,
     nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
+    ScoreRulesOptions,
     increase_selection_dfs, increase_score_dfs,
     refine_selection, finalize_selection, selection_is_independent,
 )
@@ -68,43 +78,34 @@ def _base_geometries(polygons) -> list[Geometry]:
 
 
 def _iter_candidates(
-    board_geom: Geometry,
+    board: BaseGeometry,
     polygons,
     *,
-    strict_board: bool = False,
+    sheet=None,
+    void_geoms=None,
+    min_dist: float = 0.0,
+    epsilon_ratio: float = 0.05,
 ) -> Iterator[Candidate]:
+    if sheet is None or void_geoms is None:
+        sheet, void_geoms = board_context_from_geometry(board)
+    bounds = sheet.bounds
+    guidance_cfg = guidance_config_for_scene(
+        min_dist, board_bounds=bounds, epsilon_ratio=epsilon_ratio
+    )
     bases = _base_geometries(polygons)
     for i, item in enumerate(polygons):
         _p, transforms, w = _poly_and_transforms(item)
         base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
-            if strict_board:
-                if not _placement_inside_board(board_geom, placed):
-                    continue
-            elif not board_geom.contains_point(*placed.center()):
+            scene = PlacementScene(sheet, void_geoms, [], base)
+            cx, cy = placed.center()
+            if not is_valid_placement(
+                scene, placed, (cx, cy), min_dist, guidance_cfg,
+                epsilon_ratio=epsilon_ratio,
+            ):
                 continue
             yield Candidate(i, w, t, placed)
-
-
-def _placement_inside_board(board_geom: Geometry, placed: Geometry) -> bool:
-    for x, y in placed.vertices():
-        if not board_geom.contains_point(x, y):
-            return False
-    return True
-
-
-def _placement_valid(
-    board: BaseGeometry,
-    board_geom: Geometry,
-    placed: Geometry,
-    poly: Polygon,
-    t: np.ndarray,
-    board_check: str,
-) -> bool:
-    if board_check == "contains":
-        return bool(board.contains(transform_poly(poly, t)))
-    return _placement_inside_board(board_geom, placed)
 
 
 def _bounds_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
@@ -232,12 +233,21 @@ def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, f
     return tuple(np.array(tt) for tt in result)
 
 
-def make_polygon_matrix(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
-    board_geom = Geometry.from_shapely(b)
+def make_polygon_matrix(
+    b: BaseGeometry,
+    polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...],
+    *,
+    min_dist: float = 0.0,
+    epsilon_ratio: float = 0.05,
+):
+    sheet, void_geoms = board_context_from_geometry(b)
     selected_geoms: list[Geometry] = []
     group_weights = []
 
-    for cand in _iter_candidates(board_geom, polygons, strict_board=True):
+    for cand in _iter_candidates(
+        b, polygons, sheet=sheet, void_geoms=void_geoms,
+        min_dist=min_dist, epsilon_ratio=epsilon_ratio,
+    ):
         selected_geoms.append(cand.placed)
         group_weights.append(cand.weight)
 
@@ -256,9 +266,13 @@ def make_polygon_graph(
     b: BaseGeometry,
     polygons,
     *,
-    board_check: str = "vertices",
+    min_dist: float = 0.0,
+    epsilon_ratio: float = 0.05,
 ):
-    board_geom = Geometry.from_shapely(b)
+    sheet, void_geoms = board_context_from_geometry(b)
+    guidance_cfg = guidance_config_for_scene(
+        min_dist, board_bounds=sheet.bounds, epsilon_ratio=epsilon_ratio
+    )
     graph = ElemGraph()
     selected_polys = []
     selected_geoms: list[Geometry] = []
@@ -276,7 +290,12 @@ def make_polygon_graph(
         base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
-            if not _placement_valid(b, board_geom, placed, p, t, board_check):
+            scene = PlacementScene(sheet, void_geoms, [], base)
+            cx, cy = placed.center()
+            if not is_valid_placement(
+                scene, placed, (cx, cy), min_dist, guidance_cfg,
+                epsilon_ratio=epsilon_ratio,
+            ):
                 continue
             pending.append((i, p, t, placed))
 
@@ -371,14 +390,23 @@ FILL_COLORS = (
     (0, 100, 100),
 )
 
+
+def _draw_board_outline(im, board: BaseGeometry, xstart, ystart, xscale, yscale):
+    cv.drawContours(im, [scale_coords(
+        np.array(board.exterior.coords), xstart, ystart, xscale, yscale
+    )], -1, (255, 255, 255), 3)
+    if isinstance(board, Polygon):
+        for ring in board.interiors:
+            cv.drawContours(im, [scale_coords(
+                np.array(ring.coords), xstart, ystart, xscale, yscale
+            )], -1, (160, 160, 160), 2)
+
 def render_placement(b: BaseGeometry, elems: Tuple[Tuple[Polygon, np.ndarray], ...], im_shape=(1024, 1024)):
     xstart, ystart, xend, yend = b.bounds
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    cv.drawContours(im, [scale_coords(
-        np.array(b.exterior.coords), xstart, ystart, xscale, yscale
-    )], -1, (255, 255, 255), 3)
+    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
     for it, (p, transforms) in enumerate(elems):
         fill_col = FILL_COLORS[it % len(FILL_COLORS)]
         for t in transforms:
@@ -397,9 +425,7 @@ def render_selection(b: BaseGeometry, polys: Tuple[Polygon, ...], v: np.ndarray,
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    cv.drawContours(im, [scale_coords(
-        np.array(b.exterior.coords), xstart, ystart, xscale, yscale
-    )], -1, (255, 255, 255), 3)
+    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
     for w, p in sorted(zip(v, polys), key=lambda x: x[0]):
         cv.drawContours(im, [scale_coords(
             np.array(p.exterior.coords), xstart, ystart, xscale, yscale
@@ -415,9 +441,7 @@ def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_sha
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    cv.drawContours(im, [scale_coords(
-        np.array(b.exterior.coords), xstart, ystart, xscale, yscale
-    )], -1, (255, 255, 255), 3)
+    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
     for it, poly_set in enumerate(polys):
         fill_col = FILL_COLORS[it % len(FILL_COLORS)]
         for p in poly_set:
@@ -435,6 +459,96 @@ def _rule_region(board: BaseGeometry) -> Circle:
     return Circle.from_bounds(xmin, ymin, xmax, ymax)
 
 
+def _quantize_rule_scalar(v: float, places: int = 4) -> float:
+    return round(float(v), places)
+
+
+def _fingerprint_rule_set(rule_set: PlacementRuleSet) -> tuple:
+    parts: list[tuple] = []
+    q = _quantize_rule_scalar
+    for pr in rule_set.point_rules:
+        parts.append(
+            ("p", pr.group, q(pr.pos[0]), q(pr.pos[1]), q(pr.r), q(pr.w)),
+        )
+    for cr in rule_set.circle_rules:
+        parts.append(
+            (
+                "c",
+                cr.group,
+                q(cr.circle.center.x),
+                q(cr.circle.center.y),
+                q(cr.circle.radius),
+                q(cr.r),
+                q(cr.w),
+            ),
+        )
+    for pr in rule_set.point_angle_rules:
+        parts.append(
+            (
+                "pa",
+                pr.group,
+                q(pr.pos[0]),
+                q(pr.pos[1]),
+                q(pr.a),
+                q(pr.r),
+                q(pr.w),
+            ),
+        )
+    for cr in rule_set.circle_angle_rules:
+        parts.append(
+            (
+                "ca",
+                cr.group,
+                q(cr.circle.center.x),
+                q(cr.circle.center.y),
+                q(cr.a),
+                q(cr.r),
+                q(cr.w),
+            ),
+        )
+    return tuple(sorted(parts))
+
+
+def dedupe_rule_sets(rule_sets: list[PlacementRuleSet]) -> list[PlacementRuleSet]:
+    seen: set[tuple] = set()
+    out: list[PlacementRuleSet] = []
+    for rs in rule_sets:
+        key = _fingerprint_rule_set(rs)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(rs)
+    return out
+
+
+def truncate_rule_set(
+    rule_set: PlacementRuleSet,
+    max_rules: int,
+) -> PlacementRuleSet:
+    if rule_set.size() <= max_rules:
+        return rule_set
+    weighted: list[tuple[float, object]] = []
+    for pr in rule_set.point_rules:
+        weighted.append((pr.w, pr))
+    for cr in rule_set.circle_rules:
+        weighted.append((cr.w, cr))
+    for pr in rule_set.point_angle_rules:
+        weighted.append((pr.w, pr))
+    for cr in rule_set.circle_angle_rules:
+        weighted.append((cr.w, cr))
+    weighted.sort(key=lambda item: item[0], reverse=True)
+    out = PlacementRuleSet()
+    for _, rule in weighted[:max_rules]:
+        out.append_rule(rule)
+    return out
+
+
+def active_rule_set(rule_sets: list[PlacementRuleSet]) -> PlacementRuleSet:
+    if not rule_sets:
+        return PlacementRuleSet()
+    return rule_sets[0]
+
+
 def improve_rules(
     graphs,
     rules,
@@ -442,7 +556,11 @@ def improve_rules(
     board: BaseGeometry | None = None,
     *,
     mutation_presets: list[RuleMutationSettings] | None = None,
-    rule_score_penalty: float = 0.01,
+    rule_score_penalty: float = 0.03,
+    elite_count: int = 16,
+    seed: int = 0,
+    score_options: ScoreRulesOptions | None = None,
+    max_rules_per_set: int = 24,
 ):
     if mutation_presets is None:
         region = _rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
@@ -458,18 +576,71 @@ def improve_rules(
             ),
             RuleMutationSettings(
                 region=region, dpos=0.01, dw=0.01, da=np.pi / 64,
-                insert_p=0.01, remove_p=0.001, mutate_p=0.1, ngroups=ng,
+                insert_p=0.01, remove_p=0.02, mutate_p=0.1, ngroups=ng,
             ),
         ]
-    new_rules = list(rules)
-    for preset in mutation_presets:
-        new_rules.extend(augment_rules(rules, preset))
-    scores = score_rules(graphs, new_rules)
-    scored = []
-    for s, r in zip(scores, new_rules):
-        scored.append((s - r.size() * rule_score_penalty, r))
-    scored = sorted(scored, key=lambda x: x[0], reverse=True)
-    return [v[1] for v in scored[:n]]
+    if score_options is None:
+        score_options = ScoreRulesOptions()
+        score_options.rule_complexity_penalty = rule_score_penalty
+    elif score_options.rule_complexity_penalty == 0.0:
+        score_options.rule_complexity_penalty = rule_score_penalty
+
+    parents = list(rules)
+    elites = parents
+    if graphs and parents:
+        rank_opts = ScoreRulesOptions()
+        rank_opts.latest_graph_only = score_options.latest_graph_only
+        rank_opts.count_weight = score_options.count_weight
+        rank_opts.rule_complexity_penalty = score_options.rule_complexity_penalty
+        rank_opts.select = score_options.select
+        parent_scores = score_rules(graphs, parents, rank_opts)
+        ranked = sorted(
+            zip(parent_scores, parents),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        k = min(max(elite_count, 1), len(ranked))
+        elites = [rs for _, rs in ranked[:k]]
+
+    pool: list[PlacementRuleSet] = list(parents)
+    for preset_idx, preset in enumerate(mutation_presets):
+        mutate_seed = (int(seed) + preset_idx * 10007) & 0xFFFFFFFF
+        children = augment_rules(elites, preset, seed=mutate_seed)
+        pool.extend(children)
+
+    pool = dedupe_rule_sets(pool)
+    if max_rules_per_set > 0:
+        pool = [truncate_rule_set(rs, max_rules_per_set) for rs in pool]
+    if not pool:
+        return []
+
+    fitness = score_rules(graphs, pool, score_options)
+    scored = sorted(zip(fitness, pool), key=lambda item: item[0], reverse=True)
+    return [rs for _, rs in scored[:n]]
+
+
+def score_rule_sets_with_dfs(
+    graph: ElemGraph,
+    rule_sets: list[PlacementRuleSet],
+    selection: SelectionConfig,
+    *,
+    top_k: int = 4,
+) -> list[float]:
+    """Tier-B fitness for benchmarks: nest + DFS count on latest graph (top_k by Tier A)."""
+    if not rule_sets:
+        return []
+    tier_a = score_rules([graph], rule_sets, score_rules_options(selection))
+    order = sorted(range(len(rule_sets)), key=lambda i: tier_a[i], reverse=True)
+    out = list(tier_a)
+    for idx in order[: max(top_k, 0)]:
+        rs = rule_sets[idx]
+        selected = list(nest_by_graph(graph, [rs])[0])
+        scores = score_elems(graph, rs)
+        _, final, _ = apply_dfs_refinement(
+            graph, rs, selected, scores, selection=selection,
+        )
+        out[idx] = float(len(final)) - selection.rule_score_penalty * rs.size()
+    return out
 
 
 def _build_transform_batch(
@@ -510,7 +681,19 @@ def _build_transform_batch(
         proposed = propose_by_group.get(group_id, np.zeros((0, 3)))
         if proposed.shape[0] > 0:
             batch_parts.append(proposed)
-        batch_parts.append(rng.uniform(-1, 1, (sc.random_per_iter, 3)) * scale)
+            jittered = expand_structured_transforms(
+                proposed,
+                sc.structured_jitter_scale,
+                sc.structured_jitter_per_proposal,
+            )
+            if jittered.shape[0] > 0:
+                batch_parts.append(jittered)
+        n_random = (
+            sc.random_per_iter_when_proposed
+            if proposed.shape[0] > 0
+            else sc.random_per_iter
+        )
+        batch_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
         if hist.shape[0] > 0:
             batch_parts.append(hist)
         if sel.shape[0] > 0:
@@ -573,43 +756,50 @@ def prune_selection_to_independent_set(
     return kept
 
 
-def _loose_refine_options(max_tries: int = 0) -> RefineSelectionOptions:
+def _refine_options(
+    sel: SelectionConfig,
+    *,
+    loose: bool,
+    max_tries: int | None = None,
+) -> RefineSelectionOptions:
     opts = RefineSelectionOptions()
-    opts.max_tries = max_tries
-    opts.min_collisions = 2
-    opts.max_root_collisions = 2
-    opts.max_passes = 32
-    opts.beam_width = 2
+    opts.max_tries = sel.dfs_max_tries if max_tries is None else max_tries
+    opts.max_passes = sel.dfs_refine_max_passes
+    opts.beam_width = sel.dfs_refine_beam_width
+    if loose:
+        opts.min_collisions = 2
+        opts.max_root_collisions = 2
+    else:
+        opts.min_collisions = 1
+        opts.max_root_collisions = 1
     return opts
 
 
-def _tight_refine_options() -> RefineSelectionOptions:
-    opts = RefineSelectionOptions()
-    opts.min_collisions = 1
-    opts.max_root_collisions = 1
-    opts.max_passes = 32
-    opts.beam_width = 2
+def _finalize_options(sel: SelectionConfig) -> FinalizeSelectionOptions:
+    opts = FinalizeSelectionOptions()
+    opts.repair_passes = sel.dfs_finalize_repair_passes
+    opts.max_exact_component_size = sel.dfs_finalize_max_component
     return opts
 
 
-def _strict_refine_options(max_tries: int = 0) -> RefineSelectionOptions:
-    opts = RefineSelectionOptions()
-    opts.max_tries = max_tries
+def _loose_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
+    return _refine_options(sel, loose=True)
+
+
+def _tight_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
+    return _refine_options(sel, loose=False)
+
+
+def _strict_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
+    opts = _refine_options(sel, loose=False)
     opts.min_collisions = 0
     opts.max_root_collisions = 0
-    opts.max_passes = 32
-    opts.beam_width = 2
     return opts
 
 
-def _head_loose_refine_options(max_tries: int) -> RefineSelectionOptions:
+def _head_loose_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
     """HEAD-style score DFS: allow transient overlaps during search."""
-    opts = RefineSelectionOptions()
-    opts.max_tries = max_tries
-    opts.min_collisions = 2
-    opts.max_root_collisions = 2
-    opts.max_passes = 32
-    return opts
+    return _refine_options(sel, loose=True)
 
 
 def selection_score_sum(scores: list[float], selected: list[int]) -> float:
@@ -622,95 +812,114 @@ def apply_dfs_refinement(
     selected: list[int],
     scores: list[float],
     *,
-    dfs_passes: int,
-    dfs_max_tries: int,
-    mode: str = "merged_loose_tight",
+    dfs_passes: int | None = None,
+    dfs_max_tries: int | None = None,
+    mode: str | None = None,
+    selection: SelectionConfig | None = None,
 ) -> tuple[list[int], list[int], float]:
     """Refine selection; return (pre_finalize, final, score_sum_final)."""
+    sel = selection if selection is not None else SelectionConfig()
+    passes = dfs_passes if dfs_passes is not None else sel.dfs_passes
+    max_tries = dfs_max_tries if dfs_max_tries is not None else sel.dfs_max_tries
+    mode = mode if mode is not None else sel.dfs_mode
+    finalize_opts = _finalize_options(sel)
+
     selected = list(selected)
     graph_sorted = sort_graph(graph, rule_set)
     graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
     pre_finalize = selected
 
+    def _finalize() -> list[int]:
+        return list(finalize_selection(graph, selected, scores, finalize_opts))
+
     if mode == "nest_only":
         return selected, selected, selection_score_sum(scores, selected)
 
     if mode == "legacy_alternating":
-        for _ in range(dfs_passes):
+        for _ in range(passes):
             selected = list(increase_selection_dfs(
-                graph_sorted_rev, selected, dfs_max_tries,
+                graph_sorted_rev, selected, max_tries,
             ))
-            selected = list(increase_selection_dfs(graph, selected, dfs_max_tries))
+            selected = list(increase_selection_dfs(graph, selected, max_tries))
             selected = list(increase_score_dfs(graph_sorted_rev, selected, scores))
             selected = list(increase_selection_dfs(
-                graph_sorted, selected, dfs_max_tries,
+                graph_sorted, selected, max_tries,
             ))
             selected = list(increase_score_dfs(graph_sorted, selected, scores))
         pre_finalize = selected
-        final = list(finalize_selection(graph, selected, scores))
+        final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
     if mode == "head_pipeline":
-        loose = _head_loose_refine_options(dfs_max_tries)
+        loose = _head_loose_refine_options(sel)
         tight = RefineSelectionOptions()
         tight.min_collisions = 1
         tight.max_root_collisions = 2
-        for _ in range(dfs_passes):
+        tight.max_passes = sel.dfs_refine_max_passes
+        tight.beam_width = sel.dfs_refine_beam_width
+        for _ in range(passes):
             selected = list(increase_selection_dfs(
-                graph_sorted_rev, selected, dfs_max_tries,
+                graph_sorted_rev, selected, max_tries,
             ))
-            selected = list(increase_selection_dfs(graph, selected, dfs_max_tries))
+            selected = list(increase_selection_dfs(graph, selected, max_tries))
             selected = list(increase_score_dfs(
                 graph_sorted_rev, selected, scores, loose,
             ))
             selected = list(increase_selection_dfs(
-                graph_sorted, selected, dfs_max_tries,
+                graph_sorted, selected, max_tries,
             ))
             selected = list(increase_score_dfs(graph_sorted, selected, scores, tight))
         pre_finalize = selected
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
     if mode == "strict_no_prune":
-        strict = _strict_refine_options(dfs_max_tries)
-        for _ in range(dfs_passes):
+        strict = _strict_refine_options(sel)
+        for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
         pre_finalize = selected
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
     if mode == "strict_prune":
-        strict = _strict_refine_options(dfs_max_tries)
-        for _ in range(dfs_passes):
+        strict = _strict_refine_options(sel)
+        for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
         pre_finalize = selected
         final = prune_selection_to_independent_set(graph, selected, scores)
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    loose = _loose_refine_options(dfs_max_tries)
-    tight = _tight_refine_options()
+    loose = _loose_refine_options(sel)
+    tight = _tight_refine_options(sel)
 
     if mode == "merged_single_pass":
-        for _ in range(dfs_passes):
+        for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             pre_finalize = selected
-            final = list(finalize_selection(graph, selected, scores))
+            final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    if mode == "high_pass_loose":
-        for _ in range(dfs_passes):
+    if mode == "merged_loose_finalize_end":
+        for _ in range(passes):
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+        pre_finalize = selected
+        final = _finalize()
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode in ("merged_loose_tight_finalize_end", "high_pass_loose"):
+        for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             selected = list(refine_selection(graph, selected, scores, tight))
         pre_finalize = selected
-        final = list(finalize_selection(graph, selected, scores))
+        final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    # merged_loose_tight (default) and loose_internal_strict_final
-    for _ in range(dfs_passes):
+    # merged_loose_tight: finalize after each outer pass
+    for _ in range(passes):
         selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         selected = list(refine_selection(graph, selected, scores, tight))
     pre_finalize = selected
-    final = list(finalize_selection(graph, selected, scores))
+    final = _finalize()
     return pre_finalize, final, selection_score_sum(scores, final)
 
 
@@ -721,6 +930,10 @@ def _make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
     return [first]
 
 
+def _make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
+    return _make_seed_rule_sets(cfg) + [_make_demo_rule_set(cfg)]
+
+
 def run_build_graph(cfg: BuildGraphConfig) -> None:
     rng = cfg.apply_seed()
     sc = cfg.sampling
@@ -729,6 +942,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     out = cfg.output
 
     p_board = cfg.rules.board_polygon()
+    p_sheet = cfg.rules.board_sheet_polygon()
     p1 = cfg.rules.rect_polygon()
     p2 = cfg.rules.tri_polygon()
 
@@ -736,8 +950,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
     )
-    rule_sets = _make_seed_rule_sets(cfg)
-    rule_set = _make_demo_rule_set(cfg)
+    rule_sets = _make_initial_rule_sets(cfg)
     render_size = (out.render_size, out.render_size)
     video = cv.VideoWriter(
         out.video_path,
@@ -766,11 +979,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         graph, polys, group_id, transform = make_polygon_graph(
             p_board,
             [(p1, selected_t[0]), (p2, selected_t[1])],
-            board_check=gc.board_check,
+            min_dist=cfg.board_min_dist(),
+            epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
         )
         graphs.append(graph)
         graphs = graphs[-gc.graphs_window:]
-        for _ in range(sel.improve_rules_rounds):
+        for round_idx in range(sel.improve_rules_rounds):
             rule_sets = improve_rules(
                 graphs,
                 rule_sets,
@@ -778,22 +992,25 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 p_board,
                 mutation_presets=cfg.rules.mutation_presets(),
                 rule_score_penalty=sel.rule_score_penalty,
+                elite_count=sel.improve_rules_elite_count,
+                seed=int(rng.integers(0, 2**31)) + round_idx,
+                score_options=score_rules_options(sel),
+                max_rules_per_set=cfg.rules.max_rules_per_set,
             )
+        active_rules = active_rule_set(rule_sets)
         selected_polys = nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0]
         old_len = len(selected_polys)
-        scores = score_elems(graph, rule_set)
+        scores = score_elems(graph, active_rules)
         _, selected_polys, _ = apply_dfs_refinement(
             graph,
-            rule_set,
+            active_rules,
             list(selected_polys),
             scores,
-            dfs_passes=sel.dfs_passes,
-            dfs_max_tries=sel.dfs_max_tries,
-            mode="merged_loose_tight",
+            selection=sel,
         )
         assert selection_is_independent(graph, selected_polys)
         print(len(polys), old_len, ' -> ', len(selected_polys))
-        im = render_polys(p_board, [[polys[i] for i in selected_polys]], im_shape=render_size)
+        im = render_polys(p_sheet, [[polys[i] for i in selected_polys]], im_shape=render_size)
         video.write(im)
         cv.imwrite(out.snapshot_path, im)
 

@@ -1,0 +1,5 @@
+# rules benchmark
+tier_b=False top_k=4
+label seed tier_a_best tier_b_best dfs_parts rule_size improve_s total_s
+tier_a 0 0.1800 0.1800 12 2 0.017 5.037
+tier_a 1 0.1800 0.1800 12 2 0.005 5.451

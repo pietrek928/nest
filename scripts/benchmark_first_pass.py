@@ -12,13 +12,19 @@ import numpy as np
 from nest_graph.build_graph import (
     NestState,
     _build_transform_batch,
-    _make_demo_rule_set,
-    _make_seed_rule_sets,
+    _make_initial_rule_sets,
+    active_rule_set,
     apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
 )
-from nest_graph.config import BuildGraphConfig, ProposeConfig, SamplingConfig, SelectionConfig
+from nest_graph.config import (
+    BuildGraphConfig,
+    ProposeConfig,
+    SamplingConfig,
+    SelectionConfig,
+    score_rules_options,
+)
 from nest_graph.elem_graph import nest_by_graph, selection_is_independent
 
 
@@ -32,6 +38,47 @@ DFS_MODES = (
     "merged_single_pass",
     "high_pass_loose",
 )
+
+PROPOSE_PRESETS: dict[str, dict[str, Any]] = {
+    "baseline": {
+        "use_free_region_search": False,
+        "ranking_mode": "legacy",
+        "smart_push_target": False,
+        "use_contact_ranking": False,
+    },
+    "clearance": {
+        "use_free_region_search": True,
+        "ranking_mode": "clearance",
+        "smart_push_target": True,
+        "trim_candidates_by_clearance": True,
+        "use_ribbon_seeds": True,
+        "use_group_edge_seeds": False,
+        "use_border_focus": False,
+        "use_contact_ranking": False,
+    },
+    "shipped": {
+        "use_free_region_search": True,
+        "smart_push_target": True,
+        "trim_candidates_by_clearance": True,
+        "use_ribbon_seeds": True,
+        "use_group_edge_seeds": True,
+        "multi_site_erosion": True,
+        "use_border_focus": True,
+        "use_border_edge_seeds": True,
+        "border_focus_ranking": True,
+        "use_contact_ranking": True,
+        "candidate_pool": 32,
+        "group_edge_samples_per_edge": 24,
+        "sheet_edge_samples_per_edge": 24,
+    },
+    "free_clearance_pso": {
+        "use_free_region_search": True,
+        "ranking_mode": "clearance",
+        "smart_push_target": True,
+        "use_point_cloud": True,
+        "use_contact_ranking": False,
+    },
+}
 
 
 @dataclass
@@ -81,8 +128,7 @@ def run_first_pass(
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
     )
     history = (np.zeros((1, 3)), np.zeros((1, 3)))
-    rule_sets = _make_seed_rule_sets(cfg)
-    rule_set = _make_demo_rule_set(cfg)
+    rule_sets = _make_initial_rule_sets(cfg)
 
     t0 = time.perf_counter()
     selected_t = _build_transform_batch(
@@ -92,18 +138,24 @@ def run_first_pass(
     graph, polys, _group_id, _transform = make_polygon_graph(
         p_board,
         [(p1, selected_t[0]), (p2, selected_t[1])],
-        board_check=gc.board_check,
+        min_dist=cfg.board_min_dist(),
+        epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
     )
     graphs = [graph]
-    for _ in range(sel.improve_rules_rounds):
+    for round_idx in range(sel.improve_rules_rounds):
         rule_sets = improve_rules(
             graphs, rule_sets, sel.rules_kept, p_board,
             mutation_presets=cfg.rules.mutation_presets(),
             rule_score_penalty=sel.rule_score_penalty,
+            elite_count=sel.improve_rules_elite_count,
+            seed=seed + round_idx,
+            score_options=score_rules_options(sel),
+            max_rules_per_set=cfg.rules.max_rules_per_set,
         )
     from nest_graph.elem_graph import score_elems
 
-    scores = score_elems(graph, rule_set)
+    active_rules = active_rule_set(rule_sets)
+    scores = score_elems(graph, active_rules)
     selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
     nest_sel = len(selected)
 
@@ -112,7 +164,7 @@ def run_first_pass(
     else:
         raw, final, score_sum = apply_dfs_refinement(
             graph,
-            rule_set,
+            active_rules,
             selected,
             scores,
             dfs_passes=passes,
@@ -154,14 +206,31 @@ def _cfg(
     return name, BuildGraphConfig(sampling=s, propose=p, selection=sel)
 
 
-J_MAX_DENSITY = _cfg("J_max_density", sampling={
-    "random_per_iter": 256, "initial_random": 256,
-    "max_transforms_per_group": 1000,
-    "shuffle_passes": 2, "shuffle_per_pass": 32,
-}, propose={
-    "max_proposals": 20, "candidate_pool": 16,
-    "use_voronoi": True, "use_point_cloud": False,
-}, selection={"improve_rules_rounds": 4})
+def _j_max_density(propose_overrides: dict[str, Any] | None = None) -> tuple[str, BuildGraphConfig]:
+    propose = dict(PROPOSE_PRESETS["shipped"])
+    propose.setdefault("max_proposals", 20)
+    propose.setdefault("use_voronoi", True)
+    propose.setdefault("use_point_cloud", False)
+    if propose_overrides:
+        propose.update(propose_overrides)
+    return _cfg(
+        "J_max_density",
+        sampling={
+            "random_per_iter": 128,
+            "random_per_iter_when_proposed": 48,
+            "structured_jitter_per_proposal": 8,
+            "structured_jitter_scale": (0.06, 0.06, 0.35),
+            "initial_random": 256,
+            "max_transforms_per_group": 900,
+            "shuffle_passes": 2,
+            "shuffle_per_pass": 32,
+        },
+        propose=propose,
+        selection={"improve_rules_rounds": 4, "dfs_mode": "merged_loose_tight"},
+    )
+
+
+J_MAX_DENSITY = _j_max_density()
 
 
 def _format_mode_table(rows: list[FirstPassMetrics]) -> str:
@@ -206,9 +275,20 @@ def main() -> None:
         action="store_true",
         help="Also run high_pass_loose with dfs_passes=16 on seeds 0..2",
     )
+    parser.add_argument(
+        "--propose-preset",
+        choices=sorted(PROPOSE_PRESETS),
+        default=None,
+        help="Override ProposeConfig for gap-fitting A/B (baseline, free_clearance, …)",
+    )
     args = parser.parse_args()
 
-    _name, cfg = J_MAX_DENSITY
+    preset_label = args.propose_preset or "default"
+    if args.propose_preset:
+        _name, cfg = _j_max_density(PROPOSE_PRESETS[args.propose_preset])
+        _name = f"{_name}+{args.propose_preset}"
+    else:
+        _name, cfg = J_MAX_DENSITY
     rows: list[FirstPassMetrics] = []
     for mode in args.modes:
         for seed in args.seeds:
@@ -237,10 +317,22 @@ def main() -> None:
     table = _format_mode_table(rows)
     print("\n" + table)
 
+    delta_rows = [
+        f"seed={r.seed} mode={r.mode}: dfs_final - nest_sel = {r.dfs_sel_final - r.nest_sel:+d}"
+        for r in rows
+    ]
+    if delta_rows:
+        print("\n# dfs_sel_final - nest_sel (propose → graph quality)")
+        print("\n".join(delta_rows))
+
     out_path = Path(__file__).resolve().parents[1] / "docs" / "first_pass_tuning_results.txt"
     out_path.write_text(
         f"# Auto-generated {time.strftime('%Y-%m-%d %H:%M')}\n"
-        f"# preset={_name} seeds={list(args.seeds)}\n\n{table}\n",
+        f"# preset={_name} propose_preset={preset_label} seeds={list(args.seeds)}\n\n"
+        f"{table}\n\n"
+        f"## dfs_sel_final - nest_sel\n\n"
+        + "\n".join(delta_rows)
+        + "\n",
         encoding="utf-8",
     )
     print(f"\nWrote {out_path}")

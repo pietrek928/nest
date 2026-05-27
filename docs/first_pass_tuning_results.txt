@@ -1,13 +1,16 @@
-# Auto-generated 2026-05-23 20:37
-# preset=J_max_density seeds=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+# Auto-generated 2026-05-26 10:45
+# preset=J_max_density+shipped propose_preset=shipped seeds=[0, 1, 2]
 
 | mode | nest_sel | dfs_raw | dfs_final | Δnest | dropped | score_sum | time_s |
 |------|----------|---------|-----------|-------|---------|-----------|--------|
-| nest_only | 19.6 | 19.6 | 19.6 | +0.0 | 0.0 | 0.05 | 0.77 |
-| head_pipeline | 19.3 | 20.2 | 20.2 | +0.9 | 0.0 | 0.05 | 0.96 |
-| strict_no_prune | 19.4 | 19.4 | 19.4 | +0.0 | 0.0 | 0.04 | 0.91 |
-| strict_prune | 20.7 | 20.7 | 20.7 | +0.0 | 0.0 | 0.05 | 1.01 |
-| legacy_alternating | 20.7 | 21.5 | 21.5 | +0.8 | 0.0 | 0.05 | 0.99 |
-| merged_loose_tight | 19.4 | 20.6 | 20.6 | +1.2 | 0.0 | 0.05 | 0.87 |
-| merged_single_pass | 19.1 | 20.2 | 20.2 | +1.1 | 0.0 | 0.05 | 0.93 |
-| high_pass_loose | 19.9 | 20.9 | 20.9 | +1.0 | 0.0 | 0.05 | 0.90 |
+| merged_loose_tight | 18.7 | 19.3 | 19.3 | +0.7 | 0.0 | 0.04 | 6.95 |
+| merged_single_pass | 19.3 | 20.0 | 20.0 | +0.7 | 0.0 | 0.04 | 6.95 |
+
+## dfs_sel_final - nest_sel
+
+seed=0 mode=merged_loose_tight: dfs_final - nest_sel = +0
+seed=1 mode=merged_loose_tight: dfs_final - nest_sel = +2
+seed=2 mode=merged_loose_tight: dfs_final - nest_sel = +0
+seed=0 mode=merged_single_pass: dfs_final - nest_sel = +0
+seed=1 mode=merged_single_pass: dfs_final - nest_sel = +2
+seed=2 mode=merged_single_pass: dfs_final - nest_sel = +0
