@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <initializer_list>
+#include <random>
 #include <vector>
 
 #include "geometry/solid/decompose.h"
@@ -34,8 +35,9 @@ inline PolyTestSolidGeometry2 polygon_from_quad(
     if (!ring.empty()) {
         ring.push_back(ring.front());
     }
-    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 
@@ -74,10 +76,11 @@ inline PolyTestSolidGeometry2 polygon_c_shape_three_parts() {
     poly.add_boundary_ring(std::vector<PolyTestVec2>(bottom.begin(), bottom.end() - 1));
     poly.add_boundary_ring(std::vector<PolyTestVec2>(back.begin(), back.end() - 1));
     poly.add_boundary_ring(std::vector<PolyTestVec2>(top.begin(), top.end() - 1));
-    poly.append_line_poly(bottom.data(), static_cast<int>(bottom.size()));
-    poly.append_line_poly(back.data(), static_cast<int>(back.size()));
-    poly.append_line_poly(top.data(), static_cast<int>(top.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(bottom.data(), static_cast<int>(bottom.size()), gen);
+    poly.append_line_poly(back.data(), static_cast<int>(back.size()), gen);
+    poly.append_line_poly(top.data(), static_cast<int>(top.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 

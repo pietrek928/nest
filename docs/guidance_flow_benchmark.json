@@ -1,0 +1,2073 @@
+{
+  "winner": "props_no_grid",
+  "ranked": [
+    {
+      "flow": "props_no_grid",
+      "score": 462.35927681059667
+    },
+    {
+      "flow": "shipped_props",
+      "score": 460.4409692897933
+    },
+    {
+      "flow": "shipped_no_props",
+      "score": 458.3260857505094
+    },
+    {
+      "flow": "props_no_squeeze",
+      "score": 454.41756538003847
+    },
+    {
+      "flow": "props_max3",
+      "score": 454.415951274055
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "score": 447.3723653721656
+    }
+  ],
+  "propose": [
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.8126556469360366
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.7576982260216027
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.7624484329717234
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.7834503160556778
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.8165160010103136
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.7699523569317535
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 1.82310071203392
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.087330668931827
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.237788430065848
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.363828353001736
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.6301103009609506
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.529060277971439
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.4825616820016876
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.3920206890907139
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.4050363170681521
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.499385125003755
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 1.4619930560002103
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.4054617780493572
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 1.4318357330048457
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.4823255069786683
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.2245070110075176
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.2708538710139692
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.2167884190566838
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.1997424889123067
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.2053004859481007
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.2281529620522633
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.1708621219731867
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.345503927092068
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 1.2080917319981381
+    },
+    {
+      "flow": "shipped_no_props",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.1985219799680635
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.488989364937879
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.591207155957818
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6335404550191015
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.725506864953786
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.3701970279216766
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.716067087952979
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.487068196060136
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.4387560890754685
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6730106309987605
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.556956869084388
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.598867380991578
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.3063280429923907
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.346307193976827
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.4094018150353804
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.4643359199399129
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.6484605160076171
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 1.968277249019593
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.7888333359733224
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 1.431229426059872
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.413575173006393
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.1419601310044527
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.1464116959832609
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.121465464006178
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.0500148650025949
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.1626462569693103
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.2068979119649157
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.1807618199381977
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.2771089510060847
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 1.2614299020497128
+    },
+    {
+      "flow": "shipped_props",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.2645894560264423
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.5417912621051073
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.531408684095368
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.5638224079739302
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.503535953001119
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.543896554969251
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.7375171380117536
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.5674633550224826
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6088147460250184
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.548857565037906
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.4902467970969155
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.5849589579738677
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.6106871550437063
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.6600288149202242
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.690693621058017
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.6008149879053235
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.8142706010257825
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 2.43411690404173
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.7721189459552988
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 1.6098123269621283
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.5020225290209055
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.308748665964231
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.1498868080088869
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.3147219199454412
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.3835728509584442
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.5414193220203742
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.464627799927257
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.467121506924741
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.533625766984187
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 1.2326743359444663
+    },
+    {
+      "flow": "props_no_grid",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.2521540719317272
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6684307899558917
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.5982280919561163
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6401514979079366
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.5799991140374914
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6677931849844754
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 3.107721033040434
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.798125311965123
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.9424743490526453
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.517083984101191
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.4427582670468837
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.544364140019752
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.7239983279723674
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.5923712969524786
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.4468402969650924
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.4667887049727142
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.4526770829688758
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 1.518101213965565
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.7744376229820773
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 1.7728558119852096
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.782512929989025
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.1853784460108727
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.2311234219232574
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.2291010490152985
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.233698119991459
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.4208658720599487
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.2450453320052475
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.2570844450965524
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.0533792909700423
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 0.9728829159867018
+    },
+    {
+      "flow": "props_no_squeeze",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.0481251889141276
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.3947344350162894
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.697954674018547
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 3.125852719997056
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.7806549289962277
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.611985499970615
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.490525032975711
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6596421090653166
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.980577738955617
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.824337305035442
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.383208516985178
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.505816465942189
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.4192619489040226
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.5755585639271885
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.5234249699860811
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.4237347280140966
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.5194812240079045
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 1.6974574360065162
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.6831808960996568
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 1.7390668099978939
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.5700074289925396
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.299232798977755
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.2608531879959628
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.2284073990304023
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.0481993899447843
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.1987861340167
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.3276437280001119
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.275299231056124
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.3835197089938447
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 1.1360596340382472
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.1880969259655103
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.3031788889784366
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.3437353699700907
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.37220956699457
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.313142394996248
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.4717976569663733
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6916058469796553
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.814268119051121
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.8460095110349357
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.717157723964192
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "empty_base",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.2976181961641746,
+      "border_err_min": 3.0512909123168574e-05,
+      "time_s": 2.6860190010629594
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003424377742899685,
+      "border_err_min": 0.0008464365963410585,
+      "time_s": 1.598137327004224
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.003428674968538323,
+      "border_err_min": 0.00551773124693028,
+      "time_s": 1.6770383269758895
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034198799627604896,
+      "border_err_min": 0.00024674448586094145,
+      "time_s": 1.5517974758986384
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.0034451154675899224,
+      "border_err_min": 0.00107843800943351,
+      "time_s": 1.679664499941282
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003439180505289846,
+      "border_err_min": 0.0001350473943679052,
+      "time_s": 1.6442156800767407
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034199708154324846,
+      "border_err_min": 0.001698665841649218,
+      "time_s": 1.6284863109467551
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.003431287853305285,
+      "border_err_min": 0.004528440136098417,
+      "time_s": 1.633546786964871
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.0034348176810328813,
+      "border_err_min": 0.0010739912493105473,
+      "time_s": 1.8966501260874793
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.00344358571229368,
+      "border_err_min": 0.0004588584093672271,
+      "time_s": 2.016089108074084
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "partial_pack",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.003434856851761988,
+      "border_err_min": 0.0007221359843827065,
+      "time_s": 1.7591265949886292
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 0,
+      "valid": 24,
+      "clearance_min": 0.003498247540680193,
+      "border_err_min": 0.002016565994949309,
+      "time_s": 1.4567264589713886
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 1,
+      "valid": 24,
+      "clearance_min": 0.0034420777775299124,
+      "border_err_min": 0.00400727173971927,
+      "time_s": 1.1303869590628892
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 2,
+      "valid": 24,
+      "clearance_min": 0.0034468067178640895,
+      "border_err_min": 0.0024934534201932414,
+      "time_s": 1.0695178559981287
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 3,
+      "valid": 24,
+      "clearance_min": 0.003421914976582592,
+      "border_err_min": 0.0007880352772255054,
+      "time_s": 1.1098330849781632
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 4,
+      "valid": 24,
+      "clearance_min": 0.003442102491788149,
+      "border_err_min": 0.00544113952417012,
+      "time_s": 1.1202402579365298
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 5,
+      "valid": 24,
+      "clearance_min": 0.0034749226263265805,
+      "border_err_min": 0.0010677957485326,
+      "time_s": 1.0799884049920365
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 6,
+      "valid": 24,
+      "clearance_min": 0.0034335702450529705,
+      "border_err_min": 0.0025382284620148817,
+      "time_s": 1.2150982569437474
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 7,
+      "valid": 24,
+      "clearance_min": 0.003442619898649006,
+      "border_err_min": 0.0018263140837708474,
+      "time_s": 1.2326954840682447
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 8,
+      "valid": 24,
+      "clearance_min": 0.003504008124344386,
+      "border_err_min": 0.0071191339858936095,
+      "time_s": 1.2237946219975129
+    },
+    {
+      "flow": "props_max3",
+      "scenario": "two_clusters",
+      "seed": 9,
+      "valid": 24,
+      "clearance_min": 0.0034615688819254198,
+      "border_err_min": 0.0027896223553886897,
+      "time_s": 1.506901070009917
+    }
+  ],
+  "pipeline": [
+    {
+      "flow": "shipped_no_props",
+      "seed": 0,
+      "parts": 45,
+      "border_err": 0.000756912783789795,
+      "time_s": 32.70225309499074
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 1,
+      "parts": 43,
+      "border_err": 0.001439511781752631,
+      "time_s": 28.82859750802163
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 2,
+      "parts": 47,
+      "border_err": 0.0001836809856659771,
+      "time_s": 27.266750545008108
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 3,
+      "parts": 43,
+      "border_err": 0.0016048248515199352,
+      "time_s": 29.31735507096164
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 4,
+      "parts": 43,
+      "border_err": 0.00039402881004532795,
+      "time_s": 34.99471215007361
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 5,
+      "parts": 47,
+      "border_err": 0.0011758152537934764,
+      "time_s": 25.775438704993576
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 6,
+      "parts": 47,
+      "border_err": 0.0008261033963432732,
+      "time_s": 23.601530460990034
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 7,
+      "parts": 45,
+      "border_err": 0.0008525694867282181,
+      "time_s": 28.950289408909157
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 8,
+      "parts": 48,
+      "border_err": 0.0011403020146143051,
+      "time_s": 25.416011014021933
+    },
+    {
+      "flow": "shipped_no_props",
+      "seed": 9,
+      "parts": 47,
+      "border_err": 0.002190803572677057,
+      "time_s": 29.495609102072194
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 0,
+      "parts": 45,
+      "border_err": 0.0006321455191843147,
+      "time_s": 26.98285292997025
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 1,
+      "parts": 45,
+      "border_err": 0.0011727440312975924,
+      "time_s": 24.674453104962595
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 2,
+      "parts": 46,
+      "border_err": 0.0014209538793457303,
+      "time_s": 25.57998800999485
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 3,
+      "parts": 47,
+      "border_err": 0.0012819280699493322,
+      "time_s": 24.88939655094873
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 4,
+      "parts": 43,
+      "border_err": 0.0006961964453955018,
+      "time_s": 23.553912510047667
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 5,
+      "parts": 48,
+      "border_err": 0.00029871064949678946,
+      "time_s": 20.75734986900352
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 6,
+      "parts": 50,
+      "border_err": 0.0011714485408897209,
+      "time_s": 18.324162195902318
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 7,
+      "parts": 42,
+      "border_err": 0.001107842148036491,
+      "time_s": 21.735147926025093
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 8,
+      "parts": 45,
+      "border_err": 9.760984957821834e-05,
+      "time_s": 20.551266681985
+    },
+    {
+      "flow": "shipped_props",
+      "seed": 9,
+      "parts": 46,
+      "border_err": 0.0005359885854936955,
+      "time_s": 19.635808425955474
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 0,
+      "parts": 46,
+      "border_err": 0.000429462416853411,
+      "time_s": 20.50057052797638
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 1,
+      "parts": 47,
+      "border_err": 0.0006327237272167538,
+      "time_s": 28.6467483950546
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 2,
+      "parts": 45,
+      "border_err": 0.00041107909032682367,
+      "time_s": 28.448223069077358
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 3,
+      "parts": 45,
+      "border_err": 0.00030457229301791193,
+      "time_s": 39.86590371909551
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 4,
+      "parts": 46,
+      "border_err": 0.001345398820188644,
+      "time_s": 31.09274336998351
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 5,
+      "parts": 49,
+      "border_err": 0.0001495170039693271,
+      "time_s": 24.379248662968166
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 6,
+      "parts": 44,
+      "border_err": 0.002600021813364556,
+      "time_s": 21.25909176003188
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 7,
+      "parts": 46,
+      "border_err": 0.0011789530139611824,
+      "time_s": 26.949766931007616
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 8,
+      "parts": 44,
+      "border_err": 0.0005956746186945297,
+      "time_s": 21.06322089897003
+    },
+    {
+      "flow": "props_no_grid",
+      "seed": 9,
+      "parts": 47,
+      "border_err": 0.0010268922021401607,
+      "time_s": 24.093317099963315
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 0,
+      "parts": 45,
+      "border_err": 0.0008129836997146584,
+      "time_s": 22.8776989269536
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 1,
+      "parts": 45,
+      "border_err": 0.000665055782600558,
+      "time_s": 29.505973053979687
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 2,
+      "parts": 46,
+      "border_err": 0.0002440797792544261,
+      "time_s": 22.894098168006167
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 3,
+      "parts": 45,
+      "border_err": 0.00041861664561911125,
+      "time_s": 25.61325475096237
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 4,
+      "parts": 44,
+      "border_err": 0.0015221768178043308,
+      "time_s": 22.04375486704521
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 5,
+      "parts": 46,
+      "border_err": 0.0015018248711797795,
+      "time_s": 25.931694178958423
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 6,
+      "parts": 46,
+      "border_err": 0.00047447354533815224,
+      "time_s": 24.953746294020675
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 7,
+      "parts": 46,
+      "border_err": 0.0001678438932251813,
+      "time_s": 20.806790419039316
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 8,
+      "parts": 41,
+      "border_err": 0.0019967649852642775,
+      "time_s": 21.758704302017577
+    },
+    {
+      "flow": "props_no_squeeze",
+      "seed": 9,
+      "parts": 47,
+      "border_err": 0.0008640283829064598,
+      "time_s": 21.319179825950414
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 0,
+      "parts": 45,
+      "border_err": 0.0013328814117210606,
+      "time_s": 25.78138778998982
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 1,
+      "parts": 43,
+      "border_err": 0.00022196300712479895,
+      "time_s": 22.460016800905578
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 2,
+      "parts": 45,
+      "border_err": 0.0003468563644233244,
+      "time_s": 21.680676504969597
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 3,
+      "parts": 42,
+      "border_err": 0.0003742532216009227,
+      "time_s": 26.968230161932297
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 4,
+      "parts": 44,
+      "border_err": 0.0003947272604711556,
+      "time_s": 41.6230614669621
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 5,
+      "parts": 47,
+      "border_err": 0.0007942250365480167,
+      "time_s": 24.05743059993256
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 6,
+      "parts": 46,
+      "border_err": 0.00024508104662882045,
+      "time_s": 19.993913231999613
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 7,
+      "parts": 45,
+      "border_err": 0.00043872264419600503,
+      "time_s": 30.41327112505678
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 8,
+      "parts": 44,
+      "border_err": 0.00029569306033819936,
+      "time_s": 27.382091469946317
+    },
+    {
+      "flow": "props_squeeze_heavy",
+      "seed": 9,
+      "parts": 43,
+      "border_err": 4.860182003867857e-05,
+      "time_s": 19.932098092976958
+    },
+    {
+      "flow": "props_max3",
+      "seed": 0,
+      "parts": 45,
+      "border_err": 0.0021508599320859212,
+      "time_s": 21.16573585208971
+    },
+    {
+      "flow": "props_max3",
+      "seed": 1,
+      "parts": 46,
+      "border_err": 0.0011485746225364034,
+      "time_s": 26.53835489298217
+    },
+    {
+      "flow": "props_max3",
+      "seed": 2,
+      "parts": 46,
+      "border_err": 0.0012429998816685856,
+      "time_s": 22.0610689119203
+    },
+    {
+      "flow": "props_max3",
+      "seed": 3,
+      "parts": 44,
+      "border_err": 0.0016046464245410836,
+      "time_s": 26.279572344967164
+    },
+    {
+      "flow": "props_max3",
+      "seed": 4,
+      "parts": 40,
+      "border_err": 0.0025910239521008617,
+      "time_s": 24.275277587003075
+    },
+    {
+      "flow": "props_max3",
+      "seed": 5,
+      "parts": 45,
+      "border_err": 0.006025209302447196,
+      "time_s": 21.773790815961547
+    },
+    {
+      "flow": "props_max3",
+      "seed": 6,
+      "parts": 47,
+      "border_err": 0.001333523654022569,
+      "time_s": 22.215424934052862
+    },
+    {
+      "flow": "props_max3",
+      "seed": 7,
+      "parts": 48,
+      "border_err": 9.573803392146042e-05,
+      "time_s": 21.86581348697655
+    },
+    {
+      "flow": "props_max3",
+      "seed": 8,
+      "parts": 44,
+      "border_err": 0.00045515387269482637,
+      "time_s": 26.829317030962557
+    },
+    {
+      "flow": "props_max3",
+      "seed": 9,
+      "parts": 46,
+      "border_err": 0.000388812319692935,
+      "time_s": 25.549371376051567
+    }
+  ]
+}

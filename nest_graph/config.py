@@ -86,7 +86,8 @@ class SelectionConfig(BaseModel):
     dfs_max_tries: int = 4
     dfs_passes: int = 3
     nest_rule_sets_used: int = 1
-    dfs_refine_max_passes: int = 12
+    dfs_refine_max_passes: int = 1024
+    dfs_refine_max_stagnant_passes: int = 4
     dfs_refine_beam_width: int = 2
     dfs_finalize_repair_passes: int = 6
     dfs_finalize_max_component: int = 18
@@ -101,7 +102,7 @@ class SelectionConfig(BaseModel):
         "merged_loose_tight_finalize_end",
         "merged_single_pass",
         "high_pass_loose",
-    ] = "merged_loose_finalize_end"
+    ] = "merged_loose_tight_finalize_end"
 
 
 class RulesConfig(BaseModel):
@@ -128,6 +129,7 @@ class RulesConfig(BaseModel):
     ngroups: int = 2
     board_holes: tuple[tuple[tuple[float, float], ...], ...] = ()
     board_sheet_padding: float = 0.0
+    board_sheet_padding_ratio: float = 0.08
     max_inserts_per_type: int = 2
     max_rules_per_set: int = 24
 
@@ -135,19 +137,27 @@ class RulesConfig(BaseModel):
         """Nest outline (exterior ring). Prefer board_sheet_polygon() for nesting/propose."""
         return Polygon(list(self.board_coords))
 
-    def board_sheet_polygon(self) -> Polygon:
-        outline = Polygon(list(self.board_coords))
-        return board_sheet_from_outline(
+    def effective_sheet_padding(self) -> float:
+        from .board import default_sheet_padding
+
+        outline = self.board_polygon()
+        return default_sheet_padding(
             outline,
-            padding=self.board_sheet_padding,
-            user_holes=self.board_holes,
+            extra=self.board_sheet_padding,
+            ratio=self.board_sheet_padding_ratio,
         )
 
-    def board_void_geometries(self):
-        from .geometry import Geometry
+    def board_sheet_polygon(self) -> Polygon:
+        outline = Polygon(list(self.board_coords))
+        return board_sheet_from_outline(outline, user_holes=self.board_holes)
 
+    def board_void_geometries(self):
         sheet = self.board_sheet_polygon()
-        return board_void_geometries(sheet)
+        return board_void_geometries(
+            sheet,
+            outline=self.board_polygon(),
+            padding=self.effective_sheet_padding(),
+        )
 
     def rect_polygon(self) -> Polygon:
         return normalize_poly(Polygon(list(self.rect_coords)))
@@ -254,6 +264,14 @@ class ProposeConfig(BaseModel):
     ranking_hull_weight: float = 0.1
     group_edge_samples_per_edge: int = 24
     sheet_edge_samples_per_edge: int = 24
+    use_guidance_propositions: bool = True
+    guidance_max_propositions: int = 5
+    guidance_use_tight_packing: bool = True
+    guidance_squeeze_weight: float = 0.4
+    guidance_enable_grid: bool = False
+    guidance_grid_step_ratio: float = 2.0
+    guidance_diversity_dist_ratio: float = 4.0
+    guidance_proposition_seed_count: int = 8
 
 
 class BuildGraphConfig(BaseModel):
@@ -271,6 +289,22 @@ class BuildGraphConfig(BaseModel):
         return diag * self.propose.min_dist_ratio
 
     @classmethod
+    def benchmark_aligned(cls, *, seed: int | None = None) -> "BuildGraphConfig":
+        """Sampling/DFS preset used by ``scripts/benchmark_guidance_flow.py``."""
+        return cls(
+            sampling=SamplingConfig(
+                random_per_iter=128,
+                random_per_iter_when_proposed=48,
+                structured_jitter_per_proposal=8,
+                initial_random=256,
+                max_transforms_per_group=900,
+                seed=seed,
+            ),
+            selection=SelectionConfig(dfs_mode="merged_loose_finalize_end"),
+            propose=ProposeConfig(),
+        )
+
+    @classmethod
     def from_env(cls) -> "BuildGraphConfig":
         sx = _env_float("NEST_TRANSFORM_SX", 1.5)
         sy = _env_float("NEST_TRANSFORM_SY", 1.5)
@@ -279,7 +313,7 @@ class BuildGraphConfig(BaseModel):
             sampling=SamplingConfig(
                 random_per_iter=_env_int("NEST_RANDOM_PER_ITER", 128),
                 transform_scale=(sx, sy, sa),
-                initial_random=_env_int("NEST_INITIAL_RANDOM", 128),
+                initial_random=_env_int("NEST_INITIAL_RANDOM", 256),
                 selection_expand_n=_env_int("NEST_SELECTION_EXPAND_N", 4),
                 history_expand_n=_env_int("NEST_HISTORY_EXPAND_N", 2),
                 history_max=_env_int("NEST_HISTORY_MAX", 512),
@@ -310,7 +344,10 @@ class BuildGraphConfig(BaseModel):
                 ),
                 dfs_max_tries=_env_int("NEST_DFS_MAX_TRIES", 4),
                 dfs_passes=_env_int("NEST_DFS_PASSES", 3),
-                dfs_refine_max_passes=_env_int("NEST_DFS_REFINE_MAX_PASSES", 12),
+                dfs_refine_max_passes=_env_int("NEST_DFS_REFINE_MAX_PASSES", 1024),
+                dfs_refine_max_stagnant_passes=_env_int(
+                    "NEST_DFS_REFINE_STAGNANT_PASSES", 4,
+                ),
                 dfs_refine_beam_width=_env_int("NEST_DFS_REFINE_BEAM", 2),
                 dfs_finalize_repair_passes=_env_int("NEST_DFS_FINALIZE_REPAIR", 6),
                 dfs_finalize_max_component=_env_int("NEST_DFS_FINALIZE_COMPONENT", 18),

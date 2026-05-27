@@ -47,6 +47,7 @@ PYTHONPATH=. python scripts/benchmark_first_pass.py --seeds 0 1 2 \
 |-----------|---------|
 | Propose | `ProposeConfig()` defaults — see [propose_benchmark.md](propose_benchmark.md) |
 | Transform batch | `proposed_transforms_for_groups` + `expand_structured_transforms` + `random_per_iter_when_proposed=48` |
-| DFS | `merged_loose_finalize_end`, `dfs_passes=3`, `dfs_max_tries=4` — see [dfs_benchmark.md](dfs_benchmark.md) |
+| DFS | `merged_loose_tight_finalize_end`, `dfs_passes=3`, `dfs_max_tries=4` — see [dfs_benchmark.md](dfs_benchmark.md) |
+| Propose guidance | `use_guidance_propositions=True`, `guidance_enable_grid=False` — see [guidance_flow_benchmark.json](guidance_flow_benchmark.json) |
 | Propose | pool 48, hybrid contact rank, stratified trim, 12-angle erosion/ray |
 | Env override | `NEST_DFS_MODE=merged_loose_tight_finalize_end` (+quality, ~10% slower) |

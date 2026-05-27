@@ -26,7 +26,7 @@ See [README.md](../README.md) for setup and build instructions.
 
 Disable transform cap: `NEST_MAX_TRANSFORMS=none` (or `0`).
 
-Disable progress bar: `NEST_PROGRESS=0`.
+Disable progress bar: `NEST_PROGRESS=0`. When enabled, the bar shows `parts` (selected count), `cov` (% of nest-board area), `pool` (graph nodes), and `refine` (nest→DFS).
 
 ## Sampling
 
@@ -53,7 +53,7 @@ Disable progress bar: `NEST_PROGRESS=0`.
 
 Board nesting uses a **sheet** polygon: bbox outer ring plus void holes (`bbox \\ outline` and optional `board_holes`). Validity and propose guidance share `evaluate_local_placement` with voids as obstacles (`nest_graph.placement_scene`).
 
-Rules fields (Python config, not env): `board_coords` (outline), optional `board_holes`, `board_sheet_padding`, `max_inserts_per_type` (default 2), `max_rules_per_set` (default 24).
+Rules fields (Python config, not env): `board_coords` (nest outline), optional `board_holes`, `board_sheet_padding` (extra margin), `board_sheet_padding_ratio` (default `0.08` × bbox diagonal for the sheet outer rectangle), `max_inserts_per_type` (default 2), `max_rules_per_set` (default 24). Video/snapshots draw the nest outline only, not the sheet bbox.
 
 Rule evolution uses elitist mutation (`improve_rules_elite_count`), deduplication, and the same `score_rules` select path as `nest_by_graph`. DFS refinement scores with the best evolved rule set, not a fixed demo set. See [`docs/rules_benchmark_results.txt`](rules_benchmark_results.txt) and `scripts/benchmark_rules.py`.
 
@@ -71,11 +71,12 @@ Rule evolution uses elitist mutation (`improve_rules_elite_count`), deduplicatio
 | `NEST_SELECT_MODE` | `weighted_greedy` | `weighted_greedy` or `greedy_score` |
 | `NEST_DFS_MAX_TRIES` | 4 | Retries per DFS growth pass |
 | `NEST_DFS_PASSES` | 3 | Repeat refine block per iteration |
-| `NEST_DFS_REFINE_MAX_PASSES` | 12 | Inner C++ refine cap per call (was 32) |
+| `NEST_DFS_REFINE_STAGNANT_PASSES` | 4 | Stop refine after this many sweeps with no score gain |
+| `NEST_DFS_REFINE_MAX_PASSES` | 1024 | Hard safety cap on refine sweeps per call |
 | `NEST_DFS_REFINE_BEAM` | 2 | Beam width in refine DFS |
 | `NEST_DFS_FINALIZE_REPAIR` | 6 | Repair passes in `finalize_selection` |
 | `NEST_DFS_FINALIZE_COMPONENT` | 18 | Max overlap component for exact MIS |
-| `NEST_DFS_MODE` | `merged_loose_finalize_end` | See [dfs_benchmark.md](dfs_benchmark.md) |
+| `NEST_DFS_MODE` | `merged_loose_tight_finalize_end` | See [dfs_benchmark.md](dfs_benchmark.md) |
 | `NEST_NEST_RULE_SETS` | 1 | Rule sets passed to `nest_by_graph` |
 
 Rendered placements are always collision-free: DFS refinement only adds non-colliding nodes, and the build loop prunes the final selection to an independent set before drawing.
@@ -90,9 +91,16 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 |--------|----------------------|------|
 | `board_min_dist()` = board diagonal × `min_dist_ratio` | `minimum_placing_distance` = `min_dist + epsilon` | Inflates MTV on overlap; gravity stops before contact |
 | `placement_clearance_epsilon_ratio` (default `0.05`) | (via margin check in Python) | Extra slack so near-touching poses are rejected |
-| — | `alternative_translations` / `alternative_rotations` | Wall-slide and multi-edge mating hints for ray nudge |
+| `guidance_diversity_dist_ratio`, `guidance_grid_step_ratio` | `diversity_distance_threshold`, `grid_exploration_step` | Scaled from `min_dist` / board diag (not raw C++ defaults) |
+| `use_guidance_propositions`, `guidance_max_propositions` | `max_propositions`, proposition menu | Multi-move seeds from `evaluate_local_placement` |
+| `guidance_use_tight_packing`, `guidance_squeeze_weight` | `use_tight_packing`, `squeeze_weight` | Local NFP-proxy: pull toward nearest obstacle |
+| `guidance_enable_grid` | `enable_grid_exploration` | Axis-aligned micro-moves when soft pack stalls |
 
-`make_polygon_graph` filters candidates with the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
+**Shipped propose defaults** (from `scripts/benchmark_guidance_flow.py`, seeds 0–9): `use_guidance_propositions=True`, `guidance_enable_grid=False` (`props_no_grid`). See [`docs/guidance_flow_benchmark.json`](guidance_flow_benchmark.json).
+
+`make_polygon_graph` filters candidates with validity-only guidance (`guidance_config_for_graph`) using the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
+
+For the exact guidance-flow pipeline preset (DFS `merged_loose_finalize_end`), use `BuildGraphConfig.benchmark_aligned()`.
 
 ```python
 from nest_graph.config import BuildGraphConfig, ProposeConfig

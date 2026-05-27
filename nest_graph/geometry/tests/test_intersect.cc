@@ -1,4 +1,5 @@
 #include <initializer_list>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -22,8 +23,9 @@ SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_h
     ring.emplace_back(std::initializer_list<double>{static_cast<double>(x1), y_hi});
     ring.emplace_back(std::initializer_list<double>{static_cast<double>(x0), y_hi});
     if (!ring.empty()) ring.push_back(ring.front());
-    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 
@@ -43,9 +45,10 @@ SolidGeometry2 polygon_two_disjoint_parts() {
         Vec2{{50.0, 51.0}},
         Vec2{{50.0, 50.0}},
     };
-    poly.append_line_poly(r1.data(), static_cast<int>(r1.size()));
-    poly.append_line_poly(r2.data(), static_cast<int>(r2.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(r1.data(), static_cast<int>(r1.size()), gen);
+    poly.append_line_poly(r2.data(), static_cast<int>(r2.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 
@@ -65,9 +68,10 @@ SolidGeometry2 polygon_two_overlapping_parts_same_partner() {
         Vec2{{0.0, 4.0}},
         Vec2{{0.0, 3.0}},
     };
-    poly.append_line_poly(bar_low.data(), static_cast<int>(bar_low.size()));
-    poly.append_line_poly(bar_high.data(), static_cast<int>(bar_high.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(bar_low.data(), static_cast<int>(bar_low.size()), gen);
+    poly.append_line_poly(bar_high.data(), static_cast<int>(bar_high.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 

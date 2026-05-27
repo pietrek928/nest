@@ -29,6 +29,7 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def(nb::init<>())
         .def_rw("min_score_delta", &RefineSelectionOptions::min_score_delta)
         .def_rw("max_passes", &RefineSelectionOptions::max_passes)
+        .def_rw("max_stagnant_passes", &RefineSelectionOptions::max_stagnant_passes)
         .def_rw("max_depth", &RefineSelectionOptions::max_depth)
         .def_rw("seed", &RefineSelectionOptions::seed)
         .def_rw("explore_shuffle", &RefineSelectionOptions::explore_shuffle)

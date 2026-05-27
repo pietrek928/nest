@@ -12,12 +12,15 @@ from .config import ProposeConfig, dedupe_transforms
 from .geometry import Geometry
 from .placement_scene import (
     PLACEMENT_EPSILON_RATIO,
+    best_proposition,
     build_placement_scene,
     guidance_config_for_propose,
     guidance_config_for_scene,
     guidance_ray_direction_candidates,
     is_valid_placement,
-    placement_outside_outer,
+    placement_anchor_inside_board,
+    proposition_translation,
+    tiered_propositions,
 )
 from .utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
@@ -205,6 +208,26 @@ def _placement_contact_error(
     return border_err
 
 
+def _guidance_kwargs(propose_cfg: ProposeConfig | None) -> dict:
+    if propose_cfg is None:
+        return {
+            "max_propositions": 5,
+            "use_tight_packing": False,
+            "squeeze_weight": 0.4,
+            "enable_grid_exploration": False,
+            "diversity_dist_ratio": 4.0,
+            "grid_step_ratio": 2.0,
+        }
+    return {
+        "max_propositions": propose_cfg.guidance_max_propositions,
+        "use_tight_packing": propose_cfg.guidance_use_tight_packing,
+        "squeeze_weight": propose_cfg.guidance_squeeze_weight,
+        "enable_grid_exploration": propose_cfg.guidance_enable_grid,
+        "diversity_dist_ratio": propose_cfg.guidance_diversity_dist_ratio,
+        "grid_step_ratio": propose_cfg.guidance_grid_step_ratio,
+    }
+
+
 class ProposeGeometry:
     """Cached placement scene for fast propose validation and guidance."""
 
@@ -216,6 +239,7 @@ class ProposeGeometry:
         min_dist: float,
         *,
         epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+        propose_cfg: ProposeConfig | None = None,
     ):
         part = Geometry.from_shapely(part_poly)
         base_geoms: list[Geometry] = []
@@ -227,11 +251,24 @@ class ProposeGeometry:
         self.part = part
         self._min_dist = min_dist
         self._epsilon_ratio = epsilon_ratio
+        self._propose_cfg = propose_cfg
         self._board_bounds = self.sheet.bounds
+        gkw = _guidance_kwargs(propose_cfg)
         self._guidance_cfg = guidance_config_for_scene(
             min_dist,
             board_bounds=self._board_bounds,
             epsilon_ratio=epsilon_ratio,
+            **gkw,
+        )
+
+    def _propose_guidance_cfg(self, push: Point):
+        gkw = _guidance_kwargs(self._propose_cfg)
+        return guidance_config_for_propose(
+            push,
+            min_dist=self._min_dist,
+            board_bounds=self._board_bounds,
+            epsilon_ratio=self._epsilon_ratio,
+            **gkw,
         )
 
     def placed_at(self, coords: Tuple[float, float, float]) -> Geometry:
@@ -243,16 +280,11 @@ class ProposeGeometry:
         xy: Tuple[float, float],
         push: Point,
     ):
-        cfg = guidance_config_for_propose(
-            push,
-            min_dist=self._min_dist,
-            board_bounds=self._board_bounds,
-            epsilon_ratio=self._epsilon_ratio,
-        )
+        cfg = self._propose_guidance_cfg(push)
         return self.scene.guidance(placed, xy, cfg)
 
     def inside_board(self, placed: Geometry) -> bool:
-        if placement_outside_outer(placed, self.sheet):
+        if not placement_anchor_inside_board(placed, self.scene.board_geom):
             return False
         cx, cy = placed.center()
         g = self.scene.guidance(placed, (cx, cy), self._guidance_cfg)
@@ -274,12 +306,7 @@ class ProposeGeometry:
         push: Point,
         xy: Tuple[float, float],
     ) -> bool:
-        cfg = guidance_config_for_propose(
-            push,
-            min_dist=self._min_dist,
-            board_bounds=self._board_bounds,
-            epsilon_ratio=self._epsilon_ratio,
-        )
+        cfg = self._propose_guidance_cfg(push)
         return is_valid_placement(
             self.scene, placed, xy, self._min_dist, cfg,
             epsilon_ratio=self._epsilon_ratio,
@@ -292,10 +319,12 @@ class ProposeGeometry:
         xy: Tuple[float, float],
     ) -> np.ndarray:
         g = self.placement_guidance(placed, xy, push)
-        if g.is_penetrating:
-            vec = np.array(g.ejection_vector, dtype=np.float64)
+        prop = best_proposition(g)
+        if prop is not None:
+            tx, ty = proposition_translation(prop)
+            vec = np.array([tx, ty], dtype=np.float64)
         else:
-            vec = np.array(g.suggested_translation, dtype=np.float64)
+            vec = np.zeros(2, dtype=np.float64)
         norm = np.linalg.norm(vec)
         return vec / norm if norm > 1e-9 else np.zeros(2)
 
@@ -409,7 +438,7 @@ def propose_placements_guidance_walk(
     step_scale: float = 0.15,
     top_n: int = 8,
 ) -> List[Tuple[float, float, float]]:
-    """Seed placements by stepping along C++ guidance in free space."""
+    """Seed placements by stepping along C++ guidance propositions in free space."""
     seeds = list(sample_placement_points_ribbon(base_shape, shape_to_place, sheet, min_dist))
     if not seeds:
         seeds = [sheet.centroid if not base_shape.is_empty else pt_push]
@@ -426,22 +455,35 @@ def propose_placements_guidance_walk(
         for _ in range(walk_steps):
             placed = propose_geom.placed_at((x, y, theta))
             g = propose_geom.placement_guidance(placed, (x, y), pt_push)
-            if g.is_penetrating:
-                ex, ey = g.ejection_vector
-                step = step_scale * max(min_dist, 1e-4)
-                if math.hypot(ex, ey) > 1e-9:
-                    x += ex / math.hypot(ex, ey) * step
-                    y += ey / math.hypot(ex, ey) * step
-                else:
-                    break
-            else:
-                sx, sy = g.suggested_translation
-                mag = math.hypot(sx, sy)
+            props = tiered_propositions(g)[:3]
+            if not props:
+                break
+            moved = False
+            for prop in props:
+                tx, ty = proposition_translation(prop)
+                mag = math.hypot(tx, ty)
                 if mag < 1e-9:
+                    continue
+                step_len = step_scale * max(min_dist, 1e-4)
+                if not g.is_penetrating:
+                    step_len = step_scale * mag
+                nx = x + tx / mag * step_len
+                ny = y + ty / mag * step_len
+                ntheta = theta
+                if abs(float(prop.rotation_rad)) > 1e-6:
+                    delta = float(prop.rotation_rad) - theta
+                    while delta > np.pi:
+                        delta -= 2 * np.pi
+                    while delta < -np.pi:
+                        delta += 2 * np.pi
+                    ntheta = theta + delta * 0.2
+                trial = propose_geom.placed_at((nx, ny, ntheta))
+                if propose_geom.is_valid_placement(trial, pt_push, (nx, ny)):
+                    x, y, theta = nx, ny, ntheta
+                    moved = True
                     break
-                step = step_scale * mag
-                x += sx / mag * step
-                y += sy / mag * step
+            if not moved:
+                break
         placed = propose_geom.placed_at((x, y, theta))
         if propose_geom.is_valid_placement(placed, pt_push, (x, y)):
             key = (round(x, 3), round(y, 3), round(theta, 3))
@@ -451,6 +493,78 @@ def propose_placements_guidance_walk(
         if len(out) >= top_n:
             break
     return out[:top_n]
+
+
+def _coords_too_close(
+    coords: Tuple[float, float, float],
+    existing: Sequence[Tuple[float, float, float]],
+    dist_thresh: float,
+    angle_thresh: float,
+) -> bool:
+    x, y, theta = coords
+    for ex, ey, et in existing:
+        if math.hypot(x - ex, y - ey) < dist_thresh:
+            ang = abs(theta - et)
+            while ang > math.pi:
+                ang = abs(ang - 2 * math.pi)
+            if ang < angle_thresh:
+                return True
+    return False
+
+
+def propose_placements_guidance_propositions(
+    seeds: Sequence[Tuple[float, float, float]],
+    pt_push: Point,
+    propose_geom: ProposeGeometry,
+    propose_cfg: ProposeConfig,
+    *,
+    min_dist: float,
+) -> List[Tuple[float, float, float]]:
+    """Expand top structured seeds using C++ guidance proposition menu."""
+    if not seeds or not propose_cfg.use_guidance_propositions:
+        return []
+    cap = min(
+        propose_cfg.guidance_max_propositions,
+        max(1, propose_cfg.candidate_pool // 4),
+    )
+    dist_thresh = max(
+        propose_cfg.guidance_diversity_dist_ratio * min_dist,
+        0.02 * math.hypot(
+            propose_geom._board_bounds[2] - propose_geom._board_bounds[0],
+            propose_geom._board_bounds[3] - propose_geom._board_bounds[1],
+        ),
+    )
+    angle_thresh = math.pi / 8.0
+    n_seeds = min(len(seeds), propose_cfg.guidance_proposition_seed_count)
+    out: list[tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+    for coords in seeds[:n_seeds]:
+        x, y, theta = coords
+        placed = propose_geom.placed_at(coords)
+        g = propose_geom.placement_guidance(placed, (x, y), pt_push)
+        for prop in tiered_propositions(g):
+            if len(out) >= cap:
+                return out
+            if "Grid" in (prop.move_type or "") and not g.is_penetrating:
+                continue
+            tx, ty = proposition_translation(prop)
+            nx, ny = x + tx, y + ty
+            ntheta = theta + float(prop.rotation_rad)
+            while ntheta > math.pi:
+                ntheta -= 2 * math.pi
+            while ntheta < -math.pi:
+                ntheta += 2 * math.pi
+            candidate = (nx, ny, ntheta)
+            if _coords_too_close(candidate, out, dist_thresh, angle_thresh):
+                continue
+            key = (round(nx, 4), round(ny, 4), round(ntheta, 4))
+            if key in seen:
+                continue
+            trial = propose_geom.placed_at(candidate)
+            if propose_geom.is_valid_placement(trial, pt_push, (nx, ny)):
+                seen.add(key)
+                out.append(candidate)
+    return out
 
 
 def _exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Point]:
@@ -914,21 +1028,25 @@ def evaluate_ray_placement(
             torque = lever_arm[0] * attract_u[1] - lever_arm[1] * attract_u[0]
             m_theta = beta_theta * m_theta + (1 - beta_theta) * torque
             curr_theta += m_theta * 0.3 * decay
-            if abs(float(g.suggested_rotation_rad)) > 1e-6:
-                delta = float(g.suggested_rotation_rad) - curr_theta
+            prop = best_proposition(g)
+            if prop is not None and abs(float(prop.rotation_rad)) > 1e-6:
+                delta = float(prop.rotation_rad) - curr_theta
                 while delta > np.pi:
                     delta -= 2 * np.pi
                 while delta < -np.pi:
                     delta += 2 * np.pi
                 curr_theta += delta * 0.3 * decay
-            elif g.is_penetrating and g.alternative_rotations:
-                alt = float(g.alternative_rotations[0])
-                delta = alt - curr_theta
-                while delta > np.pi:
-                    delta -= 2 * np.pi
-                while delta < -np.pi:
-                    delta += 2 * np.pi
-                curr_theta += delta * 0.2 * decay
+            elif g.is_penetrating:
+                alt_props = tiered_propositions(g)
+                for alt_prop in alt_props:
+                    if abs(float(alt_prop.rotation_rad)) > 1e-6:
+                        delta = float(alt_prop.rotation_rad) - curr_theta
+                        while delta > np.pi:
+                            delta -= 2 * np.pi
+                        while delta < -np.pi:
+                            delta += 2 * np.pi
+                        curr_theta += delta * 0.2 * decay
+                        break
         else:
             placed_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
             is_inside = boundary.contains(placed_shape)
@@ -1737,6 +1855,19 @@ def collect_propose_candidates(
                 pt_push=pt_push,
             )
         )
+    if propose_cfg.use_guidance_propositions and candidates:
+        structured = list(candidates)
+        if len(structured) > propose_cfg.guidance_proposition_seed_count:
+            structured = structured[: propose_cfg.guidance_proposition_seed_count]
+        candidates.extend(
+            propose_placements_guidance_propositions(
+                structured,
+                pt_push,
+                propose_geom,
+                propose_cfg,
+                min_dist=min_dist,
+            )
+        )
     return candidates
 
 
@@ -1782,6 +1913,7 @@ def _propose_coords_from_candidates(
         shape_to_place,
         min_dist,
         epsilon_ratio=propose_cfg.placement_clearance_epsilon_ratio,
+        propose_cfg=propose_cfg,
     )
     pool = list(candidates)
     if len(pool) > propose_cfg.candidate_pool:
@@ -1871,6 +2003,7 @@ def propose_coords_with_strategy(
         shape_to_place,
         min_dist,
         epsilon_ratio=cfg.placement_clearance_epsilon_ratio,
+        propose_cfg=cfg,
     )
     candidates = collect_propose_candidates(
         base_shape,
