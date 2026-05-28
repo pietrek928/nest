@@ -4,6 +4,7 @@ import cv2 as cv
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
+from shapely.geometry import box as shapely_box
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
@@ -22,10 +23,17 @@ from .config import (
 from .geometry import Geometry, GuidanceConfig, find_polygon_intersections_bipartite
 from .placement_scene import (
     PlacementScene,
-    guidance_config_for_scene,
+    guidance_config_for_graph,
     is_valid_placement,
+    placement_footprint_inside_board,
+    placement_scene_for_part,
+    footprints_inside_board,
 )
-from .board import board_context_from_geometry
+from .board import (
+    board_context_from_geometry,
+    default_sheet_padding,
+    padded_board_bounds,
+)
 from .utils import normalize_poly, transform_poly
 from .propose import (
     propose_placements_point_cloud,
@@ -70,6 +78,18 @@ def _poly_and_transforms(item):
     return item[0], item[2], item[1]
 
 
+def _selection_coverage_pct(
+    selected_indices: list[int],
+    group_id: list[int],
+    part_areas: tuple[float, ...],
+    board_area: float,
+) -> float:
+    if board_area <= 0:
+        return 0.0
+    parts_area = sum(part_areas[group_id[i]] for i in selected_indices)
+    return 100.0 * parts_area / board_area
+
+
 def _base_geometries(polygons) -> list[Geometry]:
     return [
         Geometry.from_shapely(_poly_and_transforms(item)[0])
@@ -89,16 +109,17 @@ def _iter_candidates(
     if sheet is None or void_geoms is None:
         sheet, void_geoms = board_context_from_geometry(board)
     bounds = sheet.bounds
-    guidance_cfg = guidance_config_for_scene(
+    guidance_cfg = guidance_config_for_graph(
         min_dist, board_bounds=bounds, epsilon_ratio=epsilon_ratio
     )
+    board_geom = Geometry.from_shapely(sheet)
     bases = _base_geometries(polygons)
     for i, item in enumerate(polygons):
         _p, transforms, w = _poly_and_transforms(item)
         base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
-            scene = PlacementScene(sheet, void_geoms, [], base)
+            scene = placement_scene_for_part(sheet, board_geom, void_geoms, base)
             cx, cy = placed.center()
             if not is_valid_placement(
                 scene, placed, (cx, cy), min_dist, guidance_cfg,
@@ -147,9 +168,10 @@ def placement_board_score(
     board_geom: Geometry,
     placed: Geometry,
 ) -> float:
-    cx, cy = placed.center()
-    if not board_geom.contains_point(cx, cy):
+    if not placement_footprint_inside_board(placed, board_geom):
+        cx, cy = placed.center()
         return -board.distance(Point(cx, cy))
+    cx, cy = placed.center()
     return 2.0 * board.boundary.distance(Point(cx, cy))
 
 
@@ -270,8 +292,12 @@ def make_polygon_graph(
     epsilon_ratio: float = 0.05,
 ):
     sheet, void_geoms = board_context_from_geometry(b)
-    guidance_cfg = guidance_config_for_scene(
-        min_dist, board_bounds=sheet.bounds, epsilon_ratio=epsilon_ratio
+    board_geom = Geometry.from_shapely(sheet)
+    pad = default_sheet_padding(b)
+    guidance_cfg = guidance_config_for_graph(
+        min_dist,
+        board_bounds=padded_board_bounds(b, pad),
+        epsilon_ratio=epsilon_ratio,
     )
     graph = ElemGraph()
     selected_polys = []
@@ -281,7 +307,8 @@ def make_polygon_graph(
     selected_transform = []
     bases = _base_geometries(polygons)
 
-    pending: list[tuple] = []
+    candidates: list[tuple] = []
+    placed_solids: list[Geometry] = []
     for i, item in enumerate(polygons):
         if len(item) == 2:
             p, transforms = item
@@ -290,14 +317,28 @@ def make_polygon_graph(
         base = bases[i]
         for t in transforms:
             placed = base.apply_transform(t)
-            scene = PlacementScene(sheet, void_geoms, [], base)
-            cx, cy = placed.center()
-            if not is_valid_placement(
-                scene, placed, (cx, cy), min_dist, guidance_cfg,
-                epsilon_ratio=epsilon_ratio,
-            ):
-                continue
-            pending.append((i, p, t, placed))
+            candidates.append((i, p, t, placed, base))
+            placed_solids.append(placed)
+
+    footprint_ok = (
+        footprints_inside_board(placed_solids, board_geom)
+        if placed_solids
+        else []
+    )
+
+    pending: list[tuple] = []
+    for k, (i, p, t, placed, base) in enumerate(candidates):
+        if not footprint_ok[k]:
+            continue
+        scene = placement_scene_for_part(sheet, board_geom, void_geoms, base)
+        cx, cy = placed.center()
+        if not is_valid_placement(
+            scene, placed, (cx, cy), min_dist, guidance_cfg,
+            epsilon_ratio=epsilon_ratio,
+            skip_footprint=True,
+        ):
+            continue
+        pending.append((i, p, t, placed))
 
     graph.reserve_elems(len(pending))
     for i, p, t, placed in pending:
@@ -391,22 +432,43 @@ FILL_COLORS = (
 )
 
 
-def _draw_board_outline(im, board: BaseGeometry, xstart, ystart, xscale, yscale):
-    cv.drawContours(im, [scale_coords(
-        np.array(board.exterior.coords), xstart, ystart, xscale, yscale
-    )], -1, (255, 255, 255), 3)
-    if isinstance(board, Polygon):
-        for ring in board.interiors:
+def _draw_nesting_outline(
+    im,
+    outline: BaseGeometry,
+    xstart: float,
+    ystart: float,
+    xscale: float,
+    yscale: float,
+) -> None:
+    """Draw nest outline only (not the sheet bbox or corner voids)."""
+    geoms = outline.geoms if hasattr(outline, "geoms") else [outline]
+    for g in geoms:
+        if g.is_empty:
+            continue
+        if g.geom_type != "Polygon":
+            continue
+        cv.drawContours(im, [scale_coords(
+            np.array(g.exterior.coords), xstart, ystart, xscale, yscale
+        )], -1, (255, 255, 255), 3)
+        for ring in g.interiors:
             cv.drawContours(im, [scale_coords(
                 np.array(ring.coords), xstart, ystart, xscale, yscale
             )], -1, (160, 160, 160), 2)
 
-def render_placement(b: BaseGeometry, elems: Tuple[Tuple[Polygon, np.ndarray], ...], im_shape=(1024, 1024)):
+
+def render_placement(
+    b: BaseGeometry,
+    elems: Tuple[Tuple[Polygon, np.ndarray], ...],
+    im_shape=(1024, 1024),
+    *,
+    nest_outline: BaseGeometry | None = None,
+):
     xstart, ystart, xend, yend = b.bounds
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
+    _draw_nesting_outline(im, nest_outline if nest_outline is not None else b,
+                          xstart, ystart, xscale, yscale)
     for it, (p, transforms) in enumerate(elems):
         fill_col = FILL_COLORS[it % len(FILL_COLORS)]
         for t in transforms:
@@ -420,12 +482,20 @@ def render_placement(b: BaseGeometry, elems: Tuple[Tuple[Polygon, np.ndarray], .
     return im
 
 
-def render_selection(b: BaseGeometry, polys: Tuple[Polygon, ...], v: np.ndarray, im_shape=(1024, 1024)):
+def render_selection(
+    b: BaseGeometry,
+    polys: Tuple[Polygon, ...],
+    v: np.ndarray,
+    im_shape=(1024, 1024),
+    *,
+    nest_outline: BaseGeometry | None = None,
+):
     xstart, ystart, xend, yend = b.bounds
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
+    _draw_nesting_outline(im, nest_outline if nest_outline is not None else b,
+                          xstart, ystart, xscale, yscale)
     for w, p in sorted(zip(v, polys), key=lambda x: x[0]):
         cv.drawContours(im, [scale_coords(
             np.array(p.exterior.coords), xstart, ystart, xscale, yscale
@@ -436,12 +506,19 @@ def render_selection(b: BaseGeometry, polys: Tuple[Polygon, ...], v: np.ndarray,
     return im
 
 
-def render_polys(b: BaseGeometry, polys: Tuple[Tuple[Polygon, ...], ...], im_shape=(1024, 1024)):
+def render_polys(
+    b: BaseGeometry,
+    polys: Tuple[Tuple[Polygon, ...], ...],
+    im_shape=(1024, 1024),
+    *,
+    nest_outline: BaseGeometry | None = None,
+):
     xstart, ystart, xend, yend = b.bounds
     xscale = im_shape[0] / (xend - xstart)
     yscale = im_shape[1] / (yend - ystart)
     im = np.zeros((im_shape[0], im_shape[1], 3), dtype=np.uint8)
-    _draw_board_outline(im, b, xstart, ystart, xscale, yscale)
+    _draw_nesting_outline(im, nest_outline if nest_outline is not None else b,
+                          xstart, ystart, xscale, yscale)
     for it, poly_set in enumerate(polys):
         fill_col = FILL_COLORS[it % len(FILL_COLORS)]
         for p in poly_set:
@@ -765,6 +842,7 @@ def _refine_options(
     opts = RefineSelectionOptions()
     opts.max_tries = sel.dfs_max_tries if max_tries is None else max_tries
     opts.max_passes = sel.dfs_refine_max_passes
+    opts.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
     opts.beam_width = sel.dfs_refine_beam_width
     if loose:
         opts.min_collisions = 2
@@ -856,6 +934,7 @@ def apply_dfs_refinement(
         tight.min_collisions = 1
         tight.max_root_collisions = 2
         tight.max_passes = sel.dfs_refine_max_passes
+        tight.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
         tight.beam_width = sel.dfs_refine_beam_width
         for _ in range(passes):
             selected = list(increase_selection_dfs(
@@ -935,6 +1014,12 @@ def _make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
 
 
 def run_build_graph(cfg: BuildGraphConfig) -> None:
+    """Demo build loop: propose → graph → rules → nest → DFS refine.
+
+    Shipped defaults match guidance-flow + nest-pipeline benchmarks
+    (``ProposeConfig`` props_no_grid, ``SelectionConfig`` merged_loose_tight_finalize_end).
+    Use ``BuildGraphConfig.benchmark_aligned()`` for the exact guidance-flow script preset.
+    """
     rng = cfg.apply_seed()
     sc = cfg.sampling
     gc = cfg.graph
@@ -942,7 +1027,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     out = cfg.output
 
     p_board = cfg.rules.board_polygon()
-    p_sheet = cfg.rules.board_sheet_polygon()
+    sheet_pad = cfg.rules.effective_sheet_padding()
     p1 = cfg.rules.rect_polygon()
     p2 = cfg.rules.tri_polygon()
 
@@ -962,11 +1047,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     graphs: list[ElemGraph] = []
     nest_state: NestState | None = None
     parts = [(p1, 0), (p2, 1)]
+    board_area = p_board.area
+    part_areas = (p1.area, p2.area)
     iters = tuple(range(out.n_iters))
-    if out.progress:
-        iters = tqdm(iters)
+    pbar = tqdm(
+        iters,
+        desc="Nesting",
+        unit="iter",
+        dynamic_ncols=True,
+        disable=not out.progress,
+    )
 
-    for _it in iters:
+    for _it in pbar:
         selected_t = _build_transform_batch(
             cfg,
             selected_t,
@@ -1009,8 +1101,29 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             selection=sel,
         )
         assert selection_is_independent(graph, selected_polys)
-        print(len(polys), old_len, ' -> ', len(selected_polys))
-        im = render_polys(p_sheet, [[polys[i] for i in selected_polys]], im_shape=render_size)
+        cov = _selection_coverage_pct(
+            selected_polys, group_id, part_areas, board_area,
+        )
+        if out.progress:
+            pbar.set_postfix(
+                parts=len(selected_polys),
+                cov=f"{cov:.1f}%",
+                pool=len(polys),
+                refine=f"{old_len}->{len(selected_polys)}",
+                ordered=True,
+            )
+        else:
+            print(
+                len(polys), old_len, "->", len(selected_polys),
+                f"cov={cov:.1f}%",
+            )
+        render_frame = shapely_box(*padded_board_bounds(p_board, sheet_pad))
+        im = render_polys(
+            render_frame,
+            [[polys[i] for i in selected_polys]],
+            im_shape=render_size,
+            nest_outline=p_board,
+        )
         video.write(im)
         cv.imwrite(out.snapshot_path, im)
 

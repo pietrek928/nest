@@ -4,7 +4,12 @@ import sys
 import pytest
 
 from nest_graph.geometry import Geometry, GuidanceConfig, evaluate_local_placement
-from nest_graph.placement_scene import placement_clearance_epsilon
+from nest_graph.placement_scene import (
+    best_proposition,
+    placement_clearance_epsilon,
+    propositions_by_tier,
+    proposition_translation,
+)
 
 
 def _unit_square():
@@ -19,6 +24,10 @@ def test_guidance_config_defaults():
     assert cfg.max_alternative_angles == 3
     assert cfg.slide_escape_multiplier == pytest.approx(0.8)
     assert cfg.use_hole_seeking is True
+    assert cfg.use_tight_packing is True
+    assert cfg.squeeze_weight == pytest.approx(0.4)
+    assert cfg.max_propositions == 5
+    assert cfg.enable_grid_exploration is True
     assert cfg.target_angle_rad == pytest.approx(0.0)
     assert cfg.attraction_weight == pytest.approx(0.1)
     assert cfg.alignment_weight == pytest.approx(0.5)
@@ -33,7 +42,11 @@ def test_evaluate_single_polygon_gravity():
     cfg.minimum_placing_distance = 0.0
     guidance = evaluate_local_placement(0, [poly], (0.0, 0.0), cfg)
     assert guidance.is_penetrating is False
-    assert guidance.suggested_translation == (-1.0, -1.0)
+    assert len(guidance.propositions) >= 1
+    prop = best_proposition(guidance)
+    tx, ty = proposition_translation(prop)
+    assert tx == pytest.approx(-1.0)
+    assert ty == pytest.approx(-1.0)
 
 
 def test_evaluate_target_attractor():
@@ -47,8 +60,10 @@ def test_evaluate_target_attractor():
 
     guidance = evaluate_local_placement(0, [poly], (0.0, 0.0), cfg)
     assert guidance.is_penetrating is False
-    assert guidance.suggested_translation[0] == pytest.approx(2.0)
-    assert guidance.suggested_translation[1] == pytest.approx(0.0)
+    prop = best_proposition(guidance)
+    tx, ty = proposition_translation(prop)
+    assert tx == pytest.approx(2.0)
+    assert ty == pytest.approx(0.0)
 
 
 def test_evaluate_penetrating_overlap():
@@ -60,9 +75,11 @@ def test_evaluate_penetrating_overlap():
 
     guidance = evaluate_local_placement(0, [a, b], (0.0, 0.0), cfg)
     assert guidance.is_penetrating is True
-    ex, ey = guidance.ejection_vector
-    assert math.hypot(ex, ey) > 1e-9
-    assert len(guidance.alternative_translations) >= 1
+    tiers = propositions_by_tier(guidance)
+    assert tiers["ejection"] or tiers["slide"]
+    prop = best_proposition(guidance)
+    tx, ty = proposition_translation(prop)
+    assert math.hypot(tx, ty) > 1e-9
 
 
 def test_evaluate_separated_clearance():
@@ -90,8 +107,25 @@ def test_gravity_scales_down_near_obstacle():
     guidance = evaluate_local_placement(0, [a, b], (0.0, 0.0), cfg)
     assert guidance.is_penetrating is False
     assert guidance.clearance < 0.5
-    sx, sy = guidance.suggested_translation
-    assert math.hypot(sx, sy) < math.hypot(-1.0, -1.0)
+    prop = best_proposition(guidance)
+    tx, ty = proposition_translation(prop)
+    assert math.hypot(tx, ty) < math.hypot(-1.0, -1.0)
+
+
+def test_tight_packing_proposition_when_separated():
+    a = _unit_square()
+    b = _unit_square().translate(1.2, 0.0)
+    cfg = GuidanceConfig()
+    cfg.search_radius = 5.0
+    cfg.minimum_placing_distance = 0.0
+    cfg.use_tight_packing = True
+    cfg.use_gravity = False
+    cfg.enable_grid_exploration = False
+
+    guidance = evaluate_local_placement(0, [a, b], (0.0, 0.0), cfg)
+    assert guidance.is_penetrating is False
+    tiers = propositions_by_tier(guidance)
+    assert tiers["pack"]
 
 
 def test_placement_clearance_epsilon():

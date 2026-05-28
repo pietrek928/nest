@@ -1,8 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <vector>
 #include <cmath>
+#include <random>
+#include <vector>
 #include "solid/solid_geometry.h"
 
 
@@ -34,6 +35,7 @@ template <class VecType>
 inline void process_boundary_to_convex_segments(
     const std::vector<VecType>& loop,
     SolidGeometry<VecType>& out_mesh,
+    std::mt19937& gen,
     bool subtractive = false,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
 ) {
@@ -108,7 +110,10 @@ inline void process_boundary_to_convex_segments(
             // We don't push p3 here, because p2 is the last valid point of this convex segment.
             // But to close the segment, we need to ensure it's a valid line string.
             out_mesh.append_line_poly(
-                current_segment.data(), static_cast<int>(current_segment.size()), subtractive);
+                current_segment.data(),
+                static_cast<int>(current_segment.size()),
+                gen,
+                subtractive);
 
             current_segment.clear();
             current_turn_sign = 0;
@@ -118,7 +123,10 @@ inline void process_boundary_to_convex_segments(
 
     if (current_segment.size() >= 2) {
         out_mesh.append_line_poly(
-            current_segment.data(), static_cast<int>(current_segment.size()), subtractive);
+            current_segment.data(),
+            static_cast<int>(current_segment.size()),
+            gen,
+            subtractive);
     }
 }
 
@@ -131,18 +139,21 @@ SolidGeometry<VecType> decompose_complex_polygon(
     const std::vector<std::vector<VecType>>& holes
 ) {
     SolidGeometry<VecType> composed_mesh;
+    std::mt19937 gen(std::random_device{}());
 
     for (const auto& outer : outer_boundaries) {
         composed_mesh.add_boundary_ring(outer, /*subtractive=*/false);
-        process_boundary_to_convex_segments<VecType>(outer, composed_mesh, /*subtractive=*/false);
+        process_boundary_to_convex_segments<VecType>(
+            outer, composed_mesh, gen, /*subtractive=*/false);
     }
 
     for (const auto& hole : holes) {
         auto reversed = reverse_ring(hole);
         composed_mesh.add_boundary_ring(reversed, /*subtractive=*/true);
-        process_boundary_to_convex_segments<VecType>(reversed, composed_mesh, /*subtractive=*/true);
+        process_boundary_to_convex_segments<VecType>(
+            reversed, composed_mesh, gen, /*subtractive=*/true);
     }
 
-    composed_mesh.finalize();
+    composed_mesh.finalize(gen);
     return composed_mesh;
 }

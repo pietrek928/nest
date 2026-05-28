@@ -374,11 +374,10 @@ std::vector<Tvertex> refine_selection_dfs(
         nodes[i] = i;
     }
 
-    int passes = 0;
-    bool improved = true;
-    while (improved && passes < options.max_passes) {
-        improved = false;
-        ++passes;
+    const int stagnant_limit = std::max(1, options.max_stagnant_passes);
+    int stagnant_passes = 0;
+    for (int pass = 0; pass < options.max_passes; ++pass) {
+        bool pass_improved = false;
 
         std::sort(
             nodes.begin(), nodes.end(),
@@ -397,7 +396,7 @@ std::vector<Tvertex> refine_selection_dfs(
             if (try_refine_root(
                     v, g, scores, options, baseline_sum, selected, backup,
                     best_selected, mark, selected_collisions, selected_sum)) {
-                improved = true;
+                pass_improved = true;
                 update_best_independent(
                     g, selected, scores, best_independent, best_sum, best_count);
             }
@@ -415,11 +414,20 @@ std::vector<Tvertex> refine_selection_dfs(
                 if (try_refine_root(
                         v, g, scores, options, baseline_sum, selected, backup,
                         best_selected, mark, selected_collisions, selected_sum)) {
-                    improved = true;
+                    pass_improved = true;
                     update_best_independent(
                         g, selected, scores, best_independent, best_sum, best_count);
                 }
                 std::fill(mark.begin(), mark.end(), 0);
+            }
+        }
+
+        if (pass_improved) {
+            stagnant_passes = 0;
+        } else {
+            stagnant_passes++;
+            if (stagnant_passes >= stagnant_limit) {
+                break;
             }
         }
     }

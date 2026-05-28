@@ -124,10 +124,11 @@ def test_default_config_first_pass_tuned():
     assert cfg.sampling.random_per_iter_when_proposed == 48
     assert cfg.propose.use_group_edge_seeds is True
     assert cfg.propose.use_contact_ranking is True
-    assert cfg.selection.dfs_mode == "merged_loose_finalize_end"
+    assert cfg.selection.dfs_mode == "merged_loose_tight_finalize_end"
     assert cfg.selection.dfs_passes == 3
     assert cfg.selection.dfs_max_tries == 4
-    assert cfg.selection.dfs_refine_max_passes == 12
+    assert cfg.selection.dfs_refine_max_passes == 1024
+    assert cfg.selection.dfs_refine_max_stagnant_passes == 4
     assert cfg.propose.candidate_pool == 48
     assert cfg.propose.use_contact_clearance_hybrid is True
     assert cfg.sampling.max_transforms_per_group == 900

@@ -51,18 +51,19 @@ DFS wall time is sub-millisecond on this small graph; tuning targets outer-loop 
 
 | Field | Value | Notes |
 |-------|-------|-------|
-| `dfs_mode` | `merged_loose_finalize_end` | Loose search only; `finalize_selection` once at end |
+| `dfs_mode` | `merged_loose_tight_finalize_end` | Loose→tight search; `finalize_selection` once at end |
 | `dfs_passes` | 3 | Was 4 |
 | `dfs_max_tries` | 4 | Was 8 |
-| `dfs_refine_max_passes` | 12 | Was 32 (C++ inner cap per refine call) |
+| `dfs_refine_max_stagnant_passes` | 4 | Stop after this many sweeps with no score gain |
+| `dfs_refine_max_passes` | 1024 | Hard safety cap on refinement sweeps per call |
 | `dfs_refine_beam_width` | 2 | |
 | `dfs_finalize_repair_passes` | 6 | Was 8 |
 
 ### Modes
 
-- **`merged_loose_finalize_end`** — fastest effective default; one `refine_selection` (loose) per outer pass.
-- **`merged_loose_tight_finalize_end`** — adds tight pass; +quality on hard graphs, slightly slower.
+- **`merged_loose_tight_finalize_end`** — shipped default; best mean parts in nest-pipeline benchmark.
+- **`merged_loose_finalize_end`** — loose only; faster; used by `BuildGraphConfig.benchmark_aligned()`.
 - **`merged_loose_tight`** — finalize after every pass (older; more MIS repair work).
 - **`merged_single_pass`** — loose only + finalize each pass.
 
-Override: `NEST_DFS_MODE`, `NEST_DFS_PASSES`, `NEST_DFS_MAX_TRIES`, `NEST_DFS_REFINE_MAX_PASSES`, `NEST_DFS_FINALIZE_REPAIR`.
+Override: `NEST_DFS_MODE`, `NEST_DFS_PASSES`, `NEST_DFS_MAX_TRIES`, `NEST_DFS_REFINE_STAGNANT_PASSES`, `NEST_DFS_REFINE_MAX_PASSES`, `NEST_DFS_FINALIZE_REPAIR`.

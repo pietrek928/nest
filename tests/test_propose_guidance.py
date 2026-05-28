@@ -5,12 +5,17 @@ import pytest
 from shapely.affinity import translate
 from shapely.geometry import Point, Polygon
 
+from nest_graph.config import ProposeConfig
 from nest_graph.propose import (
     ProposeGeometry,
     evaluate_ray_placement,
     proposed_transforms_for_groups,
 )
-from nest_graph.placement_scene import board_placement_valid
+from nest_graph.placement_scene import (
+    board_placement_valid,
+    best_proposition,
+    proposition_translation,
+)
 from nest_graph.geometry import Geometry
 
 
@@ -30,6 +35,7 @@ def propose_geom(board):
         translate(_unit_square_poly(), 3, 0),
         _unit_square_poly(),
         min_dist=0.05,
+        propose_cfg=ProposeConfig(),
     )
 
 
@@ -39,35 +45,45 @@ def test_placement_guidance_separated(board, propose_geom):
     assert g.is_penetrating is False
     assert float(g.clearance) < float("inf")
     assert float(g.clearance) > 0.0
+    assert len(g.propositions) >= 1
 
 
 def test_placement_guidance_overlap(board):
     base = translate(_unit_square_poly(), 3, 0)
-    geom = ProposeGeometry(board, base, _unit_square_poly(), min_dist=0.05)
+    geom = ProposeGeometry(
+        board, base, _unit_square_poly(), min_dist=0.05, propose_cfg=ProposeConfig(),
+    )
     placed = geom.placed_at((3.3, 0.1, 0.0))
     push = board.centroid
     g = geom.placement_guidance(placed, (3.3, 0.1), push)
     assert g.is_penetrating is True
-    ex, ey = g.ejection_vector
-    assert math.hypot(ex, ey) > 1e-9
+    prop = best_proposition(g)
+    tx, ty = proposition_translation(prop)
+    assert math.hypot(tx, ty) > 1e-9
 
 
 def test_attraction_unit_matches_ejection(board):
     base = translate(_unit_square_poly(), 3, 0)
-    geom = ProposeGeometry(board, base, _unit_square_poly(), min_dist=0.05)
+    geom = ProposeGeometry(
+        board, base, _unit_square_poly(), min_dist=0.05, propose_cfg=ProposeConfig(),
+    )
     placed = geom.placed_at((3.3, 0.1, 0.0))
     push = board.centroid
     g = geom.placement_guidance(placed, (3.3, 0.1), push)
     attr = geom.attraction_unit(placed, push, (3.3, 0.1))
-    eject = np.array(g.ejection_vector, dtype=np.float64)
-    eject_u = eject / (np.linalg.norm(eject) + 1e-12)
+    prop = best_proposition(g)
+    tx, ty = proposition_translation(prop)
+    eject_u = np.array([tx, ty], dtype=np.float64)
+    eject_u = eject_u / (np.linalg.norm(eject_u) + 1e-12)
     assert np.dot(attr, eject_u) > 0.99
 
 
 def test_evaluate_ray_placement_nudge_moves_part(board):
     """Guidance-driven nudge should change pose; empty base yields a valid scored placement."""
     part = _unit_square_poly()
-    geom = ProposeGeometry(board, Polygon(), part, min_dist=0.05)
+    geom = ProposeGeometry(
+        board, Polygon(), part, min_dist=0.05, propose_cfg=ProposeConfig(),
+    )
     push = board.centroid
     params = np.array([1.0, 1.0, 0.0, 0.0])
     score, settled = evaluate_ray_placement(
@@ -111,7 +127,9 @@ def test_proposed_transforms_board_valid(nest_board, rect_poly, tri_poly, build_
 
 
 def test_propose_geometry_validation(board):
-    geom = ProposeGeometry(board, Polygon(), _unit_square_poly(), min_dist=0.001)
+    geom = ProposeGeometry(
+        board, Polygon(), _unit_square_poly(), min_dist=0.001, propose_cfg=ProposeConfig(),
+    )
     placed = geom.placed_at((0.5, 0.5, 0.0))
     push = board.centroid
     assert geom.inside_board(placed)

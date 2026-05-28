@@ -22,7 +22,7 @@ from nest_graph.build_graph import (
     run_build_graph,
     select_polygons_from_edges,
 )
-from nest_graph.config import SelectionConfig
+from nest_graph.config import BuildGraphConfig, SelectionConfig
 from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph, score_elems
 from nest_graph.placement_scene import board_placement_valid
 from nest_graph.utils import transform_poly
@@ -385,3 +385,17 @@ def test_make_polygon_graph_geometry_shapely_edge_parity(
                 g_j = bases[gid[j]].apply_transform(trans[j])
                 hits = find_polygon_intersections_bipartite([g_i], [g_j])
                 assert hits == [(0, 0)], f"geometry miss for nodes {i}, {j}"
+
+
+def test_shipped_config_matches_benchmarks():
+    cfg = BuildGraphConfig()
+    assert cfg.selection.dfs_mode == "merged_loose_tight_finalize_end"
+    assert cfg.propose.use_guidance_propositions is True
+    assert cfg.propose.guidance_enable_grid is False
+    assert cfg.sampling.initial_random == 256
+    assert cfg.sampling.max_transforms_per_group == 900
+
+    bench = BuildGraphConfig.benchmark_aligned(seed=7)
+    assert bench.sampling.seed == 7
+    assert bench.selection.dfs_mode == "merged_loose_finalize_end"
+    assert bench.propose.guidance_enable_grid is False

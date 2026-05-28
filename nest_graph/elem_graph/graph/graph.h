@@ -36,7 +36,10 @@ struct SelectOptions {
 
 struct RefineSelectionOptions {
     float min_score_delta = 1e-6f;
-    int max_passes = 32;
+    /** Hard cap on refinement sweeps (safety). */
+    int max_passes = 1024;
+    /** Stop after this many consecutive sweeps with no score gain. */
+    int max_stagnant_passes = 4;
     int max_depth = 64;
     std::uint32_t seed = 0;
     bool explore_shuffle = false;

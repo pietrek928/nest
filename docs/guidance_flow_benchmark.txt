@@ -1,0 +1,38 @@
+# Guidance flow benchmark
+seeds=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9] pipeline_iters=3
+
+## Ranked flows (composite score: parts + tight pack + border - time)
+
+| rank | flow | score | parts_mean | pack_clear_min | empty_border | propose_s | pipeline_s |
+|------|------|-------|------------|----------------|--------------|-----------|------------|
+| 1 | props_no_grid | 462.36 | 45.9 | 0.0034 | 0.0000 | 1.89 | 26.6 |
+| 2 | shipped_props | 460.44 | 45.7 | 0.0034 | 0.0000 | 1.76 | 22.7 |
+| 3 | shipped_no_props | 458.33 | 45.5 | 0.0034 | 0.0000 | 1.54 | 28.6 |
+| 4 | props_no_squeeze | 454.42 | 45.1 | 0.0034 | 0.0000 | 1.83 | 23.8 |
+| 5 | props_max3 | 454.42 | 45.1 | 0.0034 | 0.0000 | 1.83 | 23.9 |
+| 6 | props_squeeze_heavy | 447.37 | 44.4 | 0.0034 | 0.0000 | 1.83 | 26.0 |
+
+**Recommended flow: `props_no_grid`**
+
+## Propose detail by scenario
+
+| flow | scenario | valid | clearance_min | border_err | time_s |
+|------|----------|-------|---------------|------------|--------|
+| props_max3 | empty_base | 24.0 | 0.2976 | 0.0000 | 2.556 |
+| props_max3 | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.708 |
+| props_max3 | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.215 |
+| props_no_grid | empty_base | 24.0 | 0.2976 | 0.0000 | 2.564 |
+| props_no_grid | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.728 |
+| props_no_grid | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.365 |
+| props_no_squeeze | empty_base | 24.0 | 0.2976 | 0.0000 | 2.696 |
+| props_no_squeeze | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.607 |
+| props_no_squeeze | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.188 |
+| props_squeeze_heavy | empty_base | 24.0 | 0.2976 | 0.0000 | 2.695 |
+| props_squeeze_heavy | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.566 |
+| props_squeeze_heavy | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.235 |
+| shipped_no_props | empty_base | 24.0 | 0.2976 | 0.0000 | 1.921 |
+| shipped_no_props | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.472 |
+| shipped_no_props | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.227 |
+| shipped_props | empty_base | 24.0 | 0.2976 | 0.0000 | 2.568 |
+| shipped_props | partial_pack | 24.0 | 0.0034 | 0.0016 | 1.538 |
+| shipped_props | two_clusters | 24.0 | 0.0035 | 0.0030 | 1.181 |

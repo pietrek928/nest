@@ -1,6 +1,9 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <random>
 
+#include "geometry/solid/containment.h"
 #include "geometry/solid/point_in_solid.h"
 #include "geometry/intersect/polygon_intersect.h"
 #include "geometry/tests/geometry_test_helpers.h"
@@ -30,6 +33,7 @@ TEST_CASE("Geometry API: from_convex_polygon", "[geometry_api]") {
     REQUIRE(g.boundary_rings.size() == 1);
     const auto& c = g.get_bounding_circle();
     REQUIRE(c.square_radius() > 0.0);
+    REQUIRE(g.area() == Catch::Approx(1.0));
 }
 
 TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]") {
@@ -40,11 +44,13 @@ TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]
         {1, 1},
         {0, 1},
     };
+    std::mt19937 gen(42);
     open_only.append_line_poly(
         open_pts.data(),
         static_cast<int>(open_pts.size()),
+        gen,
         false);
-    open_only.finalize();
+    open_only.finalize(gen);
     REQUIRE(open_only.boundary_rings.empty());
 
     SolidGeometry2 closed = polygon_from_quad({
@@ -129,6 +135,50 @@ TEST_CASE("Geometry API: contains_point donut hole", "[geometry_api][holes]") {
     );
     REQUIRE(is_point_inside_solid_space(PolyTestVec2({1.0, 1.0}), donut));
     REQUIRE_FALSE(is_point_inside_solid_space(PolyTestVec2({3.0, 3.0}), donut));
+}
+
+TEST_CASE("Geometry API: footprint_inside rectangle", "[geometry_api]") {
+    SolidGeometry2 board = polygon_from_quad({
+        {0, 0},
+        {10, 0},
+        {10, 10},
+        {0, 10},
+    });
+    SolidGeometry2 inside = make_box(5.0, 5.0, 0.5, 0.5);
+    SolidGeometry2 outside = make_box(12.0, 5.0, 0.5, 0.5);
+    REQUIRE(solid_footprint_inside(inside, board));
+    REQUIRE_FALSE(solid_footprint_inside(outside, board));
+}
+
+TEST_CASE("Geometry API: footprint_inside donut hole", "[geometry_api][holes]") {
+    SolidGeometry2 donut = make_donut(
+        {{0, 0}, {6, 0}, {6, 6}, {0, 6}},
+        {{2, 2}, {4, 2}, {4, 4}, {2, 4}}
+    );
+    SolidGeometry2 in_ring = make_box(1.0, 1.0, 0.2, 0.2);
+    SolidGeometry2 in_hole = make_box(3.0, 3.0, 0.2, 0.2);
+    REQUIRE(solid_footprint_inside(in_ring, donut));
+    REQUIRE_FALSE(solid_footprint_inside(in_hole, donut));
+}
+
+TEST_CASE("Geometry API: footprint_inside_batch", "[geometry_api]") {
+    SolidGeometry2 board = polygon_from_quad({
+        {0, 0},
+        {10, 0},
+        {10, 10},
+        {0, 10},
+    });
+    SolidGeometry2 a = make_box(2.0, 2.0, 0.5, 0.5);
+    SolidGeometry2 b = make_box(12.0, 2.0, 0.5, 0.5);
+    SolidGeometry2 c = make_box(7.0, 7.0, 0.5, 0.5);
+    auto batch = solid_footprint_inside(std::vector<SolidGeometry2>{a, b, c}, board);
+    REQUIRE(batch.size() == 3);
+    REQUIRE(batch[0]);
+    REQUIRE_FALSE(batch[1]);
+    REQUIRE(batch[2]);
+    REQUIRE(batch[0] == solid_footprint_inside(a, board));
+    REQUIRE(batch[1] == solid_footprint_inside(b, board));
+    REQUIRE(batch[2] == solid_footprint_inside(c, board));
 }
 
 TEST_CASE("Geometry API: intersects disjoint and overlap", "[geometry_api]") {

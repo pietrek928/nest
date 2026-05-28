@@ -4,23 +4,23 @@ import numpy as np
 import pytest
 from shapely.geometry import Point, Polygon
 
-from nest_graph.board import board_sheet_from_outline, board_void_geometries
+from nest_graph.board import board_context_from_geometry, board_sheet_from_outline
 from nest_graph.build_graph import make_polygon_graph
 from nest_graph.config import RulesConfig
 from nest_graph.geometry import Geometry, GuidanceConfig
 from nest_graph.placement_scene import (
-    PlacementScene,
     board_placement_valid,
     build_placement_scene,
     is_valid_placement,
+    placement_scene_for_part,
 )
 from nest_graph.utils import transform_poly
 
 
 def test_board_sheet_equivalent_to_outline(nest_board, rect_poly, small_transforms):
-    """Triangle outline validity matches sheet + void obstacle model."""
-    sheet = board_sheet_from_outline(nest_board)
-    void_geoms = board_void_geometries(sheet)
+    """Footprint validity matches Shapely outline containment on triangle board."""
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
     part = Geometry.from_shapely(rect_poly)
     guidance_cfg = GuidanceConfig()
     transforms = small_transforms(24, seed=7)
@@ -28,15 +28,15 @@ def test_board_sheet_equivalent_to_outline(nest_board, rect_poly, small_transfor
     for t in transforms:
         placed = part.apply_transform(t)
         legacy = nest_board.contains(transform_poly(rect_poly, t))
-        scene = PlacementScene(sheet, void_geoms, [], part)
+        scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
         cx, cy = placed.center()
         unified = is_valid_placement(scene, placed, (cx, cy), 0.0, guidance_cfg)
         assert unified == legacy
 
 
 def test_void_penetrating_in_guidance(nest_board):
-    sheet = board_sheet_from_outline(nest_board)
-    void_geoms = board_void_geometries(sheet)
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
     assert void_geoms, "triangle sheet should have corner voids"
 
     part = Geometry.from_convex_polygon([(0, 0), (0.05, 0), (0.05, 0.05), (0, 0.05)])
@@ -44,7 +44,7 @@ def test_void_penetrating_in_guidance(nest_board):
     assert not nest_board.contains(transform_poly(
         Polygon([(0, 0), (0.05, 0), (0.05, 0.05), (0, 0.05)]), (1.0, 0.5, 0.0)
     ))
-    scene = PlacementScene(sheet, void_geoms, [], part)
+    scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
     g = scene.guidance(placed, placed.center(), GuidanceConfig())
     assert g.is_penetrating is True
 
@@ -53,8 +53,10 @@ def test_rules_config_board_sheet_polygon():
     rules = RulesConfig()
     outline = rules.board_polygon()
     sheet = rules.board_sheet_polygon()
-    assert sheet.area >= outline.area
-    assert len(sheet.interiors) >= 1
+    assert sheet.area == outline.area
+    voids = rules.board_void_geometries()
+    assert len(voids) >= 1
+    assert rules.effective_sheet_padding() > 0.0
 
 
 def test_user_board_holes():
@@ -97,6 +99,60 @@ def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_con
         assert not g.is_penetrating
         if min_dist > 0:
             assert float(g.clearance) >= margin - 1e-9
+
+
+def test_center_outside_nest_rejected(nest_board, rect_poly):
+    """Bbox inside padded sheet but anchor outside nest outline is invalid."""
+    from nest_graph.placement_scene import placement_outside_outer
+
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
+    part = Geometry.from_shapely(rect_poly)
+    t = (1.093120887400734, 0.4460933475784889, 0.0)
+    placed = part.apply_transform(t)
+    cx, cy = placed.center()
+    assert not nest_board.contains(Point(cx, cy))
+    assert not placement_outside_outer(placed, sheet)
+    scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
+    assert not is_valid_placement(scene, placed, (cx, cy), 0.0, GuidanceConfig())
+
+
+def test_corner_void_overlap_rejected(nest_board):
+    """Solid overlapping corner void is invalid even when bbox clears sheet bounds."""
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
+    part = Geometry.from_convex_polygon([(0, 0), (0.05, 0), (0.05, 0.05), (0, 0.05)])
+    placed = part.apply_transform((1.0, 0.5, 0.0))
+    cx, cy = placed.center()
+    scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
+    g = scene.guidance(placed, (cx, cy), GuidanceConfig())
+    assert g.is_penetrating
+    assert not is_valid_placement(scene, placed, (cx, cy), 0.0, GuidanceConfig())
+
+
+def test_hypotenuse_overhang_rejected(nest_board, rect_poly):
+    """Center inside nest but footprint past hypotenuse is invalid."""
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
+    part = Geometry.from_shapely(rect_poly)
+    t = (0.37802249442265207, 0.6972761008108197, 0.0)
+    placed = part.apply_transform(t)
+    assert nest_board.contains(Point(*placed.center()))
+    assert not nest_board.contains(transform_poly(rect_poly, t))
+    scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
+    cx, cy = placed.center()
+    assert not is_valid_placement(scene, placed, (cx, cy), 0.0, GuidanceConfig())
+
+
+def test_fully_inside_nest_accepted(nest_board, rect_poly):
+    sheet, void_geoms = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
+    part = Geometry.from_shapely(rect_poly)
+    placed = part.apply_transform((0.35, 0.35, 0.0))
+    cx, cy = placed.center()
+    assert nest_board.contains(transform_poly(rect_poly, (0.35, 0.35, 0.0)))
+    scene = placement_scene_for_part(sheet, board_geom, void_geoms, part)
+    assert is_valid_placement(scene, placed, (cx, cy), 0.0, GuidanceConfig())
 
 
 def test_donut_board_rejects_hole_overlap(nest_board_donut, rect_poly):

@@ -1,0 +1,27 @@
+# Guidance flow benchmark (seeds 0-9, pipeline 3 iters)
+
+Script: `scripts/benchmark_guidance_flow.py`
+
+## Winner: `props_no_grid`
+
+Proposition seed expansion **on**, C++ grid exploration **off** (`guidance_enable_grid=False`).
+
+## Ranked (composite: parts×10 + tight-pack bonus + border bonus − time)
+
+| rank | flow | score | parts_mean | pack_clear_min | propose_s | pipeline_s |
+|------|------|-------|------------|----------------|-----------|------------|
+| 1 | props_no_grid | 462.4 | 45.9 | 0.0034 | 1.89 | 26.6 |
+| 2 | shipped_props | 460.4 | 45.7 | 0.0034 | 1.76 | 22.7 |
+| 3 | shipped_no_props | 458.3 | 45.5 | 0.0034 | 1.54 | 28.6 |
+| 4 | props_no_squeeze | 454.4 | 45.1 | 0.0034 | 1.83 | 23.8 |
+| 5 | props_max3 | 454.4 | 45.1 | 0.0034 | 1.83 | 23.9 |
+| 6 | props_squeeze_heavy | 447.4 | 44.4 | 0.0034 | 1.83 | 26.0 |
+
+## Conclusions
+
+- **Proposition seeds**: small +0.4 parts vs `shipped_no_props` on average; keep `use_guidance_propositions=True`.
+- **Grid exploration**: `guidance_enable_grid=False` wins (faster pipeline, highest parts_mean).
+- **Squeeze**: `guidance_use_tight_packing=True` with weight 0.4; disabling squeeze or heavy squeeze (0.6) does not improve pipeline score.
+- **max_propositions=3**: same as full props on this fixture; keep 5 for diversity headroom.
+
+Shipped defaults updated in `ProposeConfig`: propositions on, grid off, tight packing on.

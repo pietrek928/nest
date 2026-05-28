@@ -1,4 +1,7 @@
 #include <cmath>
+#include <cstdint>
+#include <random>
+#include <utility>
 #include <vector>
 
 #include <nanobind/nanobind.h>
@@ -14,6 +17,7 @@ namespace nb = nanobind;
 #include "guide/guide.h"
 #include "intersect/polygon_intersect.h"
 #include "solid/decompose.h"
+#include "solid/containment.h"
 #include "solid/point_in_solid.h"
 #include "solid/solid_geometry.h"
 
@@ -21,18 +25,45 @@ using SolidGeometry2d = SolidGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
 using GuidanceConfig2d = GuidanceConfig<Vec2d>;
 using PlacementGuidance2d = PlacementGuidance<Vec2d>;
+using PlacementProposition2d = PlacementProposition<Vec2d>;
 
-nb::tuple circle_bounds_tuple(const SolidGeometry2d &g) {
-    const auto &c = g.get_bounding_circle();
+struct GeometryHolder {
+    SolidGeometry2d solid;
+    std::mt19937 rng;
+
+    GeometryHolder()
+        : rng(std::random_device{}()) {}
+
+    explicit GeometryHolder(std::uint32_t seed)
+        : rng(seed != 0 ? std::mt19937(seed) : std::mt19937(std::random_device{}())) {}
+
+    explicit GeometryHolder(SolidGeometry2d mesh)
+        : solid(std::move(mesh)), rng(std::random_device{}()) {}
+};
+
+nb::tuple circle_bounds_tuple(const GeometryHolder &g) {
+    const auto &c = g.solid.get_bounding_circle();
     const double cx = c.center()[0];
     const double cy = c.center()[1];
     const double r = std::sqrt(static_cast<double>(c.square_radius()));
     return nb::make_tuple(cx - r, cy - r, cx + r, cy + r);
 }
 
+std::vector<SolidGeometry2d> solids_from_holders(
+    const std::vector<GeometryHolder> &holders
+) {
+    std::vector<SolidGeometry2d> out;
+    out.reserve(holders.size());
+    for (const auto &h : holders) {
+        out.push_back(h.solid);
+    }
+    return out;
+}
+
 void bind_geometry(nb::module_ &m) {
-    nb::class_<SolidGeometry2d>(m, "Geometry")
+    nb::class_<GeometryHolder>(m, "Geometry")
         .def(nb::init<>())
+        .def(nb::init<std::uint32_t>(), nb::arg("seed"))
         .def_static(
             "from_convex_polygon",
             [](nb::handle points) {
@@ -42,20 +73,21 @@ void bind_geometry(nb::module_ &m) {
                     throw nb::value_error(
                         "from_convex_polygon: need at least 3 distinct points");
                 }
-                SolidGeometry2d poly;
-                poly.add_boundary_ring(pts);
+                GeometryHolder holder;
+                holder.solid.add_boundary_ring(pts);
                 std::vector<Vec2d> closed = pts;
                 const Vec2d &first = closed.front();
                 const Vec2d &last = closed.back();
                 if (first[0] != last[0] || first[1] != last[1]) {
                     closed.push_back(first);
                 }
-                poly.append_line_poly(
+                holder.solid.append_line_poly(
                     closed.data(),
                     static_cast<int>(closed.size()),
+                    holder.rng,
                     false);
-                poly.finalize();
-                return poly;
+                holder.solid.finalize(holder.rng);
+                return holder;
             },
             nb::arg("points"))
         .def_static(
@@ -69,52 +101,61 @@ void bind_geometry(nb::module_ &m) {
                         "Geometry.from_shapely: no usable polygon rings "
                         "(empty or unsupported geometry types are skipped)");
                 }
-                return decompose_complex_polygon<Vec2d>(outers, holes);
+                return GeometryHolder(decompose_complex_polygon<Vec2d>(outers, holes));
             },
             nb::arg("geom"))
         .def(
             "append_convex_poly",
-            [](SolidGeometry2d &poly, nb::handle points) {
+            [](GeometryHolder &holder, nb::handle points) {
                 std::vector<Vec2d> pts;
                 points_from_iterable(points, pts);
-                poly.append_line_poly(pts.data(), static_cast<int>(pts.size()), false);
+                holder.solid.append_line_poly(
+                    pts.data(), static_cast<int>(pts.size()), holder.rng, false);
             },
             nb::arg("points"))
         .def(
             "append_convex_hole",
-            [](SolidGeometry2d &poly, nb::handle points) {
+            [](GeometryHolder &holder, nb::handle points) {
                 std::vector<Vec2d> ring = ring_from_coords(points);
                 if (ring.size() < 3) {
                     return;
                 }
                 auto reversed = reverse_ring(ring);
-                poly.add_boundary_ring(reversed, true);
-                process_boundary_to_convex_segments<Vec2d>(reversed, poly, true);
+                holder.solid.add_boundary_ring(reversed, true);
+                process_boundary_to_convex_segments<Vec2d>(
+                    reversed, holder.solid, holder.rng, true);
             },
             nb::arg("points"))
-        .def("finalize", &SolidGeometry2d::finalize)
+        .def(
+            "finalize",
+            [](GeometryHolder &holder) { holder.solid.finalize(holder.rng); })
+        .def(
+            "area",
+            [](const GeometryHolder &holder) {
+                return static_cast<double>(holder.solid.area());
+            })
         .def(
             "translate",
-            [](const SolidGeometry2d &g, double dx, double dy) {
-                return g.translate(Vec2d({dx, dy}));
+            [](const GeometryHolder &g, double dx, double dy) {
+                return GeometryHolder(g.solid.translate(Vec2d({dx, dy})));
             },
             nb::arg("dx"),
             nb::arg("dy"))
         .def(
             "translate",
-            [](const SolidGeometry2d &g, nb::handle offset) {
+            [](const GeometryHolder &g, nb::handle offset) {
                 double x = 0.0;
                 double y = 0.0;
                 if (!read_xy(offset, x, y)) {
                     throw nb::type_error(
                         "translate(offset): expected a length-2 tuple or sequence");
                 }
-                return g.translate(Vec2d({x, y}));
+                return GeometryHolder(g.solid.translate(Vec2d({x, y})));
             },
             nb::arg("offset"))
         .def(
             "rotate",
-            [](const SolidGeometry2d &g, double angle, nb::handle origin) {
+            [](const GeometryHolder &g, double angle, nb::handle origin) {
                 Vec2d o({0.0, 0.0});
                 if (!origin.is_none()) {
                     double x = 0.0;
@@ -125,95 +166,127 @@ void bind_geometry(nb::module_ &m) {
                     }
                     o = Vec2d({x, y});
                 }
-                return g.rotate(angle, o);
+                return GeometryHolder(g.solid.rotate(angle, o));
             },
             nb::arg("angle"),
             nb::arg("origin") = nb::none())
         .def(
             "apply_transform",
-            [](const SolidGeometry2d &g, nb::args args) {
+            [](const GeometryHolder &g, nb::args args) {
                 double x = 0.0;
                 double y = 0.0;
                 double angle = 0.0;
                 if (args.size() == 1 && read_transform(args[0], x, y, angle)) {
-                    return g.rotate(angle).translate(Vec2d({x, y}));
+                    return GeometryHolder(
+                        g.solid.rotate(angle).translate(Vec2d({x, y})));
                 }
                 if (args.size() == 3) {
                     x = nb::cast<double>(args[0]);
                     y = nb::cast<double>(args[1]);
                     angle = nb::cast<double>(args[2]);
-                    return g.rotate(angle).translate(Vec2d({x, y}));
+                    return GeometryHolder(
+                        g.solid.rotate(angle).translate(Vec2d({x, y})));
                 }
                 throw nb::type_error(
                     "apply_transform: expected (x, y, angle) or a length-3 sequence");
             })
         .def(
             "center",
-            [](const SolidGeometry2d &g) {
-                const auto &c = g.get_bounding_circle();
+            [](const GeometryHolder &g) {
+                const auto &c = g.solid.get_bounding_circle();
                 auto cen = c.center();
                 return nb::make_tuple(cen[0], cen[1]);
             })
         .def(
             "radius",
-            [](const SolidGeometry2d &g) {
+            [](const GeometryHolder &g) {
                 return std::sqrt(
-                    static_cast<double>(g.get_bounding_circle().square_radius()));
+                    static_cast<double>(g.solid.get_bounding_circle().square_radius()));
             })
         .def("bounds", &circle_bounds_tuple)
         .def(
             "vertices",
-            [](const SolidGeometry2d &g) {
+            [](const GeometryHolder &g) {
                 nb::list out;
-                for (const auto &p : g.line_points) {
+                for (const auto &p : g.solid.line_points) {
                     out.append(nb::make_tuple(p[0], p[1]));
                 }
                 return out;
             })
         .def(
             "contains_point",
-            [](const SolidGeometry2d &g, double x, double y) {
-                return is_point_inside_solid_space(Vec2d({x, y}), g);
+            [](const GeometryHolder &g, double x, double y) {
+                return is_point_inside_solid_space(Vec2d({x, y}), g.solid);
             },
             nb::arg("x"),
             nb::arg("y"))
         .def(
+            "footprint_inside",
+            [](const GeometryHolder &inner, const GeometryHolder &outer) {
+                return solid_footprint_inside(inner.solid, outer.solid);
+            },
+            nb::arg("container"))
+        .def(
+            "footprint_inside_batch",
+            [](const GeometryHolder &outer, const std::vector<GeometryHolder> &inners) {
+                std::vector<SolidGeometry2d> inner_solids;
+                inner_solids.reserve(inners.size());
+                for (const auto &h : inners) {
+                    inner_solids.push_back(h.solid);
+                }
+                const auto flags = solid_footprint_inside(inner_solids, outer.solid);
+                nb::list out;
+                for (bool ok : flags) {
+                    out.append(ok);
+                }
+                return out;
+            },
+            nb::arg("inners"))
+        .def(
             "intersects",
-            [](const SolidGeometry2d &a, const SolidGeometry2d &b) {
-                return !find_polygon_intersections<Vec2d>({a, b}).empty();
+            [](const GeometryHolder &a, const GeometryHolder &b) {
+                return !find_polygon_intersections<Vec2d>({a.solid, b.solid}).empty();
             },
             nb::arg("other"))
         .def(
             "intersects_any",
-            [](const SolidGeometry2d &a, const std::vector<SolidGeometry2d> &others) {
+            [](const GeometryHolder &a, const std::vector<GeometryHolder> &others) {
                 if (others.empty()) {
                     return false;
                 }
-                return !find_polygon_intersections<Vec2d>({a}, others).empty();
+                auto solids = solids_from_holders(others);
+                return !find_polygon_intersections<Vec2d>({a.solid}, solids).empty();
             },
             nb::arg("others"))
         .def(
             "get_bounding_circle",
-            [](const SolidGeometry2d &poly) {
-                const auto &c = poly.get_bounding_circle();
+            [](const GeometryHolder &poly) {
+                const auto &c = poly.solid.get_bounding_circle();
                 auto cen = c.center();
                 double r = std::sqrt(static_cast<double>(c.square_radius()));
                 return nb::make_tuple(cen[0], cen[1], r);
             })
-        .def("__repr__", [](const SolidGeometry2d &) {
+        .def("__repr__", [](const GeometryHolder &) {
             return "<nest_graph.geometry.Geometry>";
         });
 
     nb::class_<GuidanceConfig2d>(m, "GuidanceConfig")
         .def(nb::init<>())
         .def_rw("minimum_placing_distance", &GuidanceConfig2d::minimum_placing_distance)
-        .def_rw("max_alternative_angles", &GuidanceConfig2d::max_alternative_angles)
-        .def_rw("slide_escape_multiplier", &GuidanceConfig2d::slide_escape_multiplier)
-        .def_rw("use_target_attractor", &GuidanceConfig2d::use_target_attractor)
-        .def_rw("target_angle_rad", &GuidanceConfig2d::target_angle_rad)
-        .def_rw("use_gravity", &GuidanceConfig2d::use_gravity)
+        .def_rw("use_tight_packing", &GuidanceConfig2d::use_tight_packing)
+        .def_rw("squeeze_weight", &GuidanceConfig2d::squeeze_weight)
         .def_rw("use_hole_seeking", &GuidanceConfig2d::use_hole_seeking)
         .def_rw("hole_seeking_weight", &GuidanceConfig2d::hole_seeking_weight)
+        .def_rw("use_gravity", &GuidanceConfig2d::use_gravity)
+        .def_rw("use_target_attractor", &GuidanceConfig2d::use_target_attractor)
+        .def_rw("target_angle_rad", &GuidanceConfig2d::target_angle_rad)
+        .def_rw("max_propositions", &GuidanceConfig2d::max_propositions)
+        .def_rw("diversity_distance_threshold", &GuidanceConfig2d::diversity_distance_threshold)
+        .def_rw("diversity_angle_rad_threshold", &GuidanceConfig2d::diversity_angle_rad_threshold)
+        .def_rw("enable_grid_exploration", &GuidanceConfig2d::enable_grid_exploration)
+        .def_rw("grid_exploration_step", &GuidanceConfig2d::grid_exploration_step)
+        .def_rw("max_alternative_angles", &GuidanceConfig2d::max_alternative_angles)
+        .def_rw("slide_escape_multiplier", &GuidanceConfig2d::slide_escape_multiplier)
         .def_rw("attraction_weight", &GuidanceConfig2d::attraction_weight)
         .def_rw("alignment_weight", &GuidanceConfig2d::alignment_weight)
         .def_rw("escape_radius_multiplier", &GuidanceConfig2d::escape_radius_multiplier)
@@ -231,35 +304,25 @@ void bind_geometry(nb::module_ &m) {
                 c.gravity_vector = vec2d_from_tuple(o);
             });
 
+    nb::class_<PlacementProposition2d>(m, "PlacementProposition")
+        .def_ro("rotation_rad", &PlacementProposition2d::rotation_rad)
+        .def_ro("heuristic_score", &PlacementProposition2d::heuristic_score)
+        .def_ro("move_type", &PlacementProposition2d::move_type)
+        .def_prop_ro(
+            "translation",
+            [](const PlacementProposition2d &p) {
+                return vec2d_to_tuple(p.translation);
+            });
+
     nb::class_<PlacementGuidance2d>(m, "PlacementGuidance")
         .def_ro("is_penetrating", &PlacementGuidance2d::is_penetrating)
-        .def_ro("suggested_rotation_rad", &PlacementGuidance2d::suggested_rotation_rad)
         .def_ro("clearance", &PlacementGuidance2d::clearance)
         .def_prop_ro(
-            "ejection_vector",
-            [](const PlacementGuidance2d &g) {
-                return vec2d_to_tuple(g.ejection_vector);
-            })
-        .def_prop_ro(
-            "suggested_translation",
-            [](const PlacementGuidance2d &g) {
-                return vec2d_to_tuple(g.suggested_translation);
-            })
-        .def_prop_ro(
-            "alternative_translations",
+            "propositions",
             [](const PlacementGuidance2d &g) {
                 nb::list out;
-                for (const auto &v : g.alternative_translations) {
-                    out.append(vec2d_to_tuple(v));
-                }
-                return out;
-            })
-        .def_prop_ro(
-            "alternative_rotations",
-            [](const PlacementGuidance2d &g) {
-                nb::list out;
-                for (const auto &a : g.alternative_rotations) {
-                    out.append(static_cast<double>(a));
+                for (const auto &p : g.propositions) {
+                    out.append(p);
                 }
                 return out;
             });
@@ -278,45 +341,49 @@ void bind_geometry(nb::module_ &m) {
 
     m.def(
         "find_polygon_intersections",
-        [](const std::vector<SolidGeometry2d> &polygons) {
-            return find_polygon_intersections<Vec2d>(polygons);
+        [](const std::vector<GeometryHolder> &polygons) {
+            return find_polygon_intersections<Vec2d>(solids_from_holders(polygons));
         },
         nb::arg("polygons"));
 
     m.def(
         "find_polygon_intersections_active",
-        [](const std::vector<SolidGeometry2d> &polygons,
+        [](const std::vector<GeometryHolder> &polygons,
            const std::vector<int> &active_indices) {
-            return find_polygon_intersections<Vec2d>(polygons, active_indices);
+            return find_polygon_intersections<Vec2d>(
+                solids_from_holders(polygons), active_indices);
         },
         nb::arg("polygons"),
         nb::arg("active_indices"));
 
     m.def(
         "find_polygon_intersections_bipartite",
-        [](const std::vector<SolidGeometry2d> &set_a,
-           const std::vector<SolidGeometry2d> &set_b) {
-            return find_polygon_intersections<Vec2d>(set_a, set_b);
+        [](const std::vector<GeometryHolder> &set_a,
+           const std::vector<GeometryHolder> &set_b) {
+            return find_polygon_intersections<Vec2d>(
+                solids_from_holders(set_a), solids_from_holders(set_b));
         },
         nb::arg("set_a"),
         nb::arg("set_b"));
 
     m.def(
         "find_polygon_distances",
-        [](const std::vector<SolidGeometry2d> &polygons, double aura) {
+        [](const std::vector<GeometryHolder> &polygons, double aura) {
             return find_polygon_distances<Vec2d>(
-                polygons, static_cast<Vec2d::Scalar>(aura));
+                solids_from_holders(polygons), static_cast<Vec2d::Scalar>(aura));
         },
         nb::arg("polygons"),
         nb::arg("aura") = 0.5);
 
     m.def(
         "find_polygon_distances_active",
-        [](const std::vector<SolidGeometry2d> &polygons,
+        [](const std::vector<GeometryHolder> &polygons,
            const std::vector<int> &active_indices,
            double aura) {
             return find_polygon_distances<Vec2d>(
-                polygons, active_indices, static_cast<Vec2d::Scalar>(aura));
+                solids_from_holders(polygons),
+                active_indices,
+                static_cast<Vec2d::Scalar>(aura));
         },
         nb::arg("polygons"),
         nb::arg("active_indices"),
@@ -324,11 +391,13 @@ void bind_geometry(nb::module_ &m) {
 
     m.def(
         "find_polygon_distances_bipartite",
-        [](const std::vector<SolidGeometry2d> &set_a,
-           const std::vector<SolidGeometry2d> &set_b,
+        [](const std::vector<GeometryHolder> &set_a,
+           const std::vector<GeometryHolder> &set_b,
            double aura) {
             return find_polygon_distances<Vec2d>(
-                set_a, set_b, static_cast<Vec2d::Scalar>(aura));
+                solids_from_holders(set_a),
+                solids_from_holders(set_b),
+                static_cast<Vec2d::Scalar>(aura));
         },
         nb::arg("set_a"),
         nb::arg("set_b"),
@@ -337,7 +406,7 @@ void bind_geometry(nb::module_ &m) {
     m.def(
         "evaluate_local_placement",
         [](int placed_poly_idx,
-           const std::vector<SolidGeometry2d> &polygons,
+           const std::vector<GeometryHolder> &polygons,
            nb::handle current_position,
            nb::handle config) {
             Vec2d pos = vec2d_from_tuple(current_position);
@@ -345,7 +414,8 @@ void bind_geometry(nb::module_ &m) {
             if (!config.is_none()) {
                 cfg = nb::cast<GuidanceConfig2d>(config);
             }
-            return evaluate_local_placement<Vec2d>(placed_poly_idx, polygons, pos, cfg);
+            return evaluate_local_placement<Vec2d>(
+                placed_poly_idx, solids_from_holders(polygons), pos, cfg);
         },
         nb::arg("placed_poly_idx"),
         nb::arg("polygons"),

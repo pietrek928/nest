@@ -1,5 +1,6 @@
 #include <cmath>
 #include <initializer_list>
+#include <random>
 #include <utility>
 #include <vector>
 
@@ -22,8 +23,9 @@ SolidGeometry2 polygon_from_ring(std::initializer_list<std::initializer_list<dou
         ring.emplace_back(std::initializer_list<double>{*it, *++it});
     }
     if (!ring.empty()) ring.push_back(ring.front());
-    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()));
-    poly.finalize();
+    std::mt19937 gen(42);
+    poly.append_line_poly(ring.data(), static_cast<int>(ring.size()), gen);
+    poly.finalize(gen);
     return poly;
 }
 

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <random>
 #include "geometry/intersect/polygon_intersect.h"
 #include "geometry/solid/decompose.h"
 #include "tests/geometry_test_helpers.h"
@@ -27,8 +28,9 @@ TEST_CASE("highly curved linestrings decomposition and intersection", "[bug][dec
     };
     
     SolidGeometry2 spiral_mesh;
-    process_boundary_to_convex_segments<Vec2>(spiral_ring, spiral_mesh);
-    spiral_mesh.finalize();
+    std::mt19937 gen(42);
+    process_boundary_to_convex_segments<Vec2>(spiral_ring, spiral_mesh, gen);
+    spiral_mesh.finalize(gen);
     
     // If the >90 degree split logic is working, this should be split into multiple parts
     // (at least 4 parts since it does almost two full turns)
@@ -44,8 +46,8 @@ TEST_CASE("highly curved linestrings decomposition and intersection", "[bug][dec
     };
     
     SolidGeometry2 box_mesh;
-    process_boundary_to_convex_segments<Vec2>(box_ring, box_mesh);
-    box_mesh.finalize();
+    process_boundary_to_convex_segments<Vec2>(box_ring, box_mesh, gen);
+    box_mesh.finalize(gen);
     
     // They should intersect
     auto hits = find_polygon_intersections<Vec2>({spiral_mesh, box_mesh});

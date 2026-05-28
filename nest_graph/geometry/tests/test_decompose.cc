@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdlib>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -70,11 +71,12 @@ std::vector<std::vector<Vec2f>> mesh_line_parts(const SolidGeometry<Vec2f>& mesh
 
 void require_loads_into_solid_geometry(const std::vector<std::vector<Vec2f>>& parts) {
     SolidGeometry2f poly;
+    std::mt19937 gen(42);
     for (const auto& part : parts) {
         REQUIRE(part.size() >= 2u);
-        poly.append_line_poly(part.data(), static_cast<int>(part.size()));
+        poly.append_line_poly(part.data(), static_cast<int>(part.size()), gen);
     }
-    poly.finalize();
+    poly.finalize(gen);
     REQUIRE(poly.line_parts.size() == parts.size());
     size_t total = 0;
     for (size_t i = 0; i < poly.line_parts.size(); ++i) {

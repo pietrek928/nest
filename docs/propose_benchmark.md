@@ -63,11 +63,28 @@ Output: `docs/propose_benchmark_results.txt`.
 | `candidate_pool` | `32` | Needed for corner seeds before trim |
 | `use_point_cloud` | `False` | Cost vs benefit |
 | `smart_push_target` | `True` | Push toward packed centroid |
+| `use_guidance_propositions` | `True` | Benchmark winner: +~0.4 parts vs off (seeds 0-9) |
+| `guidance_enable_grid` | `False` | Grid off beats on for parts/time ([flow benchmark](guidance_flow_benchmark.txt)) |
+| `guidance_max_propositions` | `5` | Max distinct moves per guidance call |
+| `guidance_use_tight_packing` | `True` | Squeeze toward nearest obstacle (local NFP proxy) |
+| `guidance_squeeze_weight` | `0.4` | Squeeze strength in C++ soft translation |
+| `guidance_diversity_dist_ratio` | `4.0` | NMS distance × `min_dist` (scaled in Python) |
+| `guidance_grid_step_ratio` | `2.0` | Grid step × `min_dist` |
 
-Production: `proposed_transforms_for_groups` → nearest-cluster obstacles + ribbon/border seeds; `make_polygon_graph` validates all packed parts.
+Production: `proposed_transforms_for_groups` → nearest-cluster obstacles + ribbon/border seeds + optional guidance proposition expansion; `evaluate_local_placement` returns tiered `PlacementProposition` list (ejection → slide → pack → grid).
+
+### Research notes (guidance propositions)
+
+- **MTV / SAT ejection** — primary proposition tier when penetrating ([dyn4j SAT](https://dyn4j.org/2010/01/sat/)).
+- **Slide ejection** — tangent escape when primary ejection bottlenecks (NFP orbiting analog).
+- **Tight packing / squeeze** — pull toward `closest_obstacle_center` without full NFP ([SVGnest](https://github.com/Jack000/SVGnest)).
+- **Grid exploration** — discrete H/V neighborhood for local-minimum escape ([EJOR fast neighborhood search](https://www.sciencedirect.com/science/article/abs/pii/S037722170600302X)).
+- **Tiered scores** — respect C++ `heuristic_score`; grid moves are fallback only.
+
+See [`docs/guidance_benchmark_results.txt`](guidance_benchmark_results.txt) and [`docs/guidance_flow_benchmark.txt`](guidance_flow_benchmark.txt).
 
 ## Tests
 
 ```bash
-PYTHONPATH=. python -m pytest tests/test_propose_gap.py -q
+PYTHONPATH=. python -m pytest tests/test_propose_gap.py tests/test_geometry_guide.py tests/test_guidance_propositions.py -q
 ```

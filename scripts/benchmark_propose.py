@@ -72,6 +72,34 @@ PROPOSE_BENCHMARK_PRESETS: dict[str, ProposeConfig] = {
         use_guidance_walk=True,
         use_ribbon_seeds=False,
     ),
+    "guidance_props": _benchmark_propose_cfg(
+        use_guidance_propositions=True,
+        guidance_use_tight_packing=True,
+        use_ribbon_seeds=True,
+        use_border_focus=True,
+        use_contact_ranking=True,
+        use_contact_clearance_hybrid=True,
+    ),
+    "guidance_props_no_grid": _benchmark_propose_cfg(
+        use_guidance_propositions=True,
+        guidance_enable_grid=False,
+        use_ribbon_seeds=False,
+    ),
+    "guidance_props_no_squeeze": _benchmark_propose_cfg(
+        use_guidance_propositions=True,
+        guidance_use_tight_packing=False,
+        use_ribbon_seeds=False,
+    ),
+    "guidance_walk_props": _benchmark_propose_cfg(
+        use_guidance_propositions=True,
+        use_guidance_walk=True,
+        use_ribbon_seeds=False,
+    ),
+    "squeeze_heavy": _benchmark_propose_cfg(
+        use_guidance_propositions=True,
+        guidance_squeeze_weight=0.6,
+        use_ribbon_seeds=False,
+    ),
 }
 
 
