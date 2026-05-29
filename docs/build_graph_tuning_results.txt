@@ -1,0 +1,70 @@
+# Build-graph tuning 2026-05-29 11:40
+# seeds=[0, 1, 2] iters=3
+
+| config | parts | nodes | border_err | score | time_s |
+|--------|-------|-------|------------|-------|--------|
+| `dfs/merged_loose_finalize_end` | 48.3 | 1370 | 0.0004 | 3.83 | 32.1 |
+| `dfs/merged_loose_tight` | 46.7 | 1369 | 0.0005 | 2.95 | 30.5 |
+| `dfs/merged_loose_tight_finalize_end` | 47.3 | 1344 | 0.0004 | 2.51 | 32.2 |
+| `dfs/merged_single_pass` | 47.7 | 1368 | 0.0004 | 0.98 | 33.0 |
+| `dfs_passes/3` | 48.3 | 1319 | 0.0003 | 1.69 | 29.4 |
+| `dfs_passes/4` | 46.3 | 1383 | 0.0003 | 2.49 | 36.2 |
+| `rules/improve_2r` | 46.0 | 1412 | 0.0005 | 2.62 | 37.1 |
+| `rules/improve_4r` | 47.7 | 1389 | 0.0006 | 3.84 | 41.9 |
+| `sampling/jitter_per_prop_12` | 46.3 | 1435 | 0.0005 | 1.78 | 47.4 |
+| `sampling/jitter_per_prop_8` | 45.0 | 1467 | 0.0003 | 1.10 | 37.4 |
+| `sampling/rand_when_proposed_48` | 47.0 | 1393 | 0.0003 | 1.86 | 35.7 |
+| `sampling/rand_when_proposed_64` | 46.3 | 1348 | 0.0001 | 1.09 | 28.6 |
+
+## Ranking (parts_final)
+- **48.3** parts, 32.1s — `dfs/merged_loose_finalize_end`
+- **48.3** parts, 29.4s — `dfs_passes/3`
+- **47.7** parts, 41.9s — `rules/improve_4r`
+- **47.7** parts, 33.0s — `dfs/merged_single_pass`
+- **47.3** parts, 32.2s — `dfs/merged_loose_tight_finalize_end`
+- **47.0** parts, 35.7s — `sampling/rand_when_proposed_48`
+- **46.7** parts, 30.5s — `dfs/merged_loose_tight`
+- **46.3** parts, 47.4s — `sampling/jitter_per_prop_12`
+- **46.3** parts, 36.2s — `dfs_passes/4`
+- **46.3** parts, 28.6s — `sampling/rand_when_proposed_64`
+- **46.0** parts, 37.1s — `rules/improve_2r`
+- **45.0** parts, 37.4s — `sampling/jitter_per_prop_8`
+
+## Raw rows
+
+{"label": "dfs/merged_loose_tight", "seed": 0, "parts_final": 45, "graph_nodes": 1447, "border_err": 0.001115535541583354, "score_sum": 1.2608377800352173, "time_s": 30.267078812001273}
+{"label": "dfs/merged_loose_tight", "seed": 1, "parts_final": 47, "graph_nodes": 1326, "border_err": 0.00014556597424074348, "score_sum": 2.194904390387819, "time_s": 36.97289170790464}
+{"label": "dfs/merged_loose_tight", "seed": 2, "parts_final": 48, "graph_nodes": 1334, "border_err": 0.00010094709398286066, "score_sum": 5.407951918430626, "time_s": 24.181275129085407}
+{"label": "dfs/merged_loose_tight_finalize_end", "seed": 0, "parts_final": 47, "graph_nodes": 1364, "border_err": 0.00024072119119691263, "score_sum": 2.9887053452257533, "time_s": 35.79366573900916}
+{"label": "dfs/merged_loose_tight_finalize_end", "seed": 1, "parts_final": 50, "graph_nodes": 1235, "border_err": 0.0006707861406163372, "score_sum": 1.6743904212489724, "time_s": 26.401749907061458}
+{"label": "dfs/merged_loose_tight_finalize_end", "seed": 2, "parts_final": 45, "graph_nodes": 1434, "border_err": 0.0003125216866747857, "score_sum": 2.860822019400075, "time_s": 34.46499678003602}
+{"label": "dfs/merged_single_pass", "seed": 0, "parts_final": 47, "graph_nodes": 1473, "border_err": 7.867537185935565e-05, "score_sum": 1.4843453862995375, "time_s": 38.976213061017916}
+{"label": "dfs/merged_single_pass", "seed": 1, "parts_final": 49, "graph_nodes": 1269, "border_err": 0.0010114327242710737, "score_sum": 3.2924472022743956e-05, "time_s": 37.30802658316679}
+{"label": "dfs/merged_single_pass", "seed": 2, "parts_final": 47, "graph_nodes": 1362, "border_err": 0.0002379253071854502, "score_sum": 1.45072982258921, "time_s": 22.850271241972223}
+{"label": "dfs/merged_loose_finalize_end", "seed": 0, "parts_final": 49, "graph_nodes": 1376, "border_err": 0.00014356337459417402, "score_sum": 3.3284374838689346e-05, "time_s": 28.162162128137425}
+{"label": "dfs/merged_loose_finalize_end", "seed": 1, "parts_final": 48, "graph_nodes": 1413, "border_err": 0.0004712536194048868, "score_sum": 7.297588251429261, "time_s": 39.44073350611143}
+{"label": "dfs/merged_loose_finalize_end", "seed": 2, "parts_final": 48, "graph_nodes": 1320, "border_err": 0.0004846866602498047, "score_sum": 4.203675274737179, "time_s": 28.645598366158083}
+{"label": "rules/improve_2r", "seed": 0, "parts_final": 47, "graph_nodes": 1460, "border_err": 0.0007590545806180006, "score_sum": 2.757857851218432, "time_s": 42.77451531402767}
+{"label": "rules/improve_2r", "seed": 1, "parts_final": 46, "graph_nodes": 1388, "border_err": 0.0002856847299644778, "score_sum": 3.620677306855214, "time_s": 37.467683306895196}
+{"label": "rules/improve_2r", "seed": 2, "parts_final": 45, "graph_nodes": 1389, "border_err": 0.0004529264873096004, "score_sum": 1.477237740822602, "time_s": 31.064661727054045}
+{"label": "rules/improve_4r", "seed": 0, "parts_final": 49, "graph_nodes": 1371, "border_err": 0.0011404782072539292, "score_sum": 4.226463628451632, "time_s": 38.76212827605195}
+{"label": "rules/improve_4r", "seed": 1, "parts_final": 48, "graph_nodes": 1392, "border_err": 0.0005053673730804351, "score_sum": 4.4894914188994495, "time_s": 47.30039431201294}
+{"label": "rules/improve_4r", "seed": 2, "parts_final": 46, "graph_nodes": 1404, "border_err": 0.00027323400768698063, "score_sum": 2.8027427215129137, "time_s": 39.714693061076105}
+{"label": "dfs_passes/3", "seed": 0, "parts_final": 49, "graph_nodes": 1330, "border_err": 0.00010603126742448525, "score_sum": 0.8063035620725714, "time_s": 28.538837765110657}
+{"label": "dfs_passes/3", "seed": 1, "parts_final": 49, "graph_nodes": 1318, "border_err": 0.00034321199600918046, "score_sum": 1.1284073489005095, "time_s": 31.302154961042106}
+{"label": "dfs_passes/3", "seed": 2, "parts_final": 47, "graph_nodes": 1309, "border_err": 0.00043571619346400485, "score_sum": 3.1243965753819793, "time_s": 28.49038725090213}
+{"label": "dfs_passes/4", "seed": 0, "parts_final": 47, "graph_nodes": 1436, "border_err": 0.00045140325804509133, "score_sum": 0.933600937074516, "time_s": 39.12056176387705}
+{"label": "dfs_passes/4", "seed": 1, "parts_final": 47, "graph_nodes": 1201, "border_err": 0.0002760540505397915, "score_sum": 3.9363385540927993, "time_s": 29.78790434007533}
+{"label": "dfs_passes/4", "seed": 2, "parts_final": 45, "graph_nodes": 1512, "border_err": 0.00016188476339439126, "score_sum": 2.6043705819101888, "time_s": 39.67935148393735}
+{"label": "sampling/rand_when_proposed_48", "seed": 0, "parts_final": 48, "graph_nodes": 1414, "border_err": 0.0002482709473044598, "score_sum": 0.5382403881376376, "time_s": 46.02830982906744}
+{"label": "sampling/rand_when_proposed_48", "seed": 1, "parts_final": 47, "graph_nodes": 1432, "border_err": 0.0002455508993919474, "score_sum": 2.6993937203660607, "time_s": 34.35591974412091}
+{"label": "sampling/rand_when_proposed_48", "seed": 2, "parts_final": 46, "graph_nodes": 1333, "border_err": 0.0005409694852031815, "score_sum": 2.3376211495934234, "time_s": 26.576947059016675}
+{"label": "sampling/rand_when_proposed_64", "seed": 0, "parts_final": 46, "graph_nodes": 1364, "border_err": 0.0002160013458770353, "score_sum": 1.0550088919189875, "time_s": 27.862194700865075}
+{"label": "sampling/rand_when_proposed_64", "seed": 1, "parts_final": 48, "graph_nodes": 1316, "border_err": 2.4305788055553612e-05, "score_sum": 1.3780966233462095, "time_s": 28.32163642300293}
+{"label": "sampling/rand_when_proposed_64", "seed": 2, "parts_final": 45, "graph_nodes": 1364, "border_err": 9.338672756661111e-05, "score_sum": 0.8482546596222457, "time_s": 29.649847886990756}
+{"label": "sampling/jitter_per_prop_8", "seed": 0, "parts_final": 45, "graph_nodes": 1463, "border_err": 0.0002613026467769078, "score_sum": 0.38287389826135776, "time_s": 43.424008392961696}
+{"label": "sampling/jitter_per_prop_8", "seed": 1, "parts_final": 45, "graph_nodes": 1487, "border_err": 0.00018565283763858405, "score_sum": 1.361833917151671, "time_s": 39.73631599918008}
+{"label": "sampling/jitter_per_prop_8", "seed": 2, "parts_final": 45, "graph_nodes": 1451, "border_err": 0.0004316521422863748, "score_sum": 1.5456008912224206, "time_s": 28.91467728698626}
+{"label": "sampling/jitter_per_prop_12", "seed": 0, "parts_final": 48, "graph_nodes": 1493, "border_err": 0.0008576759239429092, "score_sum": 1.5154946140100947, "time_s": 69.70196310896426}
+{"label": "sampling/jitter_per_prop_12", "seed": 1, "parts_final": 47, "graph_nodes": 1418, "border_err": 0.0006875930977260154, "score_sum": 2.757664761506021, "time_s": 39.27719289599918}
+{"label": "sampling/jitter_per_prop_12", "seed": 2, "parts_final": 44, "graph_nodes": 1394, "border_err": 9.686352895730329e-05, "score_sum": 1.0618017516098917, "time_s": 33.23254076996818}

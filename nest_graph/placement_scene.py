@@ -63,16 +63,11 @@ def _apply_guidance_scaling(
     board_bounds: tuple[float, float, float, float] | None,
     *,
     diversity_dist_ratio: float = 4.0,
-    grid_step_ratio: float = 2.0,
 ) -> None:
     diag = _board_diag(board_bounds)
     cfg.diversity_distance_threshold = max(
         diversity_dist_ratio * min_dist,
         0.02 * diag,
-    )
-    cfg.grid_exploration_step = max(
-        grid_step_ratio * min_dist,
-        0.01 * diag,
     )
 
 
@@ -83,33 +78,40 @@ def guidance_config_for_scene(
     board_bounds: tuple[float, float, float, float] | None = None,
     epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
     for_propose: bool = False,
-    max_propositions: int = 5,
+    border_focus: bool = False,
+    max_propositions: int = 6,
     use_tight_packing: bool = False,
-    squeeze_weight: float = 0.4,
+    use_corner_alignment: bool = True,
     enable_grid_exploration: bool = False,
     diversity_dist_ratio: float = 4.0,
-    grid_step_ratio: float = 2.0,
 ) -> GuidanceConfig:
     eps = placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
     cfg = GuidanceConfig()
     cfg.minimum_placing_distance = min_dist + eps
-    cfg.search_radius = _search_radius_for_bounds(board_bounds)
-    cfg.use_hole_seeking = False
+    cfg.search_radius = max(
+        _search_radius_for_bounds(board_bounds),
+        float(cfg.search_radius),
+    )
     cfg.max_propositions = max_propositions
     cfg.use_tight_packing = use_tight_packing
-    cfg.squeeze_weight = squeeze_weight
+    cfg.use_corner_alignment = use_corner_alignment
+    cfg.use_hole_seeking = True
     cfg.enable_grid_exploration = enable_grid_exploration
     _apply_guidance_scaling(
         cfg,
         min_dist,
         board_bounds,
         diversity_dist_ratio=diversity_dist_ratio,
-        grid_step_ratio=grid_step_ratio,
     )
     if for_propose and pt_push is not None:
-        cfg.use_target_attractor = True
-        cfg.use_gravity = False
-        cfg.target_position = (float(pt_push.x), float(pt_push.y))
+        if border_focus:
+            cfg.use_gravity = True
+            cfg.use_target_attractor = False
+            cfg.gravity_vector = (-1.0, -1.0)
+        else:
+            cfg.use_target_attractor = True
+            cfg.use_gravity = False
+            cfg.target_position = (float(pt_push.x), float(pt_push.y))
     else:
         cfg.use_target_attractor = False
         cfg.use_gravity = False
@@ -141,12 +143,13 @@ def guidance_config_for_propose(
     board_bounds: tuple[float, float, float, float] | None = None,
     search_radius: float | None = None,
     epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
-    max_propositions: int = 5,
+    max_propositions: int = 6,
     use_tight_packing: bool = True,
-    squeeze_weight: float = 0.4,
+    use_corner_alignment: bool = True,
     enable_grid_exploration: bool = True,
     diversity_dist_ratio: float = 4.0,
-    grid_step_ratio: float = 2.0,
+    border_focus: bool = False,
+    target_angle_rad: float = 0.0,
 ) -> GuidanceConfig:
     cfg = guidance_config_for_scene(
         min_dist,
@@ -154,13 +157,14 @@ def guidance_config_for_propose(
         board_bounds=board_bounds,
         epsilon_ratio=epsilon_ratio,
         for_propose=True,
+        border_focus=border_focus,
         max_propositions=max_propositions,
         use_tight_packing=use_tight_packing,
-        squeeze_weight=squeeze_weight,
+        use_corner_alignment=use_corner_alignment,
         enable_grid_exploration=enable_grid_exploration,
         diversity_dist_ratio=diversity_dist_ratio,
-        grid_step_ratio=grid_step_ratio,
     )
+    cfg.target_angle_rad = target_angle_rad
     if search_radius is not None:
         cfg.search_radius = search_radius
     return cfg
@@ -177,8 +181,16 @@ def _proposition_tier(move_type: str) -> str:
         return "ejection"
     if "Slide" in mt:
         return "slide"
-    if "Grid" in mt:
-        return "grid"
+    if any(
+        tag in mt
+        for tag in ("Exact Corner", "Corner Match", "Vertex Corner", "Floor Walk", "Grid")
+    ):
+        return "corner"
+    if any(
+        tag in mt
+        for tag in ("Exact", "Gravity", "Hole", "Snap", "Dock")
+    ):
+        return "pack"
     return "pack"
 
 
@@ -187,7 +199,7 @@ def propositions_by_tier(g) -> dict[str, list]:
         "ejection": [],
         "slide": [],
         "pack": [],
-        "grid": [],
+        "corner": [],
     }
     for prop in g.propositions:
         tiers[_proposition_tier(prop.move_type)].append(prop)
@@ -196,27 +208,28 @@ def propositions_by_tier(g) -> dict[str, list]:
     return tiers
 
 
-def best_proposition(g, *, prefer_non_grid: bool = True):
+def best_proposition(g, *, prefer_non_corner: bool = True):
     props = list(g.propositions)
     if not props:
         return None
     props.sort(key=lambda p: float(p.heuristic_score), reverse=True)
-    if prefer_non_grid:
+    if prefer_non_corner:
         for prop in props:
-            if "Grid" not in (prop.move_type or ""):
+            mt = prop.move_type or ""
+            if "Exact Corner" not in mt and "Grid" not in mt:
                 return prop
     return props[0]
 
 
 def tiered_propositions(g, *, penetrating: bool | None = None) -> list:
-    """Score-ordered props respecting ejection → slide → pack → grid schedule."""
+    """Score-ordered props respecting ejection → slide → pack → corner schedule."""
     if penetrating is None:
         penetrating = bool(g.is_penetrating)
     tiers = propositions_by_tier(g)
     if penetrating:
-        order = ("ejection", "slide", "pack", "grid")
+        order = ("ejection", "slide", "pack", "corner")
     else:
-        order = ("pack", "slide", "ejection", "grid")
+        order = ("pack", "corner", "slide", "ejection")
     out: list = []
     for key in order:
         out.extend(tiers[key])

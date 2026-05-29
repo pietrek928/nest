@@ -75,7 +75,7 @@ class GraphConfig(BaseModel):
 
 
 class SelectionConfig(BaseModel):
-    improve_rules_rounds: int = 2
+    improve_rules_rounds: int = 4
     rules_kept: int = 64
     improve_rules_elite_count: int = 16
     rule_score_penalty: float = 0.03
@@ -102,7 +102,7 @@ class SelectionConfig(BaseModel):
         "merged_loose_tight_finalize_end",
         "merged_single_pass",
         "high_pass_loose",
-    ] = "merged_loose_tight_finalize_end"
+    ] = "merged_loose_tight"
 
 
 class RulesConfig(BaseModel):
@@ -221,12 +221,17 @@ class OutputConfig(BaseModel):
 
 
 class ProposeConfig(BaseModel):
-    """Erosion + raycast + voronoi (light); ranked to max_proposals. See docs/first_pass_tuning.md."""
+    """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
     max_proposals: int = 24
     candidate_pool: int = 48
     min_dist_ratio: float = 0.002
     placement_clearance_epsilon_ratio: float = 0.05
-    erosion_num_angles: int = 12
+    placement_num_angles: int = 12
+    use_neighbor_slide: bool = False
+    use_axis_push: bool = False
+    use_bottom_left: bool = False
+    use_nfp_vertices: bool = False
+    bottom_left_vertices_per_angle: int = 8
     raycast_num_rays: int = 12
     raycast_num_angles: int = 12
     raycast_anchor_stride: int = 3
@@ -246,7 +251,6 @@ class ProposeConfig(BaseModel):
     trim_candidates_by_clearance: bool = True
     use_ribbon_seeds: bool = True
     use_group_edge_seeds: bool = True
-    multi_site_erosion: bool = True
     use_border_focus: bool = True
     use_border_edge_seeds: bool = True
     border_focus_ranking: bool = True
@@ -265,11 +269,10 @@ class ProposeConfig(BaseModel):
     group_edge_samples_per_edge: int = 24
     sheet_edge_samples_per_edge: int = 24
     use_guidance_propositions: bool = True
-    guidance_max_propositions: int = 5
+    guidance_max_propositions: int = 6
     guidance_use_tight_packing: bool = True
-    guidance_squeeze_weight: float = 0.4
+    guidance_use_corner_alignment: bool = True
     guidance_enable_grid: bool = False
-    guidance_grid_step_ratio: float = 2.0
     guidance_diversity_dist_ratio: float = 4.0
     guidance_proposition_seed_count: int = 8
 
@@ -300,7 +303,7 @@ class BuildGraphConfig(BaseModel):
                 max_transforms_per_group=900,
                 seed=seed,
             ),
-            selection=SelectionConfig(dfs_mode="merged_loose_finalize_end"),
+            selection=SelectionConfig(dfs_mode="merged_loose_tight"),
             propose=ProposeConfig(),
         )
 
@@ -326,7 +329,7 @@ class BuildGraphConfig(BaseModel):
                 graphs_window=_env_int("NEST_GRAPHS_WINDOW", 12),
             ),
             selection=SelectionConfig(
-                improve_rules_rounds=_env_int("NEST_IMPROVE_ROUNDS", 2),
+                improve_rules_rounds=_env_int("NEST_IMPROVE_ROUNDS", 4),
                 rules_kept=_env_int("NEST_RULES_KEPT", 64),
                 improve_rules_elite_count=_env_int("NEST_RULES_ELITE", 16),
                 rule_score_penalty=_env_float("NEST_RULE_SIZE_PENALTY", 0.03),
@@ -353,7 +356,7 @@ class BuildGraphConfig(BaseModel):
                 dfs_finalize_max_component=_env_int("NEST_DFS_FINALIZE_COMPONENT", 18),
                 nest_rule_sets_used=_env_int("NEST_NEST_RULE_SETS", 1),
                 dfs_mode=os.environ.get(
-                    "NEST_DFS_MODE", "merged_loose_tight_finalize_end",
+                    "NEST_DFS_MODE", "merged_loose_tight",
                 ),
             ),
             output=OutputConfig(

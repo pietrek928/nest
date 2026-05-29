@@ -45,10 +45,9 @@ def test_guidance_config_scaled_for_small_board():
         use_tight_packing=True,
         enable_grid_exploration=True,
         diversity_dist_ratio=4.0,
-        grid_step_ratio=2.0,
     )
     assert cfg.diversity_distance_threshold < 1.0
-    assert cfg.grid_exploration_step < 1.0
+    assert cfg.use_hole_seeking is True
 
 
 def test_proposition_seeds_partial_pack():

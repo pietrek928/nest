@@ -62,7 +62,6 @@ PROPOSE_PRESETS: dict[str, dict[str, Any]] = {
         "trim_candidates_by_clearance": True,
         "use_ribbon_seeds": True,
         "use_group_edge_seeds": True,
-        "multi_site_erosion": True,
         "use_border_focus": True,
         "use_border_edge_seeds": True,
         "border_focus_ranking": True,

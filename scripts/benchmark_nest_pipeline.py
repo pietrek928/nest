@@ -55,7 +55,7 @@ def _propose_preset(name: str, **overrides: Any) -> ProposeConfig:
     shipped_prev.update({
         "max_proposals": 20,
         "candidate_pool": 32,
-        "erosion_num_angles": 6,
+        "placement_num_angles": 6,
         "raycast_num_rays": 8,
         "raycast_num_angles": 6,
         "use_contact_clearance_hybrid": False,

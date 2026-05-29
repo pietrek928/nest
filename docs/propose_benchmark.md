@@ -1,90 +1,96 @@
 # Propose benchmark (gap-fitting)
 
-Isolated benchmark for the **propose** step (no full 256-iter nest loop). Compares config presets on triangle-board fixtures.
+Isolated benchmark for the **propose** step (no full nest loop). Compares config presets and per-proposer ablation on triangle-board fixtures.
 
 ## Run
 
 ```bash
 PYTHONPATH=. python scripts/benchmark_propose.py --seeds 0 1 2 3 4 5 6 7 8 9
+PYTHONPATH=. python scripts/benchmark_propose_ablation.py --seeds 0 1 2 3 4 5 6 7 8 9
 ```
 
-Key presets:
+Outputs:
 
-```bash
-PYTHONPATH=. python scripts/benchmark_propose.py --presets ribbon_free shipped free_pso_light
-```
-
-Output: `docs/propose_benchmark_results.txt`.
+- [`docs/propose_benchmark_results.txt`](propose_benchmark_results.txt) — preset comparison
+- [`docs/propose_ablation_results.txt`](propose_ablation_results.txt) — one proposer at a time
 
 ## Scenarios
 
 | Scenario | Setup |
 |----------|--------|
-| `empty_base` | First part on empty sheet |
+| `empty_base` | First part on empty sheet (border focus) |
 | `partial_pack` | One rect placed; propose triangle into pocket |
 | `two_clusters` | Two separated rects; propose triangle between them |
+| `hole_board` | Rectangular sheet; rect on floor (hole-seeking smoke) |
 
-## Results (seeds 0–9, 2026-05-25)
+## Metrics
 
-| preset | scenario | valid | clearance_mean | clearance_min | time_s |
-|--------|----------|-------|----------------|---------------|--------|
-| **ribbon_free** | partial_pack | 12.0 | **0.0939** | **0.0631** | 0.37 |
-| **ribbon_free** | two_clusters | 12.0 | **0.1842** | **0.1603** | 1.47 |
-| shipped | partial_pack | 12.0 | 0.0939 | 0.0631 | 0.35 |
-| shipped | two_clusters | 12.0 | 0.1842 | 0.1603 | **3.17** |
-| free_pso_light | partial_pack | 12.0 | 0.1011 | 0.0676 | 0.47 |
-| free_clearance | partial_pack | 12.0 | 0.0818 | 0.0240 | 0.29 |
+| Metric | Meaning |
+|--------|---------|
+| `contact_min` | Min distance from placed part to obstacle union (lower = tighter kiss) |
+| `clearance_min` | C++ guidance clearance (deep void signal) |
+| `kiss_fraction` | Share of final proposals within `min_dist` + epsilon of obstacles |
+| `raw_pool_size` | Candidates before trim/rank |
+| `graph+` | Graph nodes when proposals are added vs random-only |
 
-### Interpretation
+## Calibration memo (2026-05-28, seeds 0–9)
 
-1. **`ribbon_free` wins** on gap quality (partial pack + two clusters) at acceptable time.
-2. **`free_pso_light`** — slightly higher clearance (~0.068 min) but ~1.3× slower; left off defaults.
-3. **`trim_candidates_by_clearance`** — no change vs untrim on this fixture when pool is small; kept on as safeguard.
-4. Propose obstacles: **nearest packed cluster** only; graph still validates against full layout.
+Preset comparison (see [`propose_benchmark_results.txt`](propose_benchmark_results.txt)):
+
+| preset | partial_pack contact_min | two_clusters contact_min | hole_board contact_min |
+|--------|--------------------------|---------------------------|-------------------------|
+| **contact_rank** / **ribbon_heavy** | **0.003–0.005** | **0.003–0.004** | 0.003–0.004 |
+| shipped / shipped_no_phase2 | 0.061 | 0.003 | 0.003 |
+| shipped_no_guidance_cast | 0.033 | 0.003 | 0.003 |
+| clearance_rank | 0.159 | 0.268 | 0.166 |
+
+After calibration, **shipped** matches **shipped_no_phase2** (phase-2 Shapely proposers default off). `partial_pack` contact_min ~0.06 is limited by combined trim/rank, not phase-2 flags. `contact_rank` and `ribbon_heavy` still win on kiss metrics for packed fixtures; shipped keeps contact hybrid + full seed mix for graph diversity.
+
+Per-proposer ablation (partial_pack, seeds 0–9) — see [`propose_ablation_results.txt`](propose_ablation_results.txt):
+
+| proposer | contact_min | Notes |
+|----------|-------------|--------|
+| **group_fit** | **0.003** | Best kiss; keep `use_group_edge_seeds` |
+| **neighbor_slide** | 0.003 | Good alone; dilutes combined pool → **default off** |
+| ribbon_free / raycasting / voronoi | ~0.007–0.008 | Cheap gap fillers; keep |
+| axis_push / perimeter / nfp / bottom_left | 0.15–0.30 | Loose alone; **defaults off** |
+| guidance_propositions (alone) | ~0.14 | Needs upstream seeds; keep in combined pipeline |
+
+**Shipped default changes:**
+
+- `use_neighbor_slide`, `use_axis_push`, `use_bottom_left`, `use_nfp_vertices` → **False** (enable per job if needed)
+- `use_group_edge_seeds`, `use_ribbon_seeds`, `use_guidance_propositions`, contact hybrid ranking → **unchanged**
+- `guidance_enable_grid` → **False** (corner casts; optional for irregular voids)
 
 ## Shipped defaults (`ProposeConfig`)
 
+See [`nest_graph/config.py`](../nest_graph/config.py). Key fields:
+
 | Field | Value | Rationale |
 |-------|-------|-----------|
-| `use_free_region_search` | `True` | Valid partial-pack candidates |
-| `ranking_mode` | `"clearance"` | C++ clearance ranking |
-| `trim_candidates_by_clearance` | `True` | Pool trim before final rank |
-| `use_ribbon_seeds` | `True` | Best min clearance on partial pack |
-| `use_group_edge_seeds` | `True` | Snap along nearest packed-cluster exterior |
-| `use_contact_ranking` | `True` | Packed layouts: rank/trim by tight border/group fit |
-| `use_contact_clearance_hybrid` | `True` | `contact_hybrid` = tight fit + clearance for pockets |
-| `use_stratified_contact_trim` | `True` | 65% contact + 35% clearance candidates in pool |
-| `candidate_pool` | `48` | Larger pool before trim (was 32) |
-| `max_proposals` | `24` | More seeds per group to graph |
-| `multi_site_erosion` | `True` | Extra deterministic erosion sites |
-| `use_border_focus` | `True` | Empty board: push/rank toward sheet edge ([border benchmark](propose_border_benchmark.md)) |
-| `use_border_edge_seeds` | `True` | Corner + edge seed generator |
-| `border_focus_ranking` | `True` | Empty board: prefer tight border standoff over deep clearance |
-| `candidate_pool` | `32` | Needed for corner seeds before trim |
-| `use_point_cloud` | `False` | Cost vs benefit |
-| `smart_push_target` | `True` | Push toward packed centroid |
-| `use_guidance_propositions` | `True` | Benchmark winner: +~0.4 parts vs off (seeds 0-9) |
-| `guidance_enable_grid` | `False` | Grid off beats on for parts/time ([flow benchmark](guidance_flow_benchmark.txt)) |
-| `guidance_max_propositions` | `5` | Max distinct moves per guidance call |
-| `guidance_use_tight_packing` | `True` | Squeeze toward nearest obstacle (local NFP proxy) |
-| `guidance_squeeze_weight` | `0.4` | Squeeze strength in C++ soft translation |
-| `guidance_diversity_dist_ratio` | `4.0` | NMS distance × `min_dist` (scaled in Python) |
-| `guidance_grid_step_ratio` | `2.0` | Grid step × `min_dist` |
+| `candidate_pool` | `48` | Room before contact/clearance trim |
+| `max_proposals` | `24` | Seeds per group to graph |
+| `use_contact_ranking` | `True` | Packed: rank by kiss to focal/group |
+| `use_contact_clearance_hybrid` | `True` | Keep pocket poses via clearance blend |
+| `use_ribbon_seeds` | `True` | Strong on partial_pack ablation |
+| `use_group_edge_seeds` | `True` | Best contact_min in ablation |
+| `use_guidance_propositions` | `True` | Cast expansion on structured seeds |
+| `guidance_enable_grid` | `False` | Corner exploration optional |
+| Phase-2 Shapely proposers | **off** | See calibration memo |
 
-Production: `proposed_transforms_for_groups` → nearest-cluster obstacles + ribbon/border seeds + optional guidance proposition expansion; `evaluate_local_placement` returns tiered `PlacementProposition` list (ejection → slide → pack → grid).
+## Guidance cast (`guide.h`)
 
-### Research notes (guidance propositions)
+After C++ changes, rebuild `geometry` and re-run:
 
-- **MTV / SAT ejection** — primary proposition tier when penetrating ([dyn4j SAT](https://dyn4j.org/2010/01/sat/)).
-- **Slide ejection** — tangent escape when primary ejection bottlenecks (NFP orbiting analog).
-- **Tight packing / squeeze** — pull toward `closest_obstacle_center` without full NFP ([SVGnest](https://github.com/Jack000/SVGnest)).
-- **Grid exploration** — discrete H/V neighborhood for local-minimum escape ([EJOR fast neighborhood search](https://www.sciencedirect.com/science/article/abs/pii/S037722170600302X)).
-- **Tiered scores** — respect C++ `heuristic_score`; grid moves are fallback only.
+```bash
+cmake --build build --target geometry
+PYTHONPATH=. python scripts/benchmark_guidance_flow.py --seeds 0 1 2 3 4
+```
 
-See [`docs/guidance_benchmark_results.txt`](guidance_benchmark_results.txt) and [`docs/guidance_flow_benchmark.txt`](guidance_flow_benchmark.txt).
+Tune `guidance_use_corner_alignment`, `guidance_enable_grid`, `guidance_use_tight_packing` from pipeline scores in `docs/guidance_flow_benchmark.txt`.
 
 ## Tests
 
 ```bash
-PYTHONPATH=. python -m pytest tests/test_propose_gap.py tests/test_geometry_guide.py tests/test_guidance_propositions.py -q
+.venv/bin/pytest tests/test_geometry_guide.py tests/test_guidance_propositions.py tests/test_propose_gap.py tests/test_propose_benchmark_smoke.py -q
 ```

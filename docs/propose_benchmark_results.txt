@@ -1,23 +1,11 @@
 # Propose preset benchmark
 
-| preset | scenario | valid | clearance_mean | clearance_min | graph+ | Δnodes | time_s |
-|--------|----------|-------|----------------|---------------|--------|--------|--------|
-| guidance_props | partial_pack | 12.0 | 0.0611 | 0.0034 | 12.0 | +12.0 | 1.564 |
-| guidance_props_no_grid | partial_pack | 12.0 | 0.0611 | 0.0034 | 12.0 | +12.0 | 1.437 |
-| guidance_props_no_squeeze | partial_pack | 12.0 | 0.0611 | 0.0034 | 12.0 | +12.0 | 1.394 |
-| shipped | partial_pack | 12.0 | 0.0611 | 0.0034 | 12.0 | +12.0 | 1.154 |
+| preset | scenario | valid | contact_min | clearance_min | kiss_frac | pool | final | graph+ | time_s |
+|--------|----------|-------|-------------|---------------|-----------|------|-------|--------|--------|
+| shipped | partial_pack | 24.0 | 0.0552 | 0.0552 | 0.00 | 288 | 24.0 | +24.0 | 2.131 |
 
 ## Raw rows (JSON lines)
 
-{"preset": "shipped", "scenario": "partial_pack", "seed": 0, "valid_count": 12, "top_clearance_mean": 0.06223883971519309, "top_clearance_min": 0.003424377742899685, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.1253541900077835}
-{"preset": "shipped", "scenario": "partial_pack", "seed": 1, "valid_count": 12, "top_clearance_mean": 0.06023355916236913, "top_clearance_min": 0.003428674968538323, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.1614544139010832}
-{"preset": "shipped", "scenario": "partial_pack", "seed": 2, "valid_count": 12, "top_clearance_mean": 0.06071141828100602, "top_clearance_min": 0.0034198799627604896, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.1740964140044525}
-{"preset": "guidance_props", "scenario": "partial_pack", "seed": 0, "valid_count": 12, "top_clearance_mean": 0.06223883971519309, "top_clearance_min": 0.003424377742899685, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.4289364389842376}
-{"preset": "guidance_props", "scenario": "partial_pack", "seed": 1, "valid_count": 12, "top_clearance_mean": 0.06023355916236913, "top_clearance_min": 0.003428674968538323, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.525971226976253}
-{"preset": "guidance_props", "scenario": "partial_pack", "seed": 2, "valid_count": 12, "top_clearance_mean": 0.06071141828100602, "top_clearance_min": 0.0034198799627604896, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.7362339950632304}
-{"preset": "guidance_props_no_grid", "scenario": "partial_pack", "seed": 0, "valid_count": 12, "top_clearance_mean": 0.06223883971519309, "top_clearance_min": 0.003424377742899685, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.5422302520601079}
-{"preset": "guidance_props_no_grid", "scenario": "partial_pack", "seed": 1, "valid_count": 12, "top_clearance_mean": 0.06023355916236913, "top_clearance_min": 0.003428674968538323, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.4109605309786275}
-{"preset": "guidance_props_no_grid", "scenario": "partial_pack", "seed": 2, "valid_count": 12, "top_clearance_mean": 0.06071141828100602, "top_clearance_min": 0.0034198799627604896, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.3584475259995088}
-{"preset": "guidance_props_no_squeeze", "scenario": "partial_pack", "seed": 0, "valid_count": 12, "top_clearance_mean": 0.06223883971519309, "top_clearance_min": 0.003424377742899685, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.3375351729337126}
-{"preset": "guidance_props_no_squeeze", "scenario": "partial_pack", "seed": 1, "valid_count": 12, "top_clearance_mean": 0.06023355916236913, "top_clearance_min": 0.003428674968538323, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.5681456689490005}
-{"preset": "guidance_props_no_squeeze", "scenario": "partial_pack", "seed": 2, "valid_count": 12, "top_clearance_mean": 0.06071141828100602, "top_clearance_min": 0.0034198799627604896, "graph_nodes": 12, "graph_nodes_vs_random": 12, "propose_time_s": 1.277160051977262}
+{"preset": "shipped", "scenario": "partial_pack", "seed": 0, "valid_count": 24, "top_clearance_mean": 0.13335221282898216, "top_clearance_min": 0.04819690729190409, "contact_dist_mean": 0.34273451200970967, "contact_dist_min": 0.048196907291904095, "kiss_fraction": 0.0, "raw_pool_size": 288, "final_count": 24, "graph_nodes": 24, "graph_nodes_vs_random": 24, "propose_time_s": 1.8930875959340483, "per_proposer_counts": {"perimeter_walk": 18, "erosion": 24, "raycasting": 48, "voronoi": 48, "ribbon_free": 48, "group_fit": 96, "guidance_propositions": 6}, "border_standoff_min": 0.0008464365963410585}
+{"preset": "shipped", "scenario": "partial_pack", "seed": 1, "valid_count": 24, "top_clearance_mean": 0.14850275491803175, "top_clearance_min": 0.06620511355411167, "contact_dist_mean": 0.3798508981239112, "contact_dist_min": 0.06620511355411167, "kiss_fraction": 0.0, "raw_pool_size": 288, "final_count": 24, "graph_nodes": 24, "graph_nodes_vs_random": 24, "propose_time_s": 2.2396586660761386, "per_proposer_counts": {"perimeter_walk": 18, "erosion": 24, "raycasting": 48, "voronoi": 48, "ribbon_free": 48, "group_fit": 96, "guidance_propositions": 6}, "border_standoff_min": 0.0021744235880780042}
+{"preset": "shipped", "scenario": "partial_pack", "seed": 2, "valid_count": 24, "top_clearance_mean": 0.12837491324072717, "top_clearance_min": 0.051098873504982226, "contact_dist_mean": 0.3192373835222447, "contact_dist_min": 0.05109887350498223, "kiss_fraction": 0.0, "raw_pool_size": 288, "final_count": 24, "graph_nodes": 24, "graph_nodes_vs_random": 24, "propose_time_s": 2.261272268835455, "per_proposer_counts": {"perimeter_walk": 18, "erosion": 24, "raycasting": 48, "voronoi": 48, "ribbon_free": 48, "group_fit": 96, "guidance_propositions": 6}, "border_standoff_min": 0.00024674448586094145}

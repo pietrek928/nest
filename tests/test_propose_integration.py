@@ -124,7 +124,7 @@ def test_default_config_first_pass_tuned():
     assert cfg.sampling.random_per_iter_when_proposed == 48
     assert cfg.propose.use_group_edge_seeds is True
     assert cfg.propose.use_contact_ranking is True
-    assert cfg.selection.dfs_mode == "merged_loose_tight_finalize_end"
+    assert cfg.selection.dfs_mode == "merged_loose_tight"
     assert cfg.selection.dfs_passes == 3
     assert cfg.selection.dfs_max_tries == 4
     assert cfg.selection.dfs_refine_max_passes == 1024
@@ -135,6 +135,10 @@ def test_default_config_first_pass_tuned():
     assert cfg.propose.max_proposals == 24
     assert cfg.propose.use_voronoi is True
     assert cfg.propose.use_point_cloud is False
+    assert cfg.propose.use_guidance_propositions is True
+    assert cfg.propose.guidance_max_propositions == 6
+    assert cfg.propose.guidance_use_corner_alignment is True
+    assert cfg.propose.guidance_enable_grid is False
 
 
 def test_propose_geometry_validation(nest_board, rect_poly):

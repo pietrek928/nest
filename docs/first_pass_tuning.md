@@ -41,11 +41,14 @@ All modes assert `selection_is_independent` on **final** output.
 
 | Item | Value |
 |------|-------|
-| Pipeline | `selection.dfs_mode` → `apply_dfs_refinement` (default **`merged_single_pass`**) |
-| `dfs_passes` | **4** |
+| Pipeline | `selection.dfs_mode` → **`merged_loose_tight`** (loose→tight per pass, finalize once) |
+| `dfs_passes` | **3** |
+| `improve_rules_rounds` | **4** |
 | Internal loose caps | `min_collisions=2`, `max_root_collisions=2` (C++) |
 | Internal tight caps | `min_collisions=1`, `max_root_collisions=1` |
 | Finalize | `finalize_selection` (repair → exact weighted MIS ≤18 nodes) |
+
+See [build_graph_tuning.md](build_graph_tuning.md) for multi-iter pipeline benchmark (2026-05-29).
 
 ## Preset tuning (J_max_density, seeds 0–2, prior run)
 

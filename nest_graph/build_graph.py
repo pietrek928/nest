@@ -1016,9 +1016,8 @@ def _make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
 def run_build_graph(cfg: BuildGraphConfig) -> None:
     """Demo build loop: propose → graph → rules → nest → DFS refine.
 
-    Shipped defaults match guidance-flow + nest-pipeline benchmarks
-    (``ProposeConfig`` props_no_grid, ``SelectionConfig`` merged_loose_tight_finalize_end).
-    Use ``BuildGraphConfig.benchmark_aligned()`` for the exact guidance-flow script preset.
+    Shipped defaults match nest-pipeline tuning (``SelectionConfig`` merged_loose_tight,
+    ``dfs_passes=3``, ``improve_rules_rounds=4``). See docs/build_graph_tuning.md.
     """
     rng = cfg.apply_seed()
     sc = cfg.sampling

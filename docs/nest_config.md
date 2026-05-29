@@ -61,7 +61,7 @@ Rule evolution uses elitist mutation (`improve_rules_elite_count`), deduplicatio
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NEST_IMPROVE_ROUNDS` | 2 | Rule-mutation rounds per iteration |
+| `NEST_IMPROVE_ROUNDS` | 4 | Rule-mutation rounds per iteration |
 | `NEST_RULES_KEPT` | 64 | Top rule sets kept after scoring |
 | `NEST_RULES_ELITE` | 16 | Top rule sets mutated each improve round |
 | `NEST_RULE_SIZE_PENALTY` | 0.03 | Per-rule penalty in `score_rules` (C++) |
@@ -76,7 +76,7 @@ Rule evolution uses elitist mutation (`improve_rules_elite_count`), deduplicatio
 | `NEST_DFS_REFINE_BEAM` | 2 | Beam width in refine DFS |
 | `NEST_DFS_FINALIZE_REPAIR` | 6 | Repair passes in `finalize_selection` |
 | `NEST_DFS_FINALIZE_COMPONENT` | 18 | Max overlap component for exact MIS |
-| `NEST_DFS_MODE` | `merged_loose_tight_finalize_end` | See [dfs_benchmark.md](dfs_benchmark.md) |
+| `NEST_DFS_MODE` | `merged_loose_tight` | See [build_graph_tuning.md](build_graph_tuning.md) |
 | `NEST_NEST_RULE_SETS` | 1 | Rule sets passed to `nest_by_graph` |
 
 Rendered placements are always collision-free: DFS refinement only adds non-colliding nodes, and the build loop prunes the final selection to an independent set before drawing.
@@ -91,16 +91,19 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 |--------|----------------------|------|
 | `board_min_dist()` = board diagonal × `min_dist_ratio` | `minimum_placing_distance` = `min_dist + epsilon` | Inflates MTV on overlap; gravity stops before contact |
 | `placement_clearance_epsilon_ratio` (default `0.05`) | (via margin check in Python) | Extra slack so near-touching poses are rejected |
-| `guidance_diversity_dist_ratio`, `guidance_grid_step_ratio` | `diversity_distance_threshold`, `grid_exploration_step` | Scaled from `min_dist` / board diag (not raw C++ defaults) |
-| `use_guidance_propositions`, `guidance_max_propositions` | `max_propositions`, proposition menu | Multi-move seeds from `evaluate_local_placement` |
-| `guidance_use_tight_packing`, `guidance_squeeze_weight` | `use_tight_packing`, `squeeze_weight` | Local NFP-proxy: pull toward nearest obstacle |
-| `guidance_enable_grid` | `enable_grid_exploration` | Axis-aligned micro-moves when soft pack stalls |
+| `guidance_diversity_dist_ratio` | `diversity_distance_threshold` | Scaled from `min_dist` / board diag (not raw C++ defaults) |
+| `use_guidance_propositions`, `guidance_max_propositions` | `max_propositions`, proposition menu | Cast-based moves from `evaluate_local_placement` |
+| `guidance_use_tight_packing` | `use_tight_packing` | `Exact Neighbor Snap` via polygon cast |
+| `guidance_use_corner_alignment` | `use_corner_alignment` | `Vertex Corner Match` / `Corner Match (Intercept)` |
+| `guidance_enable_grid` | `enable_grid_exploration` | `Floor Walk L/R` (perpendicular casts along gravity tangent) |
+| (C++ default) | `max_hole_size_ratio` | Hole seeking when void radius ∈ `[placed_radius, placed_radius × ratio]` |
+| (C++ default) | `search_radius` | Cast/distance horizon; scaled up from board diag in Python |
 
-**Shipped propose defaults** (from `scripts/benchmark_guidance_flow.py`, seeds 0–9): `use_guidance_propositions=True`, `guidance_enable_grid=False` (`props_no_grid`). See [`docs/guidance_flow_benchmark.json`](guidance_flow_benchmark.json).
+**Shipped propose defaults** (cast `guide.h`, re-tune with `scripts/benchmark_guidance_flow.py`): `use_guidance_propositions=True`, `guidance_use_tight_packing=True`, `guidance_use_corner_alignment=True`, `guidance_enable_grid=False`, `guidance_max_propositions=6`.
 
 `make_polygon_graph` filters candidates with validity-only guidance (`guidance_config_for_graph`) using the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
 
-For the exact guidance-flow pipeline preset (DFS `merged_loose_finalize_end`), use `BuildGraphConfig.benchmark_aligned()`.
+For the guidance-flow pipeline preset, use `BuildGraphConfig.benchmark_aligned()` (`merged_loose_tight` DFS).
 
 ```python
 from nest_graph.config import BuildGraphConfig, ProposeConfig

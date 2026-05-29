@@ -168,10 +168,18 @@ def test_sheet_edge_produces_tight_border_placements():
     tri = _tri()
     sheet, _ = board_context_from_geometry(board)
     min_dist = 0.003
-    from nest_graph.propose import propose_placements_sheet_edge
+    from nest_graph.propose import ProposeGeometry, propose_placements_sheet_edge
 
+    geom = ProposeGeometry(board, Polygon(), tri, min_dist, propose_cfg=ProposeConfig())
+    pt_push = board.centroid
     coords = propose_placements_sheet_edge(
-        tri, sheet, min_dist=min_dist, top_n=16, samples_per_edge=12,
+        tri,
+        sheet,
+        min_dist,
+        propose_geom=geom,
+        pt_push=pt_push,
+        top_n=16,
+        samples_per_edge=12,
     )
     assert len(coords) > 0
     dists = [transform_poly(tri, c).distance(sheet.exterior) for c in coords]
@@ -201,6 +209,10 @@ def test_contact_ranking_prefers_group_fit_on_partial_pack():
             use_group_edge_seeds=True,
             use_ribbon_seeds=False,
             use_voronoi=False,
+            use_axis_push=False,
+            use_bottom_left=False,
+            use_nfp_vertices=False,
+            use_neighbor_slide=False,
             use_contact_ranking=contact,
             trim_candidates_by_clearance=True,
         )

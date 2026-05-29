@@ -8,6 +8,7 @@
 
 #include "solid/solid_geometry.h"
 #include "distance/polygon_distance.h"
+#include "polygon_cast.h"
 
 // -------------------------------------------------------------------------
 // CONFIGURATION & RESULT STRUCTURES
@@ -19,13 +20,15 @@ struct GuidanceConfig {
     // --- Physics & Spacing ---
     Scalar minimum_placing_distance = static_cast<Scalar>(1e-6);
 
-    // --- Tight Packing (Squeeze) ---
+    // --- Tight Packing (Squeeze & Snap) ---
     bool use_tight_packing = true;
-    Scalar squeeze_weight = static_cast<Scalar>(0.4); // Actively pulls shapes to close empty gaps
+
+    // --- NEW: Corner Alignment ---
+    bool use_corner_alignment = true;
 
     // --- Hole Seeking & Behavior ---
     bool use_hole_seeking = true;
-    Scalar hole_seeking_weight = static_cast<Scalar>(0.3);
+    Scalar max_hole_size_ratio = static_cast<Scalar>(4.0);
 
     // --- Attractors & Gravity ---
     bool use_gravity = true;
@@ -34,15 +37,12 @@ struct GuidanceConfig {
     VecType target_position{};
     Scalar target_angle_rad = 0.0;
 
-    // --- PROPOSITION EXPLORATION (The "Wider Space") ---
-    int max_propositions = 5; // How many distinct choices to return to the solver
-
-    // Spatial Diversity (Prevents returning multiple hints that do the exact same thing)
+    // --- PROPOSITION EXPLORATION ---
+    int max_propositions = 6;
     Scalar diversity_distance_threshold = static_cast<Scalar>(2.0);
-    Scalar diversity_angle_rad_threshold = static_cast<Scalar>(M_PI / 8.0); // 22.5 degrees
+    Scalar diversity_angle_rad_threshold = static_cast<Scalar>(M_PI / 8.0);
 
-    bool enable_grid_exploration = true; // Synthesize extra local micro-moves
-    Scalar grid_exploration_step = static_cast<Scalar>(2.0);
+    bool enable_grid_exploration = true;
     int max_alternative_angles = 3;
     Scalar slide_escape_multiplier = static_cast<Scalar>(0.8);
 
@@ -50,35 +50,31 @@ struct GuidanceConfig {
     Scalar attraction_weight = static_cast<Scalar>(0.1);
     Scalar alignment_weight = static_cast<Scalar>(0.5);
     Scalar escape_radius_multiplier = static_cast<Scalar>(1.5);
-    Scalar search_radius = static_cast<Scalar>(5.0);
+
+    Scalar search_radius = static_cast<Scalar>(25.0);
 };
 
-// A single curated move for the solver to attempt
 template <class VecType>
 struct PlacementProposition {
     using Scalar = typename VecType::Scalar;
     VecType translation{};
     Scalar rotation_rad = 0.0;
-    Scalar heuristic_score = 0.0; // Higher is better
-    std::string move_type = "";   // "Ejection", "Slide", "Pack", "Grid", etc.
+    Scalar heuristic_score = 0.0;
+    std::string move_type = "";
 
     bool operator<(const PlacementProposition& o) const {
-        return heuristic_score > o.heuristic_score; // Sort descending
+        return heuristic_score > o.heuristic_score;
     }
 };
 
 template <class VecType>
 struct PlacementGuidance {
     using Scalar = typename VecType::Scalar;
-
     bool is_penetrating = false;
     Scalar clearance = std::numeric_limits<Scalar>::max();
-
-    // The curated menu of distinct, high-quality moves for the solver
     std::vector<PlacementProposition<VecType>> propositions;
 };
 
-// Internal Context to pass data smoothly between phases
 template <class VecType>
 struct PhysicsContext {
     using Scalar = typename VecType::Scalar;
@@ -91,15 +87,16 @@ struct PhysicsContext {
 
     bool is_penetrating = false;
     Scalar min_clearance = std::numeric_limits<Scalar>::max();
-    VecType closest_obstacle_center{};
 
-    // Raw vectors generated before filtering
-    std::vector<VecType> raw_translations;
+    // Track the absolute closest geometry for precision docking
+    VecType closest_obstacle_center{};
+    int closest_poly_idx = -1;
+
     std::vector<Scalar> raw_rotations;
 };
 
 // -------------------------------------------------------------------------
-// PHASE 1: AGGREGATION (Handles Deep Swallow & Hole Physics)
+// PHASE 1: AGGREGATION
 // -------------------------------------------------------------------------
 template <class VecType>
 inline void aggregate_physics_feedback(
@@ -122,10 +119,7 @@ inline void aggregate_physics_feedback(
             const auto& obstacle_part = obstacle.line_parts[res.partB_idx];
 
             if (res.penetration_sq == std::numeric_limits<Scalar>::max()) {
-                // DEEP SWALLOW & HOLE FIX
                 VecType push_dir = placed_bounds.center() - obstacle_part.bounding_circle.center();
-
-                // If completely swallowed by a hole's solid boundary, push BACK to the hole's center
                 if (obstacle_part.is_subtractive) push_dir = -push_dir;
 
                 Scalar dir_len_sq = push_dir.len_sq();
@@ -147,7 +141,6 @@ inline void aggregate_physics_feedback(
                 VecType localized_mtv = res.mtv;
                 if (res.polyB_idx == placed_poly_idx) localized_mtv = -localized_mtv;
 
-                // INFLATE MTV BY MINIMUM PLACING DISTANCE
                 Scalar mtv_len_sq = localized_mtv.len_sq();
                 if (mtv_len_sq > 1e-8 && config.minimum_placing_distance > 0) {
                     Scalar mtv_len = std::sqrt(mtv_len_sq);
@@ -167,13 +160,14 @@ inline void aggregate_physics_feedback(
             if (res.distance_sq < ctx.min_clearance * ctx.min_clearance) {
                 ctx.min_clearance = std::sqrt(static_cast<double>(res.distance_sq));
                 ctx.closest_obstacle_center = all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
+                ctx.closest_poly_idx = res.polyB_idx; // Track for corner snapping
             }
         }
     }
 }
 
 // -------------------------------------------------------------------------
-// PHASE 2: MANDATORY EJECTION (Physics Resolution)
+// PHASE 2: MANDATORY EJECTION
 // -------------------------------------------------------------------------
 template <class VecType>
 inline void formulate_mandatory_ejection(
@@ -187,7 +181,6 @@ inline void formulate_mandatory_ejection(
     VecType average_mtv = ctx.total_ejection * (static_cast<Scalar>(1.0) / ctx.penetration_count);
     VecType primary_ejection = (average_mtv + ctx.max_mtv) * static_cast<Scalar>(0.5);
 
-    // Score: 100+ (Absolute priority to escape collision)
     raw_propositions.push_back({primary_ejection, 0.0, 100.0, "Primary Ejection"});
 
     if (ctx.max_mtv_sq > 1e-8) {
@@ -196,17 +189,16 @@ inline void formulate_mandatory_ejection(
         Scalar placed_radius = std::sqrt(placed_poly.get_bounding_circle().square_radius());
         Scalar slide_mag = placed_radius * config.slide_escape_multiplier;
 
-        // Score: 80 (Good fallback if primary ejection hits a bottleneck)
-        raw_propositions.push_back({primary_ejection + (tangent * slide_mag), 0.0, 80.0, "Slide Ejection L"});
-        raw_propositions.push_back({primary_ejection - (tangent * slide_mag), 0.0, 80.0, "Slide Ejection R"});
+        raw_propositions.push_back({primary_ejection + (tangent * slide_mag), 0.0, 80.0, "Slide Escape L"});
+        raw_propositions.push_back({primary_ejection - (tangent * slide_mag), 0.0, 80.0, "Slide Escape R"});
     }
 }
 
 // -------------------------------------------------------------------------
-// PHASE 3: SOFT TRANSLATION (Packing, Squeeze, Seeking)
+// PHASE 3: EXACT CASTING TRANSLATION (Shape Cast Powered)
 // -------------------------------------------------------------------------
 template <class VecType>
-inline void formulate_soft_translation(
+inline void formulate_exact_casting_translation(
     int placed_poly_idx,
     const std::vector<SolidGeometry<VecType>>& all_polygons,
     const VecType& current_position,
@@ -215,17 +207,111 @@ inline void formulate_soft_translation(
     std::vector<PlacementProposition<VecType>>& raw_propositions
 ) {
     using Scalar = typename VecType::Scalar;
-    VecType soft_translation{};
-    bool seeking_active = false;
-
     const auto& placed_bounds = all_polygons[placed_poly_idx].get_bounding_circle();
     Scalar placed_radius = std::sqrt(placed_bounds.square_radius());
 
-    // 1. Hole Seeking
-    if (config.use_hole_seeking) {
-        Scalar closest_hole_dist_sq = std::numeric_limits<Scalar>::max();
-        VecType best_hole_center{};
+    // 1. EXACT GRAVITY DOCKING
+    if (config.use_gravity) {
+        Scalar grav_len = std::sqrt(config.gravity_vector.len_sq());
+        if (grav_len > 1e-6) {
+            VecType g_norm = config.gravity_vector * (static_cast<Scalar>(1.0) / grav_len);
 
+            auto cast_res = find_closest_polygon_cast<VecType>(
+                placed_poly_idx, all_polygons, g_norm, config.search_radius
+            );
+
+            if (cast_res.intersects_path && cast_res.t_entry > config.minimum_placing_distance) {
+                Scalar exact_dock_dist = cast_res.t_entry - config.minimum_placing_distance;
+                raw_propositions.push_back({g_norm * exact_dock_dist, 0.0, 95.0, "Exact Gravity Dock"});
+            } else if (!cast_res.intersects_path) {
+                raw_propositions.push_back({g_norm * config.search_radius, 0.0, 50.0, "Gravity Fall"});
+            }
+        }
+    }
+
+    // 2. EXACT NEIGHBOR SNAP
+    if (config.use_tight_packing && ctx.min_clearance < config.search_radius && ctx.closest_poly_idx >= 0) {
+        VecType squeeze_dir = ctx.closest_obstacle_center - placed_bounds.center();
+        Scalar sq_len = std::sqrt(squeeze_dir.len_sq());
+
+        if (sq_len > 1e-6) {
+            VecType sq_norm = squeeze_dir * (static_cast<Scalar>(1.0) / sq_len);
+
+            auto cast_res = find_closest_polygon_cast<VecType>(
+                placed_poly_idx, all_polygons, sq_norm, config.search_radius
+            );
+
+            if (cast_res.intersects_path && cast_res.t_entry > config.minimum_placing_distance) {
+                Scalar exact_snap_dist = cast_res.t_entry - config.minimum_placing_distance;
+                raw_propositions.push_back({sq_norm * exact_snap_dist, 0.0, 85.0, "Exact Neighbor Snap"});
+            }
+        }
+    }
+
+    // 3. EXACT CORNER ALIGNMENT (Vertex-to-Vertex Match)
+    if (config.use_corner_alignment && ctx.closest_poly_idx >= 0 && ctx.min_clearance < config.search_radius) {
+        const auto& placed = all_polygons[placed_poly_idx];
+        const auto& obstacle = all_polygons[ctx.closest_poly_idx];
+
+        Scalar best_dist_sq = std::numeric_limits<Scalar>::max();
+        VecType best_v_norm{};
+        Scalar best_v_len = 0;
+        bool found_corner = false;
+
+        // Iterate through all vertices to find the absolutely closest corner pair
+        for (size_t pA = 0; pA < placed.line_parts.size(); ++pA) {
+            const VecType* ptsA = placed.get_part_points(pA);
+            int nA = placed.get_part_size(pA);
+            for (int i = 0; i < nA; ++i) {
+                for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                    const VecType* ptsB = obstacle.get_part_points(pB);
+                    int nB = obstacle.get_part_size(pB);
+                    for (int j = 0; j < nB; ++j) {
+                        VecType diff = ptsB[j] - ptsA[i];
+                        Scalar d_sq = diff.len_sq();
+
+                        // Limit search to realistic local corners
+                        if (d_sq > 1e-8 && d_sq < best_dist_sq && d_sq < (config.search_radius * config.search_radius)) {
+                            best_dist_sq = d_sq;
+                            Scalar len = std::sqrt(d_sq);
+                            best_v_norm = diff * (static_cast<Scalar>(1.0) / len);
+                            best_v_len = len;
+                            found_corner = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (found_corner) {
+            // Cast along the perfect vertex-to-vertex vector!
+            auto cast_res = find_closest_polygon_cast<VecType>(
+                placed_poly_idx, all_polygons, best_v_norm, best_v_len + config.minimum_placing_distance
+            );
+
+            if (cast_res.intersects_path) {
+                // If the path is perfectly clear to the vertex (accounting for our required gap)
+                if (cast_res.t_entry >= (best_v_len - config.minimum_placing_distance - 1e-4)) {
+                    Scalar exact_snap = std::max(static_cast<Scalar>(0.0), cast_res.t_entry - config.minimum_placing_distance);
+                    // Score 92: Higher priority than a general neighbor snap!
+                    raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 92.0, "Vertex Corner Match"});
+                } else if (cast_res.t_entry > config.minimum_placing_distance) {
+                    // We hit a flat edge on the way to the corner. Still a highly valid flush fit!
+                    Scalar exact_snap = cast_res.t_entry - config.minimum_placing_distance;
+                    raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 82.0, "Corner Match (Intercept)"});
+                }
+            }
+        }
+    }
+
+    // 4. TARGET ATTRACTOR
+    if (config.use_target_attractor) {
+        VecType pull = (config.target_position - current_position) * config.attraction_weight;
+        raw_propositions.push_back({pull, 0.0, 60.0, "Target Attractor"});
+    }
+
+    // 5. SMART HOLE SEEKING
+    if (config.use_hole_seeking) {
         for (size_t i = 0; i < all_polygons.size(); ++i) {
             if (i == static_cast<size_t>(placed_poly_idx)) continue;
 
@@ -235,52 +321,34 @@ inline void formulate_soft_translation(
                 const auto& hole_bounds = all_polygons[i].line_parts[part].bounding_circle;
                 Scalar hole_radius = std::sqrt(hole_bounds.square_radius());
 
-                if (hole_radius >= (placed_radius + config.minimum_placing_distance) * static_cast<Scalar>(0.9)) {
+                if (hole_radius >= placed_radius && hole_radius <= placed_radius * config.max_hole_size_ratio) {
                     Scalar dist_sq = (hole_bounds.center() - placed_bounds.center()).len_sq();
-                    // HOLE FIX: Only attract if not already deeply inside the hole's center zone
+
                     if (dist_sq > (hole_radius * hole_radius) * static_cast<Scalar>(0.25)) {
-                        if (dist_sq < closest_hole_dist_sq) {
-                            closest_hole_dist_sq = dist_sq;
-                            best_hole_center = hole_bounds.center();
-                            seeking_active = true;
+                        VecType pull_dir = hole_bounds.center() - placed_bounds.center();
+                        Scalar pull_len = std::sqrt(pull_dir.len_sq());
+                        if (pull_len > 1e-6) {
+                            VecType pull_norm = pull_dir * (static_cast<Scalar>(1.0) / pull_len);
+                            auto cast_res = find_closest_polygon_cast<VecType>(
+                                placed_poly_idx, all_polygons, pull_norm, pull_len
+                            );
+
+                            if (cast_res.intersects_path) {
+                                Scalar safe_pull = std::max(static_cast<Scalar>(0), cast_res.t_entry - config.minimum_placing_distance);
+                                raw_propositions.push_back({pull_norm * safe_pull, 0.0, 75.0, "Safe Hole Seek"});
+                            } else {
+                                raw_propositions.push_back({pull_dir * config.attraction_weight, 0.0, 65.0, "Hole Seek"});
+                            }
                         }
                     }
                 }
             }
         }
-
-        if (seeking_active) {
-            soft_translation = soft_translation + ((best_hole_center - placed_bounds.center()) * config.hole_seeking_weight);
-        }
     }
-
-    // 2. Attractors, Gravity, and Tight Packing (Squeeze)
-    if (!seeking_active) {
-        if (config.use_target_attractor) {
-            soft_translation = soft_translation + ((config.target_position - current_position) * config.attraction_weight);
-        } else {
-            if (config.use_gravity) {
-                Scalar gravity_scale = std::min(static_cast<Scalar>(1.0), std::max(static_cast<Scalar>(0.0), ctx.min_clearance - config.minimum_placing_distance));
-                soft_translation = soft_translation + (config.gravity_vector * gravity_scale);
-            }
-            // TIGHT PACKING FIX
-            if (config.use_tight_packing && ctx.min_clearance > config.minimum_placing_distance && ctx.min_clearance < config.search_radius) {
-                VecType squeeze_dir = ctx.closest_obstacle_center - placed_bounds.center();
-                Scalar squeeze_len = std::sqrt(squeeze_dir.len_sq());
-                if (squeeze_len > 1e-6) {
-                    VecType n = squeeze_dir * (static_cast<Scalar>(1.0) / squeeze_len);
-                    soft_translation = soft_translation + (n * config.squeeze_weight);
-                }
-            }
-        }
-    }
-
-    // Score: 60 (Optimal packing, but lower priority than collision escape)
-    raw_propositions.push_back({soft_translation, 0.0, 60.0, "Soft Packing/Seek"});
 }
 
 // -------------------------------------------------------------------------
-// PHASE 4: SOFT ROTATION (Edge Mating)
+// PHASE 4: SOFT ROTATION
 // -------------------------------------------------------------------------
 template <class VecType>
 inline void formulate_rotations(
@@ -337,28 +405,27 @@ inline void formulate_rotations(
 }
 
 // -------------------------------------------------------------------------
-// PHASE 5: PROPOSITION SYNTHESIS & SPATIAL FILTERING
+// PHASE 5: PROPOSITION SYNTHESIS (Corner Finding)
 // -------------------------------------------------------------------------
 template <class VecType>
 inline std::vector<PlacementProposition<VecType>> synthesize_propositions(
     std::vector<PlacementProposition<VecType>>& raw_props,
     const PhysicsContext<VecType>& ctx,
-    const GuidanceConfig<VecType>& config
+    const GuidanceConfig<VecType>& config,
+    int placed_poly_idx,
+    const std::vector<SolidGeometry<VecType>>& all_polygons
 ) {
     using Scalar = typename VecType::Scalar;
     std::vector<PlacementProposition<VecType>> cross_product_props;
 
-    // 1. Cross-Multiply Translations with Rotations
     for (const auto& prop : raw_props) {
         if (ctx.raw_rotations.empty()) {
             cross_product_props.push_back(prop);
         } else {
-            // Primary Angle
             PlacementProposition<VecType> p_primary = prop;
             p_primary.rotation_rad = ctx.raw_rotations[0];
             cross_product_props.push_back(p_primary);
 
-            // Alternative Angles (Penalize score slightly so solver favors primary edge)
             for (size_t i = 1; i < ctx.raw_rotations.size(); ++i) {
                 PlacementProposition<VecType> p_alt = prop;
                 p_alt.rotation_rad = ctx.raw_rotations[i];
@@ -369,24 +436,30 @@ inline std::vector<PlacementProposition<VecType>> synthesize_propositions(
         }
     }
 
-    // 2. Synthesize Local Grid Exploration (Wider Space Search)
+    // EXACT FLOOR WALKING (Edge Casts)
     if (!ctx.is_penetrating && config.enable_grid_exploration) {
-        Scalar step = config.grid_exploration_step;
-        VecType grid_nudges[4] = {{step, 0}, {-step, 0}, {0, step}, {0, -step}};
         Scalar primary_rot = ctx.raw_rotations.empty() ? 0.0 : ctx.raw_rotations[0];
+        VecType g_tan = { -config.gravity_vector[1], config.gravity_vector[0] };
+        Scalar g_len = std::sqrt(g_tan.len_sq());
 
-        for (const auto& nudge : grid_nudges) {
-            cross_product_props.push_back({
-                raw_props.empty() ? nudge : raw_props[0].translation + nudge,
-                primary_rot,
-                40.0, // Low score, used only if main heuristics hit local minimum
-                "Grid Exploration"
-            });
+        if (g_len > 1e-6) {
+            VecType right_norm = g_tan * (static_cast<Scalar>(1.0) / g_len);
+            VecType left_norm = -right_norm;
+
+            // Cast perfectly perpendicular to gravity to slide into tight floor corners
+            auto cast_right = find_closest_polygon_cast<VecType>(placed_poly_idx, all_polygons, right_norm, config.search_radius);
+            if (cast_right.intersects_path && cast_right.t_entry > config.minimum_placing_distance) {
+                cross_product_props.push_back({right_norm * (cast_right.t_entry - config.minimum_placing_distance), primary_rot, 90.0, "Floor Walk R"});
+            }
+
+            auto cast_left = find_closest_polygon_cast<VecType>(placed_poly_idx, all_polygons, left_norm, config.search_radius);
+            if (cast_left.intersects_path && cast_left.t_entry > config.minimum_placing_distance) {
+                cross_product_props.push_back({left_norm * (cast_left.t_entry - config.minimum_placing_distance), primary_rot, 90.0, "Floor Walk L"});
+            }
         }
     }
 
-    // 3. Spatial Diversity Filter (Non-Maximum Suppression)
-    std::sort(cross_product_props.begin(), cross_product_props.end()); // Highest scores first
+    std::sort(cross_product_props.begin(), cross_product_props.end());
 
     std::vector<PlacementProposition<VecType>> final_propositions;
     Scalar dist_thresh_sq = config.diversity_distance_threshold * config.diversity_distance_threshold;
@@ -396,8 +469,6 @@ inline std::vector<PlacementProposition<VecType>> synthesize_propositions(
 
         for (const auto& accepted : final_propositions) {
             Scalar dist_sq = (prop.translation - accepted.translation).len_sq();
-
-            // Normalize angle difference to [0, PI]
             Scalar ang_diff = std::abs(prop.rotation_rad - accepted.rotation_rad);
             while (ang_diff > M_PI) ang_diff -= 2.0 * M_PI;
             ang_diff = std::abs(ang_diff);
@@ -427,6 +498,7 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
     const VecType& current_position,
     const GuidanceConfig<VecType>& config = GuidanceConfig<VecType>{}
 ) {
+    using Scalar = typename VecType::Scalar;
     PlacementGuidance<VecType> guidance;
 
     std::vector<int> active_indices = { placed_poly_idx };
@@ -434,14 +506,20 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
 
     if (results.empty()) {
         PlacementProposition<VecType> default_prop;
-        if (config.use_target_attractor) {
-            default_prop.translation = (config.target_position - current_position) * config.attraction_weight;
-            default_prop.rotation_rad = config.target_angle_rad;
-        } else if (config.use_gravity) {
-            default_prop.translation = config.gravity_vector;
+        if (config.use_gravity) {
+            Scalar grav_len = std::sqrt(static_cast<double>(config.gravity_vector.len_sq()));
+            VecType g_norm = config.gravity_vector * (static_cast<Scalar>(1.0) / grav_len);
+            auto cast_floor = find_closest_polygon_cast<VecType>(placed_poly_idx, all_polygons, g_norm, config.search_radius * 2.0);
+
+            if (cast_floor.intersects_path) {
+                default_prop.translation = g_norm * (cast_floor.t_entry - config.minimum_placing_distance);
+                default_prop.move_type = "Long Range Gravity Dock";
+            } else {
+                default_prop.translation = config.gravity_vector * config.search_radius;
+                default_prop.move_type = "Free Space Default";
+            }
         }
         default_prop.heuristic_score = 100.0;
-        default_prop.move_type = "Free Space Default";
         guidance.propositions.push_back(default_prop);
         return guidance;
     }
@@ -457,12 +535,12 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
     if (ctx.is_penetrating) {
         formulate_mandatory_ejection(ctx, all_polygons[placed_poly_idx], config, raw_propositions);
     } else {
-        formulate_soft_translation(placed_poly_idx, all_polygons, current_position, ctx, config, raw_propositions);
+        formulate_exact_casting_translation(placed_poly_idx, all_polygons, current_position, ctx, config, raw_propositions);
     }
 
     formulate_rotations(ctx, all_polygons[placed_poly_idx], config, ctx);
 
-    guidance.propositions = synthesize_propositions(raw_propositions, ctx, config);
+    guidance.propositions = synthesize_propositions(raw_propositions, ctx, config, placed_poly_idx, all_polygons);
 
     return guidance;
 }

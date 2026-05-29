@@ -1,13 +1,15 @@
-# Nest pipeline benchmark 2026-05-26 11:30
-# seeds=[0, 1, 2] iters=2
+# Nest pipeline benchmark 2026-05-29 11:12
+# seeds=[0] iters=2
 
 | propose | dfs_mode | parts_final | graph_nodes | border_err_min | score_sum | time_s |
 |---------|----------|-------------|-------------|----------------|-----------|--------|
-| shipped | legacy_dfs_budget | 38.7 | 1354 | 0.0004 | 0.09 | 35.07 |
-| shipped | merged_loose_finalize_end | 38.3 | 1260 | 0.0028 | 0.09 | 24.98 |
-| shipped | merged_loose_tight_finalize_end | 37.3 | 1219 | 0.0010 | 0.09 | 27.20 |
+| shipped | merged_loose_finalize_end | 39.0 | 1222 | 0.0005 | 0.00 | 14.31 |
+| shipped | merged_loose_tight | 42.0 | 1184 | 0.0003 | 0.86 | 14.08 |
+| shipped | merged_loose_tight_finalize_end | 39.0 | 1192 | 0.0005 | 0.62 | 14.75 |
+| shipped | merged_single_pass | 41.0 | 1134 | 0.0003 | 0.00 | 11.65 |
 
 ## Ranking by mean parts_final
-- **38.7** — `shipped` + `legacy_dfs_budget`
-- **38.3** — `shipped` + `merged_loose_finalize_end`
-- **37.3** — `shipped` + `merged_loose_tight_finalize_end`
+- **42.0** — `shipped` + `merged_loose_tight`
+- **41.0** — `shipped` + `merged_single_pass`
+- **39.0** — `shipped` + `merged_loose_tight_finalize_end`
+- **39.0** — `shipped` + `merged_loose_finalize_end`

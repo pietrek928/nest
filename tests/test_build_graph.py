@@ -389,13 +389,15 @@ def test_make_polygon_graph_geometry_shapely_edge_parity(
 
 def test_shipped_config_matches_benchmarks():
     cfg = BuildGraphConfig()
-    assert cfg.selection.dfs_mode == "merged_loose_tight_finalize_end"
+    assert cfg.selection.dfs_mode == "merged_loose_tight"
     assert cfg.propose.use_guidance_propositions is True
     assert cfg.propose.guidance_enable_grid is False
+    assert cfg.propose.guidance_use_corner_alignment is True
+    assert cfg.propose.guidance_max_propositions == 6
     assert cfg.sampling.initial_random == 256
     assert cfg.sampling.max_transforms_per_group == 900
 
     bench = BuildGraphConfig.benchmark_aligned(seed=7)
     assert bench.sampling.seed == 7
-    assert bench.selection.dfs_mode == "merged_loose_finalize_end"
+    assert bench.selection.dfs_mode == "merged_loose_tight"
     assert bench.propose.guidance_enable_grid is False
