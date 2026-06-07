@@ -38,7 +38,7 @@ struct GuidanceConfig {
     Scalar target_angle_rad = 0.0;
 
     // --- PROPOSITION EXPLORATION ---
-    int max_propositions = 6;
+    int max_propositions = 8;
     Scalar diversity_distance_threshold = static_cast<Scalar>(2.0);
     Scalar diversity_angle_rad_threshold = static_cast<Scalar>(M_PI / 8.0);
 

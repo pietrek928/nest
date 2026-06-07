@@ -17,6 +17,7 @@ from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import (
     ALL_PROPOSER_NAMES,
     base_shape_from_selection,
+    border_edge_transforms_for_group,
     collect_propose_candidates,
     propose_coords_with_strategy,
     proposed_transforms_for_groups,
@@ -33,6 +34,7 @@ from nest_graph.propose.placements_guidance import (
     propose_placements_guidance_walk,
 )
 from nest_graph.propose.placements_edge import (
+    propose_placements_board_edge,
     propose_placements_group_fit,
     propose_placements_ribbon_free,
     propose_placements_sheet_corners,
@@ -74,6 +76,7 @@ __all__ = [
     "placement_free_region",
     "propose_coords_with_strategy",
     "propose_placements_axis_push",
+    "propose_placements_board_edge",
     "propose_placements_bottom_left",
     "propose_placements_erosion",
     "propose_placements_group_fit",
@@ -93,6 +96,7 @@ __all__ = [
     "proposed_transforms_for_groups",
     "propositions_to_ndarray",
     "base_shape_from_selection",
+    "border_edge_transforms_for_group",
     "sample_placement_points_ribbon",
     "search_region_for_placement",
     "should_use_border_focus",

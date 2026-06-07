@@ -51,6 +51,15 @@ PROPOSE_BENCHMARK_PRESETS = {
         use_bottom_left=False,
         use_nfp_vertices=False,
     ),
+    "kiss_heavy": shipped_propose_config(
+        use_neighbor_slide=True,
+        placement_num_angles=24,
+        guidance_proposition_seed_count=16,
+        guidance_max_propositions=8,
+        guidance_enable_grid=True,
+        contact_trim_fraction=0.8,
+        contact_clearance_hybrid_weight=0.1,
+    ),
     "guidance_cast_heavy": shipped_propose_config(
         use_guidance_propositions=True,
         guidance_use_tight_packing=True,

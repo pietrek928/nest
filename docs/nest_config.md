@@ -21,7 +21,7 @@ See [README.md](../README.md) for setup and build instructions.
 | Preset | Suggested env |
 |--------|----------------|
 | **Fast** (debug / CI) | `NEST_RANDOM_PER_ITER=64` `NEST_MAX_TRANSFORMS=300` `NEST_IMPROVE_ROUNDS=2` `NEST_BUILD_GRAPH_ITERS=32` |
-| **Balanced** (code defaults, first-pass tuned) | `256` / `900` / `4` / `256` — see [first_pass_tuning.md](first_pass_tuning.md) |
+| **Balanced** (code defaults, first-pass tuned) | `256` / `1200` / `4` / `256` — see [first_pass_tuning.md](first_pass_tuning.md) |
 | **Quality** (slow) | `NEST_RANDOM_PER_ITER=256` `NEST_MAX_TRANSFORMS=1200` `NEST_IMPROVE_ROUNDS=8` `NEST_BUILD_GRAPH_ITERS=256` |
 
 Disable transform cap: `NEST_MAX_TRANSFORMS=none` (or `0`).
@@ -33,23 +33,23 @@ Disable progress bar: `NEST_PROGRESS=0`. When enabled, the bar shows `parts` (se
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `NEST_RANDOM_PER_ITER` | 128 | Random transforms per group when propose is off |
-| (code) `random_per_iter_when_proposed` | 48 | Random pool when structured proposals exist |
+| (code) `random_per_iter_when_proposed` | 64 | Random pool when structured proposals exist |
 | (code) `structured_jitter_per_proposal` | 8 | Deterministic offsets around each proposal |
 | `NEST_INITIAL_RANDOM` | 256 | Bootstrap `selected_t` size |
 | `NEST_SELECTION_EXPAND_N` | 4 | `transform_selection` expansions |
-| `NEST_HISTORY_EXPAND_N` | 2 | `transform_history` expansions |
-| `NEST_HISTORY_MAX` | 512 | Max unique history rows kept (tail) |
-| `NEST_MAX_TRANSFORMS` | 900 | Subsample cap before graph build; `none` = no cap |
+| `NEST_HISTORY_EXPAND_N` | 4 | `transform_history` expansions |
+| `NEST_HISTORY_MAX` | 1024 | Max unique history rows kept (tail) |
+| `NEST_MAX_TRANSFORMS` | 1200 | Subsample cap before graph build; `none` = no cap |
 | `NEST_TRANSFORM_SX` / `SY` / `SA` | 1.5 / 1.5 / 2π | Random transform scale |
 | `NEST_SEED` | (unset) | RNG seed for reproducibility |
-| `NEST_SHUFFLE_PASSES` | 2 | Shuffled selection/history mix passes per group |
-| `NEST_SHUFFLE_PER_PASS` | 32 | Transforms per shuffle pass |
+| `NEST_SHUFFLE_PASSES` | 4 | Shuffled selection/history mix passes per group |
+| `NEST_SHUFFLE_PER_PASS` | 48 | Transforms per shuffle pass |
 
 ## Graph
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `NEST_GRAPHS_WINDOW` | 12 | Rule-improvement graph history window |
+| `NEST_GRAPHS_WINDOW` | 24 | Rule-improvement graph history; past nest selections are re-injected as graph nodes |
 
 Board nesting uses a **sheet** polygon: bbox outer ring plus void holes (`bbox \\ outline` and optional `board_holes`). Validity and propose guidance share `evaluate_local_placement` with voids as obstacles (`nest_graph.placement_scene`).
 
@@ -65,7 +65,7 @@ Rule evolution uses elitist mutation (`improve_rules_elite_count`), deduplicatio
 | `NEST_RULES_KEPT` | 64 | Top rule sets kept after scoring |
 | `NEST_RULES_ELITE` | 16 | Top rule sets mutated each improve round |
 | `NEST_RULE_SIZE_PENALTY` | 0.03 | Per-rule penalty in `score_rules` (C++) |
-| `NEST_SCORE_RULES_LATEST_ONLY` | 1 | Score rules on latest graph only |
+| `NEST_SCORE_RULES_LATEST_ONLY` | 0 | Score rules on latest graph only (0 = all graphs in window) |
 | `NEST_SCORE_RULES_COUNT_WEIGHT` | 0.02 | Count bonus in rule fitness |
 | `NEST_SCORE_RULES_LOCAL_SWAP` | 1 | Local swap in rule scoring select |
 | `NEST_SELECT_MODE` | `weighted_greedy` | `weighted_greedy` or `greedy_score` |
@@ -99,7 +99,7 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 | (C++ default) | `max_hole_size_ratio` | Hole seeking when void radius ∈ `[placed_radius, placed_radius × ratio]` |
 | (C++ default) | `search_radius` | Cast/distance horizon; scaled up from board diag in Python |
 
-**Shipped propose defaults** (cast `guide.h`, re-tune with `scripts/benchmark_guidance_flow.py`): `use_guidance_propositions=True`, `guidance_use_tight_packing=True`, `guidance_use_corner_alignment=True`, `guidance_enable_grid=False`, `guidance_max_propositions=6`.
+**Shipped propose defaults** (cast `guide.h`, re-tune with `scripts/benchmark_guidance_flow.py`): `use_guidance_propositions=True`, `guidance_use_tight_packing=True`, `guidance_use_corner_alignment=True`, `guidance_enable_grid=False`, `guidance_max_propositions=6`, `use_batch_pack=True`, `use_board_edge_seeds=True` (outline snap + per-edge cast via `guidance_config_for_board_edge_anchor`).
 
 `make_polygon_graph` filters candidates with validity-only guidance (`guidance_config_for_graph`) using the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
 

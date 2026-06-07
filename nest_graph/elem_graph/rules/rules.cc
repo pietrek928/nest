@@ -16,6 +16,13 @@ T adjust_angle(T a) {
     return a;
 }
 
+template <class Tgen>
+float sample_angle_uniform(Tgen &gen) {
+    std::uniform_real_distribution<float> dist(
+        0.0f, static_cast<float>(2.0 * M_PI));
+    return adjust_angle(dist(gen));
+}
+
 Vec2f sample_pos_in_region(const Circle2f &region, std::mt19937 &gen) {
     std::uniform_real_distribution<float> ang(0.0f, static_cast<float>(2.0 * M_PI));
     std::uniform_real_distribution<float> rad(0.0f, 1.0f);
@@ -135,7 +142,7 @@ PointAngleRule generate_random_point_angle_rule(
 ) {
     return PointAngleRule(
         sample_pos_in_region(region, gen),
-        adjust_angle(distrib_a(gen)),
+        sample_angle_uniform(gen),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
         distrib_w(gen),
         distrib_group(gen));
@@ -161,7 +168,7 @@ CircleAngleRule generate_random_circle_angle_rule(
 ) {
     return CircleAngleRule(
         generate_random_circle(region, gen, distrib_r),
-        adjust_angle(distrib_a(gen)),
+        sample_angle_uniform(gen),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
         distrib_w(gen),
         distrib_group(gen));

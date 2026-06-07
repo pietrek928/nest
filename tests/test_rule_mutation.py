@@ -171,6 +171,6 @@ def test_selection_defaults_tuned():
     cfg = BuildGraphConfig()
     assert cfg.selection.improve_rules_rounds == 4
     assert cfg.selection.improve_rules_elite_count == 16
-    assert cfg.selection.score_rules_latest_graph_only is True
+    assert cfg.selection.score_rules_latest_graph_only is False
     assert cfg.selection.select_mode == "weighted_greedy"
     assert cfg.selection.score_rules_count_weight == 0.02

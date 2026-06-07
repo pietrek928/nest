@@ -121,7 +121,19 @@ def test_default_config_first_pass_tuned():
     cfg = BuildGraphConfig()
     assert cfg.sampling.initial_random == 256
     assert cfg.sampling.random_per_iter == 128
-    assert cfg.sampling.random_per_iter_when_proposed == 48
+    assert cfg.sampling.random_per_iter_when_proposed == 64
+    assert cfg.sampling.structured_jitter_per_proposal == 12
+    assert cfg.sampling.structured_jitter_per_proposal_empty == 4
+    assert cfg.propose.first_pass_layered_pack is True
+    assert cfg.propose.first_pass_border_pack is True
+    assert cfg.propose.first_pass_empty_border_only is True
+    assert cfg.propose.first_pass_interior_max == 0
+    assert cfg.propose.first_pass_min_dist_ratio == 0.0008
+    assert cfg.propose.first_pass_border_saturation_passes == 5
+    assert cfg.propose.first_pass_sequential_augment_max == 8
+    assert cfg.propose.first_pass_guidance_refine_passes == 3
+    assert cfg.propose.use_full_packed_obstacle is True
+    assert cfg.propose.board_edge_when_packed is True
     assert cfg.propose.use_group_edge_seeds is True
     assert cfg.propose.use_contact_ranking is True
     assert cfg.selection.dfs_mode == "merged_loose_tight"
@@ -129,16 +141,21 @@ def test_default_config_first_pass_tuned():
     assert cfg.selection.dfs_max_tries == 4
     assert cfg.selection.dfs_refine_max_passes == 1024
     assert cfg.selection.dfs_refine_max_stagnant_passes == 4
-    assert cfg.propose.candidate_pool == 48
+    assert cfg.propose.candidate_pool == 64
     assert cfg.propose.use_contact_clearance_hybrid is True
-    assert cfg.sampling.max_transforms_per_group == 900
-    assert cfg.propose.max_proposals == 24
+    assert cfg.sampling.max_transforms_per_group == 1200
+    assert cfg.propose.max_proposals == 32
     assert cfg.propose.use_voronoi is True
     assert cfg.propose.use_point_cloud is False
     assert cfg.propose.use_guidance_propositions is True
-    assert cfg.propose.guidance_max_propositions == 6
+    assert cfg.propose.guidance_max_propositions == 8
     assert cfg.propose.guidance_use_corner_alignment is True
-    assert cfg.propose.guidance_enable_grid is False
+    assert cfg.propose.guidance_enable_grid is True
+    assert cfg.propose.use_neighbor_slide is True
+    assert cfg.propose.guidance_proposition_seed_count == 16
+    assert cfg.propose.use_board_edge_seeds is True
+    assert cfg.propose.board_edge_guidance_refine is True
+    assert cfg.propose.use_batch_pack is True
 
 
 def test_propose_geometry_validation(nest_board, rect_poly):

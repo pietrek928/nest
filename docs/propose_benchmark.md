@@ -56,11 +56,13 @@ Per-proposer ablation (partial_pack, seeds 0–9) — see [`propose_ablation_res
 | axis_push / perimeter / nfp / bottom_left | 0.15–0.30 | Loose alone; **defaults off** |
 | guidance_propositions (alone) | ~0.14 | Needs upstream seeds; keep in combined pipeline |
 
-**Shipped default changes:**
+**Shipped default changes (2026-05-29, kiss pass):**
 
-- `use_neighbor_slide`, `use_axis_push`, `use_bottom_left`, `use_nfp_vertices` → **False** (enable per job if needed)
-- `use_group_edge_seeds`, `use_ribbon_seeds`, `use_guidance_propositions`, contact hybrid ranking → **unchanged**
-- `guidance_enable_grid` → **False** (corner casts; optional for irregular voids)
+- Cast seeds: **contact-ranked** (`select_guidance_cast_seeds`), not first 8 pool slots
+- `guidance_proposition_seed_count` **16**, `guidance_max_propositions` **8**, `placement_num_angles` **18**
+- `use_neighbor_slide` **True** (capped `top_n = pool // 4`); `guidance_enable_grid` **True**
+- `contact_trim_fraction` **0.8**, `contact_clearance_hybrid_weight` **0.1**
+- Phase-2 Shapely (`axis_push`, `bottom_left`, `nfp_vertices`) remain **off**
 
 ## Shipped defaults (`ProposeConfig`)
 
@@ -68,15 +70,22 @@ See [`nest_graph/config.py`](../nest_graph/config.py). Key fields:
 
 | Field | Value | Rationale |
 |-------|-------|-----------|
-| `candidate_pool` | `48` | Room before contact/clearance trim |
-| `max_proposals` | `24` | Seeds per group to graph |
+| `candidate_pool` | `64` | Room before contact/clearance trim |
+| `max_proposals` | `32` | Seeds per group to graph |
+| `placement_num_angles` | `18` | Denser rotation grid |
 | `use_contact_ranking` | `True` | Packed: rank by kiss to focal/group |
-| `use_contact_clearance_hybrid` | `True` | Keep pocket poses via clearance blend |
-| `use_ribbon_seeds` | `True` | Strong on partial_pack ablation |
+| `use_contact_clearance_hybrid` | `True` | Pocket poses via clearance blend |
+| `contact_trim_fraction` | `0.8` | Kiss-heavy trim |
+| `contact_clearance_hybrid_weight` | `0.1` | Favor contact in hybrid rank |
+| `use_neighbor_slide` | `True` | Per-obstacle snap (capped pool share) |
 | `use_group_edge_seeds` | `True` | Best contact_min in ablation |
-| `use_guidance_propositions` | `True` | Cast expansion on structured seeds |
-| `guidance_enable_grid` | `False` | Corner exploration optional |
-| Phase-2 Shapely proposers | **off** | See calibration memo |
+| `use_guidance_propositions` | `True` | Cast on contact-ranked seeds |
+| `guidance_proposition_seed_count` | `16` | Cast seed budget |
+| `guidance_enable_grid` | `True` | Floor Walk corner casts |
+| `use_board_edge_seeds` | `True` | Nest outline + per-edge guidance cast |
+| `board_edge_guidance_refine` | `True` | Cast-refine snap seeds |
+| `board_edge_samples_per_edge` | `32` | Outline anchor density |
+| Phase-2 Shapely proposers | **off** | axis_push / bottom_left / nfp |
 
 ## Guidance cast (`guide.h`)
 

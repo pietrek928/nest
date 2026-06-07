@@ -50,6 +50,21 @@ All modes assert `selection_is_independent` on **final** output.
 
 See [build_graph_tuning.md](build_graph_tuning.md) for multi-iter pipeline benchmark (2026-05-29).
 
+## Board-edge proposer (2026-06-03)
+
+New `board_edge` proposer: nest-outline geometric seeds + per-edge [`guidance_config_for_board_edge_anchor`](../nest_graph/placement_scene.py) (`Exact Gravity Dock`, vertex corner match, floor walk via [`guide.h`](../nest_graph/geometry/guide/guide.h)).
+
+Border benchmark (empty triangle, seeds 0–2): **`board_edge_hybrid`** `border_dist_min` **0.0014** vs `border_focus` **0.0033** — see [propose_border_benchmark.md](propose_border_benchmark.md).
+
+```bash
+PYTHONPATH=. python scripts/benchmark_propose_border.py \
+  --presets board_edge_hybrid border_focus
+PYTHONPATH=. python scripts/benchmark_first_pass.py --seeds 0 1 2 \
+  --propose-preset shipped_board_edge --modes merged_loose_tight
+```
+
+Defaults: `use_board_edge_seeds=True`, `board_edge_guidance_refine=True`, `board_edge_samples_per_edge=32`.
+
 ## Preset tuning (J_max_density, seeds 0–2, prior run)
 
 | preset | graph_nodes | nest_sel | dfs_sel | time_s |

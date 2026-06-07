@@ -27,7 +27,7 @@ def test_guidance_config_defaults():
     assert cfg.use_tight_packing is True
     assert cfg.use_corner_alignment is True
     assert cfg.max_hole_size_ratio == pytest.approx(4.0)
-    assert cfg.max_propositions == 6
+    assert cfg.max_propositions == 8
     assert cfg.enable_grid_exploration is True
     assert cfg.target_angle_rad == pytest.approx(0.0)
     assert cfg.attraction_weight == pytest.approx(0.1)

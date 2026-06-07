@@ -82,19 +82,23 @@ def obstacle_polys_for_propose(
     placed: Sequence[BaseGeometry],
     part_poly: Polygon,
     min_dist: float,
+    *,
+    nearest_k: int = 2,
 ) -> list[BaseGeometry]:
-    """Nearest packed cluster only; graph still checks the full layout."""
+    """Parts in the k nearest packed clusters; graph still checks the full layout."""
     if not placed:
         return []
     groups = cluster_packed_solid_groups(placed, min_dist)
     if not groups:
         return []
+    gap = max(min_dist * 0.5, 1e-6)
     if len(groups) == 1:
         return list(placed)
-    gap = max(min_dist * 0.5, 1e-6)
     ref = part_poly.centroid
-    nearest = min(groups, key=lambda g: g.distance(ref))
-    return [p for p in placed if p.buffer(gap).intersects(nearest)]
+    k = max(1, min(nearest_k, len(groups)))
+    ranked = sorted(groups, key=lambda g: g.distance(ref))[:k]
+    obstacle = unary_union(ranked)
+    return [p for p in placed if p.buffer(gap).intersects(obstacle)]
 
 
 def obstacle_shape_for_propose(

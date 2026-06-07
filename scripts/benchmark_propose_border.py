@@ -17,6 +17,7 @@ from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.propose import (
     ProposeGeometry,
     propose_coords_with_strategy,
+    propose_placements_board_edge,
     propositions_to_ndarray,
 )
 from nest_graph.utils import normalize_poly, transform_poly
@@ -59,6 +60,31 @@ BORDER_PRESETS: dict[str, ProposeConfig] = {
         use_ribbon_seeds=True,
         use_border_focus=True,
         use_border_edge_seeds=True,
+        border_focus_ranking=True,
+        trim_candidates_by_clearance=True,
+    ),
+    "board_edge_snap_only": _benchmark_cfg(
+        use_border_focus=True,
+        border_focus_ranking=True,
+        use_board_edge_seeds=True,
+        board_edge_guidance_refine=False,
+        use_border_edge_seeds=False,
+        use_guidance_propositions=False,
+    ),
+    "board_edge_hybrid": _benchmark_cfg(
+        use_border_focus=True,
+        border_focus_ranking=True,
+        use_board_edge_seeds=True,
+        board_edge_guidance_refine=True,
+        use_border_edge_seeds=False,
+        use_guidance_propositions=False,
+    ),
+    "shipped_board_edge": _benchmark_cfg(
+        use_ribbon_seeds=True,
+        use_border_focus=True,
+        use_border_edge_seeds=True,
+        use_board_edge_seeds=True,
+        board_edge_guidance_refine=True,
         border_focus_ranking=True,
         trim_candidates_by_clearance=True,
     ),
@@ -122,6 +148,38 @@ def _border_stats(
     )
 
 
+def _coords_for_preset(
+    preset: str,
+    propose_cfg: ProposeConfig,
+    board: Polygon,
+    part: Polygon,
+    base_shape: Polygon,
+    cfg: BuildGraphConfig,
+    *,
+    min_dist: float,
+    push: Point,
+) -> list[tuple[float, float, float]]:
+    if preset in ("board_edge_snap_only", "board_edge_hybrid"):
+        geom = ProposeGeometry(
+            board, base_shape, part, min_dist, propose_cfg=propose_cfg,
+        )
+        return propose_placements_board_edge(
+            part,
+            board,
+            base_shape,
+            min_dist=min_dist,
+            propose_cfg=propose_cfg,
+            propose_geom=geom,
+            pt_push=push,
+            top_n=propose_cfg.max_proposals,
+            guidance_refine=preset == "board_edge_hybrid",
+        )
+    return propose_coords_with_strategy(
+        base_shape, part, board, propose_cfg,
+        min_dist=min_dist, pt_push=push,
+    )
+
+
 def run_row(preset: str, seed: int, cfg: BuildGraphConfig) -> BorderBenchmarkRow:
     board = _triangle_board()
     part = _rect_part()
@@ -132,9 +190,9 @@ def run_row(preset: str, seed: int, cfg: BuildGraphConfig) -> BorderBenchmarkRow
     push = Point(board.centroid)
 
     t0 = time.perf_counter()
-    coords = propose_coords_with_strategy(
-        base_shape, part, board, propose_cfg,
-        min_dist=min_dist, pt_push=push,
+    coords = _coords_for_preset(
+        preset, propose_cfg, board, part, base_shape, cfg,
+        min_dist=min_dist, push=push,
     )
     elapsed = time.perf_counter() - t0
 

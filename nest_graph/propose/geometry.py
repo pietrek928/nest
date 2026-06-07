@@ -9,7 +9,7 @@ from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
+from nest_graph.geometry import Geometry, GuidanceConfig
 from nest_graph.placement_scene import (
     PLACEMENT_EPSILON_RATIO,
     best_proposition,
@@ -114,7 +114,10 @@ class ProposeGeometry:
         *,
         target_angle_rad: float = 0.0,
         border_focus: bool | None = None,
+        guidance_cfg: GuidanceConfig | None = None,
     ):
+        if guidance_cfg is not None:
+            return self.scene.guidance(placed, xy, guidance_cfg)
         cfg = self._propose_guidance_cfg(
             push,
             border_focus=border_focus,

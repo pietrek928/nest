@@ -170,6 +170,49 @@ def guidance_config_for_propose(
     return cfg
 
 
+def guidance_config_for_board_edge_anchor(
+    anchor: Point,
+    inward: tuple[float, float],
+    *,
+    min_dist: float,
+    board_bounds: tuple[float, float, float, float] | None = None,
+    epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+    target_angle_rad: float = 0.0,
+    max_propositions: int = 8,
+    use_tight_packing: bool = True,
+    use_corner_alignment: bool = True,
+    enable_grid_exploration: bool = True,
+    diversity_dist_ratio: float = 4.0,
+) -> GuidanceConfig:
+    """Per-edge-anchor cast config: gravity pulls toward nest outline, target on anchor."""
+    eps = placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
+    cfg = GuidanceConfig()
+    cfg.minimum_placing_distance = min_dist + eps
+    cfg.search_radius = max(
+        _search_radius_for_bounds(board_bounds),
+        float(cfg.search_radius),
+    )
+    cfg.max_propositions = max_propositions
+    cfg.use_tight_packing = use_tight_packing
+    cfg.use_corner_alignment = use_corner_alignment
+    cfg.use_hole_seeking = True
+    cfg.enable_grid_exploration = enable_grid_exploration
+    _apply_guidance_scaling(
+        cfg, min_dist, board_bounds, diversity_dist_ratio=diversity_dist_ratio,
+    )
+    ix, iy = inward
+    ilen = math.hypot(ix, iy)
+    if ilen > 1e-9:
+        cfg.gravity_vector = (-ix / ilen, -iy / ilen)
+    else:
+        cfg.gravity_vector = (-1.0, -1.0)
+    cfg.use_gravity = True
+    cfg.use_target_attractor = True
+    cfg.target_position = (float(anchor.x), float(anchor.y))
+    cfg.target_angle_rad = target_angle_rad
+    return cfg
+
+
 def proposition_translation(prop) -> tuple[float, float]:
     tx, ty = prop.translation
     return (float(tx), float(ty))

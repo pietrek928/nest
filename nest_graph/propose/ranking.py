@@ -297,6 +297,52 @@ def _trim_candidates_stratified(
     return out[:limit]
 
 
+def select_guidance_cast_seeds(
+    candidates: Sequence[Tuple[float, float, float]],
+    limit: int,
+    shape_to_place: Polygon,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    min_dist: float,
+    focal_shape: Optional[BaseGeometry] = None,
+) -> List[Tuple[float, float, float]]:
+    """Pick cast expansion seeds by kiss quality, not pool append order."""
+    if limit <= 0 or not candidates:
+        return []
+    if len(candidates) <= limit:
+        return list(candidates)
+    n_contact = max(1, limit // 2)
+    n_clear = max(0, limit - n_contact)
+    contact_picked = _trim_candidates_by_contact(
+        candidates,
+        shape_to_place,
+        propose_geom,
+        pt_push,
+        min_dist,
+        n_contact,
+        focal_shape,
+    )
+    picked_keys = {
+        (round(c[0], 3), round(c[1], 3), round(c[2], 3)) for c in contact_picked
+    }
+    remaining = [
+        c for c in candidates
+        if (round(c[0], 3), round(c[1], 3), round(c[2], 3)) not in picked_keys
+    ]
+    clear_picked = _trim_candidates_by_clearance(
+        remaining, propose_geom, pt_push, n_clear,
+    )
+    out = list(contact_picked)
+    for c in clear_picked:
+        key = (round(c[0], 3), round(c[1], 3), round(c[2], 3))
+        if key not in picked_keys:
+            out.append(c)
+            picked_keys.add(key)
+        if len(out) >= limit:
+            break
+    return out[:limit]
+
+
 def _trim_candidates_by_contact(
     candidates: Sequence[Tuple[float, float, float]],
     shape_to_place: Polygon,

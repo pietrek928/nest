@@ -1,11 +1,13 @@
 # CFLAGS="-Wno-error=incompatible-pointer-types" pip install --force-reinstall --no-binary=shapely --upgrade shapely
 
 import cv2 as cv
+import math
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
 from shapely.geometry import box as shapely_box
 from shapely.geometry import Point
+from shapely.ops import nearest_points
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 from typing import Iterator, NamedTuple, Tuple
@@ -18,16 +20,24 @@ from .config import (
     score_rules_options,
     shuffle_transforms,
     subsample_transforms,
+    subsample_transforms_with_pinned,
     trim_history,
 )
 from .geometry import Geometry, GuidanceConfig, find_polygon_intersections_bipartite
 from .placement_scene import (
     PlacementScene,
+    guidance_config_for_board_edge_anchor,
     guidance_config_for_graph,
     is_valid_placement,
     placement_footprint_inside_board,
     placement_scene_for_part,
     footprints_inside_board,
+    proposition_translation,
+)
+from .propose.placements_guidance import (
+    _candidate_from_proposition,
+    _is_cast_move,
+    _sorted_guidance_propositions,
 )
 from .board import (
     board_context_from_geometry,
@@ -38,7 +48,9 @@ from .utils import normalize_poly, transform_poly
 from .propose import (
     propose_placements_point_cloud,
     proposed_transforms_for_groups,
+    border_edge_transforms_for_group,
 )
+from .propose.context import should_use_border_focus
 from .track_perf import show_performance
 from .elem_graph import (
     ElemGraph, Circle, Vec2,
@@ -720,6 +732,764 @@ def score_rule_sets_with_dfs(
     return out
 
 
+def window_selected_transforms(
+    selection_window: list[tuple[np.ndarray, np.ndarray]] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Merge per-iteration nest selections from the graph window (deduped per group)."""
+    if not selection_window:
+        return (np.zeros((0, 3)), np.zeros((0, 3)))
+    parts0 = [w[0] for w in selection_window if w[0].shape[0] > 0]
+    parts1 = [w[1] for w in selection_window if w[1].shape[0] > 0]
+    t0 = (
+        dedupe_transforms(np.concatenate(parts0, axis=0))
+        if parts0
+        else np.zeros((0, 3))
+    )
+    t1 = (
+        dedupe_transforms(np.concatenate(parts1, axis=0))
+        if parts1
+        else np.zeros((0, 3))
+    )
+    return (t0, t1)
+
+
+def _append_selection_window(
+    selection_window: list[tuple[np.ndarray, np.ndarray]],
+    selected_t: tuple[np.ndarray, np.ndarray],
+    maxlen: int,
+) -> None:
+    if not any(t.shape[0] for t in selected_t):
+        return
+    selection_window.append(selected_t)
+    if len(selection_window) > maxlen:
+        del selection_window[: len(selection_window) - maxlen]
+
+
+def _greedy_independent_set_ordered(
+    graph: ElemGraph,
+    order: list[int],
+) -> list[int]:
+    """Greedy MIS following ``order`` (no score re-sort)."""
+    kept: list[int] = []
+    kept_set: set[int] = set()
+    for v in order:
+        if any(u in kept_set for u in graph.collisions[v]):
+            continue
+        kept.append(v)
+        kept_set.add(v)
+    return kept
+
+
+def _nest_outline_boundary(outline: BaseGeometry):
+    if hasattr(outline, "exterior"):
+        return outline.exterior
+    return outline.boundary
+
+
+def _outline_standoff_distance(poly, outline: BaseGeometry) -> float:
+    return float(poly.distance(_nest_outline_boundary(outline)))
+
+
+def _border_kiss_tolerance(min_dist: float, *, scale: float = 5.0) -> float:
+    return max(min_dist * scale, 1e-6)
+
+
+def _border_kiss_indices(
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+) -> list[int]:
+    tol = _border_kiss_tolerance(min_dist)
+    return [
+        i
+        for i, poly in enumerate(polys)
+        if abs(_outline_standoff_distance(poly, outline) - min_dist) <= tol
+    ]
+
+
+def _perimeter_sort_key(poly, outline: BaseGeometry) -> float:
+    ring = _nest_outline_boundary(outline)
+    touch = nearest_points(ring, poly.centroid)[0]
+    return float(ring.project(touch))
+
+
+def _expand_border_selection(
+    graph: ElemGraph,
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+    scores: list[float],
+    initial: list[int],
+) -> list[int]:
+    """Greedy MIS on outline-kiss nodes, preserving ``initial`` and walking the perimeter."""
+    kept_set = set(initial)
+    marked = [False] * len(polys)
+    for i in kept_set:
+        marked[i] = True
+        for j in graph.collisions[i]:
+            marked[j] = True
+    border = _border_kiss_indices(polys, outline, min_dist)
+    order = sorted(
+        border,
+        key=lambda i: (
+            _perimeter_sort_key(polys[i], outline),
+            abs(_outline_standoff_distance(polys[i], outline) - min_dist),
+            -scores[i],
+        ),
+    )
+    for i in order:
+        if marked[i]:
+            continue
+        kept_set.add(i)
+        marked[i] = True
+        for j in graph.collisions[i]:
+            marked[j] = True
+    return sorted(kept_set)
+
+
+def _first_pass_border_ring_selection(
+    graph: ElemGraph,
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+    scores: list[float],
+) -> list[int]:
+    """Pack as many outline-kiss nodes as possible, walking the nest perimeter."""
+    border = _border_kiss_indices(polys, outline, min_dist)
+    if not border:
+        return []
+    order = sorted(
+        border,
+        key=lambda i: (
+            _perimeter_sort_key(polys[i], outline),
+            abs(_outline_standoff_distance(polys[i], outline) - min_dist),
+            -scores[i],
+        ),
+    )
+    return _greedy_independent_set_ordered(graph, order)
+
+
+def _transform_row_key(t: np.ndarray) -> tuple[float, float, float]:
+    return (round(float(t[0]), 4), round(float(t[1]), 4), round(float(t[2]), 4))
+
+
+def _locked_graph_indices(
+    transforms: list[np.ndarray],
+    phase1_transforms: list[np.ndarray],
+) -> list[int]:
+    keys = {_transform_row_key(t) for t in phase1_transforms}
+    return [i for i, t in enumerate(transforms) if _transform_row_key(t) in keys]
+
+
+def _prepend_group_transforms(
+    phase1: np.ndarray,
+    batch: np.ndarray,
+) -> np.ndarray:
+    if phase1.shape[0] == 0:
+        return batch
+    if batch.shape[0] == 0:
+        return phase1
+    return dedupe_transforms(np.concatenate([phase1, batch], axis=0))
+
+
+def _border_saturation_transform_batch(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    parts: list[tuple[Polygon, int]],
+    nest_state: NestState,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Propose-only batch for outline saturation (no random/history noise)."""
+    min_dist = cfg.board_min_dist(first_pass=True)
+    polys = nest_state.polys
+    selected = nest_state.selected_indices
+    group_id = nest_state.group_id
+    transform = nest_state.transform
+    part_by_gid = {gid: poly for poly, gid in parts}
+    pack_polys = [polys[i] for i in selected]
+    phase1_by_group: list[list[np.ndarray]] = [[], []]
+    for idx in selected:
+        phase1_by_group[group_id[idx]].append(transform[idx])
+    propose_by_group = proposed_transforms_for_groups(
+        board,
+        parts,
+        polys,
+        selected,
+        cfg.first_pass_propose_config(),
+        min_dist=min_dist,
+        border_only_propose=True,
+        use_full_packed_obstacle=cfg.propose.use_full_packed_obstacle,
+    )
+    out: list[np.ndarray] = []
+    for gid in range(len(phase1_by_group)):
+        phase1 = (
+            np.asarray(phase1_by_group[gid], dtype=np.float64)
+            if phase1_by_group[gid]
+            else np.zeros((0, 3))
+        )
+        proposed = propose_by_group.get(gid, np.zeros((0, 3)))
+        augment_coords = _border_augment_coords(
+            cfg,
+            board,
+            part_by_gid[gid],
+            pack_polys,
+            min_dist=min_dist,
+        )
+        augment = (
+            np.asarray(augment_coords, dtype=np.float64)
+            if augment_coords
+            else np.zeros((0, 3))
+        )
+        extra = dedupe_transforms(
+            np.concatenate([proposed, augment], axis=0),
+        )
+        cap = max(cfg.propose.first_pass_max_proposals * 4, 128)
+        room = max(cap - phase1.shape[0], 0)
+        if extra.shape[0] > room:
+            extra = extra[:room]
+        merged = dedupe_transforms(np.concatenate([phase1, extra], axis=0))
+        out.append(merged)
+    return (out[0], out[1])
+
+
+def _is_border_kiss_poly(poly, outline: BaseGeometry, min_dist: float) -> bool:
+    tol = _border_kiss_tolerance(min_dist)
+    err = abs(_outline_standoff_distance(poly, outline) - min_dist)
+    return err <= tol
+
+
+def _clear_of_polys(poly, others: list, min_dist: float) -> bool:
+    for other in others:
+        if poly.intersects(other):
+            return False
+        if poly.distance(other) < min_dist - 1e-9:
+            return False
+    return True
+
+
+def _outline_anchor_inward(
+    poly,
+    outline: BaseGeometry,
+) -> tuple[Point, tuple[float, float]]:
+    ring = _nest_outline_boundary(outline)
+    if hasattr(outline, "representative_point"):
+        interior = outline.representative_point()
+    else:
+        interior = ring.interpolate(0.5, normalized=True)
+    anchor, _ = nearest_points(ring, poly)
+    ox = anchor.x - interior.x
+    oy = anchor.y - interior.y
+    dist = float(np.hypot(ox, oy))
+    if dist < 1e-9:
+        return anchor, (-1.0, -1.0)
+    return anchor, (ox / dist, oy / dist)
+
+
+def _border_tightness_cost(
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+) -> float:
+    """Lower is tighter: excess neighbor gap plus outline standoff error."""
+    if not polys:
+        return 0.0
+    kiss = sum(
+        abs(_outline_standoff_distance(poly, outline) - min_dist)
+        for poly in polys
+    )
+    if len(polys) < 2:
+        return kiss
+    excess_gap = 0.0
+    for i, poly in enumerate(polys):
+        nearest = min(
+            (poly.distance(other) for j, other in enumerate(polys) if j != i),
+            default=float("inf"),
+        )
+        if nearest < float("inf"):
+            excess_gap += max(0.0, nearest - min_dist)
+    return 2.0 * excess_gap + 0.25 * kiss
+
+
+def _border_refine_kiss_ok(poly, outline: BaseGeometry, min_dist: float) -> bool:
+    tol = _border_kiss_tolerance(min_dist, scale=8.0)
+    err = abs(_outline_standoff_distance(poly, outline) - min_dist)
+    return err <= tol
+
+
+def _border_refine_candidates(
+    x: float,
+    y: float,
+    theta: float,
+    g,
+    *,
+    min_dist: float,
+    max_props: int,
+) -> list[tuple[float, float, float]]:
+    """Cast snaps plus fractional slide steps along guidance propositions."""
+    out: list[tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+
+    def add(coords: tuple[float, float, float]) -> None:
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(coords)
+
+    for prop in _sorted_guidance_propositions(g)[:max_props]:
+        use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
+        add(_candidate_from_proposition(x, y, theta, prop, use_full_cast=use_cast))
+        if use_cast:
+            continue
+        tx, ty = proposition_translation(prop)
+        mag = math.hypot(tx, ty)
+        if mag < 1e-9:
+            continue
+        step_scale = 0.2
+        step_len = step_scale * max(min_dist, 1e-4)
+        if not g.is_penetrating:
+            step_len = step_scale * mag
+        for frac in (0.4, 0.7, 1.0):
+            nx = x + tx / mag * step_len * frac
+            ny = y + ty / mag * step_len * frac
+            add((nx, ny, theta))
+    return out
+
+
+def _guidance_border_refine(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    parts: list[tuple[Polygon, int]],
+    *,
+    outline: BaseGeometry,
+    pack_polys: list,
+    pack_gids: list[int],
+    pack_tr: list[np.ndarray],
+) -> tuple[list, list[int], list[np.ndarray]]:
+    """Tighten border ring placements using per-anchor guidance casts."""
+    passes = max(cfg.propose.first_pass_guidance_refine_passes, 0)
+    if passes <= 0 or len(pack_polys) < 2:
+        return pack_polys, pack_gids, pack_tr
+
+    min_dist = cfg.board_min_dist(first_pass=True)
+    eps = cfg.placement_epsilon_ratio(first_pass=True)
+    propose_cfg = cfg.first_pass_propose_config()
+    sheet, voids = board_context_from_geometry(board)
+    board_geom = Geometry.from_shapely(sheet)
+    pad = default_sheet_padding(board)
+    bounds = padded_board_bounds(board, pad)
+    part_by_gid = {gid: poly for poly, gid in parts}
+    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
+
+    polys = list(pack_polys)
+    gids = list(pack_gids)
+    trs = [np.asarray(t, dtype=np.float64) for t in pack_tr]
+    geoms = [bases[gid].apply_transform(t) for gid, t in zip(gids, trs, strict=True)]
+    max_props = max(propose_cfg.guidance_max_propositions, 1)
+
+    for _ in range(passes):
+        base_cost = _border_tightness_cost(polys, outline, min_dist)
+        improved = False
+        order = sorted(
+            range(len(polys)),
+            key=lambda i: _perimeter_sort_key(polys[i], outline),
+        )
+        for idx in order:
+            gid = gids[idx]
+            part_poly = part_by_gid[gid]
+            x, y, theta = float(trs[idx][0]), float(trs[idx][1]), float(trs[idx][2])
+            anchor, inward = _outline_anchor_inward(polys[idx], outline)
+            others_geoms = [geoms[j] for j in range(len(geoms)) if j != idx]
+            others_polys = [polys[j] for j in range(len(polys)) if j != idx]
+            scene = placement_scene_for_part(
+                sheet, board_geom, voids, bases[gid], base_geoms=others_geoms,
+            )
+            edge_cfg = guidance_config_for_board_edge_anchor(
+                anchor,
+                inward,
+                min_dist=min_dist,
+                board_bounds=bounds,
+                epsilon_ratio=eps,
+                target_angle_rad=theta,
+                max_propositions=max_props,
+                use_tight_packing=propose_cfg.guidance_use_tight_packing,
+                use_corner_alignment=propose_cfg.guidance_use_corner_alignment,
+                enable_grid_exploration=propose_cfg.guidance_enable_grid,
+                diversity_dist_ratio=propose_cfg.guidance_diversity_dist_ratio,
+            )
+            placed = scene.placed_at((x, y, theta))
+            g = scene.guidance(placed, (x, y), edge_cfg)
+            best_coords: tuple[float, float, float] | None = None
+            best_cost = base_cost
+            for candidate in _border_refine_candidates(
+                x, y, theta, g, min_dist=min_dist, max_props=max_props,
+            ):
+                cand_poly = transform_poly(part_poly, candidate)
+                if not _border_refine_kiss_ok(cand_poly, outline, min_dist):
+                    continue
+                if not _clear_of_polys(cand_poly, others_polys, min_dist):
+                    continue
+                cand_geom = bases[gid].apply_transform(np.asarray(candidate, dtype=np.float64))
+                if not is_valid_placement(
+                    scene,
+                    cand_geom,
+                    cand_geom.center(),
+                    min_dist,
+                    edge_cfg,
+                    skip_footprint=True,
+                ):
+                    continue
+                trial_polys = list(polys)
+                trial_polys[idx] = cand_poly
+                cost = _border_tightness_cost(trial_polys, outline, min_dist)
+                if cost + 1e-9 < best_cost:
+                    best_coords = candidate
+                    best_cost = cost
+            if best_coords is None:
+                continue
+            polys[idx] = transform_poly(part_poly, best_coords)
+            trs[idx] = np.asarray(best_coords, dtype=np.float64)
+            geoms[idx] = bases[gid].apply_transform(trs[idx])
+            base_cost = best_cost
+            improved = True
+        if not improved:
+            break
+
+    return polys, gids, trs
+
+
+def _border_pack_graph(
+    pack_polys: list,
+    pack_gids: list[int],
+    pack_tr: list[np.ndarray],
+) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
+    placed_geoms = [Geometry.from_shapely(p) for p in pack_polys]
+    graph = ElemGraph()
+    bboxes = [g.bounds() for g in placed_geoms]
+    graph.reserve_elems(len(placed_geoms))
+    for n, geom in enumerate(placed_geoms):
+        cx, cy = geom.center()
+        graph.append_elem(
+            pack_gids[n],
+            Vec2(x=cx, y=cy),
+            Circle.from_center_radius(cx, cy, geom.radius()),
+        )
+        for j in _collision_partners_vs_existing(
+            geom, bboxes[n], placed_geoms[:n], bboxes[:n],
+        ):
+            graph.add_collision(n, j)
+    selected_out = list(range(len(pack_polys)))
+    assert selection_is_independent(graph, selected_out)
+    return graph, pack_polys, pack_gids, pack_tr, selected_out
+
+
+def _border_augment_coords(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    part_poly: Polygon,
+    placed_polys: list,
+    *,
+    min_dist: float,
+) -> list[tuple[float, float, float]]:
+    """Fast outline candidates: board snap + chain fit against full packed union."""
+    from nest_graph.propose.placements_edge import (
+        propose_placements_board_edge,
+        propose_placements_group_fit,
+    )
+    from nest_graph.propose.placements_primary import (
+        propose_placements_neighbor_slide,
+        propose_placements_perimeter_walk,
+    )
+    from nest_graph.propose.context import border_focal_for_propose, propose_push_point
+    from nest_graph.propose.geometry import ProposeGeometry
+
+    sheet, _ = board_context_from_geometry(board)
+    obstacle = unary_union(placed_polys) if placed_polys else Polygon()
+    propose_cfg = cfg.first_pass_propose_config()
+    push = propose_push_point(
+        board,
+        obstacle,
+        smart_push=propose_cfg.smart_push_target,
+        min_dist=min_dist,
+        use_border_focus=True,
+    )
+    geom = ProposeGeometry(
+        board,
+        obstacle,
+        part_poly,
+        min_dist,
+        epsilon_ratio=propose_cfg.placement_clearance_epsilon_ratio,
+        propose_cfg=propose_cfg,
+    )
+    coords: list[tuple[float, float, float]] = []
+    coords.extend(
+        propose_placements_board_edge(
+            part_poly,
+            sheet,
+            Polygon(),
+            min_dist=min_dist,
+            propose_cfg=propose_cfg,
+            propose_geom=geom,
+            pt_push=push,
+            top_n=propose_cfg.first_pass_max_proposals,
+            samples_per_edge=propose_cfg.board_edge_samples_per_edge,
+        ),
+    )
+    if not obstacle.is_empty:
+        focal = unary_union([border_focal_for_propose(board, min_dist), obstacle])
+        coords.extend(
+            propose_placements_group_fit(
+                focal,
+                part_poly,
+                sheet,
+                obstacle,
+                min_dist=min_dist,
+                top_n=propose_cfg.first_pass_max_proposals,
+                samples_per_edge=propose_cfg.first_pass_group_edge_samples_per_edge,
+                propose_geom=geom,
+                pt_push=push,
+            ),
+        )
+        coords.extend(
+            propose_placements_neighbor_slide(
+                obstacle,
+                part_poly,
+                sheet,
+                min_dist,
+                propose_geom=geom,
+                pt_push=push,
+                num_angles=propose_cfg.placement_num_angles,
+                top_n=propose_cfg.first_pass_max_proposals,
+            ),
+        )
+        coords.extend(
+            propose_placements_perimeter_walk(
+                obstacle,
+                part_poly,
+                sheet,
+                min_dist,
+                propose_geom=geom,
+                pt_push=push,
+                use_free_region=False,
+                border_focus=True,
+                num_angles=propose_cfg.placement_num_angles,
+                top_n=propose_cfg.first_pass_max_proposals // 2,
+            ),
+        )
+    seen: set[tuple[float, float, float]] = set()
+    out: list[tuple[float, float, float]] = []
+    for c in coords:
+        key = (round(c[0], 3), round(c[1], 3), round(c[2], 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(c)
+    return out
+
+
+def _sequential_border_augment(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    parts: list[tuple[Polygon, int]],
+    *,
+    outline: BaseGeometry,
+    polys: list,
+    group_id: list[int],
+    transform: list[np.ndarray],
+    selected: list[int],
+) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
+    """Fill outline gaps by proposing against the full packed union each step."""
+    min_dist = cfg.board_min_dist(first_pass=True)
+    eps = cfg.placement_epsilon_ratio(first_pass=True)
+    sheet, voids = board_context_from_geometry(board)
+    board_geom = Geometry.from_shapely(sheet)
+    pad = default_sheet_padding(board)
+    guidance_cfg = guidance_config_for_graph(
+        min_dist,
+        board_bounds=padded_board_bounds(board, pad),
+        epsilon_ratio=eps,
+    )
+    part_by_gid = {gid: poly for poly, gid in parts}
+    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
+
+    pack_polys = [polys[i] for i in selected]
+    pack_gids = [group_id[i] for i in selected]
+    pack_tr = [transform[i] for i in selected]
+    placed_geoms = [Geometry.from_shapely(p) for p in pack_polys]
+    max_rounds = max(cfg.propose.first_pass_sequential_augment_max, 0)
+
+    for _ in range(max_rounds):
+        candidates: list[tuple[float, int, np.ndarray, Polygon, Geometry]] = []
+        for gid, part_poly in part_by_gid.items():
+            for c in _border_augment_coords(
+                cfg, board, part_poly, pack_polys, min_dist=min_dist,
+            ):
+                coords = np.asarray(c, dtype=np.float64)
+                shapely_placed = transform_poly(part_poly, coords)
+                if not _is_border_kiss_poly(shapely_placed, outline, min_dist):
+                    continue
+                if not _clear_of_polys(shapely_placed, pack_polys, min_dist):
+                    continue
+                geom = bases[gid].apply_transform(coords)
+                scene = placement_scene_for_part(
+                    sheet, board_geom, voids, bases[gid], base_geoms=placed_geoms,
+                )
+                if not is_valid_placement(
+                    scene, geom, geom.center(), min_dist, guidance_cfg,
+                    skip_footprint=True,
+                ):
+                    continue
+                cost = abs(_outline_standoff_distance(shapely_placed, outline) - min_dist)
+                candidates.append((cost, gid, coords, shapely_placed, geom))
+        if not candidates:
+            break
+        candidates.sort(key=lambda row: row[0])
+        added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
+        for cost, gid, coords, shapely_placed, geom in candidates:
+            blockers = pack_polys + [row[2] for row in added]
+            if not _clear_of_polys(shapely_placed, blockers, min_dist):
+                continue
+            added.append((gid, coords, shapely_placed, geom))
+        if not added:
+            break
+        for gid, coords, shapely_placed, geom in added:
+            pack_polys.append(shapely_placed)
+            pack_gids.append(gid)
+            pack_tr.append(coords)
+            placed_geoms.append(geom)
+
+    pack_polys, pack_gids, pack_tr = _guidance_border_refine(
+        cfg,
+        board,
+        parts,
+        outline=outline,
+        pack_polys=pack_polys,
+        pack_gids=pack_gids,
+        pack_tr=pack_tr,
+    )
+    return _border_pack_graph(pack_polys, pack_gids, pack_tr)
+
+
+def _first_pass_layered_selection(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    parts: list[tuple[Polygon, int]],
+    *,
+    graph: ElemGraph,
+    p1: Polygon,
+    p2: Polygon,
+    selected_t: tuple[np.ndarray, np.ndarray],
+    history: tuple[np.ndarray, np.ndarray],
+    rng: np.random.Generator,
+    selection_window: list[tuple[np.ndarray, np.ndarray]] | None,
+    polys: list,
+    group_id: list[int],
+    transform: list[np.ndarray],
+    phase1_selected: list[int],
+    rule_set: PlacementRuleSet,
+    scores: list[float],
+    selection: SelectionConfig,
+) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
+    """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
+    min_dist = cfg.board_min_dist(first_pass=True)
+    outline = board
+    graph_cur = graph
+    polys_cur = polys
+    group_id_cur = group_id
+    transform_cur = transform
+    sel_cur = list(phase1_selected)
+    passes = max(cfg.propose.first_pass_border_saturation_passes, 0)
+
+    for _ in range(passes):
+        phase1_by_group: list[list[np.ndarray]] = [[], []]
+        for idx in sel_cur:
+            phase1_by_group[group_id_cur[idx]].append(transform_cur[idx])
+        phase1_t = tuple(
+            np.asarray(rows, dtype=np.float64) if rows else np.zeros((0, 3))
+            for rows in phase1_by_group
+        )
+        nest_state = NestState(
+            polys=polys_cur,
+            group_id=group_id_cur,
+            transform=transform_cur,
+            selected_indices=list(sel_cur),
+        )
+        batch2 = _border_saturation_transform_batch(
+            cfg,
+            board,
+            parts,
+            nest_state,
+        )
+        combined = (
+            _prepend_group_transforms(phase1_t[0], batch2[0]),
+            _prepend_group_transforms(phase1_t[1], batch2[1]),
+        )
+        graph2, polys2, group_id2, transform2 = make_polygon_graph(
+            board,
+            [(p1, combined[0]), (p2, combined[1])],
+            min_dist=min_dist,
+            epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=True),
+        )
+        locked = _locked_graph_indices(
+            transform2,
+            [transform_cur[i] for i in sel_cur],
+        )
+        if not locked:
+            break
+        scores2 = score_elems(graph2, rule_set)
+        new_sel = _expand_border_selection(
+            graph2, polys2, outline, min_dist, scores2, locked,
+        )
+        graph_cur = graph2
+        polys_cur = polys2
+        group_id_cur = group_id2
+        transform_cur = transform2
+        if len(new_sel) <= len(sel_cur):
+            sel_cur = new_sel
+            break
+        sel_cur = new_sel
+
+    if cfg.propose.first_pass_sequential_augment_max > 0:
+        return _sequential_border_augment(
+            cfg,
+            board,
+            parts,
+            outline=outline,
+            polys=polys_cur,
+            group_id=group_id_cur,
+            transform=transform_cur,
+            selected=sel_cur,
+        )
+
+    pack_polys = [polys_cur[i] for i in sel_cur]
+    pack_gids = [group_id_cur[i] for i in sel_cur]
+    pack_tr = [transform_cur[i] for i in sel_cur]
+    pack_polys, pack_gids, pack_tr = _guidance_border_refine(
+        cfg,
+        board,
+        parts,
+        outline=outline,
+        pack_polys=pack_polys,
+        pack_gids=pack_gids,
+        pack_tr=pack_tr,
+    )
+    return _border_pack_graph(pack_polys, pack_gids, pack_tr)
+
+
+def _boost_border_scores(
+    polys: list,
+    scores: list[float],
+    outline: BaseGeometry,
+    min_dist: float,
+    *,
+    weight: float = 8.0,
+) -> None:
+    """Favor graph nodes flush to the nest outline when scoring nest/DFS."""
+    scale = _border_kiss_tolerance(min_dist)
+    for i, sc in enumerate(scores):
+        err = abs(_outline_standoff_distance(polys[i], outline) - min_dist)
+        scores[i] = sc + weight * max(0.0, 1.0 - err / scale)
+
+
 def _build_transform_batch(
     cfg: BuildGraphConfig,
     selected_t: tuple[np.ndarray, np.ndarray],
@@ -729,10 +1499,18 @@ def _build_transform_batch(
     board: BaseGeometry | None = None,
     parts: list[tuple[Polygon, int]] | None = None,
     nest_state: NestState | None = None,
+    selection_window: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    first_pass: bool = False,
+    border_saturation: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     sc = cfg.sampling
     scale = sc.transform_scale
     propose_by_group: dict[int, np.ndarray] = {}
+    border_pin_by_group: dict[int, np.ndarray] = {}
+    empty_sheet = (
+        nest_state is None
+        or not nest_state.selected_indices
+    )
     if (
         board is not None
         and parts is not None
@@ -740,35 +1518,89 @@ def _build_transform_batch(
     ):
         polys = nest_state.polys if nest_state is not None else []
         selected = nest_state.selected_indices if nest_state is not None else []
+        min_dist = cfg.board_min_dist(first_pass=first_pass)
+        propose_cfg = (
+            cfg.first_pass_propose_config() if first_pass else cfg.propose
+        )
+        border_only = (
+            (empty_sheet and cfg.propose.first_pass_empty_border_only)
+            or (border_saturation and cfg.propose.first_pass_border_pack)
+        )
         propose_by_group = proposed_transforms_for_groups(
             board,
             parts,
             polys,
             selected,
-            cfg.propose,
-            min_dist=cfg.board_min_dist(),
+            propose_cfg,
+            min_dist=min_dist,
+            border_only_propose=border_only,
+            use_full_packed_obstacle=(
+                cfg.propose.use_full_packed_obstacle and not empty_sheet
+            ),
         )
+        if empty_sheet and cfg.propose.use_board_edge_seeds:
+            for part_poly, group_id in parts:
+                border_pin_by_group[group_id] = border_edge_transforms_for_group(
+                    board,
+                    part_poly,
+                    Polygon(),
+                    propose_cfg,
+                    min_dist=min_dist,
+                )
+
+    window_t = window_selected_transforms(selection_window)
 
     def one_group(
         group_id: int,
         sel: np.ndarray,
         hist: np.ndarray,
+        window: np.ndarray,
     ) -> np.ndarray:
         batch_parts: list[np.ndarray] = []
+        pinned = border_pin_by_group.get(group_id, np.zeros((0, 3)))
         proposed = propose_by_group.get(group_id, np.zeros((0, 3)))
-        if proposed.shape[0] > 0:
+        border_batch = (
+            empty_sheet
+            and cfg.propose.first_pass_border_pack
+            and cfg.propose.first_pass_empty_border_only
+        )
+        if border_batch:
+            if pinned.shape[0] > 0:
+                batch_parts.append(pinned)
+                jitter_n = sc.structured_jitter_per_proposal_empty
+                if jitter_n > 0:
+                    jittered = expand_structured_transforms(
+                        pinned,
+                        cfg.propose.structured_jitter_border_scale,
+                        jitter_n,
+                    )
+                    if jittered.shape[0] > 0:
+                        batch_parts.append(jittered)
+            if proposed.shape[0] > 0:
+                batch_parts.append(proposed)
+        elif proposed.shape[0] > 0:
             batch_parts.append(proposed)
-            jittered = expand_structured_transforms(
-                proposed,
-                sc.structured_jitter_scale,
-                sc.structured_jitter_per_proposal,
-            )
-            if jittered.shape[0] > 0:
-                batch_parts.append(jittered)
+            if pinned.shape[0] == 0:
+                jitter_n = (
+                    sc.structured_jitter_per_proposal_empty
+                    if empty_sheet
+                    else sc.structured_jitter_per_proposal
+                )
+                jittered = expand_structured_transforms(
+                    proposed,
+                    sc.structured_jitter_scale,
+                    jitter_n,
+                )
+                if jittered.shape[0] > 0:
+                    batch_parts.append(jittered)
         n_random = (
-            sc.random_per_iter_when_proposed
-            if proposed.shape[0] > 0
-            else sc.random_per_iter
+            cfg.propose.random_per_iter_empty_border
+            if empty_sheet and cfg.propose.use_border_focus and not border_batch
+            else (
+                sc.random_per_iter_when_proposed
+                if proposed.shape[0] > 0
+                else sc.random_per_iter
+            )
         )
         batch_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
         if hist.shape[0] > 0:
@@ -777,7 +1609,12 @@ def _build_transform_batch(
             batch_parts.append(sel)
             batch_parts.extend(transform_selection(sel, sc.selection_expand_n))
             batch_parts.extend(transform_history(hist, sc.history_expand_n))
-        if sc.shuffle_passes > 0 and (sel.shape[0] > 0 or hist.shape[0] > 0):
+        if window.shape[0] > 0:
+            batch_parts.append(window)
+            batch_parts.extend(transform_selection(window, sc.selection_expand_n))
+        if sc.shuffle_passes > 0 and (
+            sel.shape[0] > 0 or hist.shape[0] > 0 or window.shape[0] > 0
+        ):
             for _ in range(sc.shuffle_passes):
                 batch_parts.append(
                     transform_shuffle_mix(
@@ -786,11 +1623,13 @@ def _build_transform_batch(
                 )
         merged = dedupe_transforms(np.concatenate(batch_parts))
         merged = shuffle_transforms(merged, rng)
-        return subsample_transforms(merged, sc.max_transforms_per_group, rng)
+        return subsample_transforms_with_pinned(
+            merged, pinned, sc.max_transforms_per_group, rng,
+        )
 
     return (
-        one_group(0, selected_t[0], history[0]),
-        one_group(1, selected_t[1], history[1]),
+        one_group(0, selected_t[0], history[0], window_t[0]),
+        one_group(1, selected_t[1], history[1], window_t[1]),
     )
 
 
@@ -805,10 +1644,18 @@ def _make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
     rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0.7, y=0.7), r=r, w=wtri, group=1))
     rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=1.1), r=r, w=wtri, group=1))
     rule_set.append_rule(PointPlaceRule(pos=Vec2(x=1.2, y=0), r=r, w=wtri, group=1))
-    rule_set.append_rule(PointAngleRule(pos=Vec2(x=0, y=1.1), r=r, a=np.pi / 4, w=aw, group=1))
-    rule_set.append_rule(PointAngleRule(pos=Vec2(x=0, y=1.1), r=r, a=np.pi * 5 / 4, w=aw, group=1))
-    rule_set.append_rule(PointAngleRule(pos=Vec2(x=1.2, y=0), r=r, a=np.pi / 4, w=aw, group=1))
-    rule_set.append_rule(PointAngleRule(pos=Vec2(x=1.2, y=0), r=r, a=np.pi * 5 / 4, w=aw, group=1))
+    for gi, wgt in ((0, wrect), (1, wtri)):
+        for k in range(8):
+            a = float(2.0 * np.pi * k / 8.0)
+            rule_set.append_rule(
+                PointAngleRule(
+                    pos=Vec2(x=0.6, y=0.55),
+                    r=r,
+                    a=a,
+                    w=aw * wgt,
+                    group=gi,
+                ),
+            )
     return rule_set
 
 
@@ -1044,6 +1891,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     )
     history = (np.zeros((1, 3)), np.zeros((1, 3)))
     graphs: list[ElemGraph] = []
+    selection_window: list[tuple[np.ndarray, np.ndarray]] = []
     nest_state: NestState | None = None
     parts = [(p1, 0), (p2, 1)]
     board_area = p_board.area
@@ -1066,39 +1914,98 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             board=p_board,
             parts=parts,
             nest_state=nest_state,
+            selection_window=selection_window,
+            first_pass=nest_state is None,
         )
+        first_pass = nest_state is None
         graph, polys, group_id, transform = make_polygon_graph(
             p_board,
             [(p1, selected_t[0]), (p2, selected_t[1])],
-            min_dist=cfg.board_min_dist(),
-            epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
+            min_dist=cfg.board_min_dist(first_pass=first_pass),
+            epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=first_pass),
         )
         graphs.append(graph)
         graphs = graphs[-gc.graphs_window:]
-        for round_idx in range(sel.improve_rules_rounds):
-            rule_sets = improve_rules(
-                graphs,
-                rule_sets,
-                sel.rules_kept,
-                p_board,
-                mutation_presets=cfg.rules.mutation_presets(),
-                rule_score_penalty=sel.rule_score_penalty,
-                elite_count=sel.improve_rules_elite_count,
-                seed=int(rng.integers(0, 2**31)) + round_idx,
-                score_options=score_rules_options(sel),
-                max_rules_per_set=cfg.rules.max_rules_per_set,
+        first_pass = nest_state is None
+        seed_rules = active_rule_set(_make_seed_rule_sets(cfg))
+        if first_pass and cfg.propose.first_pass_border_pack:
+            scores = score_elems(graph, seed_rules)
+            sheet, _ = board_context_from_geometry(p_board)
+            min_dist = cfg.board_min_dist(first_pass=True)
+            selected_polys = _first_pass_border_ring_selection(
+                graph, polys, p_board, min_dist, scores,
             )
-        active_rules = active_rule_set(rule_sets)
-        selected_polys = nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0]
-        old_len = len(selected_polys)
-        scores = score_elems(graph, active_rules)
-        _, selected_polys, _ = apply_dfs_refinement(
-            graph,
-            active_rules,
-            list(selected_polys),
-            scores,
-            selection=sel,
-        )
+            old_len = 0
+            if not selected_polys:
+                selected_polys = list(nest_by_graph(graph, [seed_rules])[0])
+                old_len = len(selected_polys)
+            if cfg.propose.first_pass_layered_pack and selected_polys:
+                graph, polys, group_id, transform, selected_polys = (
+                    _first_pass_layered_selection(
+                        cfg,
+                        p_board,
+                        parts,
+                        graph=graph,
+                        p1=p1,
+                        p2=p2,
+                        selected_t=selected_t,
+                        history=history,
+                        rng=rng,
+                        selection_window=selection_window,
+                        polys=polys,
+                        group_id=group_id,
+                        transform=transform,
+                        phase1_selected=list(selected_polys),
+                        rule_set=seed_rules,
+                        scores=scores,
+                        selection=sel,
+                    )
+                )
+            for round_idx in range(sel.improve_rules_rounds):
+                rule_sets = improve_rules(
+                    graphs,
+                    rule_sets,
+                    sel.rules_kept,
+                    p_board,
+                    mutation_presets=cfg.rules.mutation_presets(),
+                    rule_score_penalty=sel.rule_score_penalty,
+                    elite_count=sel.improve_rules_elite_count,
+                    seed=int(rng.integers(0, 2**31)) + round_idx,
+                    score_options=score_rules_options(sel),
+                    max_rules_per_set=cfg.rules.max_rules_per_set,
+                )
+        else:
+            for round_idx in range(sel.improve_rules_rounds):
+                rule_sets = improve_rules(
+                    graphs,
+                    rule_sets,
+                    sel.rules_kept,
+                    p_board,
+                    mutation_presets=cfg.rules.mutation_presets(),
+                    rule_score_penalty=sel.rule_score_penalty,
+                    elite_count=sel.improve_rules_elite_count,
+                    seed=int(rng.integers(0, 2**31)) + round_idx,
+                    score_options=score_rules_options(sel),
+                    max_rules_per_set=cfg.rules.max_rules_per_set,
+                )
+            active_rules = active_rule_set(rule_sets)
+            scores = score_elems(graph, active_rules)
+            sheet, _ = board_context_from_geometry(p_board)
+            min_dist = cfg.board_min_dist(first_pass=first_pass)
+            selected_polys = nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0]
+            old_len = len(selected_polys)
+            if first_pass and should_use_border_focus(Polygon(), cfg.propose):
+                _boost_border_scores(
+                    polys, scores, p_board, min_dist,
+                    weight=cfg.propose.border_selection_score_boost,
+                )
+            _, selected_polys, _ = apply_dfs_refinement(
+                graph,
+                active_rules,
+                list(selected_polys),
+                scores,
+                selection=sel,
+            )
         assert selection_is_independent(graph, selected_polys)
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
@@ -1131,6 +2038,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             gi = group_id[i]
             selected_t[gi].append(transform[i])
         selected_t = tuple(np.array(t) for t in selected_t)
+        _append_selection_window(selection_window, selected_t, gc.graphs_window)
         if len(history[0]) and len(selected_t[0]):
             history = (
                 trim_history(history[0], selected_t[0], sc.history_max),

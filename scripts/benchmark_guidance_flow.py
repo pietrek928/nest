@@ -15,6 +15,7 @@ from shapely.geometry import Point, Polygon
 from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
+    _append_selection_window,
     _build_transform_batch,
     _make_initial_rule_sets,
     active_rule_set,
@@ -263,6 +264,7 @@ def run_pipeline(flow: str, seed: int, n_iters: int = 3) -> PipelineRow:
     rule_sets = _make_initial_rule_sets(cfg)
     nest_state = None
     graphs: list = []
+    selection_window: list = []
     selected_polys: list[int] = []
     polys: list = []
 
@@ -271,6 +273,7 @@ def run_pipeline(flow: str, seed: int, n_iters: int = 3) -> PipelineRow:
         selected_t = _build_transform_batch(
             cfg, selected_t, (np.zeros((1, 3)), np.zeros((1, 3))), rng,
             board=p_board, parts=parts, nest_state=nest_state,
+            selection_window=selection_window,
         )
         graph, polys, group_id, transform = make_polygon_graph(
             p_board,
@@ -302,6 +305,7 @@ def run_pipeline(flow: str, seed: int, n_iters: int = 3) -> PipelineRow:
             gi = group_id[i]
             selected_t[gi].append(transform[i])
         selected_t = tuple(np.array(t) for t in selected_t)
+        _append_selection_window(selection_window, selected_t, gc.graphs_window)
         nest_state = NestState(polys, group_id, transform, list(selected_polys))
 
     border_errs = [

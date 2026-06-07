@@ -53,25 +53,27 @@ def _env_max_transforms() -> Optional[int]:
 class SamplingConfig(BaseModel):
     random_per_iter: int = 128
     """Uniform random transforms per group per iteration when propose is off."""
-    random_per_iter_when_proposed: int = 48
+    random_per_iter_when_proposed: int = 64
     """Smaller random pool when structured proposals are present."""
-    structured_jitter_per_proposal: int = 8
+    structured_jitter_per_proposal: int = 12
     """Deterministic (x, y, angle) offsets per proposed transform."""
-    structured_jitter_scale: tuple[float, float, float] = (0.06, 0.06, 0.35)
+    structured_jitter_per_proposal_empty: int = 4
+    """Small edge-only jitter when border packing (see propose.structured_jitter_border_scale)."""
+    structured_jitter_scale: tuple[float, float, float] = (0.06, 0.06, 0.5)
     transform_scale: tuple[float, float, float] = (1.5, 1.5, 2 * np.pi)
     initial_random: int = 256
     selection_expand_n: int = 4
-    history_expand_n: int = 2
-    history_max: int = 512
-    max_transforms_per_group: Optional[int] = 900
-    shuffle_passes: int = 2
-    shuffle_per_pass: int = 32
+    history_expand_n: int = 4
+    history_max: int = 1024
+    max_transforms_per_group: Optional[int] = 1200
+    shuffle_passes: int = 4
+    shuffle_per_pass: int = 48
     shuffle_scale: tuple[float, float, float] = (0.12, 0.12, 0.5)
     seed: Optional[int] = None
 
 
 class GraphConfig(BaseModel):
-    graphs_window: int = 12
+    graphs_window: int = 24
 
 
 class SelectionConfig(BaseModel):
@@ -79,7 +81,7 @@ class SelectionConfig(BaseModel):
     rules_kept: int = 64
     improve_rules_elite_count: int = 16
     rule_score_penalty: float = 0.03
-    score_rules_latest_graph_only: bool = True
+    score_rules_latest_graph_only: bool = False
     score_rules_count_weight: float = 0.02
     score_rules_local_swap: bool = True
     select_mode: Literal["weighted_greedy", "greedy_score"] = "weighted_greedy"
@@ -130,7 +132,7 @@ class RulesConfig(BaseModel):
     board_holes: tuple[tuple[tuple[float, float], ...], ...] = ()
     board_sheet_padding: float = 0.0
     board_sheet_padding_ratio: float = 0.08
-    max_inserts_per_type: int = 2
+    max_inserts_per_type: int = 4
     max_rules_per_set: int = 24
 
     def board_polygon(self) -> Polygon:
@@ -222,21 +224,33 @@ class OutputConfig(BaseModel):
 
 class ProposeConfig(BaseModel):
     """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
-    max_proposals: int = 24
-    candidate_pool: int = 48
+    max_proposals: int = 32
+    candidate_pool: int = 64
     min_dist_ratio: float = 0.002
+    first_pass_min_dist_ratio: float = 0.0008
+    """Tighter standoff on iteration 1 for denser outline packing."""
+    first_pass_clearance_epsilon_ratio: float = 0.02
+    first_pass_candidate_pool: int = 96
+    first_pass_max_proposals: int = 48
+    first_pass_num_angles: int = 28
+    first_pass_group_edge_samples_per_edge: int = 64
+    first_pass_use_axis_push: bool = True
+    first_pass_sequential_augment_max: int = 8
+    """Greedy gap-fill steps after saturation (sheet-snap + chain-fit)."""
+    first_pass_guidance_refine_passes: int = 3
+    """Slide border placements with per-anchor guidance casts for tighter packing."""
     placement_clearance_epsilon_ratio: float = 0.05
-    placement_num_angles: int = 12
-    use_neighbor_slide: bool = False
+    placement_num_angles: int = 18
+    use_neighbor_slide: bool = True
     use_axis_push: bool = False
     use_bottom_left: bool = False
     use_nfp_vertices: bool = False
     bottom_left_vertices_per_angle: int = 8
     raycast_num_rays: int = 12
     raycast_num_angles: int = 12
-    raycast_anchor_stride: int = 3
+    raycast_anchor_stride: int = 2
     voronoi_densify_divisor: float = 30.0
-    voronoi_num_angles: int = 6
+    voronoi_num_angles: int = 12
     voronoi_max_sites: int = 48
     point_cloud_particles: int = 12
     point_cloud_iterations: int = 16
@@ -258,23 +272,52 @@ class ProposeConfig(BaseModel):
     """When packed: rank/trim by tight fit to sheet border or focal group, not deep clearance."""
     use_contact_clearance_hybrid: bool = True
     """Blend contact fit with clearance so valid pocket poses are not discarded."""
-    contact_clearance_hybrid_weight: float = 0.2
+    contact_clearance_hybrid_weight: float = 0.1
     use_stratified_contact_trim: bool = True
-    contact_trim_fraction: float = 0.65
+    contact_trim_fraction: float = 0.8
     ranking_mode: Literal[
         "legacy", "clearance", "hybrid", "border", "contact", "contact_hybrid",
     ] = "clearance"
     ranking_clearance_weight: float = 1.0
     ranking_hull_weight: float = 0.1
-    group_edge_samples_per_edge: int = 24
+    group_edge_samples_per_edge: int = 32
     sheet_edge_samples_per_edge: int = 24
     use_guidance_propositions: bool = True
-    guidance_max_propositions: int = 6
+    guidance_max_propositions: int = 8
     guidance_use_tight_packing: bool = True
     guidance_use_corner_alignment: bool = True
-    guidance_enable_grid: bool = False
+    guidance_enable_grid: bool = True
     guidance_diversity_dist_ratio: float = 4.0
-    guidance_proposition_seed_count: int = 8
+    guidance_proposition_seed_count: int = 16
+    use_batch_pack: bool = True
+    """Place one group, then pack the next against it; add both configs to proposals."""
+    batch_pack_anchor_seeds: int = 6
+    batch_pack_follow_proposals: int = 10
+    batch_pack_follow_pool: int = 32
+    batch_pack_max_pairs: int = 16
+    use_board_edge_seeds: bool = True
+    board_edge_samples_per_edge: int = 64
+    structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
+    """Tight (x,y) and modest angle jitter for outline snap seeds only."""
+    board_edge_guidance_refine: bool = True
+    board_edge_guidance_seeds: int = 16
+    board_edge_when_packed: bool = True
+    """Phase-2 propose: snap along outline with packed obstacles."""
+    board_edge_batch_reserve: int = 96
+    use_full_packed_obstacle: bool = True
+    """When proposing into a partial pack, treat all placed parts as obstacles."""
+    first_pass_border_saturation_passes: int = 5
+    """Graph rebuild passes before sequential gap-fill."""
+    random_per_iter_empty_border: int = 0
+    border_selection_score_boost: float = 24.0
+    first_pass_empty_border_only: bool = True
+    """Empty sheet: only board_edge + sheet_corners proposers (no interior seeds)."""
+    first_pass_layered_pack: bool = True
+    """Iter 1: rebuild graph with border placements, saturate more outline-kiss nodes."""
+    first_pass_border_pack: bool = True
+    """Iter 1: pack outline-kiss nodes around nest perimeter before any interior fill."""
+    first_pass_interior_max: int = 0
+    """Max non-outline parts after border saturate (0 = border-only first pass)."""
 
 
 class BuildGraphConfig(BaseModel):
@@ -285,11 +328,30 @@ class BuildGraphConfig(BaseModel):
     propose: ProposeConfig = Field(default_factory=ProposeConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
-    def board_min_dist(self) -> float:
+    def board_min_dist(self, *, first_pass: bool = False) -> float:
         board = self.rules.board_polygon()
         xmin, ymin, xmax, ymax = board.bounds
         diag = float(np.hypot(xmax - xmin, ymax - ymin))
-        return diag * self.propose.min_dist_ratio
+        ratio = self.propose.min_dist_ratio
+        if first_pass:
+            ratio = self.propose.first_pass_min_dist_ratio
+        return diag * ratio
+
+    def placement_epsilon_ratio(self, *, first_pass: bool = False) -> float:
+        if first_pass:
+            return self.propose.first_pass_clearance_epsilon_ratio
+        return self.propose.placement_clearance_epsilon_ratio
+
+    def first_pass_propose_config(self) -> ProposeConfig:
+        p = self.propose.model_copy(deep=True)
+        p.candidate_pool = max(p.candidate_pool, p.first_pass_candidate_pool)
+        p.max_proposals = max(p.max_proposals, p.first_pass_max_proposals)
+        p.placement_num_angles = p.first_pass_num_angles
+        p.placement_clearance_epsilon_ratio = p.first_pass_clearance_epsilon_ratio
+        p.group_edge_samples_per_edge = p.first_pass_group_edge_samples_per_edge
+        p.ranking_mode = "border"
+        p.use_axis_push = False
+        return p
 
     @classmethod
     def benchmark_aligned(cls, *, seed: int | None = None) -> "BuildGraphConfig":
@@ -297,10 +359,10 @@ class BuildGraphConfig(BaseModel):
         return cls(
             sampling=SamplingConfig(
                 random_per_iter=128,
-                random_per_iter_when_proposed=48,
-                structured_jitter_per_proposal=8,
+                random_per_iter_when_proposed=64,
+                structured_jitter_per_proposal=12,
                 initial_random=256,
-                max_transforms_per_group=900,
+                max_transforms_per_group=1200,
                 seed=seed,
             ),
             selection=SelectionConfig(dfs_mode="merged_loose_tight"),
@@ -318,15 +380,15 @@ class BuildGraphConfig(BaseModel):
                 transform_scale=(sx, sy, sa),
                 initial_random=_env_int("NEST_INITIAL_RANDOM", 256),
                 selection_expand_n=_env_int("NEST_SELECTION_EXPAND_N", 4),
-                history_expand_n=_env_int("NEST_HISTORY_EXPAND_N", 2),
-                history_max=_env_int("NEST_HISTORY_MAX", 512),
+                history_expand_n=_env_int("NEST_HISTORY_EXPAND_N", 4),
+                history_max=_env_int("NEST_HISTORY_MAX", 1024),
                 max_transforms_per_group=_env_max_transforms(),
-                shuffle_passes=_env_int("NEST_SHUFFLE_PASSES", 2),
-                shuffle_per_pass=_env_int("NEST_SHUFFLE_PER_PASS", 32),
+                shuffle_passes=_env_int("NEST_SHUFFLE_PASSES", 4),
+                shuffle_per_pass=_env_int("NEST_SHUFFLE_PER_PASS", 48),
                 seed=_env_optional_int("NEST_SEED"),
             ),
             graph=GraphConfig(
-                graphs_window=_env_int("NEST_GRAPHS_WINDOW", 12),
+                graphs_window=_env_int("NEST_GRAPHS_WINDOW", 24),
             ),
             selection=SelectionConfig(
                 improve_rules_rounds=_env_int("NEST_IMPROVE_ROUNDS", 4),
@@ -334,7 +396,7 @@ class BuildGraphConfig(BaseModel):
                 improve_rules_elite_count=_env_int("NEST_RULES_ELITE", 16),
                 rule_score_penalty=_env_float("NEST_RULE_SIZE_PENALTY", 0.03),
                 score_rules_latest_graph_only=_env_bool(
-                    "NEST_SCORE_RULES_LATEST_ONLY", True,
+                    "NEST_SCORE_RULES_LATEST_ONLY", False,
                 ),
                 score_rules_count_weight=_env_float(
                     "NEST_SCORE_RULES_COUNT_WEIGHT", 0.02,
@@ -401,6 +463,41 @@ def subsample_transforms(
         return transforms
     idx = rng.choice(transforms.shape[0], size=max_n, replace=False)
     return transforms[idx]
+
+
+def subsample_transforms_with_pinned(
+    transforms: np.ndarray,
+    pinned: np.ndarray,
+    max_n: Optional[int],
+    rng: np.random.Generator,
+) -> np.ndarray:
+    """Subsample while always keeping ``pinned`` rows (deduped, listed first)."""
+    if pinned.shape[0] == 0:
+        return subsample_transforms(transforms, max_n, rng)
+    pinned = dedupe_transforms(pinned)
+    if max_n is None:
+        return dedupe_transforms(np.concatenate([pinned, transforms], axis=0))
+    if pinned.shape[0] >= max_n:
+        return pinned[:max_n]
+    cap_rest = max_n - pinned.shape[0]
+    if transforms.shape[0] == 0:
+        return pinned
+    pinned_keys = {
+        (round(r[0], 4), round(r[1], 4), round(r[2], 4)) for r in pinned
+    }
+    rest_rows: list[np.ndarray] = []
+    for row in transforms:
+        key = (round(float(row[0]), 4), round(float(row[1]), 4), round(float(row[2]), 4))
+        if key in pinned_keys:
+            continue
+        rest_rows.append(row)
+    if not rest_rows:
+        return pinned
+    rest = np.asarray(rest_rows, dtype=np.float64)
+    if rest.shape[0] <= cap_rest:
+        return dedupe_transforms(np.concatenate([pinned, rest], axis=0))
+    idx = rng.choice(rest.shape[0], size=cap_rest, replace=False)
+    return dedupe_transforms(np.concatenate([pinned, rest[idx]], axis=0))
 
 
 def expand_structured_transforms(

@@ -107,7 +107,7 @@ def test_cluster_packed_solid_groups_splits_touching_parts():
     assert len(cluster_packed_solid_groups([p1, p2], min_dist=0.01)) == 2
 
 
-def test_obstacle_polys_focal_ignores_distant_cluster():
+def test_obstacle_polys_includes_two_nearest_clusters():
     rect = _rect()
     tri = _tri()
     p1 = transform_poly(rect, np.array([0.08, 0.08, 0.0]))
@@ -115,24 +115,26 @@ def test_obstacle_polys_focal_ignores_distant_cluster():
     placed = [p1, p2]
     min_dist = 0.01
     near_origin = obstacle_polys_for_propose(placed, tri, min_dist)
-    assert len(near_origin) == 1
-    assert near_origin[0].distance(p1) < 0.02
+    assert len(near_origin) == 2
     tri_near_p2 = transform_poly(tri, np.array([0.5, 0.5, 0.0]))
     near_p2 = obstacle_polys_for_propose(placed, tri_near_p2, min_dist)
-    assert len(near_p2) == 1
-    assert near_p2[0].distance(p2) < 0.02
+    assert len(near_p2) == 2
+    single = obstacle_polys_for_propose(placed, tri, min_dist, nearest_k=1)
+    assert len(single) == 1
+    assert single[0].distance(p1) < 0.02
 
 
-def test_focal_obstacle_expands_free_region():
+def test_focal_obstacle_expands_free_region_with_three_clusters():
     board = _triangle_board()
     rect = _rect()
     tri = _tri()
     p1 = transform_poly(rect, np.array([0.08, 0.08, 0.0]))
     p2 = transform_poly(rect, np.array([0.55, 0.55, 0.0]))
+    p3 = transform_poly(rect, np.array([0.08, 0.55, 0.0]))
     sheet, _ = board_context_from_geometry(board)
     min_dist = 0.01
-    focal = obstacle_shape_for_propose([p1, p2], tri, min_dist)
-    full = unary_union([p1, p2])
+    focal = obstacle_shape_for_propose([p1, p2, p3], tri, min_dist)
+    full = unary_union([p1, p2, p3])
     free_focal = placement_free_region(sheet, focal, min_dist)
     free_full = placement_free_region(sheet, full, min_dist)
     assert free_focal.area > free_full.area
@@ -256,16 +258,18 @@ def test_group_edge_seeds_improve_partial_pack_clearance():
     assert min_group_gap(group_seeds=True) <= min_group_gap(group_seeds=False) * 1.05
 
 
-def test_focal_shape_matches_nearest_cluster():
+def test_focal_shape_matches_nearest_clusters():
     board = _triangle_board()
     rect = _rect()
     tri = _tri()
     p1 = transform_poly(rect, np.array([0.08, 0.08, 0.0]))
     p2 = transform_poly(rect, np.array([0.55, 0.55, 0.0]))
+    p3 = transform_poly(rect, np.array([0.08, 0.55, 0.0]))
     cfg = ProposeConfig()
-    focal = focal_shape_for_propose(board, [p1, p2], tri, 0.01, cfg)
+    focal = focal_shape_for_propose(board, [p1, p2, p3], tri, 0.01, cfg)
     assert focal is not None
     assert focal.distance(p1) < 0.02
+    assert focal.distance(p3) < 0.02
     assert focal.distance(p2) > 0.1
 
 

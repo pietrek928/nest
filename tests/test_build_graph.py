@@ -9,8 +9,12 @@ from shapely.geometry import Point, Polygon
 from nest_graph.build_graph import (
     Geometry,
     find_polygon_intersections_bipartite,
+    _append_selection_window,
     _base_geometries,
+    _border_pack_graph,
+    _border_tightness_cost,
     _build_transform_batch,
+    _guidance_border_refine,
     _make_seed_rule_sets,
     _poly_and_transforms,
     _rule_region,
@@ -18,6 +22,7 @@ from nest_graph.build_graph import (
     improve_rules,
     make_polygon_graph,
     make_polygon_matrix,
+    window_selected_transforms,
     placement_board_score,
     run_build_graph,
     select_polygons_from_edges,
@@ -119,6 +124,42 @@ def test_make_polygon_graph_main_iteration_scale(
     edges = sum(len(graph.collisions[i]) for i in range(len(polys))) // 2
     assert len(polys) > 50
     assert edges > 100
+
+
+def test_window_selected_transforms_dedupes_per_group():
+    w = [
+        (np.array([[0.1, 0.2, 0.0], [0.1, 0.2, 0.0]]), np.zeros((0, 3))),
+        (np.array([[0.3, 0.4, 1.0]]), np.array([[0.5, 0.5, 0.0]])),
+    ]
+    t0, t1 = window_selected_transforms(w)
+    assert t0.shape[0] == 2
+    assert t1.shape[0] == 1
+
+
+def test_build_transform_batch_includes_selection_window(build_graph_config):
+    cfg = build_graph_config
+    cfg.sampling.max_transforms_per_group = None
+    rng = cfg.apply_seed()
+    history = (np.zeros((0, 3)), np.zeros((0, 3)))
+    sel = (np.zeros((0, 3)), np.zeros((0, 3)))
+    window = [
+        (np.array([[0.5, 0.5, 1.0]]), np.array([[0.6, 0.6, 0.0]])),
+        (np.array([[0.7, 0.7, 2.0]]), np.zeros((0, 3))),
+    ]
+    win0, win1 = window_selected_transforms(window)
+    s0, s1 = _build_transform_batch(
+        cfg, sel, history, rng, selection_window=window,
+    )
+    assert any(np.allclose(row, win0[i], atol=1e-6) for i in range(len(win0)) for row in s0)
+    assert any(np.allclose(row, win1[i], atol=1e-6) for i in range(len(win1)) for row in s1)
+
+
+def test_append_selection_window_trims(build_graph_config):
+    window: list = []
+    for k in range(5):
+        _append_selection_window(window, (np.array([[float(k), 0.0, 0.0]]), np.zeros((0, 3))), 3)
+    assert len(window) == 3
+    assert window[0][0][0, 0] == 2.0
 
 
 def test_run_build_graph_fast(tmp_path, build_graph_config):
@@ -391,13 +432,52 @@ def test_shipped_config_matches_benchmarks():
     cfg = BuildGraphConfig()
     assert cfg.selection.dfs_mode == "merged_loose_tight"
     assert cfg.propose.use_guidance_propositions is True
-    assert cfg.propose.guidance_enable_grid is False
+    assert cfg.propose.guidance_enable_grid is True
     assert cfg.propose.guidance_use_corner_alignment is True
-    assert cfg.propose.guidance_max_propositions == 6
+    assert cfg.propose.guidance_max_propositions == 8
+    assert cfg.propose.use_neighbor_slide is True
+    assert cfg.propose.placement_num_angles == 18
     assert cfg.sampling.initial_random == 256
-    assert cfg.sampling.max_transforms_per_group == 900
+    assert cfg.sampling.max_transforms_per_group == 1200
 
     bench = BuildGraphConfig.benchmark_aligned(seed=7)
     assert bench.sampling.seed == 7
     assert bench.selection.dfs_mode == "merged_loose_tight"
-    assert bench.propose.guidance_enable_grid is False
+    assert bench.propose.guidance_enable_grid is True
+
+
+def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly, tri_poly):
+    cfg = BuildGraphConfig()
+    cfg.propose.first_pass_guidance_refine_passes = 2
+    min_dist = cfg.board_min_dist(first_pass=True)
+    t1 = np.array([0.05130231, 0.05130231, 0.0])
+    t2 = np.array([1.10435139, 0.04630272, 6.05878583])
+    t3 = np.array([0.02366807, 0.99681871, 2.01959528])
+    pack_polys = [
+        transform_poly(rect_poly, t1),
+        transform_poly(tri_poly, t2),
+        transform_poly(tri_poly, t3),
+    ]
+    pack_gids = [0, 1, 1]
+    pack_tr = [t1, t2, t3]
+    before = _border_tightness_cost(pack_polys, nest_board, min_dist)
+    refined_polys, refined_gids, refined_tr = _guidance_border_refine(
+        cfg,
+        nest_board,
+        [(rect_poly, 0), (tri_poly, 1)],
+        outline=nest_board,
+        pack_polys=pack_polys,
+        pack_gids=pack_gids,
+        pack_tr=pack_tr,
+    )
+    after = _border_tightness_cost(refined_polys, nest_board, min_dist)
+    assert after <= before + 1e-6
+    graph, polys, gids, trans, selected = _border_pack_graph(
+        refined_polys, refined_gids, refined_tr,
+    )
+    assert len(selected) == len(refined_polys)
+    group_bases = [Geometry.from_shapely(rect_poly), Geometry.from_shapely(tri_poly)]
+    geom_bases = [group_bases[gids[i]] for i in range(len(polys))]
+    assert_selected_non_overlapping(
+        graph, polys, selected, bases=geom_bases, transforms=trans,
+    )

@@ -33,6 +33,179 @@ from nest_graph.propose.placement_common import (
     _snap_coords_along_exterior,
 )
 
+def _board_edge_snap_seeds(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    base_shape: BaseGeometry,
+    *,
+    min_dist: float,
+    num_angles: int,
+    samples_per_edge: int,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    top_n: int,
+) -> list[tuple[tuple[float, float, float], Point, tuple[float, float]]]:
+    """Snap seeds along nest outline; return (coords, anchor, inward) for guidance refine."""
+    interior = sheet.representative_point()
+    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+    propositions: list[dict] = []
+    anchor_pts = _exterior_anchor_points(sheet, samples_per_edge)
+
+    def _add_seed(
+        coords: tuple[float, float, float],
+        anchor: Point,
+        inward: tuple[float, float],
+        cost: float,
+    ) -> None:
+        propositions.append({
+            "coords": coords,
+            "anchor": anchor,
+            "inward": inward,
+            "cost": cost,
+        })
+
+    for angle in angles:
+        for contact in anchor_pts:
+            ox = contact.x - interior.x
+            oy = contact.y - interior.y
+            dist = math.hypot(ox, oy)
+            if dist < 1e-9:
+                continue
+            inward = (ox / dist, oy / dist)
+            coords = _snap_coords_along_exterior(
+                shape_to_place,
+                sheet,
+                contact,
+                inward,
+                angle,
+                min_dist,
+            )
+            if coords is None:
+                continue
+            placed = transform_poly(shape_to_place, coords)
+            if not base_shape.is_empty:
+                if base_shape.intersects(placed):
+                    continue
+                if base_shape.distance(placed) < min_dist - 1e-6:
+                    continue
+            if not _propose_valid_at(coords, propose_geom, pt_push):
+                continue
+            err = _placement_contact_error(placed, sheet, min_dist, None)
+            _add_seed(coords, contact, inward, err)
+
+    corner_coords = propose_placements_sheet_corners(
+        shape_to_place,
+        sheet,
+        min_dist,
+        propose_geom=propose_geom,
+        pt_push=pt_push,
+        num_angles=max(num_angles * 2, 16),
+        top_n=top_n,
+    )
+    for coords in corner_coords:
+        placed = transform_poly(shape_to_place, coords)
+        anchor_pt, _ = nearest_points(sheet.exterior, placed)
+        ox = anchor_pt.x - interior.x
+        oy = anchor_pt.y - interior.y
+        dist = math.hypot(ox, oy)
+        if dist < 1e-9:
+            continue
+        inward = (ox / dist, oy / dist)
+        err = _placement_contact_error(placed, sheet, min_dist, None)
+        _add_seed(coords, anchor_pt, inward, err)
+
+    propositions.sort(key=lambda x: x["cost"])
+    seen: set[tuple[float, float, float]] = set()
+    out: list[tuple[tuple[float, float, float], Point, tuple[float, float]]] = []
+    for p in propositions:
+        key = (round(p["coords"][0], 2), round(p["coords"][1], 2), round(p["coords"][2], 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((p["coords"], p["anchor"], p["inward"]))
+        if len(out) >= top_n:
+            break
+    return out
+
+
+def propose_placements_board_edge(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    base_shape: BaseGeometry,
+    *,
+    min_dist: float,
+    propose_cfg: ProposeConfig,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    num_angles: int | None = None,
+    samples_per_edge: int | None = None,
+    top_n: int = 16,
+    guidance_refine: bool | None = None,
+) -> List[Tuple[float, float, float]]:
+    """Dock along nest outline: geometric snap seeds + optional per-edge guidance cast."""
+    if sheet.is_empty:
+        return []
+
+    n_angles = num_angles if num_angles is not None else propose_cfg.placement_num_angles
+    samples = (
+        samples_per_edge
+        if samples_per_edge is not None
+        else propose_cfg.board_edge_samples_per_edge
+    )
+    refine = (
+        guidance_refine
+        if guidance_refine is not None
+        else propose_cfg.board_edge_guidance_refine
+    )
+
+    seed_anchors = _board_edge_snap_seeds(
+        shape_to_place,
+        sheet,
+        base_shape,
+        min_dist=min_dist,
+        propose_geom=propose_geom,
+        pt_push=pt_push,
+        num_angles=n_angles,
+        samples_per_edge=samples,
+        top_n=top_n * 2 if refine else top_n,
+    )
+    if not seed_anchors:
+        return []
+
+    snap_coords = [coords for coords, _anchor, _inward in seed_anchors]
+    if not refine:
+        return snap_coords[:top_n]
+
+    from nest_graph.propose.placements_guidance import (
+        propose_placements_board_edge_guidance_cast,
+    )
+
+    refined = propose_placements_board_edge_guidance_cast(
+        seed_anchors,
+        pt_push,
+        propose_geom,
+        propose_cfg,
+        min_dist=min_dist,
+        top_n=top_n,
+    )
+    merged: list[tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+    for coords in refined + snap_coords:
+        key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(coords)
+        if len(merged) >= top_n:
+            break
+    merged.sort(
+        key=lambda c: _placement_contact_error(
+            transform_poly(shape_to_place, c), sheet, min_dist, None,
+        ),
+    )
+    return merged[:top_n]
+
+
 def propose_placements_group_fit(
     focal_shape: BaseGeometry,
     shape_to_place: Polygon,

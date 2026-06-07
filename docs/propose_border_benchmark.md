@@ -17,6 +17,22 @@ Results: `docs/propose_border_benchmark_results.txt`
 | `border_dist_min` | Min distance from placed part to sheet exterior (lower = tighter edge fit) |
 | `border_slack_mean` | Mean `(border_dist - min_dist)` over proposals |
 
+## Results (seeds 0–2, 2026-06-03, `board_edge` proposer)
+
+| preset | border_dist_min | border_slack_mean | time_s |
+|--------|-----------------|-------------------|--------|
+| **board_edge_hybrid** | **0.0014** | -0.0002 | 2.51 |
+| board_edge_snap_only | 0.0033 | -0.0000 | 2.37 |
+| border_focus | 0.0033 | -0.0000 | 3.10 |
+| shipped_board_edge | 0.0033 | -0.0000 | 4.36 |
+
+`board_edge` combines nest-outline snap seeds + per-edge `guidance_config_for_board_edge_anchor` cast refine (`Exact Gravity Dock`, corner match, floor walk).
+
+```bash
+PYTHONPATH=. python scripts/benchmark_propose_border.py \
+  --presets board_edge_snap_only board_edge_hybrid border_focus shipped_board_edge
+```
+
 ## Results (seeds 0–9, 2026-05-25)
 
 | preset | border_dist_min | border_slack_mean | time_s |
@@ -28,7 +44,9 @@ Results: `docs/propose_border_benchmark_results.txt`
 ## Shipped border behavior (empty board)
 
 - `use_border_focus` — push/attract toward border ring, not board centroid
-- `use_border_edge_seeds` — corner + edge sampling with validity filter
+- `use_board_edge_seeds` — nest-outline snap + per-edge guidance cast (`board_edge` proposer; default on)
+- `board_edge_guidance_refine` — stage-2 cast refine on snap seeds (default `True`)
+- `use_border_edge_seeds` — legacy bbox corner + edge (`sheet_corners` / `sheet_edge`)
 - `border_focus_ranking` — rank valid poses by tight border standoff (not max clearance)
 - `candidate_pool=32` — room for corner seeds before trim
 

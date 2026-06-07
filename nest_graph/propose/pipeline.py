@@ -35,6 +35,7 @@ from nest_graph.propose.context import (
 )
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_edge import (
+    propose_placements_board_edge,
     propose_placements_group_fit,
     propose_placements_ribbon_free,
     propose_placements_sheet_corners,
@@ -53,13 +54,14 @@ from nest_graph.propose.placements_primary import (
     propose_placements_nfp_vertices,
     propose_placements_perimeter_walk,
 )
-from nest_graph.propose.placements_pso import propose_placements_point_cloud
+from nest_graph.propose.placements_batch import augment_batch_pack_proposals
 from nest_graph.propose.ranking import (
     _rank_proposal_coords,
     _score_placement_border,
     _trim_candidates_by_clearance,
     _trim_candidates_by_contact,
     _trim_candidates_stratified,
+    select_guidance_cast_seeds,
 )
 
 def propositions_to_ndarray(coords_list: Sequence[Tuple[float, float, float]]) -> np.ndarray:
@@ -93,7 +95,9 @@ ALL_PROPOSER_NAMES: tuple[str, ...] = (
     "group_fit",
     "sheet_corners",
     "sheet_edge",
+    "board_edge",
     "guidance_propositions",
+    "batch_pack",
 )
 
 
@@ -161,7 +165,7 @@ def collect_propose_candidates(
         and propose_cfg.use_neighbor_slide
         and not base_shape.is_empty
     ):
-        neighbor_top = pool if propose_cfg.guidance_use_tight_packing else pool * 2
+        neighbor_top = max(pool // 4, n_angles)
         _extend_counted(
             candidates,
             proposer_counts,
@@ -403,16 +407,47 @@ def collect_propose_candidates(
             ),
         )
     if (
+        _proposer_enabled("board_edge", enabled_proposers)
+        and propose_cfg.use_board_edge_seeds
+        and (
+            should_use_border_focus(base_shape, propose_cfg)
+            or propose_cfg.board_edge_when_packed
+        )
+    ):
+        _extend_counted(
+            candidates,
+            proposer_counts,
+            "board_edge",
+            propose_placements_board_edge(
+                shape_to_place,
+                sheet,
+                base_shape,
+                min_dist=min_dist,
+                propose_cfg=propose_cfg,
+                propose_geom=propose_geom,
+                pt_push=pt_push,
+                num_angles=max(n_angles, 12),
+                top_n=pool * 2,
+            ),
+        )
+    if (
         _proposer_enabled("guidance_propositions", enabled_proposers)
         and propose_cfg.use_guidance_propositions
     ):
-        structured = list(candidates)
+        seed_limit = propose_cfg.guidance_proposition_seed_count
+        structured = select_guidance_cast_seeds(
+            candidates,
+            seed_limit,
+            shape_to_place,
+            propose_geom,
+            pt_push,
+            min_dist,
+            focal_shape,
+        )
         if not structured and guidance_seed_coords:
-            structured = list(guidance_seed_coords)
+            structured = list(guidance_seed_coords)[:seed_limit]
         if not structured:
             return candidates
-        if len(structured) > propose_cfg.guidance_proposition_seed_count:
-            structured = structured[: propose_cfg.guidance_proposition_seed_count]
         _extend_counted(
             candidates,
             proposer_counts,
@@ -533,6 +568,7 @@ def propose_coords_with_strategy(
     min_dist: float,
     pt_push: Point,
     focal_shape: Optional[BaseGeometry] = None,
+    enabled_proposers: frozenset[str] | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     rank_mode = effective_ranking_mode(cfg, base_shape)
@@ -568,6 +604,7 @@ def propose_coords_with_strategy(
         pt_push=pt_push,
         propose_geom=geom,
         focal_shape=focal_shape,
+        enabled_proposers=enabled_proposers,
     )
     return _propose_coords_from_candidates(
         base_shape,
@@ -582,6 +619,14 @@ def propose_coords_with_strategy(
     )
 
 
+_FIRST_PASS_EMPTY_BORDER_PROPOSERS = frozenset({
+    "board_edge", "sheet_corners", "perimeter_walk",
+})
+_FIRST_PASS_PACKED_BORDER_PROPOSERS = frozenset({
+    "board_edge", "sheet_corners", "group_fit", "neighbor_slide", "ribbon_free",
+})
+
+
 def _best_proposer_coords(
     base_shape: BaseGeometry,
     shape_to_place: Polygon,
@@ -591,6 +636,7 @@ def _best_proposer_coords(
     min_dist: float,
     pt_push: Point,
     focal_shape: Optional[BaseGeometry] = None,
+    enabled_proposers: frozenset[str] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -601,7 +647,53 @@ def _best_proposer_coords(
         min_dist=min_dist,
         pt_push=pt_push,
         focal_shape=focal_shape,
+        enabled_proposers=enabled_proposers,
     )
+
+
+def border_edge_transforms_for_group(
+    board: BaseGeometry,
+    part_poly: Polygon,
+    base_shape: BaseGeometry,
+    propose_cfg: ProposeConfig,
+    *,
+    min_dist: float,
+    pt_push: Point | None = None,
+) -> np.ndarray:
+    """Edge-tight (x, y, θ) for graph batch pinning when the sheet is mostly empty."""
+    if not propose_cfg.use_board_edge_seeds:
+        return np.zeros((0, 3), dtype=np.float64)
+    from nest_graph.propose.placements_edge import propose_placements_board_edge
+    from nest_graph.propose.geometry import ProposeGeometry
+
+    sheet, _ = board_context_from_geometry(board)
+    push = pt_push if pt_push is not None else propose_push_point(
+        board,
+        base_shape,
+        smart_push=propose_cfg.smart_push_target,
+        min_dist=min_dist,
+        use_border_focus=True,
+    )
+    geom = ProposeGeometry(
+        board,
+        base_shape,
+        part_poly,
+        min_dist,
+        epsilon_ratio=propose_cfg.placement_clearance_epsilon_ratio,
+        propose_cfg=propose_cfg,
+    )
+    reserve = max(propose_cfg.board_edge_batch_reserve, propose_cfg.max_proposals // 2)
+    coords = propose_placements_board_edge(
+        part_poly,
+        sheet,
+        base_shape,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        propose_geom=geom,
+        pt_push=push,
+        top_n=reserve,
+    )
+    return propositions_to_ndarray(coords)
 
 
 def proposed_transforms_for_groups(
@@ -613,6 +705,8 @@ def proposed_transforms_for_groups(
     *,
     min_dist: float,
     pt_push: Optional[Point] = None,
+    border_only_propose: bool = False,
+    use_full_packed_obstacle: bool = False,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -622,7 +716,10 @@ def proposed_transforms_for_groups(
     placed = [selected_polys[i] for i in selected_indices]
     out: dict[int, np.ndarray] = {}
     for part_poly, group_id in parts:
-        obstacle_shape = obstacle_shape_for_propose(placed, part_poly, min_dist)
+        if use_full_packed_obstacle and placed:
+            obstacle_shape = unary_union(placed)
+        else:
+            obstacle_shape = obstacle_shape_for_propose(placed, part_poly, min_dist)
         focal = focal_shape_for_propose(
             board, placed, part_poly, min_dist, propose_cfg,
         )
@@ -634,6 +731,12 @@ def proposed_transforms_for_groups(
             min_dist=min_dist,
             use_border_focus=border_focus,
         )
+        enabled = None
+        if border_only_propose:
+            if should_use_border_focus(obstacle_shape, propose_cfg):
+                enabled = _FIRST_PASS_EMPTY_BORDER_PROPOSERS
+            elif placed:
+                enabled = _FIRST_PASS_PACKED_BORDER_PROPOSERS
         coords = _best_proposer_coords(
             obstacle_shape,
             part_poly,
@@ -642,6 +745,39 @@ def proposed_transforms_for_groups(
             min_dist=min_dist,
             pt_push=push,
             focal_shape=focal,
+            enabled_proposers=enabled,
         )
-        out[group_id] = propositions_to_ndarray(coords)
+        arr = propositions_to_ndarray(coords)
+        if border_focus and propose_cfg.use_board_edge_seeds:
+            edge_arr = border_edge_transforms_for_group(
+                board,
+                part_poly,
+                obstacle_shape,
+                propose_cfg,
+                min_dist=min_dist,
+                pt_push=push,
+            )
+            if edge_arr.shape[0] > 0:
+                arr = dedupe_transforms(
+                    np.concatenate([edge_arr, arr], axis=0),
+                )[: propose_cfg.max_proposals]
+        out[group_id] = arr
+
+    if propose_cfg.use_batch_pack and len(out) >= 2:
+        batch_extra = augment_batch_pack_proposals(
+            board,
+            parts,
+            placed,
+            out,
+            propose_cfg,
+            min_dist=min_dist,
+        )
+        for gid, extra in batch_extra.items():
+            if not extra:
+                continue
+            merged = np.concatenate(
+                [out.get(gid, np.zeros((0, 3))), propositions_to_ndarray(extra)],
+            )
+            out[gid] = dedupe_transforms(merged)
+
     return out

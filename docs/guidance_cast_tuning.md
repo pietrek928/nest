@@ -11,11 +11,13 @@ PYTHONPATH=. python scripts/benchmark_guidance_flow.py --seeds 0 1 2 3 4
 
 | Field | Value | Benchmark note |
 |-------|-------|----------------|
-| `use_guidance_propositions` | `True` | Cast expansion on structured seeds |
-| `guidance_max_propositions` | `6` | Matches C++ `max_propositions` |
+| `use_guidance_propositions` | `True` | Cast expansion on contact-ranked seeds |
+| `guidance_max_propositions` | `8` | Matches C++ `max_propositions` |
+| `guidance_proposition_seed_count` | `16` | Kiss-ranked seeds, not pool prefix |
 | `guidance_use_tight_packing` | `True` | `Exact Neighbor Snap` |
-| `guidance_use_corner_alignment` | `True` | `Vertex Corner Match` / `Corner Match` |
-| `guidance_enable_grid` | `False` | `Floor Walk` did not improve composite score vs `props_no_grid` |
+| `guidance_use_corner_alignment` | `True` | Vertex/corner match casts |
+| `guidance_enable_grid` | `True` | `Floor Walk L/R` |
+| `use_neighbor_slide` | `True` | Capped contribution to pool |
 | Phase-2 Shapely proposers | off | See [propose_benchmark.md](propose_benchmark.md) |
 
 ## Move types (cast path)
@@ -27,6 +29,10 @@ PYTHONPATH=. python scripts/benchmark_guidance_flow.py --seeds 0 1 2 3 4
 | `Vertex Corner Match` / `Corner Match (Intercept)` | corner | Vertex alignment |
 | `Safe Hole Seek` | pack | Sheet voids |
 | `Floor Walk L/R` | corner | When `guidance_enable_grid=True` |
+
+## Board-edge cast (2026-06-03)
+
+[`propose_placements_board_edge`](../nest_graph/propose/placements_edge.py) refines snap seeds with [`guidance_config_for_board_edge_anchor`](../nest_graph/placement_scene.py): per-anchor `gravity_vector` points toward the nest edge (not global `(-1,-1)`), `target_position` on the outline anchor, tight packing + corner alignment enabled.
 
 ## Pipeline ranking (seeds 0–2, 3 iters)
 
