@@ -99,3 +99,40 @@ std::vector<Tscore> score_elems(
     compute_scores(g, elems_by_group, scores, rules, aggregation);
     return scores;
 }
+
+Tscore score_transform(
+    const PlacementRuleSet &rules,
+    Tvertex group,
+    Vec2f pos,
+    float angle_rad,
+    ScoreAggregation aggregation
+) {
+    Tscore total = 0.0f;
+    const Circle2f circle(pos, 0.25f);
+
+    for (const PointPlaceRule &p : rules.point_rules) {
+        if (p.group != group) {
+            continue;
+        }
+        accumulate_score(total, compute_score(p, pos), aggregation);
+    }
+    for (const CirclePlaceRule &p : rules.circle_rules) {
+        if (p.group != group) {
+            continue;
+        }
+        accumulate_score(total, compute_score(p, circle), aggregation);
+    }
+    for (const PointAngleRule &p : rules.point_angle_rules) {
+        if (p.group != group) {
+            continue;
+        }
+        accumulate_score(total, compute_score(p, pos, angle_rad), aggregation);
+    }
+    for (const CircleAngleRule &p : rules.circle_angle_rules) {
+        if (p.group != group) {
+            continue;
+        }
+        accumulate_score(total, compute_score(p, circle, angle_rad), aggregation);
+    }
+    return total;
+}

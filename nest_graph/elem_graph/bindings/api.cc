@@ -5,6 +5,7 @@ namespace nb = nanobind;
 #include "bindings.h"
 #include "graph/graph.h"
 #include "rules/rules.h"
+#include "scoring/scoring.h"
 
 void bind_elem_graph_api(nb::module_ &m) {
     m.def(
@@ -54,6 +55,24 @@ void bind_elem_graph_api(nb::module_ &m) {
         },
         nb::arg("g"),
         nb::arg("rules"),
+        nb::arg("aggregation") = ScoreAggregation::Sum);
+
+    m.def(
+        "score_transform",
+        [](const PlacementRuleSet &rules,
+           Tvertex group,
+           float x,
+           float y,
+           float angle,
+           ScoreAggregation agg) {
+            return ::score_transform(
+                rules, group, Vec2f({x, y}), angle, agg);
+        },
+        nb::arg("rules"),
+        nb::arg("group"),
+        nb::arg("x"),
+        nb::arg("y"),
+        nb::arg("angle"),
         nb::arg("aggregation") = ScoreAggregation::Sum);
 
     m.def(

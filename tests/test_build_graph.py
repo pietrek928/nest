@@ -12,12 +12,17 @@ from nest_graph.build_graph import (
     _append_selection_window,
     _base_geometries,
     _border_pack_graph,
+    _border_placement_ok,
     _border_tightness_cost,
     _build_transform_batch,
+    _first_pass_border_ring_selection,
+    _first_pass_layered_selection,
     _guidance_border_refine,
+    _make_initial_rule_sets,
     _make_seed_rule_sets,
     _poly_and_transforms,
     _rule_region,
+    active_rule_set,
     apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
@@ -25,11 +30,19 @@ from nest_graph.build_graph import (
     window_selected_transforms,
     placement_board_score,
     run_build_graph,
+    score_elems,
     select_polygons_from_edges,
 )
-from nest_graph.config import BuildGraphConfig, SelectionConfig
-from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph, score_elems
-from nest_graph.placement_scene import board_placement_valid
+from nest_graph.board import board_context_from_geometry
+from nest_graph.config import BuildGraphConfig, SamplingConfig, SelectionConfig
+from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph
+from nest_graph.placement_scene import (
+    board_placement_valid,
+    guidance_config_for_graph,
+    placement_footprint_inside_board,
+    placement_scene_for_part,
+)
+from nest_graph.board import default_sheet_padding, padded_board_bounds
 from nest_graph.utils import transform_poly
 
 from tests.nest_invariants import assert_selected_non_overlapping
@@ -460,6 +473,8 @@ def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly,
     ]
     pack_gids = [0, 1, 1]
     pack_tr = [t1, t2, t3]
+    sheet, _ = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
     before = _border_tightness_cost(pack_polys, nest_board, min_dist)
     refined_polys, refined_gids, refined_tr = _guidance_border_refine(
         cfg,
@@ -472,8 +487,10 @@ def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly,
     )
     after = _border_tightness_cost(refined_polys, nest_board, min_dist)
     assert after <= before + 1e-6
+    for poly in refined_polys:
+        assert placement_footprint_inside_board(Geometry.from_shapely(poly), board_geom)
     graph, polys, gids, trans, selected = _border_pack_graph(
-        refined_polys, refined_gids, refined_tr,
+        refined_polys, refined_gids, refined_tr, board_geom=board_geom,
     )
     assert len(selected) == len(refined_polys)
     group_bases = [Geometry.from_shapely(rect_poly), Geometry.from_shapely(tri_poly)]
@@ -481,3 +498,88 @@ def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly,
     assert_selected_non_overlapping(
         graph, polys, selected, bases=geom_bases, transforms=trans,
     )
+
+
+def test_border_placement_ok_rejects_hypotenuse_overhang(nest_board, rect_poly):
+    """Footprint past the nest hypotenuse must fail border placement validation."""
+    cfg = BuildGraphConfig()
+    min_dist = cfg.board_min_dist(first_pass=True)
+    eps = cfg.placement_epsilon_ratio(first_pass=True)
+    sheet, voids = board_context_from_geometry(nest_board)
+    board_geom = Geometry.from_shapely(sheet)
+    part = Geometry.from_shapely(rect_poly)
+    t = (0.37802249442265207, 0.6972761008108197, 0.0)
+    placed = part.apply_transform(t)
+    poly = transform_poly(rect_poly, t)
+    pad = default_sheet_padding(nest_board)
+    guidance_cfg = guidance_config_for_graph(
+        min_dist,
+        board_bounds=padded_board_bounds(nest_board, pad),
+        epsilon_ratio=eps,
+    )
+    scene = placement_scene_for_part(sheet, board_geom, voids, part)
+    assert not _border_placement_ok(
+        scene,
+        placed,
+        poly,
+        [],
+        nest_board,
+        min_dist,
+        guidance_cfg,
+        eps,
+    )
+
+
+def test_first_pass_border_pack_footprints_inside_board():
+    cfg = BuildGraphConfig(sampling=SamplingConfig(seed=0))
+    cfg.propose.first_pass_border_saturation_passes = 2
+    cfg.propose.first_pass_sequential_augment_max = 2
+    rng = cfg.apply_seed()
+    sc = cfg.sampling
+    p_board = cfg.rules.board_polygon()
+    p1 = cfg.rules.rect_polygon()
+    p2 = cfg.rules.tri_polygon()
+    parts = [(p1, 0), (p2, 1)]
+    sheet, _ = board_context_from_geometry(p_board)
+    board_geom = Geometry.from_shapely(sheet)
+
+    selected_t = (
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+    )
+    history = (np.zeros((1, 3)), np.zeros((1, 3)))
+    selection_window: list = []
+    selected_t = _build_transform_batch(
+        cfg, selected_t, history, rng,
+        board=p_board, parts=parts, nest_state=None,
+        selection_window=selection_window, first_pass=True,
+    )
+    graph, polys, group_id, transform = make_polygon_graph(
+        p_board,
+        [(p1, selected_t[0]), (p2, selected_t[1])],
+        min_dist=cfg.board_min_dist(first_pass=True),
+        epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=True),
+    )
+    seed_rules = active_rule_set(_make_initial_rule_sets(cfg))
+    scores = score_elems(graph, seed_rules)
+    min_dist = cfg.board_min_dist(first_pass=True)
+    ring = _first_pass_border_ring_selection(
+        graph, polys, p_board, min_dist, scores,
+    )
+    assert ring
+    _, polys2, gid2, tr2, selected = _first_pass_layered_selection(
+        cfg, p_board, parts,
+        graph=graph, p1=p1, p2=p2,
+        selected_t=selected_t, history=history, rng=rng,
+        selection_window=selection_window,
+        polys=polys, group_id=group_id, transform=transform,
+        phase1_selected=list(ring),
+        rule_set=seed_rules, scores=scores,
+        selection=cfg.selection,
+    )
+    assert selected
+    for idx in selected:
+        poly = polys2[idx]
+        geom = Geometry.from_shapely(poly)
+        assert placement_footprint_inside_board(geom, board_geom)
+        assert p_board.contains(poly) or placement_footprint_inside_board(geom, board_geom)

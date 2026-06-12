@@ -1,7 +1,7 @@
 import math
 
 import numpy as np
-from shapely.geometry import Point, Polygon
+from shapely.geometry import LineString, Point, Polygon
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.propose import (
@@ -100,11 +100,59 @@ def test_board_edge_beats_sheet_edge_bbox_on_triangle():
         pt_push=pt_push,
         top_n=16,
     )
+    from nest_graph.propose.context import _placement_contact_error
+
     assert board_coords
-    board_min = min(transform_poly(rect, c).distance(board.exterior) for c in board_coords)
+    board_err = min(
+        _placement_contact_error(transform_poly(rect, c), board, min_dist, None)
+        for c in board_coords
+    )
     if sheet_coords:
-        sheet_min = min(transform_poly(rect, c).distance(board.exterior) for c in sheet_coords)
-        assert board_min <= sheet_min * 1.1 + 1e-6
+        sheet_err = min(
+            _placement_contact_error(transform_poly(rect, c), board, min_dist, None)
+            for c in sheet_coords
+        )
+        assert board_err <= sheet_err * 1.1 + 1e-6
+
+
+def _edge_label_for_anchor(board: Polygon, anchor: Point) -> str:
+    coords = list(board.exterior.coords)
+    best_i = 0
+    best_dist = float("inf")
+    for i in range(len(coords) - 1):
+        seg = LineString([coords[i], coords[i + 1]])
+        dist = seg.distance(anchor)
+        if dist < best_dist:
+            best_dist = dist
+            best_i = i
+    return ("bottom", "hypotenuse", "left")[best_i]
+
+
+def test_board_edge_snap_seeds_cover_all_triangle_edges():
+    """Stratified seed pick must reserve slots on the long hypotenuse."""
+    board = _triangle_board()
+    rect = _rect_part()
+    cfg = BuildGraphConfig()
+    min_dist = cfg.board_min_dist(first_pass=True)
+    propose_cfg = cfg.first_pass_propose_config()
+    geom = ProposeGeometry(board, Polygon(), rect, min_dist, propose_cfg=propose_cfg)
+    seeds = _board_edge_snap_seeds(
+        rect,
+        board,
+        Polygon(),
+        min_dist=min_dist,
+        propose_geom=geom,
+        pt_push=board.centroid,
+        num_angles=propose_cfg.first_pass_num_angles,
+        samples_per_edge=propose_cfg.board_edge_samples_per_edge,
+        top_n=propose_cfg.first_pass_max_proposals,
+    )
+    by_edge = {
+        _edge_label_for_anchor(board, anchor)
+        for _, anchor, _ in seeds
+    }
+    assert "hypotenuse" in by_edge
+    assert len(seeds) >= propose_cfg.first_pass_max_proposals // 3
 
 
 def test_board_edge_guidance_cast_emits_candidates():
@@ -157,3 +205,50 @@ def test_propose_coords_with_board_edge_only():
 def test_default_config_enables_board_edge():
     assert BuildGraphConfig().propose.use_board_edge_seeds is True
     assert BuildGraphConfig().propose.board_edge_guidance_refine is True
+
+
+def test_snap_coords_cpp_matches_shapely():
+    from nest_graph.propose.placement_common import _snap_coords_along_exterior
+
+    board = _triangle_board()
+    rect = _rect_part()
+    cfg = BuildGraphConfig()
+    min_dist = cfg.board_min_dist()
+    geom = ProposeGeometry(board, Polygon(), rect, min_dist, propose_cfg=cfg.propose)
+    anchors = [
+        Point(0.3, 0.0),
+        Point(0.0, 0.4),
+        Point(0.55, 0.55),
+    ]
+    angles = [0.0, math.pi / 4, math.pi / 2]
+    from nest_graph.propose.placement_common import _inward_at_contact
+
+    for contact in anchors:
+        for angle in angles:
+            snap_contact, inward = _inward_at_contact(board, contact)
+            shapely_coords = _snap_coords_along_exterior(
+                rect,
+                board,
+                snap_contact,
+                inward,
+                angle,
+                min_dist,
+                container=board,
+                propose_geom=None,
+            )
+            cpp_coords = _snap_coords_along_exterior(
+                rect,
+                board,
+                snap_contact,
+                inward,
+                angle,
+                min_dist,
+                container=board,
+                propose_geom=geom,
+            )
+            if shapely_coords is None:
+                assert cpp_coords is None
+                continue
+            assert cpp_coords is not None
+            for i in range(3):
+                assert math.isclose(shapely_coords[i], cpp_coords[i], abs_tol=0.05)

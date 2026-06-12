@@ -158,14 +158,22 @@ def propose_placements_neighbor_slide(
     for angle in angles:
         for obstacle in obstacles:
             coords = _slide_toward_obstacle(
-                shape_to_place, obstacle, float(angle), min_dist, sheet,
+                shape_to_place,
+                obstacle,
+                float(angle),
+                min_dist,
+                sheet,
+                propose_geom=propose_geom,
             )
             if coords is None:
                 continue
             if not _propose_valid_at(coords, propose_geom, pt_push):
                 continue
-            placed = transform_poly(shape_to_place, coords)
-            score = float(base_shape.distance(placed))
+            placed_geom = propose_geom.placed_at(coords)
+            score = min(
+                placed_geom.distance(base_geom)
+                for base_geom in propose_geom.base_geoms
+            ) if propose_geom.base_geoms else 10.0
             propositions.append({"coords": coords, "cost": score})
 
     return _finalize_placement_propositions(propositions, top_n)
@@ -251,6 +259,8 @@ def propose_placements_axis_push(
                 sheet,
                 obstacle_geom,
                 min_dist,
+                propose_geom=propose_geom,
+                angle=float(angle),
             )
             if pushed is None:
                 continue

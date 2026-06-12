@@ -145,6 +145,39 @@ def scenario_context(
         base = base_shape_from_selection(polys, indices)
         return board, tri, rect, (polys, indices), base
 
+    if scenario == "packed_border":
+        t1 = np.array([0.06, 0.06, float(rng.uniform(0, 0.4))])
+        t2 = np.array([0.95, 0.06, float(rng.uniform(0, 0.4))])
+        t3 = np.array([0.06, 0.85, float(rng.uniform(0, 0.4))])
+        polys = [
+            transform_poly(rect, t1),
+            transform_poly(rect, t2),
+            transform_poly(tri, t3),
+        ]
+        indices = [0, 1, 2]
+        base = base_shape_from_selection(polys, indices)
+        return board, tri, rect, (polys, indices), base
+
+    if scenario == "border_gap":
+        t_rect = np.array([0.08, 0.08, float(rng.uniform(0, 0.4))])
+        placed = transform_poly(rect, t_rect)
+        polys, indices = [placed], [0]
+        base = base_shape_from_selection(polys, indices)
+        return board, tri, rect, (polys, indices), base
+
+    if scenario == "interior_after_border":
+        t1 = np.array([0.06, 0.06, float(rng.uniform(0, 0.3))])
+        t2 = np.array([0.95, 0.06, float(rng.uniform(0, 0.3))])
+        t3 = np.array([0.06, 0.85, float(rng.uniform(0, 0.3))])
+        polys = [
+            transform_poly(rect, t1),
+            transform_poly(rect, t2),
+            transform_poly(tri, t3),
+        ]
+        indices = [0, 1, 2]
+        base = base_shape_from_selection(polys, indices)
+        return board, tri, rect, (polys, indices), base
+
     raise ValueError(f"unknown scenario: {scenario}")
 
 
@@ -166,6 +199,45 @@ class ProposeBenchmarkMetrics:
     propose_time_s: float
     per_proposer_counts: dict[str, int] = field(default_factory=dict)
     border_standoff_min: float = 0.0
+    squeeze_improved_count: int = 0
+    squeeze_contact_delta: float = 0.0
+    graph_yield: float = 0.0
+    unique_transforms: int = 0
+    rule_score_top1: float = 0.0
+    place_zone: str = ""
+
+
+SCENARIO_WEIGHTS: dict[str, float] = {
+    "empty_base": 1.0,
+    "partial_pack": 2.0,
+    "two_clusters": 2.0,
+    "hole_board": 1.5,
+    "packed_border": 1.5,
+    "border_gap": 2.0,
+    "interior_after_border": 2.0,
+}
+
+
+def composite_place_score(metrics: "ProposeBenchmarkMetrics") -> float:
+    """Graph-focused composite; higher is better."""
+    rule_norm = metrics.rule_score_top1
+    return (
+        2.0 * metrics.graph_yield
+        + metrics.kiss_fraction
+        - 3.0 * metrics.contact_dist_min
+        + 0.5 * rule_norm
+        - 0.01 * metrics.propose_time_s
+    )
+
+
+def composite_local_score(metrics: ProposeBenchmarkMetrics) -> float:
+    """Higher is better; scenario weight applied externally."""
+    return (
+        -3.0 * metrics.contact_dist_min
+        + 2.0 * metrics.kiss_fraction
+        + 0.5 * metrics.squeeze_contact_delta
+        - 0.01 * metrics.propose_time_s
+    )
 
 
 def _contact_distance(placed_shapely, base_shape) -> float:
@@ -234,10 +306,9 @@ def run_propose_with_metrics(
     preset_label: str,
     enabled_proposers: frozenset[str] | None = None,
     guidance_seed_coords: list[tuple[float, float, float]] | None = None,
+    skip_graph: bool = False,
 ) -> ProposeBenchmarkMetrics:
     import time
-
-    from nest_graph.build_graph import make_polygon_graph
 
     min_dist = base_cfg.board_min_dist()
     eps = propose_cfg.placement_clearance_epsilon_ratio
@@ -305,20 +376,25 @@ def run_propose_with_metrics(
     )
 
     proposals = np.asarray(final, dtype=np.float64) if final else np.zeros((0, 3))
-    rng = np.random.default_rng(seed)
-    random_t = rng.uniform(-0.2, 0.2, (8, 3)) * [0.4, 0.4, np.pi]
-    graph_rand, _, _, _ = make_polygon_graph(
-        board, [(part_poly, random_t)], min_dist=0.0,
-    )
-    n_rand = len(graph_rand.elems)
-    if proposals.shape[0] == 0:
-        n_both = n_rand
-    else:
-        graph_both, _, _, _ = make_polygon_graph(
-            board, [(part_poly, np.concatenate([random_t, proposals]))],
-            min_dist=0.0,
+    n_rand = 0
+    n_both = 0
+    if not skip_graph:
+        from nest_graph.build_graph import make_polygon_graph
+
+        rng = np.random.default_rng(seed)
+        random_t = rng.uniform(-0.2, 0.2, (8, 3)) * [0.4, 0.4, np.pi]
+        graph_rand, _, _, _ = make_polygon_graph(
+            board, [(part_poly, random_t)], min_dist=0.0,
         )
-        n_both = len(graph_both.elems)
+        n_rand = len(graph_rand.elems)
+        if proposals.shape[0] == 0:
+            n_both = n_rand
+        else:
+            graph_both, _, _, _ = make_polygon_graph(
+                board, [(part_poly, np.concatenate([random_t, proposals]))],
+                min_dist=0.0,
+            )
+            n_both = len(graph_both.elems)
 
     return ProposeBenchmarkMetrics(
         preset=preset_label,
@@ -337,4 +413,313 @@ def run_propose_with_metrics(
         propose_time_s=elapsed,
         per_proposer_counts=dict(proposer_counts),
         border_standoff_min=border_min,
+    )
+
+
+def _coords_moved(
+    before: list[tuple[float, float, float]],
+    after: list[tuple[float, float, float]],
+    *,
+    tol: float = 1e-3,
+) -> int:
+    n = min(len(before), len(after))
+    moved = 0
+    for i in range(n):
+        b, a = before[i], after[i]
+        if (
+            abs(b[0] - a[0]) > tol
+            or abs(b[1] - a[1]) > tol
+            or abs(b[2] - a[2]) > tol
+        ):
+            moved += 1
+    return moved
+
+
+def _top_k_contact_delta(
+    before: list[tuple[float, float, float]],
+    after: list[tuple[float, float, float]],
+    board: Polygon,
+    base_shape,
+    part_poly: Polygon,
+    min_dist: float,
+    pt_push: Point,
+    epsilon_ratio: float,
+    k: int,
+) -> tuple[int, float]:
+    if k <= 0 or not before:
+        return 0, 0.0
+    kb = before[:k]
+    ka = after[:k] if after else before[:k]
+    _, _, _, _, cd_before, _, _ = evaluate_proposal_coords(
+        kb, board, base_shape, part_poly, min_dist, pt_push, epsilon_ratio,
+    )
+    _, _, _, _, cd_after, _, _ = evaluate_proposal_coords(
+        ka, board, base_shape, part_poly, min_dist, pt_push, epsilon_ratio,
+    )
+    if cd_before >= float("inf") or cd_after >= float("inf"):
+        return _coords_moved(kb, ka), 0.0
+    return _coords_moved(kb, ka), max(0.0, cd_before - cd_after)
+
+
+def run_propose_with_squeeze_metrics(
+    propose_cfg: ProposeConfig,
+    scenario: str,
+    seed: int,
+    base_cfg: BuildGraphConfig,
+    *,
+    preset_label: str,
+    enabled_proposers: frozenset[str] | None = None,
+    guidance_seed_coords: list[tuple[float, float, float]] | None = None,
+) -> ProposeBenchmarkMetrics:
+    """Run propose; record cast_squeeze movement and contact improvement."""
+    import copy as copy_mod
+    import time
+
+    t0 = time.perf_counter()
+    no_squeeze = copy_mod.copy(propose_cfg)
+    no_squeeze.cast_squeeze_top_k = 0
+    no_squeeze.cast_squeeze_passes = 0
+    pre_final = _run_propose_coords_only(
+        no_squeeze, scenario, seed, base_cfg,
+        enabled_proposers=enabled_proposers,
+        guidance_seed_coords=guidance_seed_coords,
+    )
+    post_final = _run_propose_coords_only(
+        propose_cfg, scenario, seed, base_cfg,
+        enabled_proposers=enabled_proposers,
+        guidance_seed_coords=guidance_seed_coords,
+    )
+    elapsed = time.perf_counter() - t0
+
+    min_dist = base_cfg.board_min_dist()
+    eps = propose_cfg.placement_clearance_epsilon_ratio
+    board, part_poly, _, (selected_polys, selected_indices), _ = scenario_context(
+        scenario, seed,
+    )
+    placed_polys = [selected_polys[i] for i in selected_indices]
+    obstacle = obstacle_shape_for_propose(placed_polys, part_poly, min_dist)
+    border_focus = should_use_border_focus(obstacle, propose_cfg)
+    push = propose_push_point(
+        board,
+        obstacle,
+        smart_push=propose_cfg.smart_push_target,
+        min_dist=min_dist,
+        use_border_focus=border_focus,
+    )
+
+    valid, c_mean, c_min, cd_mean, cd_min, kiss_frac, border_min = (
+        evaluate_proposal_coords(
+            post_final, board, obstacle, part_poly, min_dist, push, eps,
+        )
+    )
+    k = max(propose_cfg.cast_squeeze_top_k, 0)
+    moved, delta = _top_k_contact_delta(
+        pre_final, post_final, board, obstacle, part_poly,
+        min_dist, push, eps, k,
+    )
+
+    return ProposeBenchmarkMetrics(
+        preset=preset_label,
+        scenario=scenario,
+        seed=seed,
+        valid_count=valid,
+        top_clearance_mean=c_mean,
+        top_clearance_min=c_min,
+        contact_dist_mean=cd_mean,
+        contact_dist_min=cd_min,
+        kiss_fraction=kiss_frac,
+        raw_pool_size=0,
+        final_count=len(post_final),
+        graph_nodes=0,
+        graph_nodes_vs_random=0,
+        propose_time_s=elapsed,
+        per_proposer_counts={},
+        border_standoff_min=border_min,
+        squeeze_improved_count=moved,
+        squeeze_contact_delta=delta,
+    )
+
+
+def _run_propose_coords_only(
+    propose_cfg: ProposeConfig,
+    scenario: str,
+    seed: int,
+    base_cfg: BuildGraphConfig,
+    *,
+    enabled_proposers: frozenset[str] | None = None,
+    guidance_seed_coords: list[tuple[float, float, float]] | None = None,
+) -> list[tuple[float, float, float]]:
+    min_dist = base_cfg.board_min_dist()
+    board, part_poly, _, (selected_polys, selected_indices), _ = scenario_context(
+        scenario, seed,
+    )
+    placed_polys = [selected_polys[i] for i in selected_indices]
+    obstacle = obstacle_shape_for_propose(placed_polys, part_poly, min_dist)
+    border_focus = should_use_border_focus(obstacle, propose_cfg)
+    push = propose_push_point(
+        board,
+        obstacle,
+        smart_push=propose_cfg.smart_push_target,
+        min_dist=min_dist,
+        use_border_focus=border_focus,
+    )
+    focal = None
+    if border_focus:
+        focal = border_focal_for_propose(board, min_dist)
+    elif obstacle is not None and not obstacle.is_empty:
+        focal = obstacle
+    sheet, _voids = board_context_from_geometry(board)
+    geom = ProposeGeometry(
+        board, obstacle, part_poly, min_dist,
+        epsilon_ratio=propose_cfg.placement_clearance_epsilon_ratio,
+        propose_cfg=propose_cfg,
+    )
+    rank_mode = effective_ranking_mode(propose_cfg, obstacle)
+    raw = collect_propose_candidates(
+        obstacle,
+        part_poly,
+        sheet,
+        propose_cfg,
+        min_dist=min_dist,
+        pt_push=push,
+        propose_geom=geom,
+        focal_shape=focal,
+        enabled_proposers=enabled_proposers,
+        proposer_counts=None,
+        guidance_seed_coords=guidance_seed_coords,
+    )
+    return _propose_coords_from_candidates(
+        obstacle,
+        part_poly,
+        board,
+        propose_cfg,
+        min_dist=min_dist,
+        pt_push=push,
+        candidates=raw,
+        rank_mode=rank_mode,
+        focal_shape=focal,
+    )
+
+
+def _unique_transform_count(
+    coords: list[tuple[float, float, float]],
+) -> int:
+    keys = {
+        (round(c[0], 4), round(c[1], 4), round(c[2], 4))
+        for c in coords
+    }
+    return len(keys)
+
+
+def run_place_propose_metrics(
+    propose_cfg: ProposeConfig,
+    scenario: str,
+    seed: int,
+    base_cfg: BuildGraphConfig,
+    *,
+    preset_label: str,
+    force_zone: str | None = None,
+) -> ProposeBenchmarkMetrics:
+    """Run place-routed propose; report graph-yield and zone-stratified metrics."""
+    import time
+
+    from nest_graph.build_graph import make_polygon_graph
+    from nest_graph.config import PLACE_ZONES
+    from nest_graph.elem_graph import PlacementRuleSet, score_elems
+    from nest_graph.propose.context import classify_propose_zone
+    from nest_graph.propose.pipeline import proposed_transforms_for_groups
+
+    min_dist = base_cfg.board_min_dist()
+    eps = propose_cfg.placement_clearance_epsilon_ratio
+    board, part_poly, _, (selected_polys, selected_indices), base_shape = scenario_context(
+        scenario, seed,
+    )
+    placed_polys = [selected_polys[i] for i in selected_indices]
+    obstacle = obstacle_shape_for_propose(
+        placed_polys, part_poly, min_dist, propose_cfg=propose_cfg,
+    )
+    zone = force_zone or classify_propose_zone(
+        board,
+        obstacle,
+        part_poly,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        selected_polys=placed_polys,
+    )
+    if force_zone and force_zone in PLACE_ZONES:
+        cfg = ProposeConfig.for_place(force_zone, base=propose_cfg)
+        cfg = cfg.model_copy(update={"place_profiles_enabled": True})
+    elif propose_cfg.place_profiles_enabled:
+        cfg = ProposeConfig.for_place(zone, base=propose_cfg)
+    else:
+        cfg = propose_cfg
+
+    push = propose_push_point(
+        board,
+        obstacle,
+        smart_push=cfg.smart_push_target,
+        min_dist=min_dist,
+        use_border_focus=should_use_border_focus(obstacle, cfg),
+    )
+    parts = [(part_poly, 0)]
+    proposer_counts: dict[str, int] = {}
+    zones_used: list[str] = []
+
+    t0 = time.perf_counter()
+    by_group = proposed_transforms_for_groups(
+        board,
+        parts,
+        selected_polys,
+        selected_indices,
+        cfg.model_copy(update={"place_profiles_enabled": True}),
+        min_dist=min_dist,
+        rules=None,
+        proposer_counts_out=proposer_counts,
+        zones_used_out=zones_used,
+    )
+    proposals = by_group.get(0, np.zeros((0, 3)))
+    elapsed = time.perf_counter() - t0
+
+    final = [
+        (float(t[0]), float(t[1]), float(t[2]))
+        for t in proposals
+    ]
+    valid, c_mean, c_min, cd_mean, cd_min, kiss_frac, border_min = evaluate_proposal_coords(
+        final, board, obstacle, part_poly, min_dist, push, eps,
+    )
+
+    graph_nodes = 0
+    graph_yield = 0.0
+    rule_top1 = 0.0
+    if proposals.shape[0] > 0:
+        graph, _, _, _ = make_polygon_graph(
+            board, [(part_poly, proposals)], min_dist=min_dist, epsilon_ratio=eps,
+        )
+        graph_nodes = len(graph.elems)
+        graph_yield = graph_nodes / proposals.shape[0]
+        if graph.elems:
+            scores = score_elems(graph, PlacementRuleSet())
+            rule_top1 = max(scores) if scores else 0.0
+
+    return ProposeBenchmarkMetrics(
+        preset=preset_label,
+        scenario=scenario,
+        seed=seed,
+        valid_count=valid,
+        top_clearance_mean=c_mean,
+        top_clearance_min=c_min,
+        contact_dist_mean=cd_mean,
+        contact_dist_min=cd_min,
+        kiss_fraction=kiss_frac,
+        raw_pool_size=proposals.shape[0],
+        final_count=len(final),
+        graph_nodes=graph_nodes,
+        graph_nodes_vs_random=graph_nodes,
+        propose_time_s=elapsed,
+        per_proposer_counts=dict(proposer_counts),
+        border_standoff_min=border_min,
+        graph_yield=graph_yield,
+        unique_transforms=_unique_transform_count(final),
+        rule_score_top1=rule_top1,
+        place_zone=zones_used[0] if zones_used else zone,
     )

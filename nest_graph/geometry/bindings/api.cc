@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <utility>
 #include <vector>
@@ -12,9 +13,11 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
+#include "geometry_bindings_extra.h"
 #include "shapely.h"
 #include "distance/polygon_distance.h"
 #include "guide/guide.h"
+#include "guide/polygon_cast.h"
 #include "intersect/polygon_intersect.h"
 #include "solid/decompose.h"
 #include "solid/containment.h"
@@ -23,6 +26,8 @@ namespace nb = nanobind;
 
 using SolidGeometry2d = SolidGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
+using CastResult2d = ComplexCastResult<Vec2d>;
+using PairDistanceResult2d = PairDistanceResult<Vec2d>;
 using GuidanceConfig2d = GuidanceConfig<Vec2d>;
 using PlacementGuidance2d = PlacementGuidance<Vec2d>;
 using PlacementProposition2d = PlacementProposition<Vec2d>;
@@ -60,6 +65,25 @@ std::vector<SolidGeometry2d> solids_from_holders(
     return out;
 }
 
+Vec2d slide_vector_from_handle(nb::handle slide) {
+    double sx = 0.0;
+    double sy = 0.0;
+    if (!read_xy(slide, sx, sy)) {
+        throw nb::type_error(
+            "slide: expected a length-2 tuple or sequence");
+    }
+    return Vec2d({sx, sy});
+}
+
+GeometryHolder geometry_from_line_coords(std::vector<Vec2d> pts) {
+    if (pts.size() < 2) {
+        throw nb::value_error("from_ring: need at least 2 distinct points");
+    }
+    GeometryHolder holder;
+    holder.solid = solid_from_ring_coords<Vec2d>(pts, holder.rng);
+    return holder;
+}
+
 void bind_geometry(nb::module_ &m) {
     nb::class_<GeometryHolder>(m, "Geometry")
         .def(nb::init<>())
@@ -91,8 +115,21 @@ void bind_geometry(nb::module_ &m) {
             },
             nb::arg("points"))
         .def_static(
+            "from_ring",
+            [](nb::handle coords) {
+                std::vector<Vec2d> pts;
+                points_from_iterable(coords, pts);
+                return geometry_from_line_coords(std::move(pts));
+            },
+            nb::arg("coords"))
+        .def_static(
             "from_shapely",
             [](nb::handle geom) {
+                if (geom_type_is(geom, "LineString")
+                    || geom_type_is(geom, "LinearRing")) {
+                    std::vector<Vec2d> pts = ring_from_coords(geom.attr("coords"));
+                    return geometry_from_line_coords(std::move(pts));
+                }
                 std::vector<std::vector<Vec2d>> outers;
                 std::vector<std::vector<Vec2d>> holes;
                 collect_from_shapely(geom, outers, holes);
@@ -191,6 +228,12 @@ void bind_geometry(nb::module_ &m) {
                     "apply_transform: expected (x, y, angle) or a length-3 sequence");
             })
         .def(
+            "centroid",
+            [](const GeometryHolder &g) {
+                const auto cen = solid_centroid(g.solid);
+                return nb::make_tuple(cen[0], cen[1]);
+            })
+        .def(
             "center",
             [](const GeometryHolder &g) {
                 const auto &c = g.solid.get_bounding_circle();
@@ -227,6 +270,12 @@ void bind_geometry(nb::module_ &m) {
             },
             nb::arg("container"))
         .def(
+            "fully_inside",
+            [](const GeometryHolder &inner, const GeometryHolder &outer) {
+                return is_solid_fully_contained(inner.solid, outer.solid);
+            },
+            nb::arg("container"))
+        .def(
             "footprint_inside_batch",
             [](const GeometryHolder &outer, const std::vector<GeometryHolder> &inners) {
                 std::vector<SolidGeometry2d> inner_solids;
@@ -258,6 +307,54 @@ void bind_geometry(nb::module_ &m) {
                 return !find_polygon_intersections<Vec2d>({a.solid}, solids).empty();
             },
             nb::arg("others"))
+        .def(
+            "distance",
+            [](const GeometryHolder &a, const GeometryHolder &b) {
+                const auto pair = min_distance_pair(a.solid, b.solid);
+                if (pair.core.intersect) {
+                    return 0.0;
+                }
+                return std::sqrt(static_cast<double>(pair.core.distance_sq));
+            },
+            nb::arg("other"))
+        .def(
+            "min_distance",
+            [](const GeometryHolder &a, const GeometryHolder &b) {
+                return min_distance_pair(a.solid, b.solid);
+            },
+            nb::arg("other"))
+        .def(
+            "standoff_distance",
+            [](const GeometryHolder &part, const GeometryHolder &ring) {
+                const auto pair = standoff_distance_pair(part.solid, ring.solid);
+                if (pair.core.intersect) {
+                    return 0.0;
+                }
+                return std::sqrt(static_cast<double>(pair.core.distance_sq));
+            },
+            nb::arg("ring"))
+        .def(
+            "standoff_min_distance",
+            [](const GeometryHolder &part, const GeometryHolder &ring) {
+                return standoff_distance_pair(part.solid, ring.solid);
+            },
+            nb::arg("ring"))
+        .def(
+            "cast_slide",
+            [](const GeometryHolder &active,
+               const std::vector<GeometryHolder> &obstacles,
+               nb::handle slide,
+               double max_t) {
+                const Vec2d slide_vec = slide_vector_from_handle(slide);
+                return cast_slide(
+                    active.solid,
+                    solids_from_holders(obstacles),
+                    slide_vec,
+                    static_cast<Vec2d::Scalar>(max_t));
+            },
+            nb::arg("obstacles"),
+            nb::arg("slide"),
+            nb::arg("max_t") = std::numeric_limits<double>::infinity())
         .def(
             "get_bounding_circle",
             [](const GeometryHolder &poly) {
@@ -336,7 +433,70 @@ void bind_geometry(nb::module_ &m) {
         .def_ro("penetration_sq", &DistanceResult2d::penetration_sq)
         .def_prop_ro(
             "mtv",
-            [](const DistanceResult2d &r) { return nb::make_tuple(r.mtv[0], r.mtv[1]); });
+            [](const DistanceResult2d &r) { return nb::make_tuple(r.mtv[0], r.mtv[1]); })
+        .def_prop_ro(
+            "distance",
+            [](const DistanceResult2d &r) {
+                if (r.intersect) {
+                    return 0.0;
+                }
+                return std::sqrt(static_cast<double>(r.distance_sq));
+            });
+
+    nb::class_<PairDistanceResult2d>(m, "MinDistanceResult")
+        .def_prop_ro(
+            "polyA_idx",
+            [](const PairDistanceResult2d &r) { return r.core.polyA_idx; })
+        .def_prop_ro(
+            "polyB_idx",
+            [](const PairDistanceResult2d &r) { return r.core.polyB_idx; })
+        .def_prop_ro(
+            "partA_idx",
+            [](const PairDistanceResult2d &r) { return r.core.partA_idx; })
+        .def_prop_ro(
+            "partB_idx",
+            [](const PairDistanceResult2d &r) { return r.core.partB_idx; })
+        .def_prop_ro(
+            "intersect",
+            [](const PairDistanceResult2d &r) { return r.core.intersect; })
+        .def_prop_ro(
+            "distance_sq",
+            [](const PairDistanceResult2d &r) { return r.core.distance_sq; })
+        .def_prop_ro(
+            "penetration_sq",
+            [](const PairDistanceResult2d &r) { return r.core.penetration_sq; })
+        .def_prop_ro(
+            "distance",
+            [](const PairDistanceResult2d &r) {
+                if (r.core.intersect) {
+                    return 0.0;
+                }
+                return std::sqrt(static_cast<double>(r.core.distance_sq));
+            })
+        .def_prop_ro(
+            "closest_a",
+            [](const PairDistanceResult2d &r) {
+                return nb::make_tuple(r.closest_a[0], r.closest_a[1]);
+            })
+        .def_prop_ro(
+            "closest_b",
+            [](const PairDistanceResult2d &r) {
+                return nb::make_tuple(r.closest_b[0], r.closest_b[1]);
+            })
+        .def_prop_ro(
+            "mtv",
+            [](const PairDistanceResult2d &r) {
+                return nb::make_tuple(r.core.mtv[0], r.core.mtv[1]);
+            });
+
+    nb::class_<CastResult2d>(m, "CastResult")
+        .def_ro("intersects_path", &CastResult2d::intersects_path)
+        .def_ro("t_entry", &CastResult2d::t_entry)
+        .def_ro("t_exit", &CastResult2d::t_exit)
+        .def_ro("polyA_idx", &CastResult2d::polyA_idx)
+        .def_ro("partA_idx", &CastResult2d::partA_idx)
+        .def_ro("polyB_idx", &CastResult2d::polyB_idx)
+        .def_ro("partB_idx", &CastResult2d::partB_idx);
 
     m.def(
         "find_polygon_intersections",
@@ -401,6 +561,58 @@ void bind_geometry(nb::module_ &m) {
         nb::arg("set_a"),
         nb::arg("set_b"),
         nb::arg("aura") = 0.5);
+
+    m.def(
+        "min_distance_pair",
+        [](const GeometryHolder &a, const GeometryHolder &b) {
+            return min_distance_pair(a.solid, b.solid);
+        },
+        nb::arg("a"),
+        nb::arg("b"));
+
+    m.def(
+        "standoff_distance_pair",
+        [](const GeometryHolder &part, const GeometryHolder &ring) {
+            return standoff_distance_pair(part.solid, ring.solid);
+        },
+        nb::arg("part"),
+        nb::arg("ring"));
+
+    m.def(
+        "find_closest_polygon_cast",
+        [](const GeometryHolder &active,
+           const std::vector<GeometryHolder> &obstacles,
+           nb::handle slide,
+           double max_t) {
+            const Vec2d slide_vec = slide_vector_from_handle(slide);
+            return cast_slide(
+                active.solid,
+                solids_from_holders(obstacles),
+                slide_vec,
+                static_cast<Vec2d::Scalar>(max_t));
+        },
+        nb::arg("active"),
+        nb::arg("obstacles"),
+        nb::arg("slide"),
+        nb::arg("max_t") = std::numeric_limits<double>::infinity());
+
+    m.def(
+        "find_all_polygon_casts",
+        [](const GeometryHolder &active,
+           const std::vector<GeometryHolder> &obstacles,
+           nb::handle slide,
+           double max_t) {
+            const Vec2d slide_vec = slide_vector_from_handle(slide);
+            return cast_slide_all(
+                active.solid,
+                solids_from_holders(obstacles),
+                slide_vec,
+                static_cast<Vec2d::Scalar>(max_t));
+        },
+        nb::arg("active"),
+        nb::arg("obstacles"),
+        nb::arg("slide"),
+        nb::arg("max_t") = std::numeric_limits<double>::infinity());
 
     m.def(
         "evaluate_local_placement",

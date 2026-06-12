@@ -1,7 +1,7 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -10,6 +10,16 @@ from shapely.geometry import Polygon
 from .board import board_sheet_from_outline, board_void_geometries
 from .elem_graph import Circle, RuleMutationSettings, Vec2
 from .utils import normalize_poly
+
+
+PLACE_ZONES: tuple[str, ...] = (
+    "empty_border",
+    "border_gap",
+    "interior_pocket",
+    "cluster_edge",
+    "inter_cluster",
+    "void_seek",
+)
 
 
 def _env_int(key: str, default: int) -> int:
@@ -134,6 +144,11 @@ class RulesConfig(BaseModel):
     board_sheet_padding_ratio: float = 0.08
     max_inserts_per_type: int = 4
     max_rules_per_set: int = 24
+    use_repulsor_rules: bool = False
+    """Seed negative-weight point rules at sheet center to discourage void-center poses."""
+    repulsor_weight: float = -0.2
+    repulsor_sets_to_touch: int = 4
+    """Number of top rule sets to receive repulsor seeds each iteration."""
 
     def board_polygon(self) -> Polygon:
         """Nest outline (exterior ring). Prefer board_sheet_polygon() for nesting/propose."""
@@ -224,8 +239,8 @@ class OutputConfig(BaseModel):
 
 class ProposeConfig(BaseModel):
     """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
-    max_proposals: int = 32
-    candidate_pool: int = 64
+    max_proposals: int = 40
+    candidate_pool: int = 80
     min_dist_ratio: float = 0.002
     first_pass_min_dist_ratio: float = 0.0008
     """Tighter standoff on iteration 1 for denser outline packing."""
@@ -235,7 +250,7 @@ class ProposeConfig(BaseModel):
     first_pass_num_angles: int = 28
     first_pass_group_edge_samples_per_edge: int = 64
     first_pass_use_axis_push: bool = True
-    first_pass_sequential_augment_max: int = 8
+    first_pass_sequential_augment_max: int = 12
     """Greedy gap-fill steps after saturation (sheet-snap + chain-fit)."""
     first_pass_guidance_refine_passes: int = 3
     """Slide border placements with per-anchor guidance casts for tighter packing."""
@@ -243,6 +258,16 @@ class ProposeConfig(BaseModel):
     placement_num_angles: int = 18
     use_neighbor_slide: bool = True
     use_axis_push: bool = False
+    neighbor_slide_pool_fraction: float = 0.5
+    """Share of candidate_pool budget for neighbor_slide (was pool // 4)."""
+    obstacle_nearest_k: int = 3
+    """Packed clusters used as propose obstacles (graph still checks full layout)."""
+    contact_tightness_hybrid_weight: float = 0.15
+    """Blend geometric tightness into contact_hybrid ranking."""
+    cast_squeeze_top_k: int = 8
+    """Post-rank cast squeeze on top-K proposals (0 = off)."""
+    cast_squeeze_passes: int = 1
+    """Number of cast_squeeze iterations on top-K (2 = double-pass compaction)."""
     use_bottom_left: bool = False
     use_nfp_vertices: bool = False
     bottom_left_vertices_per_angle: int = 8
@@ -272,12 +297,16 @@ class ProposeConfig(BaseModel):
     """When packed: rank/trim by tight fit to sheet border or focal group, not deep clearance."""
     use_contact_clearance_hybrid: bool = True
     """Blend contact fit with clearance so valid pocket poses are not discarded."""
-    contact_clearance_hybrid_weight: float = 0.1
+    contact_clearance_hybrid_weight: float = 0.25
     use_stratified_contact_trim: bool = True
     contact_trim_fraction: float = 0.8
     ranking_mode: Literal[
         "legacy", "clearance", "hybrid", "border", "contact", "contact_hybrid",
+        "rule_hybrid",
     ] = "clearance"
+    use_rule_ranking: bool = True
+    """When rules are passed to propose, blend rule score into ranking."""
+    rule_ranking_weight: float = 0.3
     ranking_clearance_weight: float = 1.0
     ranking_hull_weight: float = 0.1
     group_edge_samples_per_edge: int = 32
@@ -287,7 +316,7 @@ class ProposeConfig(BaseModel):
     guidance_use_tight_packing: bool = True
     guidance_use_corner_alignment: bool = True
     guidance_enable_grid: bool = True
-    guidance_diversity_dist_ratio: float = 4.0
+    guidance_diversity_dist_ratio: float = 2.5
     guidance_proposition_seed_count: int = 16
     use_batch_pack: bool = True
     """Place one group, then pack the next against it; add both configs to proposals."""
@@ -306,7 +335,7 @@ class ProposeConfig(BaseModel):
     board_edge_batch_reserve: int = 96
     use_full_packed_obstacle: bool = True
     """When proposing into a partial pack, treat all placed parts as obstacles."""
-    first_pass_border_saturation_passes: int = 5
+    first_pass_border_saturation_passes: int = 6
     """Graph rebuild passes before sequential gap-fill."""
     random_per_iter_empty_border: int = 0
     border_selection_score_boost: float = 24.0
@@ -316,8 +345,149 @@ class ProposeConfig(BaseModel):
     """Iter 1: rebuild graph with border placements, saturate more outline-kiss nodes."""
     first_pass_border_pack: bool = True
     """Iter 1: pack outline-kiss nodes around nest perimeter before any interior fill."""
-    first_pass_interior_max: int = 0
+    first_pass_interior_max: int = 3
     """Max non-outline parts after border saturate (0 = border-only first pass)."""
+    place_profiles_enabled: bool = True
+    """Route propose config per sheet zone (border / interior / cluster edge)."""
+    late_border_saturation: bool = True
+    """Iter 2+: run border saturation propose when outline coverage is low."""
+    place_border_coverage_threshold: float = 0.35
+    """Below this parts-area/board ratio, prefer border_gap profile."""
+    place_free_area_interior_threshold: float = 0.35
+    """Free-region area ratio above this → interior_pocket profile."""
+    place_proposer_pool_scales: dict[str, float] = Field(default_factory=dict)
+    """Rolling feedback scale per proposer name (1.0 = default)."""
+
+    @classmethod
+    def proposers_for_place(cls, zone: str) -> frozenset[str] | None:
+        sets: dict[str, frozenset[str]] = {
+            "empty_border": frozenset({
+                "board_edge", "sheet_corners", "perimeter_walk",
+            }),
+            "border_gap": frozenset({
+                "board_edge", "sheet_corners", "perimeter_walk",
+                "group_fit", "neighbor_slide", "ribbon_free",
+            }),
+            "interior_pocket": frozenset({
+                "erosion", "voronoi", "ribbon_free", "guidance_propositions",
+                "raycasting",
+            }),
+            "cluster_edge": frozenset({
+                "group_fit", "neighbor_slide", "guidance_propositions",
+                "perimeter_walk", "erosion",
+            }),
+            "inter_cluster": frozenset({
+                "ribbon_free", "raycasting", "voronoi", "erosion",
+            }),
+            "void_seek": frozenset({
+                "erosion", "voronoi", "ribbon_free", "raycasting",
+                "guidance_propositions",
+            }),
+        }
+        return sets.get(zone)
+
+    @classmethod
+    def obstacle_scope_for_place(cls, zone: str) -> tuple[bool, int]:
+        if zone in ("interior_pocket", "inter_cluster", "void_seek"):
+            return True, 0
+        if zone == "border_gap":
+            return False, 2
+        if zone == "cluster_edge":
+            return False, 3
+        return False, 3
+
+    @classmethod
+    def for_place(
+        cls,
+        zone: str,
+        base: "ProposeConfig | None" = None,
+        **overrides: Any,
+    ) -> "ProposeConfig":
+        root = base.model_dump() if base is not None else cls().model_dump()
+        profiles: dict[str, dict[str, Any]] = {
+            "empty_border": {
+                "ranking_mode": "border",
+                "border_focus_ranking": True,
+                "use_border_focus": True,
+                "use_contact_ranking": False,
+                "cast_squeeze_top_k": 12,
+            },
+            "border_gap": {
+                "ranking_mode": "border",
+                "border_focus_ranking": True,
+                "use_contact_ranking": False,
+                "use_full_packed_obstacle": False,
+                "obstacle_nearest_k": 2,
+                "cast_squeeze_top_k": 12,
+                "use_board_edge_seeds": True,
+            },
+            "interior_pocket": {
+                "ranking_mode": "contact_hybrid",
+                "use_contact_ranking": True,
+                "use_contact_clearance_hybrid": True,
+                "use_full_packed_obstacle": True,
+                "use_border_focus": False,
+                "border_focus_ranking": False,
+                "cast_squeeze_top_k": 6,
+                "use_board_edge_seeds": False,
+            },
+            "cluster_edge": {
+                "use_guidance_propositions": True,
+                "guidance_use_tight_packing": True,
+                "guidance_use_corner_alignment": True,
+                "guidance_enable_grid": False,
+                "use_contact_ranking": True,
+                "use_contact_clearance_hybrid": True,
+                "cast_squeeze_top_k": 8,
+                "use_neighbor_slide": False,
+                "use_full_packed_obstacle": False,
+                "obstacle_nearest_k": 3,
+            },
+            "inter_cluster": {
+                "ranking_mode": "clearance",
+                "use_contact_ranking": False,
+                "use_full_packed_obstacle": True,
+                "use_board_edge_seeds": False,
+                "use_group_edge_seeds": False,
+                "cast_squeeze_top_k": 4,
+                "use_ribbon_seeds": True,
+                "use_voronoi": True,
+            },
+            "void_seek": {
+                "ranking_mode": "clearance",
+                "use_contact_ranking": False,
+                "use_full_packed_obstacle": True,
+                "cast_squeeze_top_k": 6,
+            },
+        }
+        patch = dict(profiles.get(zone, {}))
+        patch.update(overrides)
+        root.update(patch)
+        return cls(**root)
+
+    @classmethod
+    def local_compact_profile(
+        cls,
+        *,
+        squeeze_k: int = 8,
+        use_walk: bool = False,
+        **overrides: Any,
+    ) -> "ProposeConfig":
+        """Benchmark-synthesized local compaction: tight+corner cast + post-rank squeeze."""
+        data = cls().model_dump()
+        data.update({
+            "use_guidance_propositions": True,
+            "guidance_use_tight_packing": True,
+            "guidance_use_corner_alignment": True,
+            "guidance_enable_grid": False,
+            "guidance_max_propositions": 8,
+            "cast_squeeze_top_k": squeeze_k,
+            "cast_squeeze_passes": 1,
+            "use_neighbor_slide": False,
+            "use_guidance_walk": use_walk,
+        })
+        data.update(overrides)
+        return cls(**data)
 
 
 class BuildGraphConfig(BaseModel):
@@ -350,7 +520,7 @@ class BuildGraphConfig(BaseModel):
         p.placement_clearance_epsilon_ratio = p.first_pass_clearance_epsilon_ratio
         p.group_edge_samples_per_edge = p.first_pass_group_edge_samples_per_edge
         p.ranking_mode = "border"
-        p.use_axis_push = False
+        p.use_axis_push = p.first_pass_use_axis_push
         return p
 
     @classmethod

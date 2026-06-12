@@ -22,3 +22,10 @@ std::vector<Tscore> score_elems(
     const ElemGraph &g,
     const PlacementRuleSet &rules,
     ScoreAggregation aggregation);
+
+Tscore score_transform(
+    const PlacementRuleSet &rules,
+    Tvertex group,
+    Vec2f pos,
+    float angle_rad,
+    ScoreAggregation aggregation = ScoreAggregation::Sum);

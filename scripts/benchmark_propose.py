@@ -10,7 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from nest_graph.config import BuildGraphConfig
+from nest_graph.config import BuildGraphConfig, ProposeConfig
 from scripts.benchmark_propose_common import (
     ProposeBenchmarkMetrics,
     run_propose_with_metrics,
@@ -60,6 +60,8 @@ PROPOSE_BENCHMARK_PRESETS = {
         contact_trim_fraction=0.8,
         contact_clearance_hybrid_weight=0.1,
     ),
+    "density_heavy": shipped_propose_config(),
+    "local_compact": ProposeConfig.local_compact_profile(),
     "guidance_cast_heavy": shipped_propose_config(
         use_guidance_propositions=True,
         guidance_use_tight_packing=True,

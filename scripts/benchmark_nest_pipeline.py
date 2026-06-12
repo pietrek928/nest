@@ -15,7 +15,10 @@ from nest_graph.build_graph import (
     NestState,
     _append_selection_window,
     _build_transform_batch,
+    _inject_repulsor_rules,
+    _late_border_saturation_active,
     _make_initial_rule_sets,
+    _propose_rules_for_iter,
     active_rule_set,
     apply_dfs_refinement,
     improve_rules,
@@ -24,11 +27,13 @@ from nest_graph.build_graph import (
 from nest_graph.config import (
     BuildGraphConfig,
     ProposeConfig,
+    RulesConfig,
     SamplingConfig,
     SelectionConfig,
     score_rules_options,
 )
 from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
+from nest_graph.propose.feedback import ProposeFeedbackState
 from nest_graph.utils import transform_poly
 
 DFS_MODES = (
@@ -51,6 +56,11 @@ STRUCTURED_SAMPLING: dict[str, Any] = {
 
 
 def _propose_preset(name: str, **overrides: Any) -> ProposeConfig:
+    if name == "local_compact":
+        cfg = ProposeConfig.local_compact_profile()
+        if overrides:
+            cfg = cfg.model_copy(update=overrides)
+        return cfg
     shipped: dict[str, Any] = ProposeConfig().model_dump()
     shipped_prev = dict(shipped)
     shipped_prev.update({
@@ -84,13 +94,34 @@ def _propose_preset(name: str, **overrides: Any) -> ProposeConfig:
             "ranking_mode": "clearance",
         },
         "shipped": shipped,
+        "density_heavy": shipped,
+        "rule_propose": {
+            **shipped,
+            "use_rule_ranking": True,
+            "rule_ranking_weight": 0.3,
+        },
+        "rule_propose_repulsor": {
+            **shipped,
+            "use_rule_ranking": True,
+            "rule_ranking_weight": 0.3,
+        },
+        "local_compact": ProposeConfig.local_compact_profile().model_dump(),
+        "place_routed": {
+            **shipped,
+            "place_profiles_enabled": True,
+            "late_border_saturation": True,
+        },
     }
     base = dict(presets[name])
     base.update(overrides)
     return ProposeConfig(**base)
 
 
-PROPOSE_PRESET_NAMES = ("shipped_prev", "shipped")
+PROPOSE_PRESET_NAMES = (
+    "shipped_prev", "shipped", "density_heavy", "local_compact",
+    "place_routed",
+    "rule_propose", "rule_propose_repulsor",
+)
 
 
 @dataclass
@@ -153,6 +184,7 @@ def run_pipeline(
     history = (np.zeros((1, 3)), np.zeros((1, 3)))
     rule_sets = _make_initial_rule_sets(cfg)
     nest_state: NestState | None = None
+    propose_feedback = ProposeFeedbackState()
     graphs: list = []
     selection_window: list = []
 
@@ -164,6 +196,10 @@ def run_pipeline(
     polys: list = []
 
     for _ in range(n_iters):
+        propose_rules = _propose_rules_for_iter(cfg, rule_sets)
+        border_sat = _late_border_saturation_active(cfg, nest_state, p_board)
+        proposer_counts: dict[str, int] = {}
+        propose_stats: dict = {}
         selected_t = _build_transform_batch(
             cfg,
             selected_t,
@@ -173,6 +209,10 @@ def run_pipeline(
             parts=parts,
             nest_state=nest_state,
             selection_window=selection_window,
+            border_saturation=border_sat,
+            rules=propose_rules,
+            proposer_counts_out=proposer_counts,
+            propose_stats_out=propose_stats,
         )
         graph, polys, group_id, transform = make_polygon_graph(
             p_board,
@@ -180,6 +220,21 @@ def run_pipeline(
             min_dist=min_dist,
             epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
         )
+        prop_n = int(propose_stats.get("proposal_count", 0))
+        if prop_n > 0 and cfg.propose.place_profiles_enabled:
+            graph_yield = min(1.0, len(polys) / prop_n)
+            propose_feedback.record_iteration(
+                proposer_counts=proposer_counts,
+                graph_yield=graph_yield,
+            )
+            if propose_feedback.proposer_pool_scales:
+                cfg = cfg.model_copy(update={
+                    "propose": cfg.propose.model_copy(update={
+                        "place_proposer_pool_scales": dict(
+                            propose_feedback.proposer_pool_scales,
+                        ),
+                    }),
+                })
         graphs.append(graph)
         graphs = graphs[-gc.graphs_window :]
         for round_idx in range(sel.improve_rules_rounds):
@@ -225,6 +280,7 @@ def run_pipeline(
             transform=transform,
             selected_indices=list(selected_polys),
         )
+        rule_sets = _inject_repulsor_rules(rule_sets, cfg, p_board, nest_state)
 
     border_min = _mean_border_standoff(
         p_board, sheet, polys, selected_polys, min_dist,
@@ -247,15 +303,22 @@ def _build_cfg(
     dfs_mode: str,
     *,
     selection_overrides: dict[str, Any] | None = None,
+    rules_overrides: dict[str, Any] | None = None,
 ) -> BuildGraphConfig:
     sel_data = BuildGraphConfig().selection.model_dump()
     sel_data["dfs_mode"] = dfs_mode
     if selection_overrides:
         sel_data.update(selection_overrides)
+    rules_data = RulesConfig().model_dump()
+    if rules_overrides:
+        rules_data.update(rules_overrides)
+    if propose_name == "rule_propose_repulsor":
+        rules_data["use_repulsor_rules"] = True
     return BuildGraphConfig(
         sampling=SamplingConfig(**STRUCTURED_SAMPLING),
         propose=_propose_preset(propose_name),
         selection=SelectionConfig(**sel_data),
+        rules=RulesConfig(**rules_data),
     )
 
 

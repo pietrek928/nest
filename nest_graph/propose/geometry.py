@@ -65,6 +65,14 @@ class ProposeGeometry:
         self.sheet = self.scene.sheet
         self.boundary = self.sheet
         self.part = part
+        self.board_geom = self.scene.board_geom
+        ring_coords = list(self.sheet.exterior.coords)
+        if len(ring_coords) >= 2 and ring_coords[0] == ring_coords[-1]:
+            ring_coords = ring_coords[:-1]
+        self.boundary_ring_geom = (
+            Geometry.from_ring(ring_coords) if len(ring_coords) >= 2 else part
+        )
+        self.base_geoms = list(self.scene.base_geoms)
         self._min_dist = min_dist
         self._epsilon_ratio = epsilon_ratio
         self._propose_cfg = propose_cfg

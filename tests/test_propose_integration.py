@@ -127,10 +127,10 @@ def test_default_config_first_pass_tuned():
     assert cfg.propose.first_pass_layered_pack is True
     assert cfg.propose.first_pass_border_pack is True
     assert cfg.propose.first_pass_empty_border_only is True
-    assert cfg.propose.first_pass_interior_max == 0
+    assert cfg.propose.first_pass_interior_max == 3
     assert cfg.propose.first_pass_min_dist_ratio == 0.0008
-    assert cfg.propose.first_pass_border_saturation_passes == 5
-    assert cfg.propose.first_pass_sequential_augment_max == 8
+    assert cfg.propose.first_pass_border_saturation_passes == 6
+    assert cfg.propose.first_pass_sequential_augment_max == 12
     assert cfg.propose.first_pass_guidance_refine_passes == 3
     assert cfg.propose.use_full_packed_obstacle is True
     assert cfg.propose.board_edge_when_packed is True
@@ -141,10 +141,15 @@ def test_default_config_first_pass_tuned():
     assert cfg.selection.dfs_max_tries == 4
     assert cfg.selection.dfs_refine_max_passes == 1024
     assert cfg.selection.dfs_refine_max_stagnant_passes == 4
-    assert cfg.propose.candidate_pool == 64
+    assert cfg.propose.candidate_pool == 80
     assert cfg.propose.use_contact_clearance_hybrid is True
+    assert cfg.propose.contact_clearance_hybrid_weight == 0.25
+    assert cfg.propose.obstacle_nearest_k == 3
+    assert cfg.propose.neighbor_slide_pool_fraction == 0.5
+    assert cfg.propose.contact_tightness_hybrid_weight == 0.15
+    assert cfg.propose.cast_squeeze_top_k == 8
     assert cfg.sampling.max_transforms_per_group == 1200
-    assert cfg.propose.max_proposals == 32
+    assert cfg.propose.max_proposals == 40
     assert cfg.propose.use_voronoi is True
     assert cfg.propose.use_point_cloud is False
     assert cfg.propose.use_guidance_propositions is True

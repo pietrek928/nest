@@ -1,0 +1,28 @@
+# Density benchmark baseline (pre density_heavy defaults)
+
+Recorded before promoting density-oriented ProposeConfig defaults.
+
+## Propose benchmark (seeds 0-4, shipped preset)
+
+| preset | scenario | contact_min | kiss_frac | pool | final | time_s |
+|--------|----------|-------------|-----------|------|-------|--------|
+| shipped | partial_pack | 0.1387 | 0.00 | 404 | 32 | 1.48 |
+| shipped | two_clusters | 0.1387 | 0.00 | 626 | 32 | 3.73 |
+| contact_rank | partial_pack | 0.0371 | 0.00 | 404 | 32 | 1.45 |
+| contact_rank | two_clusters | 0.0213 | 0.00 | 626 | 32 | 3.65 |
+
+## Target after density_heavy defaults
+
+- Lower contact_min on partial_pack / two_clusters (kiss-fit proposals)
+- End-to-end parts_final improvement on nest pipeline (seeds 0-4, 3 iters)
+- Zero selection_is_independent violations
+
+## Post density_heavy defaults (seeds 0-2, 2 iters)
+
+| propose | parts_final | border_err_min | time_s |
+|---------|-------------|----------------|--------|
+| density_heavy (new defaults) | 50.0 | 0.0000 | 81.9 |
+| shipped (same defaults) | 50.3 | 0.0001 | 87.2 |
+| shipped_prev (legacy pool 32) | 49.3 | 0.0001 | 90.4 |
+
+Propose partial_pack contact_min: 0.1448 (40 proposals vs 32 previously).

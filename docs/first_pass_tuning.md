@@ -63,7 +63,25 @@ PYTHONPATH=. python scripts/benchmark_first_pass.py --seeds 0 1 2 \
   --propose-preset shipped_board_edge --modes merged_loose_tight
 ```
 
-Defaults: `use_board_edge_seeds=True`, `board_edge_guidance_refine=True`, `board_edge_samples_per_edge=32`.
+Defaults: `use_board_edge_seeds=True`, `board_edge_guidance_refine=True`, `board_edge_samples_per_edge=64`.
+
+## First-pass border pack (2026-06-11)
+
+Iteration 1 with `first_pass_border_pack=True` runs an outline-only pipeline before rule improvement:
+
+1. Empty-sheet batch (`border_batch`): pinned board-edge seeds + jitter + proposed transforms.
+2. Phase-1 ring: greedy MIS on outline-kiss nodes, perimeter-ordered.
+3. Layered saturation (`first_pass_border_saturation_passes`, default 5): rebuild graph with packed obstacles, expand via `_expand_border_selection`.
+4. Sequential gap-fill (`first_pass_sequential_augment_max`, default 8): fast board-edge snap + group-fit / neighbor-slide against full packed union.
+5. Guidance border refine (`first_pass_guidance_refine_passes`, default 3): per-part anchor guidance casts + fractional slides; tightens `_border_tightness_cost` without adding/removing parts.
+
+Key knobs: `first_pass_interior_max=0` (border-only), `use_full_packed_obstacle=True`, `first_pass_empty_border_only=True`.
+
+Compare refine on/off from the same pre-refine pack:
+
+```bash
+PYTHONPATH=. python scripts/diagnose_border_refine.py --seed 0 --augment-max 0
+```
 
 ## Preset tuning (J_max_density, seeds 0–2, prior run)
 

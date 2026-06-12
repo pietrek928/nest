@@ -103,6 +103,14 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 
 `make_polygon_graph` filters candidates with validity-only guidance (`guidance_config_for_graph`) using the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
 
+**Rule-guided propose** (`use_rule_ranking=True`, default): when a `PlacementRuleSet` is passed into `proposed_transforms_for_groups`, ranking switches to `rule_hybrid` — geometry score (contact/clearance/tightness or border) plus `rule_ranking_weight * score_transform(...)`. The build loop passes the best evolved rule set from the prior iteration (`active_rule_set(rule_sets)`). Optional repulsors: `RulesConfig.use_repulsor_rules=True` seeds negative-weight `PointPlaceRule`s at sheet (and packed-layout) centroids after each selection; truncation keeps rules by `|w|`.
+
+Benchmark presets: `rule_propose`, `rule_propose_repulsor` in `scripts/benchmark_nest_pipeline.py`.
+
+**Local compaction** (`local_compact` preset): tight+corner `guidance_propositions`, post-rank `cast_squeeze` (`cast_squeeze_top_k=8`, `cast_squeeze_passes=1`), `use_neighbor_slide=False`. Factory: `ProposeConfig.local_compact_profile()`. Benchmark: `scripts/benchmark_local_placement.py`; see [local_placement_benchmark.md](local_placement_benchmark.md).
+
+**Place-aware routing** (shipped default: `place_profiles_enabled=True`, `late_border_saturation=True`): each group is routed through `classify_propose_zone()` → `ProposeConfig.for_place(zone)` with zone-specific proposers and obstacle scope (full packed union for interior/inter-cluster/void). Late border saturation reuses first-pass border propose when outline coverage is below `place_border_coverage_threshold`. Rolling `ProposeFeedbackState` adjusts `place_proposer_pool_scales` (e.g. `neighbor_slide_pool_fraction`) from graph yield. Disable with `place_profiles_enabled=False`. Benchmark: `scripts/benchmark_place_propose.py`; see [place_propose_benchmark.md](place_propose_benchmark.md). E2E alias: `place_routed` in `scripts/benchmark_nest_pipeline.py` (same as shipped).
+
 For the guidance-flow pipeline preset, use `BuildGraphConfig.benchmark_aligned()` (`merged_loose_tight` DFS).
 
 ```python
@@ -113,6 +121,16 @@ cfg = BuildGraphConfig(propose=ProposeConfig(max_proposals=8, candidate_pool=8, 
 
 # Stronger PSO (slower)
 cfg = BuildGraphConfig(propose=ProposeConfig(point_cloud_particles=24, point_cloud_iterations=32))
+```
+
+## First-pass border pack (iteration 1)
+
+Code defaults (`ProposeConfig`): `first_pass_border_pack=True`, `first_pass_layered_pack=True`, `first_pass_empty_border_only=True`, `first_pass_interior_max=0`, `first_pass_border_saturation_passes=5`, `first_pass_sequential_augment_max=8`, `first_pass_guidance_refine_passes=3`, `use_full_packed_obstacle=True`. Pipeline: empty border batch → ring MIS → saturation → sequential augment → guidance slide refine. See [first_pass_tuning.md](first_pass_tuning.md).
+
+Diagnostic (refine on/off from same pack):
+
+```bash
+PYTHONPATH=. python scripts/diagnose_border_refine.py --seed 0
 ```
 
 ## Output

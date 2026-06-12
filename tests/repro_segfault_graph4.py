@@ -61,16 +61,17 @@ graphs = []
 
 def run_iteration():
     global selected_t, history, graphs, rule_sets
+    rng = np.random.default_rng()
     s0 = [np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi], history[0]]
     if selected_t[0].shape[0] > 0:
         s0.append(selected_t[0])
-        s0.extend(transform_selection(selected_t[0], 4))
-        s0.extend(transform_history(history[0], 2))
+        s0.extend(transform_selection(selected_t[0], 4, rng))
+        s0.extend(transform_history(history[0], 2, rng))
     s1 = [np.random.rand(256, 3) * [1.5, 1.5, 2 * np.pi], history[1]]
     if selected_t[1].shape[0] > 0:
         s1.append(selected_t[1])
-        s1.extend(transform_selection(selected_t[1], 4))
-        s1.extend(transform_history(history[1], 2))
+        s1.extend(transform_selection(selected_t[1], 4, rng))
+        s1.extend(transform_history(history[1], 2, rng))
     selected_t = [np.concatenate(s0), np.concatenate(s1)]
     graph, polys, gid, trans = make_polygon_graph(
         p_board, [(p1, selected_t[0]), (p2, selected_t[1])]

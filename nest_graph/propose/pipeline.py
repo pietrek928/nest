@@ -26,7 +26,9 @@ from nest_graph.placement_scene import (
 from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
 from nest_graph.propose.context import (
+    apply_proposer_pool_scales,
     border_focal_for_propose,
+    classify_propose_zone,
     effective_ranking_mode,
     focal_shape_for_propose,
     obstacle_shape_for_propose,
@@ -61,6 +63,7 @@ from nest_graph.propose.ranking import (
     _trim_candidates_by_clearance,
     _trim_candidates_by_contact,
     _trim_candidates_stratified,
+    cast_squeeze_ranked_coords,
     select_guidance_cast_seeds,
 )
 
@@ -165,7 +168,10 @@ def collect_propose_candidates(
         and propose_cfg.use_neighbor_slide
         and not base_shape.is_empty
     ):
-        neighbor_top = max(pool // 4, n_angles)
+        neighbor_top = max(
+            int(pool * propose_cfg.neighbor_slide_pool_fraction),
+            n_angles,
+        )
         _extend_counted(
             candidates,
             proposer_counts,
@@ -498,6 +504,8 @@ def _propose_coords_from_candidates(
     candidates: Sequence[Tuple[float, float, float]],
     rank_mode: str,
     focal_shape: Optional[BaseGeometry] = None,
+    rules=None,
+    group_id: int = 0,
 ) -> List[Tuple[float, float, float]]:
     geom = ProposeGeometry(
         boundary,
@@ -513,8 +521,10 @@ def _propose_coords_from_candidates(
             pool = _trim_candidates_by_border(
                 pool, shape_to_place, geom, pt_push, min_dist, propose_cfg.candidate_pool,
             )
-        elif rank_mode in ("contact", "contact_hybrid") and propose_cfg.trim_candidates_by_clearance:
-            if propose_cfg.use_stratified_contact_trim and rank_mode == "contact_hybrid":
+        elif rank_mode in ("contact", "contact_hybrid", "rule_hybrid") and propose_cfg.trim_candidates_by_clearance:
+            if propose_cfg.use_stratified_contact_trim and rank_mode in (
+                "contact_hybrid", "rule_hybrid",
+            ):
                 pool = _trim_candidates_stratified(
                     pool,
                     shape_to_place,
@@ -526,6 +536,11 @@ def _propose_coords_from_candidates(
                     contact_fraction=propose_cfg.contact_trim_fraction,
                     rank_mode=rank_mode,
                     clearance_weight=propose_cfg.contact_clearance_hybrid_weight,
+                    propose_cfg=propose_cfg,
+                    tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
+                    rules=rules,
+                    group_id=group_id,
+                    base_shape=base_shape,
                 )
             else:
                 pool = _trim_candidates_by_contact(
@@ -544,7 +559,7 @@ def _propose_coords_from_candidates(
             pool = _trim_candidates_by_clearance(
                 pool, geom, pt_push, propose_cfg.candidate_pool,
             )
-    return _rank_proposal_coords(
+    ranked = _rank_proposal_coords(
         pool,
         base_shape,
         shape_to_place,
@@ -556,7 +571,59 @@ def _propose_coords_from_candidates(
         propose_cfg,
         rank_mode=rank_mode,
         focal_shape=focal_shape,
+        rules=rules,
+        group_id=group_id,
     )
+    return _apply_cast_squeeze_if_enabled(
+        ranked,
+        shape_to_place=shape_to_place,
+        propose_geom=geom,
+        propose_cfg=propose_cfg,
+        pt_push=pt_push,
+        min_dist=min_dist,
+        rank_mode=rank_mode,
+        focal_shape=focal_shape,
+        rules=rules,
+        group_id=group_id,
+        base_shape=base_shape,
+    )
+
+
+def _apply_cast_squeeze_if_enabled(
+    ranked: List[Tuple[float, float, float]],
+    *,
+    shape_to_place: Polygon,
+    propose_geom: ProposeGeometry,
+    propose_cfg: ProposeConfig,
+    pt_push: Point,
+    min_dist: float,
+    rank_mode: str,
+    focal_shape: Optional[BaseGeometry],
+    rules=None,
+    group_id: int = 0,
+    base_shape: BaseGeometry | None = None,
+) -> List[Tuple[float, float, float]]:
+    if propose_cfg.cast_squeeze_top_k <= 0 or rank_mode not in (
+        "contact", "contact_hybrid", "border", "rule_hybrid",
+    ):
+        return ranked
+    out = ranked
+    passes = max(propose_cfg.cast_squeeze_passes, 1)
+    for _ in range(passes):
+        out = cast_squeeze_ranked_coords(
+            out,
+            shape_to_place,
+            propose_geom,
+            propose_cfg,
+            pt_push,
+            min_dist,
+            focal_shape=focal_shape,
+            rank_mode=rank_mode,
+            rules=rules,
+            group_id=group_id,
+            base_shape=base_shape,
+        )
+    return out
 
 
 def propose_coords_with_strategy(
@@ -569,9 +636,14 @@ def propose_coords_with_strategy(
     pt_push: Point,
     focal_shape: Optional[BaseGeometry] = None,
     enabled_proposers: frozenset[str] | None = None,
+    rules=None,
+    group_id: int = 0,
+    proposer_counts: dict[str, int] | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
-    rank_mode = effective_ranking_mode(cfg, base_shape)
+    if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
+        cfg = cfg.model_copy(update={"use_guidance_walk": False})
+    rank_mode = effective_ranking_mode(cfg, base_shape, rules=rules)
     border_focus = should_use_border_focus(base_shape, cfg)
     if focal_shape is None:
         if border_focus:
@@ -605,6 +677,7 @@ def propose_coords_with_strategy(
         propose_geom=geom,
         focal_shape=focal_shape,
         enabled_proposers=enabled_proposers,
+        proposer_counts=proposer_counts,
     )
     return _propose_coords_from_candidates(
         base_shape,
@@ -616,15 +689,28 @@ def propose_coords_with_strategy(
         candidates=candidates,
         rank_mode=rank_mode,
         focal_shape=focal_shape,
+        rules=rules,
+        group_id=group_id,
     )
 
 
 _FIRST_PASS_EMPTY_BORDER_PROPOSERS = frozenset({
     "board_edge", "sheet_corners", "perimeter_walk",
 })
-_FIRST_PASS_PACKED_BORDER_PROPOSERS = frozenset({
-    "board_edge", "sheet_corners", "group_fit", "neighbor_slide", "ribbon_free",
-})
+
+
+def _first_pass_packed_border_proposers(propose_cfg: ProposeConfig) -> frozenset[str]:
+    names = {
+        "board_edge", "sheet_corners", "group_fit", "neighbor_slide", "ribbon_free",
+    }
+    if propose_cfg.first_pass_use_axis_push:
+        names.add("axis_push")
+    return frozenset(names)
+
+
+_FIRST_PASS_PACKED_BORDER_PROPOSERS = _first_pass_packed_border_proposers(
+    ProposeConfig(),
+)
 
 
 def _best_proposer_coords(
@@ -637,6 +723,9 @@ def _best_proposer_coords(
     pt_push: Point,
     focal_shape: Optional[BaseGeometry] = None,
     enabled_proposers: frozenset[str] | None = None,
+    rules=None,
+    group_id: int = 0,
+    proposer_counts: dict[str, int] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -648,6 +737,9 @@ def _best_proposer_coords(
         pt_push=pt_push,
         focal_shape=focal_shape,
         enabled_proposers=enabled_proposers,
+        rules=rules,
+        group_id=group_id,
+        proposer_counts=proposer_counts,
     )
 
 
@@ -707,6 +799,9 @@ def proposed_transforms_for_groups(
     pt_push: Optional[Point] = None,
     border_only_propose: bool = False,
     use_full_packed_obstacle: bool = False,
+    rules=None,
+    proposer_counts_out: dict[str, int] | None = None,
+    zones_used_out: list[str] | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -715,53 +810,96 @@ def proposed_transforms_for_groups(
     """
     placed = [selected_polys[i] for i in selected_indices]
     out: dict[int, np.ndarray] = {}
+    total_counts: dict[str, int] = {}
     for part_poly, group_id in parts:
-        if use_full_packed_obstacle and placed:
+        zone: str | None = None
+        cfg = propose_cfg
+        if propose_cfg.place_profiles_enabled and not border_only_propose:
+            if not placed:
+                zone = "empty_border"
+            else:
+                obs_preview = obstacle_shape_for_propose(
+                    placed, part_poly, min_dist, propose_cfg=propose_cfg,
+                )
+                zone = classify_propose_zone(
+                    board,
+                    obs_preview,
+                    part_poly,
+                    min_dist=min_dist,
+                    propose_cfg=propose_cfg,
+                    selected_polys=placed,
+                )
+            cfg = ProposeConfig.for_place(zone, base=propose_cfg)
+            cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
+            if zones_used_out is not None:
+                zones_used_out.append(zone)
+
+        use_full = use_full_packed_obstacle
+        if zone is not None:
+            use_full, nearest_k = ProposeConfig.obstacle_scope_for_place(zone)
+            if nearest_k > 0:
+                cfg = cfg.model_copy(update={"obstacle_nearest_k": nearest_k})
+
+        if use_full and placed:
             obstacle_shape = unary_union(placed)
         else:
-            obstacle_shape = obstacle_shape_for_propose(placed, part_poly, min_dist)
+            obstacle_shape = obstacle_shape_for_propose(
+                placed, part_poly, min_dist, propose_cfg=cfg,
+            )
         focal = focal_shape_for_propose(
-            board, placed, part_poly, min_dist, propose_cfg,
+            board, placed, part_poly, min_dist, cfg,
         )
-        border_focus = should_use_border_focus(obstacle_shape, propose_cfg)
+        border_focus = should_use_border_focus(obstacle_shape, cfg)
         push = pt_push if pt_push is not None else propose_push_point(
             board,
             obstacle_shape,
-            smart_push=propose_cfg.smart_push_target,
+            smart_push=cfg.smart_push_target,
             min_dist=min_dist,
             use_border_focus=border_focus,
         )
         enabled = None
         if border_only_propose:
-            if should_use_border_focus(obstacle_shape, propose_cfg):
+            if should_use_border_focus(obstacle_shape, cfg):
                 enabled = _FIRST_PASS_EMPTY_BORDER_PROPOSERS
             elif placed:
-                enabled = _FIRST_PASS_PACKED_BORDER_PROPOSERS
+                enabled = _first_pass_packed_border_proposers(cfg)
+        elif zone is not None:
+            enabled = ProposeConfig.proposers_for_place(zone)
+        group_counts: dict[str, int] = {}
         coords = _best_proposer_coords(
             obstacle_shape,
             part_poly,
             board,
-            propose_cfg,
+            cfg,
             min_dist=min_dist,
             pt_push=push,
             focal_shape=focal,
             enabled_proposers=enabled,
+            rules=rules,
+            group_id=group_id,
+            proposer_counts=group_counts,
         )
+        for name, n in group_counts.items():
+            total_counts[name] = total_counts.get(name, 0) + n
         arr = propositions_to_ndarray(coords)
-        if border_focus and propose_cfg.use_board_edge_seeds:
+        if border_focus and cfg.use_board_edge_seeds:
             edge_arr = border_edge_transforms_for_group(
                 board,
                 part_poly,
                 obstacle_shape,
-                propose_cfg,
+                cfg,
                 min_dist=min_dist,
                 pt_push=push,
             )
             if edge_arr.shape[0] > 0:
                 arr = dedupe_transforms(
                     np.concatenate([edge_arr, arr], axis=0),
-                )[: propose_cfg.max_proposals]
+                )[: cfg.max_proposals]
         out[group_id] = arr
+
+    if proposer_counts_out is not None:
+        proposer_counts_out.clear()
+        proposer_counts_out.update(total_counts)
 
     if propose_cfg.use_batch_pack and len(out) >= 2:
         batch_extra = augment_batch_pack_proposals(

@@ -48,6 +48,14 @@ float default_rule_radius(const Circle2f &region) {
     return std::sqrt(std::max(region.r_sq, 1e-12f)) * 0.05f;
 }
 
+float adjust_mutated_weight(float w, float delta) {
+    const float nw = w + delta;
+    if (w < 0.0f) {
+        return std::min(nw, -1e-6f);
+    }
+    return std::max(nw, 1e-6f);
+}
+
 template <class Tgen, class Tdistrib>
 Circle2f mutate_random_circle(
     const Circle2f &c, const Circle2f &region, Tgen &gen, Tdistrib &distrib_pos
@@ -80,7 +88,7 @@ PointPlaceRule mutate_random(
     return PointPlaceRule(
         pos,
         std::max(p.r + distrib_pos(gen), 1e-6f),
-        p.w + distrib_w(gen),
+        adjust_mutated_weight(p.w, distrib_w(gen)),
         p.group);
 }
 
@@ -92,7 +100,7 @@ PointPlaceRule generate_random_point_place_rule(
     return PointPlaceRule(
         sample_pos_in_region(region, gen),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        distrib_w(gen),
+        std::abs(distrib_w(gen)),
         distrib_group(gen));
 }
 
@@ -104,7 +112,7 @@ CirclePlaceRule mutate_random(
     return CirclePlaceRule(
         mutate_random_circle(p.circle, region, gen, distrib_pos),
         std::max(p.r + distrib_pos(gen), 1e-6f),
-        p.w + distrib_w(gen),
+        adjust_mutated_weight(p.w, distrib_w(gen)),
         p.group);
 }
 
@@ -116,7 +124,7 @@ CirclePlaceRule generate_random_circle_place_rule(
     return CirclePlaceRule(
         generate_random_circle(region, gen, distrib_r),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        distrib_w(gen),
+        std::abs(distrib_w(gen)),
         distrib_group(gen));
 }
 
@@ -131,7 +139,7 @@ PointAngleRule mutate_random(
         pos,
         adjust_angle(p.a + distrib_a(gen)),
         std::max(p.r, 1e-6f),
-        p.w + distrib_w(gen),
+        adjust_mutated_weight(p.w, distrib_w(gen)),
         p.group);
 }
 
@@ -144,7 +152,7 @@ PointAngleRule generate_random_point_angle_rule(
         sample_pos_in_region(region, gen),
         sample_angle_uniform(gen),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        distrib_w(gen),
+        std::abs(distrib_w(gen)),
         distrib_group(gen));
 }
 
@@ -157,7 +165,7 @@ CircleAngleRule mutate_random(
         mutate_random_circle(p.circle, region, gen, distrib_pos),
         adjust_angle(p.a + distrib_a(gen)),
         std::max(p.r + distrib_pos(gen), 1e-6f),
-        p.w + distrib_w(gen),
+        adjust_mutated_weight(p.w, distrib_w(gen)),
         p.group);
 }
 
@@ -170,7 +178,7 @@ CircleAngleRule generate_random_circle_angle_rule(
         generate_random_circle(region, gen, distrib_r),
         sample_angle_uniform(gen),
         std::max(std::abs(distrib_r(gen)), default_rule_radius(region)),
-        distrib_w(gen),
+        std::abs(distrib_w(gen)),
         distrib_group(gen));
 }
 

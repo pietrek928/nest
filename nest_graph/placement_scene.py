@@ -376,6 +376,44 @@ def is_valid_placement(
     return float(g.clearance) >= margin
 
 
+def placement_ok_for_outline(
+    scene: PlacementScene,
+    placed: Geometry,
+    poly,
+    outline: BaseGeometry,
+    others_polys: list,
+    min_dist: float,
+    config: GuidanceConfig,
+    *,
+    epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+    require_outline_kiss: bool = True,
+    kiss_tolerance_scale: float = 2.0,
+) -> bool:
+    """Footprint + optional outline kiss + neighbor clearance + guidance validity."""
+    from nest_graph.propose.placement_common import (
+        clear_of_polys,
+        outline_kiss_ok,
+    )
+
+    if not placement_footprint_inside_board(placed, scene.board_geom):
+        return False
+    if require_outline_kiss and not outline_kiss_ok(
+        poly, outline, min_dist, scale=kiss_tolerance_scale,
+    ):
+        return False
+    if others_polys and not clear_of_polys(poly, others_polys, min_dist):
+        return False
+    return is_valid_placement(
+        scene,
+        placed,
+        placed.center(),
+        min_dist,
+        config,
+        epsilon_ratio=epsilon_ratio,
+        skip_footprint=True,
+    )
+
+
 def unit_vector(v: Tuple[float, float] | Sequence[float]) -> tuple[float, float]:
     x, y = float(v[0]), float(v[1])
     n = math.hypot(x, y)
