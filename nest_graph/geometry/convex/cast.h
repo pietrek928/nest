@@ -141,6 +141,11 @@ inline ShapeCastResult<VecType> convex_linestrings_cast_impl(
         else { t_min = S.dp(d); break; }
     }
 
+    // Obstacle entirely behind the cast direction: not a forward impact.
+    if (t_max < -epsilon) {
+        return {false, static_cast<Scalar>(0), static_cast<Scalar>(0), it1, it2};
+    }
+
     return {true, t_min, t_max, it1, it2};
 }
 

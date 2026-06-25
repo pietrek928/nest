@@ -148,15 +148,18 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
                     slide_vector, 24, tracer
                 );
 
-                // If it hits, and it's CLOSER than our previous best record
-                if (res.intersects_path && res.t_entry < closest_hit.t_entry) {
-                    closest_hit.intersects_path = true;
-                    closest_hit.t_entry = res.t_entry;
-                    closest_hit.t_exit = res.t_exit;
-                    closest_hit.polyA_idx = active_poly_idx;
-                    closest_hit.partA_idx = pA;
-                    closest_hit.polyB_idx = i;
-                    closest_hit.partB_idx = pB;
+                // Only accept forward (or currently-overlapping) impacts.
+                if (res.intersects_path && res.t_exit >= static_cast<Scalar>(0)) {
+                    Scalar entry = std::max(static_cast<Scalar>(0), res.t_entry);
+                    if (entry < closest_hit.t_entry) {
+                        closest_hit.intersects_path = true;
+                        closest_hit.t_entry = entry;
+                        closest_hit.t_exit = res.t_exit;
+                        closest_hit.polyA_idx = active_poly_idx;
+                        closest_hit.partA_idx = pA;
+                        closest_hit.polyB_idx = i;
+                        closest_hit.partB_idx = pB;
+                    }
                 }
             }
         }
@@ -175,6 +178,7 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
 ) {
+    using Scalar = typename VecType::Scalar;
     std::vector<ComplexCastResult<VecType>> results;
     if (active_poly_idx < 0 || active_poly_idx >= polygons.size()) return results;
 
@@ -204,12 +208,19 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
                     slide_vector, 24, tracer
                 );
 
-                if (res.intersects_path && res.t_entry <= max_t_limit) {
-                    results.push_back({
-                        active_poly_idx, static_cast<int>(pA),
-                        static_cast<int>(i), static_cast<int>(pB),
-                        true, res.t_entry, res.t_exit
-                    });
+                if (res.intersects_path && res.t_exit >= static_cast<Scalar>(0)) {
+                    Scalar entry = std::max(static_cast<Scalar>(0), res.t_entry);
+                    if (entry <= max_t_limit) {
+                        ComplexCastResult<VecType> hit{};
+                        hit.polyA_idx = active_poly_idx;
+                        hit.partA_idx = static_cast<int>(pA);
+                        hit.polyB_idx = static_cast<int>(i);
+                        hit.partB_idx = static_cast<int>(pB);
+                        hit.intersects_path = true;
+                        hit.t_entry = entry;
+                        hit.t_exit = res.t_exit;
+                        results.push_back(hit);
+                    }
                 }
             }
         }

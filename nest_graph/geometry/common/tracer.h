@@ -17,6 +17,7 @@ struct NullTracer {
     void count_sweep_pair() {}
     void count_circle_prune() {}
     void count_gjk_eval() {}
+    void record_cast() {}
 };
 
 // -------------------------------------------------------------------------
@@ -59,6 +60,7 @@ struct DebugTracer {
     void count_sweep_pair() { stat_sweep_pairs++; }
     void count_circle_prune() { stat_circle_pruned++; }
     void count_gjk_eval() { stat_gjk_evals++; }
+    void record_cast() {}
 
     void print_telemetry() const {
         std::cout << "[Physics Telemetry] "

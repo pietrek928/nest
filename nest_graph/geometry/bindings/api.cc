@@ -620,6 +620,9 @@ void bind_geometry(nb::module_ &m) {
            const std::vector<GeometryHolder> &polygons,
            nb::handle current_position,
            nb::handle config) {
+            if (placed_poly_idx < 0 || placed_poly_idx >= static_cast<int>(polygons.size())) {
+                throw nb::index_error("placed_poly_idx out of bounds");
+            }
             Vec2d pos = vec2d_from_tuple(current_position);
             GuidanceConfig2d cfg;
             if (!config.is_none()) {

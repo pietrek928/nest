@@ -92,6 +92,11 @@ struct PhysicsContext {
     VecType closest_obstacle_center{};
     int closest_poly_idx = -1;
 
+    // Second-closest neighbor for dual snap / corner alignment
+    VecType second_closest_obstacle_center{};
+    int second_closest_poly_idx = -1;
+    Scalar second_min_clearance = std::numeric_limits<Scalar>::max();
+
     std::vector<Scalar> raw_rotations;
 };
 
@@ -157,11 +162,28 @@ inline void aggregate_physics_feedback(
                 }
             }
         } else if (!ctx.is_penetrating) {
-            if (res.distance_sq < ctx.min_clearance * ctx.min_clearance) {
-                ctx.min_clearance = std::sqrt(static_cast<double>(res.distance_sq));
+            const Scalar dist_sq = res.distance_sq;
+            if (dist_sq < ctx.min_clearance * ctx.min_clearance) {
+                ctx.second_min_clearance = ctx.min_clearance;
+                ctx.second_closest_obstacle_center = ctx.closest_obstacle_center;
+                ctx.second_closest_poly_idx = ctx.closest_poly_idx;
+
+                ctx.min_clearance = std::sqrt(static_cast<double>(dist_sq));
                 ctx.closest_obstacle_center = all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
-                ctx.closest_poly_idx = res.polyB_idx; // Track for corner snapping
+                ctx.closest_poly_idx = res.polyB_idx;
+            } else if (res.polyB_idx != ctx.closest_poly_idx &&
+                       dist_sq < ctx.second_min_clearance * ctx.second_min_clearance) {
+                ctx.second_min_clearance = std::sqrt(static_cast<double>(dist_sq));
+                ctx.second_closest_obstacle_center = all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
+                ctx.second_closest_poly_idx = res.polyB_idx;
             }
+        }
+    }
+
+    if (!ctx.is_penetrating && ctx.closest_poly_idx >= 0) {
+        VecType align_dir = ctx.closest_obstacle_center - placed_bounds.center();
+        if (align_dir.len_sq() > static_cast<Scalar>(1e-8)) {
+            ctx.alignment_normal = align_dir;
         }
     }
 }
@@ -229,76 +251,95 @@ inline void formulate_exact_casting_translation(
         }
     }
 
-    // 2. EXACT NEIGHBOR SNAP
-    if (config.use_tight_packing && ctx.min_clearance < config.search_radius && ctx.closest_poly_idx >= 0) {
-        VecType squeeze_dir = ctx.closest_obstacle_center - placed_bounds.center();
-        Scalar sq_len = std::sqrt(squeeze_dir.len_sq());
+    // 2. EXACT NEIGHBOR SNAP (closest + second-closest)
+    if (config.use_tight_packing) {
+        struct NeighborTarget {
+            VecType center;
+            Scalar clearance;
+        };
+        std::vector<NeighborTarget> neighbors;
+        if (ctx.closest_poly_idx >= 0 && ctx.min_clearance < config.search_radius) {
+            neighbors.push_back({ctx.closest_obstacle_center, ctx.min_clearance});
+        }
+        if (ctx.second_closest_poly_idx >= 0 && ctx.second_min_clearance < config.search_radius) {
+            neighbors.push_back({ctx.second_closest_obstacle_center, ctx.second_min_clearance});
+        }
 
-        if (sq_len > 1e-6) {
-            VecType sq_norm = squeeze_dir * (static_cast<Scalar>(1.0) / sq_len);
+        for (const auto& nb : neighbors) {
+            VecType squeeze_dir = nb.center - placed_bounds.center();
+            Scalar sq_len = std::sqrt(squeeze_dir.len_sq());
 
-            auto cast_res = find_closest_polygon_cast<VecType>(
-                placed_poly_idx, all_polygons, sq_norm, config.search_radius
-            );
+            if (sq_len > 1e-6) {
+                VecType sq_norm = squeeze_dir * (static_cast<Scalar>(1.0) / sq_len);
 
-            if (cast_res.intersects_path && cast_res.t_entry > config.minimum_placing_distance) {
-                Scalar exact_snap_dist = cast_res.t_entry - config.minimum_placing_distance;
-                raw_propositions.push_back({sq_norm * exact_snap_dist, 0.0, 85.0, "Exact Neighbor Snap"});
+                auto cast_res = find_closest_polygon_cast<VecType>(
+                    placed_poly_idx, all_polygons, sq_norm, config.search_radius
+                );
+
+                if (cast_res.intersects_path && cast_res.t_entry > config.minimum_placing_distance) {
+                    Scalar exact_snap_dist = cast_res.t_entry - config.minimum_placing_distance;
+                    raw_propositions.push_back({sq_norm * exact_snap_dist, 0.0, 85.0, "Exact Neighbor Snap"});
+                }
             }
         }
     }
 
     // 3. EXACT CORNER ALIGNMENT (Vertex-to-Vertex Match)
-    if (config.use_corner_alignment && ctx.closest_poly_idx >= 0 && ctx.min_clearance < config.search_radius) {
+    if (config.use_corner_alignment) {
+        std::vector<int> neighbor_idxs;
+        if (ctx.closest_poly_idx >= 0 && ctx.min_clearance < config.search_radius) {
+            neighbor_idxs.push_back(ctx.closest_poly_idx);
+        }
+        if (ctx.second_closest_poly_idx >= 0 && ctx.second_min_clearance < config.search_radius) {
+            neighbor_idxs.push_back(ctx.second_closest_poly_idx);
+        }
+
         const auto& placed = all_polygons[placed_poly_idx];
-        const auto& obstacle = all_polygons[ctx.closest_poly_idx];
 
-        Scalar best_dist_sq = std::numeric_limits<Scalar>::max();
-        VecType best_v_norm{};
-        Scalar best_v_len = 0;
-        bool found_corner = false;
+        for (int obstacle_idx : neighbor_idxs) {
+            const auto& obstacle = all_polygons[obstacle_idx];
 
-        // Iterate through all vertices to find the absolutely closest corner pair
-        for (size_t pA = 0; pA < placed.line_parts.size(); ++pA) {
-            const VecType* ptsA = placed.get_part_points(pA);
-            int nA = placed.get_part_size(pA);
-            for (int i = 0; i < nA; ++i) {
-                for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
-                    const VecType* ptsB = obstacle.get_part_points(pB);
-                    int nB = obstacle.get_part_size(pB);
-                    for (int j = 0; j < nB; ++j) {
-                        VecType diff = ptsB[j] - ptsA[i];
-                        Scalar d_sq = diff.len_sq();
+            Scalar best_dist_sq = std::numeric_limits<Scalar>::max();
+            VecType best_v_norm{};
+            Scalar best_v_len = 0;
+            bool found_corner = false;
 
-                        // Limit search to realistic local corners
-                        if (d_sq > 1e-8 && d_sq < best_dist_sq && d_sq < (config.search_radius * config.search_radius)) {
-                            best_dist_sq = d_sq;
-                            Scalar len = std::sqrt(d_sq);
-                            best_v_norm = diff * (static_cast<Scalar>(1.0) / len);
-                            best_v_len = len;
-                            found_corner = true;
+            for (size_t pA = 0; pA < placed.line_parts.size(); ++pA) {
+                const VecType* ptsA = placed.get_part_points(pA);
+                int nA = placed.get_part_size(pA);
+                for (int i = 0; i < nA; ++i) {
+                    for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                        const VecType* ptsB = obstacle.get_part_points(pB);
+                        int nB = obstacle.get_part_size(pB);
+                        for (int j = 0; j < nB; ++j) {
+                            VecType diff = ptsB[j] - ptsA[i];
+                            Scalar d_sq = diff.len_sq();
+
+                            if (d_sq > 1e-8 && d_sq < best_dist_sq && d_sq < (config.search_radius * config.search_radius)) {
+                                best_dist_sq = d_sq;
+                                Scalar len = std::sqrt(d_sq);
+                                best_v_norm = diff * (static_cast<Scalar>(1.0) / len);
+                                best_v_len = len;
+                                found_corner = true;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (found_corner) {
-            // Cast along the perfect vertex-to-vertex vector!
-            auto cast_res = find_closest_polygon_cast<VecType>(
-                placed_poly_idx, all_polygons, best_v_norm, best_v_len + config.minimum_placing_distance
-            );
+            if (found_corner) {
+                auto cast_res = find_closest_polygon_cast<VecType>(
+                    placed_poly_idx, all_polygons, best_v_norm, best_v_len + config.minimum_placing_distance
+                );
 
-            if (cast_res.intersects_path) {
-                // If the path is perfectly clear to the vertex (accounting for our required gap)
-                if (cast_res.t_entry >= (best_v_len - config.minimum_placing_distance - 1e-4)) {
-                    Scalar exact_snap = std::max(static_cast<Scalar>(0.0), cast_res.t_entry - config.minimum_placing_distance);
-                    // Score 92: Higher priority than a general neighbor snap!
-                    raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 92.0, "Vertex Corner Match"});
-                } else if (cast_res.t_entry > config.minimum_placing_distance) {
-                    // We hit a flat edge on the way to the corner. Still a highly valid flush fit!
-                    Scalar exact_snap = cast_res.t_entry - config.minimum_placing_distance;
-                    raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 82.0, "Corner Match (Intercept)"});
+                if (cast_res.intersects_path) {
+                    if (cast_res.t_entry >= (best_v_len - config.minimum_placing_distance - 1e-4)) {
+                        Scalar exact_snap = std::max(static_cast<Scalar>(0.0), cast_res.t_entry - config.minimum_placing_distance);
+                        raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 92.0, "Vertex Corner Match"});
+                    } else if (cast_res.t_entry > config.minimum_placing_distance) {
+                        Scalar exact_snap = cast_res.t_entry - config.minimum_placing_distance;
+                        raw_propositions.push_back({best_v_norm * exact_snap, 0.0, 82.0, "Corner Match (Intercept)"});
+                    }
                 }
             }
         }
@@ -541,6 +582,29 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
     formulate_rotations(ctx, all_polygons[placed_poly_idx], config, ctx);
 
     guidance.propositions = synthesize_propositions(raw_propositions, ctx, config, placed_poly_idx, all_polygons);
+
+    if (guidance.propositions.empty()) {
+        PlacementProposition<VecType> default_prop;
+        if (config.use_gravity) {
+            Scalar grav_len = std::sqrt(static_cast<double>(config.gravity_vector.len_sq()));
+            if (grav_len > 1e-6) {
+                VecType g_norm = config.gravity_vector * (static_cast<Scalar>(1.0) / grav_len);
+                auto cast_floor = find_closest_polygon_cast<VecType>(
+                    placed_poly_idx, all_polygons, g_norm, config.search_radius * 2.0
+                );
+
+                if (cast_floor.intersects_path) {
+                    default_prop.translation = g_norm * (cast_floor.t_entry - config.minimum_placing_distance);
+                    default_prop.move_type = "Long Range Gravity Dock";
+                } else {
+                    default_prop.translation = config.gravity_vector * config.search_radius;
+                    default_prop.move_type = "Free Space Default";
+                }
+            }
+        }
+        default_prop.heuristic_score = 100.0;
+        guidance.propositions.push_back(default_prop);
+    }
 
     return guidance;
 }

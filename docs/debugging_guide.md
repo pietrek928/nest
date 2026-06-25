@@ -154,3 +154,47 @@ def simulate_cpp_decomposition(poly: Polygon):
         
     return parts
 ```
+
+## 4. Guide.h placement bindings and visualization
+
+### Bindings quick reference
+
+| Python symbol | C++ source | Notes |
+|---------------|------------|-------|
+| `GuidanceConfig` | `GuidanceConfig<Vec2d>` | All scalars/bools; `gravity_vector` / `target_position` as tuples |
+| `PlacementProposition` | `PlacementProposition<Vec2d>` | `translation`, `rotation_rad`, `heuristic_score`, `move_type` |
+| `PlacementGuidance` | `PlacementGuidance<Vec2d>` | `is_penetrating`, `clearance`, `propositions` |
+| `evaluate_local_placement` | `evaluate_local_placement` | `(idx, polygons, (x,y), config=None)` |
+| `find_closest_polygon_cast` | `polygon_cast.h` | Cast along slide vector |
+
+Contract tests: [`tests/test_guide_bindings.py`](../tests/test_guide_bindings.py).  
+Gap analysis: [`guidance_engine_gap_report.md`](guidance_engine_gap_report.md).
+
+### Running the guidance scenario visualizer
+
+Board-backed scenarios (triangle nest, L-pockets, holes, overlap recovery):
+
+```bash
+uv run python scripts/visualize_guidance_placement.py --scenarios all --out docs/guidance_viz/
+uv run python scripts/visualize_guidance_placement.py --scenarios l_shape_pocket concave_notch --show
+```
+
+Outputs:
+
+- One PNG per scenario under `docs/guidance_viz/<scenario_id>.png`
+- Metrics table in `docs/guidance_viz/summary.md`
+
+Layers: gray sheet, black outline, red hatched voids/holes, blue obstacles, orange dashed seed, green best proposition, purple quiver arrows for translation vectors.
+
+### Reading metrics
+
+| Metric | Meaning |
+|--------|---------|
+| `kiss_err` | `|gap_to_nearest_obstacle - min_dist|` after best proposition |
+| `border_err` | Standoff error vs nest outline when near an edge |
+| `board_ok` | Footprint inside sheet and clearance via `is_valid_placement` |
+| `exec_ms` | `evaluate_local_placement` wall time (hot-path indicator) |
+
+Move tiers (from `propositions_by_tier`): ejection → slide → pack (snap/gravity/hole) → corner (vertex match / floor walk).
+
+Scenario regression tests: [`tests/test_guidance_scenarios.py`](../tests/test_guidance_scenarios.py).

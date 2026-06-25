@@ -26,7 +26,7 @@ from nest_graph.placement_scene import (
 )
 from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, _guidance_kwargs
 from nest_graph.propose.placements_edge import sample_placement_points_ribbon
 
 _CAST_MOVE_TAGS = (
@@ -69,6 +69,66 @@ def _sorted_guidance_propositions(g) -> list:
     return props
 
 
+def _merged_guidance_propositions(
+    propose_geom: ProposeGeometry,
+    placed,
+    xy: tuple[float, float],
+    pt_push: Point,
+    theta: float,
+) -> tuple[list, object]:
+    """Dual-pass guidance: tight cast menu plus attractor pass when not border-focused."""
+    if propose_geom._border_focus:
+        g = propose_geom.placement_guidance(
+            placed, xy, pt_push, target_angle_rad=theta, border_focus=True,
+        )
+        return _sorted_guidance_propositions(g), g
+
+    gkw = _guidance_kwargs(propose_geom._propose_cfg)
+    tight_cfg = guidance_config_for_propose(
+        pt_push,
+        min_dist=propose_geom._min_dist,
+        board_bounds=propose_geom._board_bounds,
+        epsilon_ratio=propose_geom._epsilon_ratio,
+        border_focus=False,
+        target_angle_rad=theta,
+        use_tight_packing=True,
+        enable_grid_exploration=True,
+        **{
+            k: v
+            for k, v in gkw.items()
+            if k not in ("use_tight_packing", "enable_grid_exploration")
+        },
+    )
+    tight_cfg.use_target_attractor = False
+    tight_cfg.use_gravity = True
+
+    g_tight = propose_geom.placement_guidance(
+        placed, xy, pt_push, guidance_cfg=tight_cfg,
+    )
+    g_attr = propose_geom.placement_guidance(
+        placed, xy, pt_push, target_angle_rad=theta, border_focus=False,
+    )
+
+    merged: list = []
+    seen: set[tuple] = set()
+    for g in (g_tight, g_attr):
+        for prop in _sorted_guidance_propositions(g):
+            tx, ty = proposition_translation(prop)
+            key = (
+                round(tx, 6),
+                round(ty, 6),
+                round(float(prop.rotation_rad), 6),
+                prop.move_type or "",
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(prop)
+    merged.sort(key=_proposition_sort_key, reverse=True)
+    g_state = g_tight if g_tight.is_penetrating else g_attr
+    return merged, g_state
+
+
 def _normalize_angle(theta: float) -> float:
     while theta > math.pi:
         theta -= 2 * math.pi
@@ -106,10 +166,10 @@ def propose_placements_guidance_walk(
         theta = float(angle_grid[i % len(angle_grid)])
         for _ in range(walk_steps):
             placed = propose_geom.placed_at((x, y, theta))
-            g = propose_geom.placement_guidance(
-                placed, (x, y), pt_push, target_angle_rad=theta,
+            props, g = _merged_guidance_propositions(
+                propose_geom, placed, (x, y), pt_push, theta,
             )
-            props = _sorted_guidance_propositions(g)[:3]
+            props = props[:3]
             if not props:
                 break
             moved = False
@@ -216,10 +276,10 @@ def propose_placements_guidance_cast(
     for coords in seeds[:n_seeds]:
         x, y, theta = coords
         placed = propose_geom.placed_at(coords)
-        g = propose_geom.placement_guidance(
-            placed, (x, y), pt_push, target_angle_rad=theta,
+        props, g = _merged_guidance_propositions(
+            propose_geom, placed, (x, y), pt_push, theta,
         )
-        for prop in _sorted_guidance_propositions(g):
+        for prop in props:
             if len(out) >= cap:
                 return out
             use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
