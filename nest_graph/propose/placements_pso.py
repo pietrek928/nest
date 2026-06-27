@@ -1,29 +1,14 @@
-import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Optional
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
-from shapely.affinity import rotate, translate
-from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
+from shapely.ops import nearest_points
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
 from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
     best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
     guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
     tiered_propositions,
 )
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
+from nest_graph.utils import transform_poly
 
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_edge import sample_placement_points_ribbon
@@ -227,7 +212,7 @@ def evaluate_ray_placement(
 
     if propose_geom is not None:
         final_placed = propose_geom.placed_at((curr_x, curr_y, curr_theta))
-        if not propose_geom.is_valid_placement(final_placed, pt_push, (curr_x, curr_y)):
+        if not propose_geom.valid(final_placed, pt_push, (curr_x, curr_y)):
             return 1e6, (curr_x, curr_y, curr_theta)
         final_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
     else:

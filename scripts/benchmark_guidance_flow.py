@@ -226,7 +226,7 @@ def run_propose(flow: str, scenario: str, seed: int) -> ProposeRow:
     valid = 0
     for c in coords:
         placed_g = geom.placed_at(c)
-        if not geom.is_valid_placement(placed_g, push, (c[0], c[1])):
+        if not geom.valid(placed_g, push, (c[0], c[1])):
             continue
         valid += 1
         g = geom.placement_guidance(placed_g, (c[0], c[1]), push)

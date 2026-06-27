@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
 from .board import board_sheet_from_outline, board_void_geometries
-from .elem_graph import Circle, RuleMutationSettings, Vec2
+from .elem_graph import Circle, RuleMutationSettings
 from .utils import normalize_poly
 
 
@@ -240,7 +240,7 @@ class OutputConfig(BaseModel):
 class ProposeConfig(BaseModel):
     """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
     max_proposals: int = 40
-    candidate_pool: int = 80
+    candidate_pool: int = 64
     min_dist_ratio: float = 0.002
     first_pass_min_dist_ratio: float = 0.0008
     """Tighter standoff on iteration 1 for denser outline packing."""
@@ -248,15 +248,15 @@ class ProposeConfig(BaseModel):
     first_pass_candidate_pool: int = 96
     first_pass_max_proposals: int = 48
     first_pass_num_angles: int = 28
-    first_pass_group_edge_samples_per_edge: int = 64
-    first_pass_use_axis_push: bool = True
+    first_pass_group_edge_samples_per_edge: int = 32
+    first_pass_use_axis_push: bool = False
     first_pass_sequential_augment_max: int = 12
     """Greedy gap-fill steps after saturation (sheet-snap + chain-fit)."""
     first_pass_guidance_refine_passes: int = 3
     """Slide border placements with per-anchor guidance casts for tighter packing."""
     placement_clearance_epsilon_ratio: float = 0.05
     placement_num_angles: int = 18
-    use_neighbor_slide: bool = True
+    use_neighbor_slide: bool = False
     use_axis_push: bool = False
     neighbor_slide_pool_fraction: float = 0.5
     """Share of candidate_pool budget for neighbor_slide (was pool // 4)."""
@@ -276,7 +276,7 @@ class ProposeConfig(BaseModel):
     raycast_anchor_stride: int = 2
     voronoi_densify_divisor: float = 30.0
     voronoi_num_angles: int = 12
-    voronoi_max_sites: int = 48
+    voronoi_max_sites: int = 32
     point_cloud_particles: int = 12
     point_cloud_iterations: int = 16
     point_cloud_nudge_iters: int = 4
@@ -309,23 +309,27 @@ class ProposeConfig(BaseModel):
     rule_ranking_weight: float = 0.3
     ranking_clearance_weight: float = 1.0
     ranking_hull_weight: float = 0.1
-    group_edge_samples_per_edge: int = 32
-    sheet_edge_samples_per_edge: int = 24
+    group_edge_samples_per_edge: int = 16
+    sheet_edge_samples_per_edge: int = 16
     use_guidance_propositions: bool = True
     guidance_max_propositions: int = 8
     guidance_use_tight_packing: bool = True
     guidance_use_corner_alignment: bool = True
-    guidance_enable_grid: bool = True
+    guidance_enable_grid: bool = False
     guidance_diversity_dist_ratio: float = 2.5
     guidance_proposition_seed_count: int = 16
+    guidance_cast_refine_top_k: int = 8
+    """Unified cast-refine pass on top coarse seeds after all proposers."""
+    cast_rank_boost: float = 0.35
+    """Clearance score boost (× min_dist) for cast-snap ranked candidates."""
     use_batch_pack: bool = True
     """Place one group, then pack the next against it; add both configs to proposals."""
-    batch_pack_anchor_seeds: int = 6
-    batch_pack_follow_proposals: int = 10
-    batch_pack_follow_pool: int = 32
-    batch_pack_max_pairs: int = 16
+    batch_pack_anchor_seeds: int = 4
+    batch_pack_follow_proposals: int = 6
+    batch_pack_follow_pool: int = 24
+    batch_pack_max_pairs: int = 12
     use_board_edge_seeds: bool = True
-    board_edge_samples_per_edge: int = 64
+    board_edge_samples_per_edge: int = 24
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
     """Tight (x,y) and modest angle jitter for outline snap seeds only."""
     board_edge_guidance_refine: bool = True
@@ -369,11 +373,11 @@ class ProposeConfig(BaseModel):
                 "group_fit", "neighbor_slide", "ribbon_free",
             }),
             "interior_pocket": frozenset({
-                "erosion", "voronoi", "ribbon_free", "guidance_propositions",
+                "erosion", "voronoi", "ribbon_free", "guidance_cast_refine",
                 "raycasting",
             }),
             "cluster_edge": frozenset({
-                "group_fit", "neighbor_slide", "guidance_propositions",
+                "group_fit", "neighbor_slide", "guidance_cast_refine",
                 "perimeter_walk", "erosion",
             }),
             "inter_cluster": frozenset({
@@ -381,7 +385,7 @@ class ProposeConfig(BaseModel):
             }),
             "void_seek": frozenset({
                 "erosion", "voronoi", "ribbon_free", "raycasting",
-                "guidance_propositions",
+                "guidance_cast_refine",
             }),
         }
         return sets.get(zone)
@@ -420,6 +424,7 @@ class ProposeConfig(BaseModel):
                 "obstacle_nearest_k": 2,
                 "cast_squeeze_top_k": 12,
                 "use_board_edge_seeds": True,
+                "use_neighbor_slide": True,
             },
             "interior_pocket": {
                 "ranking_mode": "contact_hybrid",
@@ -439,7 +444,7 @@ class ProposeConfig(BaseModel):
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
                 "cast_squeeze_top_k": 8,
-                "use_neighbor_slide": False,
+                "use_neighbor_slide": True,
                 "use_full_packed_obstacle": False,
                 "obstacle_nearest_k": 3,
             },

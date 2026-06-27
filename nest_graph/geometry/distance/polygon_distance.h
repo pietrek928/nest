@@ -76,6 +76,7 @@ template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<SolidGeometry<VecType>>& polygons,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
 ) {
     if (polygons.size() < 2) return {};
@@ -83,18 +84,16 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     auto ctx = prepare_sweep_axis<VecType>(polygons);
 
     std::vector<PartSweepElement<VecType>> elements;
-    // OPTIMIZATION: If SolidGeometry exposes line_parts, do exact capacity calculation
-    // size_t exact_capacity = 0; for(const auto& p : polygons) exact_capacity += p.line_parts.size();
-    // elements.reserve(exact_capacity);
     elements.reserve(polygons.size() * 4);
 
     for (size_t i = 0; i < polygons.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i), 0, polygons[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(i), 0, polygons[i], ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
     }
 
     return execute_distance_sweep<VecType, Tracer>(
-        elements, aura_multiplier, SweepMode::Monopartite, -1, tracer);
+        elements, aura_multiplier, distance_margin, SweepMode::Monopartite, -1, tracer);
 }
 
 template <class VecType, class Tracer = DefaultTracer>
@@ -102,6 +101,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<SolidGeometry<VecType>>& polygons,
     const std::vector<int>& active_indices,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
 ) {
     if (active_indices.empty() || polygons.size() < 2) return {};
@@ -120,11 +120,12 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
     for (size_t i = 0; i < polygons.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i), group_ids[i], polygons[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(i), group_ids[i], polygons[i], ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
     }
 
     return execute_distance_sweep<VecType, Tracer>(
-        elements, aura_multiplier, SweepMode::Subset, -1, tracer);
+        elements, aura_multiplier, distance_margin, SweepMode::Subset, -1, tracer);
 }
 
 template <class VecType, class Tracer = DefaultTracer>
@@ -132,6 +133,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
     const std::vector<SolidGeometry<VecType>>& setA,
     const std::vector<SolidGeometry<VecType>>& setB,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
 ) {
     if (setA.empty() || setB.empty()) return {};
@@ -143,13 +145,16 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
     for (size_t i = 0; i < setA.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(i), 0, setA[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(i), 0, setA[i], ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
     }
     for (size_t i = 0; i < setB.size(); ++i) {
         append_poly_parts_to_sweep(
-            static_cast<int>(setA.size() + i), 1, setB[i], ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
+            static_cast<int>(setA.size() + i), 1, setB[i], ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
     }
 
     return execute_distance_sweep<VecType, Tracer>(
-        elements, aura_multiplier, SweepMode::Bipartite, static_cast<int>(setA.size()), tracer);
+        elements, aura_multiplier, distance_margin, SweepMode::Bipartite,
+        static_cast<int>(setA.size()), tracer);
 }

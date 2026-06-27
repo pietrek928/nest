@@ -1,29 +1,13 @@
-import math
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
-from shapely.affinity import rotate, translate
+from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
+from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig, dedupe_transforms
 from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
-    best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
-    tiered_propositions,
-)
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
 from nest_graph.propose.context import (
     apply_proposer_pool_scales,
@@ -35,7 +19,7 @@ from nest_graph.propose.context import (
     propose_push_point,
     should_use_border_focus,
 )
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_edge import (
     propose_placements_board_edge,
     propose_placements_group_fit,
@@ -45,17 +29,17 @@ from nest_graph.propose.placements_edge import (
 )
 from nest_graph.propose.placements_geo import propose_placements_raycasting, propose_placements_voronoi
 from nest_graph.propose.placements_guidance import (
-    propose_placements_guidance_propositions,
+    propose_placements_guidance_cast,
     propose_placements_guidance_walk,
 )
 from nest_graph.propose.placements_primary import (
-    propose_placements_axis_push,
-    propose_placements_bottom_left,
     propose_placements_erosion,
     propose_placements_neighbor_slide,
-    propose_placements_nfp_vertices,
     propose_placements_perimeter_walk,
 )
+from nest_graph.propose.placement_common import cluster_seed_coords
+from nest_graph.propose.query_context import ProposeContext
+from nest_graph.propose.placements_pso import propose_placements_point_cloud
 from nest_graph.propose.placements_batch import augment_batch_pack_proposals
 from nest_graph.propose.ranking import (
     _rank_proposal_coords,
@@ -86,9 +70,6 @@ def base_shape_from_selection(
 ALL_PROPOSER_NAMES: tuple[str, ...] = (
     "perimeter_walk",
     "neighbor_slide",
-    "axis_push",
-    "bottom_left",
-    "nfp_vertices",
     "erosion",
     "raycasting",
     "voronoi",
@@ -99,7 +80,7 @@ ALL_PROPOSER_NAMES: tuple[str, ...] = (
     "sheet_corners",
     "sheet_edge",
     "board_edge",
-    "guidance_propositions",
+    "guidance_cast_refine",
     "batch_pack",
 )
 
@@ -118,11 +99,67 @@ def _extend_counted(
     proposer_counts: dict[str, int] | None,
     name: str,
     new_items: Sequence[tuple[float, float, float]],
+    *,
+    max_items: int | None = None,
 ) -> None:
-    n = len(new_items)
+    items = list(new_items)
+    if max_items is not None and len(items) > max_items:
+        items = items[:max_items]
+    n = len(items)
     if proposer_counts is not None:
         proposer_counts[name] = proposer_counts.get(name, 0) + n
-    candidates.extend(new_items)
+    candidates.extend(items)
+
+
+def pre_filter_candidates(
+    candidates: Sequence[Tuple[float, float, float]],
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    min_dist: float,
+    epsilon_ratio: float,
+    *,
+    trim_by_validity: bool = True,
+) -> List[Tuple[float, float, float]]:
+    if not candidates:
+        return []
+    pool = list(candidates)
+    if propose_geom.full_packed_geoms:
+        pool = [
+            c for c in pool
+            if propose_geom.passes_full_packed_collision(propose_geom.placed_at(c))
+        ]
+    if not pool or not trim_by_validity:
+        return pool
+    return _filter_valid_candidates(
+        pool, propose_geom, pt_push, min_dist, epsilon_ratio,
+    )
+
+
+def _filter_valid_candidates(
+    candidates: Sequence[Tuple[float, float, float]],
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    min_dist: float,
+    epsilon_ratio: float,
+) -> List[Tuple[float, float, float]]:
+    if not candidates:
+        return []
+    flags = batch_valid_flags(propose_geom, candidates, pt_push, return_guidance=False)
+    return [c for c, ok in zip(candidates, flags, strict=True) if ok]
+
+
+def _filter_distant_collisions(
+    candidates: Sequence[Tuple[float, float, float]],
+    propose_geom: ProposeGeometry,
+) -> List[Tuple[float, float, float]]:
+    return pre_filter_candidates(
+        candidates,
+        propose_geom,
+        Point(0, 0),
+        0.0,
+        0.0,
+        trim_by_validity=False,
+    )
 
 
 def collect_propose_candidates(
@@ -139,10 +176,24 @@ def collect_propose_candidates(
     proposer_counts: dict[str, int] | None = None,
     guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
 ) -> List[Tuple[float, float, float]]:
-    pool = propose_cfg.candidate_pool
-    border_focus = should_use_border_focus(base_shape, propose_cfg)
-    use_free_region = propose_cfg.use_free_region_search
-    n_angles = propose_cfg.placement_num_angles
+    ctx = ProposeContext(
+        base_shape,
+        shape_to_place,
+        sheet,
+        propose_cfg,
+        min_dist=min_dist,
+        pt_push=pt_push,
+        propose_geom=propose_geom,
+        focal_shape=focal_shape,
+        enabled_proposers=enabled_proposers,
+        proposer_counts=proposer_counts,
+        guidance_seed_coords=guidance_seed_coords,
+    )
+    pool = ctx.pool
+    border_focus = ctx.border_focus
+    use_free_region = ctx.use_free_region
+    n_angles = ctx.n_angles
+    placement_angles = ctx.placement_angles
     candidates: List[Tuple[float, float, float]] = []
 
     if _proposer_enabled("perimeter_walk", enabled_proposers):
@@ -161,7 +212,9 @@ def collect_propose_candidates(
                 border_focus=border_focus,
                 num_angles=n_angles,
                 top_n=pool * 2,
+                placement_angles=placement_angles,
             ),
+            max_items=pool * 2,
         )
     if (
         _proposer_enabled("neighbor_slide", enabled_proposers)
@@ -185,62 +238,9 @@ def collect_propose_candidates(
                 pt_push=pt_push,
                 num_angles=n_angles,
                 top_n=neighbor_top,
+                placement_angles=placement_angles,
             ),
-        )
-    if (
-        _proposer_enabled("axis_push", enabled_proposers)
-        and propose_cfg.use_axis_push
-        and not base_shape.is_empty
-    ):
-        _extend_counted(
-            candidates,
-            proposer_counts,
-            "axis_push",
-            propose_placements_axis_push(
-                base_shape,
-                shape_to_place,
-                sheet,
-                min_dist,
-                propose_geom=propose_geom,
-                pt_push=pt_push,
-                num_angles=n_angles,
-                top_n=pool * 2,
-            ),
-        )
-    if _proposer_enabled("bottom_left", enabled_proposers) and propose_cfg.use_bottom_left:
-        _extend_counted(
-            candidates,
-            proposer_counts,
-            "bottom_left",
-            propose_placements_bottom_left(
-                base_shape,
-                shape_to_place,
-                sheet,
-                min_dist,
-                propose_geom=propose_geom,
-                pt_push=pt_push,
-                use_free_region=use_free_region,
-                border_focus=border_focus,
-                num_angles=n_angles,
-                top_n=pool,
-                vertices_per_angle=propose_cfg.bottom_left_vertices_per_angle,
-            ),
-        )
-    if _proposer_enabled("nfp_vertices", enabled_proposers) and propose_cfg.use_nfp_vertices:
-        _extend_counted(
-            candidates,
-            proposer_counts,
-            "nfp_vertices",
-            propose_placements_nfp_vertices(
-                base_shape,
-                shape_to_place,
-                sheet,
-                min_dist,
-                propose_geom=propose_geom,
-                pt_push=pt_push,
-                num_angles=n_angles,
-                top_n=pool * 2,
-            ),
+            max_items=neighbor_top,
         )
     if _proposer_enabled("erosion", enabled_proposers):
         _extend_counted(
@@ -259,7 +259,9 @@ def collect_propose_candidates(
                 focal_shape=focal_shape,
                 num_angles=n_angles,
                 top_n=pool,
+                placement_angles=placement_angles,
             ),
+            max_items=pool,
         )
     if _proposer_enabled("raycasting", enabled_proposers):
         _extend_counted(
@@ -278,6 +280,8 @@ def collect_propose_candidates(
                 anchor_stride=propose_cfg.raycast_anchor_stride,
                 focal_shape=focal_shape,
                 border_focus=border_focus,
+                propose_geom=propose_geom,
+                pt_push=pt_push,
             ),
         )
     if _proposer_enabled("voronoi", enabled_proposers) and propose_cfg.use_voronoi:
@@ -297,6 +301,8 @@ def collect_propose_candidates(
                 max_sites=propose_cfg.voronoi_max_sites,
                 focal_shape=focal_shape,
                 border_focus=border_focus,
+                propose_geom=propose_geom,
+                pt_push=pt_push,
             ),
         )
     if _proposer_enabled("point_cloud", enabled_proposers) and propose_cfg.use_point_cloud:
@@ -350,6 +356,8 @@ def collect_propose_candidates(
                 min_dist,
                 num_angles=n_angles,
                 top_n=pool,
+                propose_geom=propose_geom,
+                pt_push=pt_push,
             ),
         )
     if (
@@ -437,12 +445,14 @@ def collect_propose_candidates(
             ),
         )
     if (
-        _proposer_enabled("guidance_propositions", enabled_proposers)
+        _proposer_enabled("guidance_cast_refine", enabled_proposers)
         and propose_cfg.use_guidance_propositions
+        and propose_cfg.guidance_cast_refine_top_k > 0
     ):
-        seed_limit = propose_cfg.guidance_proposition_seed_count
+        seed_limit = propose_cfg.guidance_cast_refine_top_k
+        clustered = cluster_seed_coords(list(candidates))
         structured = select_guidance_cast_seeds(
-            candidates,
+            clustered,
             seed_limit,
             shape_to_place,
             propose_geom,
@@ -452,21 +462,21 @@ def collect_propose_candidates(
         )
         if not structured and guidance_seed_coords:
             structured = list(guidance_seed_coords)[:seed_limit]
-        if not structured:
-            return candidates
-        _extend_counted(
-            candidates,
-            proposer_counts,
-            "guidance_propositions",
-            propose_placements_guidance_propositions(
-                structured,
-                pt_push,
-                propose_geom,
-                propose_cfg,
-                min_dist=min_dist,
-            ),
-        )
-    return candidates
+        if structured:
+            _extend_counted(
+                candidates,
+                proposer_counts,
+                "guidance_cast_refine",
+                propose_placements_guidance_cast(
+                    structured,
+                    pt_push,
+                    propose_geom,
+                    propose_cfg,
+                    min_dist=min_dist,
+                    top_n=propose_cfg.candidate_pool,
+                ),
+            )
+    return _filter_distant_collisions(candidates, propose_geom)
 
 
 def _trim_candidates_by_border(
@@ -516,6 +526,14 @@ def _propose_coords_from_candidates(
         propose_cfg=propose_cfg,
     )
     pool = list(candidates)
+    if propose_cfg.trim_candidates_by_clearance:
+        pool = pre_filter_candidates(
+            pool,
+            geom,
+            pt_push,
+            min_dist,
+            propose_cfg.placement_clearance_epsilon_ratio,
+        )
     if len(pool) > propose_cfg.candidate_pool:
         if rank_mode == "border" and propose_cfg.trim_candidates_by_clearance:
             pool = _trim_candidates_by_border(
@@ -639,6 +657,7 @@ def propose_coords_with_strategy(
     rules=None,
     group_id: int = 0,
     proposer_counts: dict[str, int] | None = None,
+    full_packed_geoms: list[Geometry] | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -666,6 +685,7 @@ def propose_coords_with_strategy(
         min_dist,
         epsilon_ratio=cfg.placement_clearance_epsilon_ratio,
         propose_cfg=cfg,
+        full_packed_geoms=full_packed_geoms,
     )
     candidates = collect_propose_candidates(
         base_shape,
@@ -700,12 +720,9 @@ _FIRST_PASS_EMPTY_BORDER_PROPOSERS = frozenset({
 
 
 def _first_pass_packed_border_proposers(propose_cfg: ProposeConfig) -> frozenset[str]:
-    names = {
+    return frozenset({
         "board_edge", "sheet_corners", "group_fit", "neighbor_slide", "ribbon_free",
-    }
-    if propose_cfg.first_pass_use_axis_push:
-        names.add("axis_push")
-    return frozenset(names)
+    })
 
 
 _FIRST_PASS_PACKED_BORDER_PROPOSERS = _first_pass_packed_border_proposers(
@@ -726,6 +743,7 @@ def _best_proposer_coords(
     rules=None,
     group_id: int = 0,
     proposer_counts: dict[str, int] | None = None,
+    full_packed_geoms: list[Geometry] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -740,6 +758,7 @@ def _best_proposer_coords(
         rules=rules,
         group_id=group_id,
         proposer_counts=proposer_counts,
+        full_packed_geoms=full_packed_geoms,
     )
 
 
@@ -802,6 +821,7 @@ def proposed_transforms_for_groups(
     rules=None,
     proposer_counts_out: dict[str, int] | None = None,
     zones_used_out: list[str] | None = None,
+    propose_feedback=None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -809,6 +829,7 @@ def proposed_transforms_for_groups(
     ``make_polygon_graph`` still filters against the full selection.
     """
     placed = [selected_polys[i] for i in selected_indices]
+    full_packed_geoms = [Geometry.from_shapely(p) for p in placed]
     out: dict[int, np.ndarray] = {}
     total_counts: dict[str, int] = {}
     for part_poly, group_id in parts:
@@ -839,6 +860,13 @@ def proposed_transforms_for_groups(
             use_full, nearest_k = ProposeConfig.obstacle_scope_for_place(zone)
             if nearest_k > 0:
                 cfg = cfg.model_copy(update={"obstacle_nearest_k": nearest_k})
+
+        if propose_feedback is not None and propose_feedback.last_proposal_yield < 0.4:
+            if placed:
+                bumped_k = min(cfg.obstacle_nearest_k + 1, len(placed))
+                cfg = cfg.model_copy(update={"obstacle_nearest_k": bumped_k})
+            if zone == "inter_cluster":
+                use_full = True
 
         if use_full and placed:
             obstacle_shape = unary_union(placed)
@@ -878,6 +906,7 @@ def proposed_transforms_for_groups(
             rules=rules,
             group_id=group_id,
             proposer_counts=group_counts,
+            full_packed_geoms=full_packed_geoms,
         )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n

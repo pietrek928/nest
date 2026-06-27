@@ -129,6 +129,17 @@ def test_from_ring_matches_linestring_distance(simple_square):
     )
 
 
+def test_from_rings_standoff_distance():
+    ring_a = [(0, 0), (1, 0), (1, 1), (0, 1)]
+    ring_b = [(3, 0), (4, 0), (4, 1), (3, 1)]
+    multi_ring = Geometry.from_rings([ring_a, ring_b])
+    part = Geometry.from_convex_polygon([(1.5, 0.5), (2.5, 0.5), (2.5, 1.5), (1.5, 1.5)])
+    dist_multi = part.standoff_min_distance(multi_ring).distance
+    dist_a = part.standoff_min_distance(Geometry.from_ring(ring_a)).distance
+    dist_b = part.standoff_min_distance(Geometry.from_ring(ring_b)).distance
+    assert math.isclose(dist_multi, min(dist_a, dist_b), abs_tol=1e-4)
+
+
 def test_min_distance_closest_points_match_shapely():
     part = Geometry.from_convex_polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
     wall = Geometry.from_ring([(3, 0), (3, 2)])

@@ -61,8 +61,8 @@ def main() -> None:
         all_scenarios = [s for s in all_scenarios if s.label in args.scenarios]
 
     summary_lines = [
-        "| scenario | shapes | props | penetrating | best_move | kiss_err | border_err | board_ok | exec_ms |",
-        "|----------|--------|-------|-------------|-----------|----------|------------|----------|---------|",
+        "| scenario | shapes | props | penetrating | best_move | kiss_err | border_err | board_ok | exec_ms | notes |",
+        "|----------|--------|-------|-------------|-----------|----------|------------|----------|---------|-------|",
     ]
 
     for scenario in all_scenarios:
@@ -71,7 +71,7 @@ def main() -> None:
         summary_lines.append(
             f"| {res.scenario_id} | {res.shapes} | {res.props_count} | {res.is_penetrating} "
             f"| {res.best_move_type} | {res.kiss_error:.4f} | {res.border_standoff_err:.4f} "
-            f"| {res.board_valid} | {res.execution_time_ms:.3f} |"
+            f"| {res.board_valid} | {res.execution_time_ms:.3f} | {scenario.notes} |"
         )
 
         fig, ax = plt.subplots(figsize=(8, 8))

@@ -76,7 +76,7 @@ def main() -> None:
         for name in proposers:
             cfg = ablation_propose_config(name)
             seeds = None
-            if name == "guidance_propositions":
+            if name in ("guidance_cast_refine", "guidance_propositions"):
                 seeds = GUIDANCE_ABLATION_SEEDS.get(scenario, [(0.5, 0.5, 0.0)])
             for seed in args.seeds:
                 rows.append(

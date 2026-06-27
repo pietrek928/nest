@@ -93,13 +93,15 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 | `placement_clearance_epsilon_ratio` (default `0.05`) | (via margin check in Python) | Extra slack so near-touching poses are rejected |
 | `guidance_diversity_dist_ratio` | `diversity_distance_threshold` | Scaled from `min_dist` / board diag (not raw C++ defaults) |
 | `use_guidance_propositions`, `guidance_max_propositions` | `max_propositions`, proposition menu | Cast-based moves from `evaluate_local_placement` |
+| `guidance_cast_refine_top_k` | (unified cast-refine pass) | Top coarse seeds refined via `guidance_cast_refine` after all proposers |
+| `cast_rank_boost` | (ranking only) | Clearance score boost (× `min_dist`) for cast-snap candidates |
 | `guidance_use_tight_packing` | `use_tight_packing` | `Exact Neighbor Snap` via polygon cast |
 | `guidance_use_corner_alignment` | `use_corner_alignment` | `Vertex Corner Match` / `Corner Match (Intercept)` |
 | `guidance_enable_grid` | `enable_grid_exploration` | `Floor Walk L/R` (perpendicular casts along gravity tangent) |
 | (C++ default) | `max_hole_size_ratio` | Hole seeking when void radius ∈ `[placed_radius, placed_radius × ratio]` |
 | (C++ default) | `search_radius` | Cast/distance horizon; scaled up from board diag in Python |
 
-**Shipped propose defaults** (cast `guide.h`, re-tune with `scripts/benchmark_guidance_flow.py`): `use_guidance_propositions=True`, `guidance_use_tight_packing=True`, `guidance_use_corner_alignment=True`, `guidance_enable_grid=False`, `guidance_max_propositions=6`, `use_batch_pack=True`, `use_board_edge_seeds=True` (outline snap + per-edge cast via `guidance_config_for_board_edge_anchor`).
+**Shipped propose defaults** (post benchmark tune): `use_guidance_propositions=True`, `guidance_enable_grid=False`, `guidance_cast_refine_top_k=12`, `cast_rank_boost=0.35`, `cast_squeeze_top_k=8`, `candidate_pool=64`, `board_edge_samples_per_edge=48`, `use_neighbor_slide=False` globally (enabled in `border_gap` / `cluster_edge` zone profiles only). Cast uses `guide.h` tight+corner packing; re-tune with `scripts/benchmark_propose.py`.
 
 `make_polygon_graph` filters candidates with validity-only guidance (`guidance_config_for_graph`) using the same `board_min_dist()` and epsilon as propose. Set `min_dist_ratio` or `placement_clearance_epsilon_ratio` on `ProposeConfig` to tune spacing.
 
@@ -107,7 +109,9 @@ Enabled by default. Runs **erosion, raycast, voronoi**, optional **ribbon gap se
 
 Benchmark presets: `rule_propose`, `rule_propose_repulsor` in `scripts/benchmark_nest_pipeline.py`.
 
-**Local compaction** (`local_compact` preset): tight+corner `guidance_propositions`, post-rank `cast_squeeze` (`cast_squeeze_top_k=8`, `cast_squeeze_passes=1`), `use_neighbor_slide=False`. Factory: `ProposeConfig.local_compact_profile()`. Benchmark: `scripts/benchmark_local_placement.py`; see [local_placement_benchmark.md](local_placement_benchmark.md).
+**Local compaction** (`local_compact` preset): tight+corner cast refine (`guidance_cast_refine_top_k`), post-rank `cast_squeeze` (`cast_squeeze_top_k=8`, `cast_squeeze_passes=1`), `use_neighbor_slide=False`. Quality-first benchmark preset: `cast_first_quality` in `scripts/benchmark_propose.py`. Factory: `ProposeConfig.local_compact_profile()`. Benchmark: `scripts/benchmark_local_placement.py`; see [local_placement_benchmark.md](local_placement_benchmark.md).
+
+**Proposal quality feedback**: `proposal_yield = proposal_nodes / proposal_count` (graph nodes whose transform came from a propose row). Drives adaptive obstacle scope when `last_proposal_yield < 0.4`. Proposal rows are pinned through `subsample_transforms_with_pinned` up to `max_proposals`.
 
 **Place-aware routing** (shipped default: `place_profiles_enabled=True`, `late_border_saturation=True`): each group is routed through `classify_propose_zone()` → `ProposeConfig.for_place(zone)` with zone-specific proposers and obstacle scope (full packed union for interior/inter-cluster/void). Late border saturation reuses first-pass border propose when outline coverage is below `place_border_coverage_threshold`. Rolling `ProposeFeedbackState` adjusts `place_proposer_pool_scales` (e.g. `neighbor_slide_pool_fraction`) from graph yield. Disable with `place_profiles_enabled=False`. Benchmark: `scripts/benchmark_place_propose.py`; see [place_propose_benchmark.md](place_propose_benchmark.md). E2E alias: `place_routed` in `scripts/benchmark_nest_pipeline.py` (same as shipped).
 

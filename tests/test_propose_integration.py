@@ -141,7 +141,7 @@ def test_default_config_first_pass_tuned():
     assert cfg.selection.dfs_max_tries == 4
     assert cfg.selection.dfs_refine_max_passes == 1024
     assert cfg.selection.dfs_refine_max_stagnant_passes == 4
-    assert cfg.propose.candidate_pool == 80
+    assert cfg.propose.candidate_pool == 64
     assert cfg.propose.use_contact_clearance_hybrid is True
     assert cfg.propose.contact_clearance_hybrid_weight == 0.25
     assert cfg.propose.obstacle_nearest_k == 3
@@ -155,8 +155,8 @@ def test_default_config_first_pass_tuned():
     assert cfg.propose.use_guidance_propositions is True
     assert cfg.propose.guidance_max_propositions == 8
     assert cfg.propose.guidance_use_corner_alignment is True
-    assert cfg.propose.guidance_enable_grid is True
-    assert cfg.propose.use_neighbor_slide is True
+    assert cfg.propose.guidance_enable_grid is False
+    assert cfg.propose.use_neighbor_slide is False
     assert cfg.propose.guidance_proposition_seed_count == 16
     assert cfg.propose.use_board_edge_seeds is True
     assert cfg.propose.board_edge_guidance_refine is True
@@ -168,5 +168,5 @@ def test_propose_geometry_validation(nest_board, rect_poly):
 
     geom = ProposeGeometry(nest_board, Polygon(), rect_poly, min_dist=0.001)
     placed = geom.placed_at((0.5, 0.5, 0.0))
-    assert geom.inside_board(placed)
+    assert geom.footprint_clear_of_voids(placed)
     assert not geom.hits_base(placed)

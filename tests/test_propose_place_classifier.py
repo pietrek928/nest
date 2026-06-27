@@ -93,6 +93,13 @@ def test_classify_void_seek(nest_board, rect_poly):
     assert zone == "void_seek"
 
 
+def test_zone_proposers_include_cast_refine():
+    for zone in ("interior_pocket", "cluster_edge", "void_seek"):
+        proposers = ProposeConfig.proposers_for_place(zone)
+        assert proposers is not None
+        assert "guidance_cast_refine" in proposers
+
+
 def test_for_place_profiles_exist():
     base = ProposeConfig()
     for zone in PLACE_ZONES:

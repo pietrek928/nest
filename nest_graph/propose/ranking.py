@@ -2,32 +2,22 @@ import math
 from typing import List, Optional, Sequence, Tuple, Union
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
-from shapely.affinity import rotate, translate
+from shapely import MultiPoint, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
+from shapely.ops import unary_union
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
+from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
 from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
     best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
+    placement_clearance_epsilon,
     placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
-    tiered_propositions,
 )
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
+from nest_graph.utils import get_shape_polygons_coords, transform_poly
 
 from nest_graph.propose.context import _placement_contact_error
 from nest_graph.propose.placement_common import outline_standoff_distance
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_guidance import (
     _candidate_from_proposition,
     _is_cast_move,
@@ -114,7 +104,7 @@ def _score_placement_tightness(
 ) -> float:
     """Higher score = tighter outline kiss + lower neighbor excess gap."""
     placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    if not propose_geom.valid_at(coords, pt_push):
         return float("-inf")
     kiss_err = abs(
         outline_standoff_distance(placed_geom, propose_geom.sheet) - min_dist,
@@ -183,7 +173,7 @@ def _score_placement_coords(
 ) -> float:
     if propose_geom is not None:
         placed_geom = propose_geom.placed_at(coords)
-        if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+        if not propose_geom.valid_at(coords, pt_push):
             return float("inf")
         placed = transform_poly(shape_to_place, coords)  # hull metrics still need Shapely
     else:
@@ -218,7 +208,7 @@ def _score_placement_legacy(
     propose_geom: ProposeGeometry,
 ) -> float:
     placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    if not propose_geom.valid_at(coords, pt_push):
         return float("inf")
     placed = transform_poly(shape_to_place, coords)
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0.0
@@ -234,18 +224,60 @@ def _score_placement_legacy(
     )
 
 
+def _batch_placement_feedback(
+    candidates: Sequence[Tuple[float, float, float]],
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+) -> dict[Tuple[float, float, float], object | None]:
+    if not candidates:
+        return {}
+    guidance = batch_valid_flags(
+        propose_geom, candidates, pt_push, return_guidance=True,
+    )
+    return {c: g for c, g in zip(candidates, guidance, strict=True)}
+
+
+def _placement_feedback(
+    coords: Tuple[float, float, float],
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    *,
+    feedback_cache: dict[Tuple[float, float, float], object | None] | None = None,
+):
+    if feedback_cache is not None and coords in feedback_cache:
+        cached = feedback_cache[coords]
+        return cached
+    placed_geom = propose_geom.placed_at(coords)
+    if not placement_footprint_inside_board(placed_geom, propose_geom.board_geom):
+        return None
+    g = propose_geom.placement_guidance(placed_geom, (coords[0], coords[1]), pt_push)
+    if g.is_penetrating:
+        return None
+    if propose_geom._min_dist > 0.0:
+        margin = propose_geom._min_dist + placement_clearance_epsilon(
+            propose_geom._min_dist, ratio=propose_geom._epsilon_ratio,
+        )
+        if float(g.clearance) < margin:
+            return None
+    return g
+
+
 def _score_placement_clearance(
     coords: Tuple[float, float, float],
     propose_geom: ProposeGeometry,
     pt_push: Point,
+    propose_cfg: ProposeConfig | None = None,
+    min_dist: float = 0.0,
 ) -> float:
-    placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    g = _placement_feedback(coords, propose_geom, pt_push)
+    if g is None:
         return float("-inf")
-    g = propose_geom.placement_guidance(placed_geom, (coords[0], coords[1]), pt_push)
-    if g.is_penetrating:
-        return float("-inf")
-    return float(g.clearance)
+    score = float(g.clearance)
+    if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
+        prop = best_proposition(g)
+        if prop is not None and _is_cast_move(prop.move_type or ""):
+            score += propose_cfg.cast_rank_boost * min_dist
+    return score
 
 
 def _score_placement_hybrid(
@@ -279,9 +311,9 @@ def _score_placement_border(
     min_dist: float,
 ) -> float:
     """Higher score = tighter fit to sheet border (lower exterior distance)."""
-    placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    if _placement_feedback(coords, propose_geom, pt_push) is None:
         return float("-inf")
+    placed_geom = propose_geom.placed_at(coords)
     err = abs(outline_standoff_distance(placed_geom, propose_geom.sheet) - min_dist)
     return -err
 
@@ -295,9 +327,9 @@ def _score_placement_contact(
     focal_shape: Optional[BaseGeometry] = None,
 ) -> float:
     """Higher score = tighter fit to sheet border and/or focal group."""
-    placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    if _placement_feedback(coords, propose_geom, pt_push) is None:
         return float("-inf")
+    placed_geom = propose_geom.placed_at(coords)
     err = _placement_contact_error(
         placed_geom, propose_geom.sheet, min_dist, focal_shape,
     )
@@ -369,7 +401,9 @@ def _rank_score_for_mode(
             tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
         )
     if rank_mode == "clearance":
-        return _score_placement_clearance(coords, propose_geom, pt_push)
+        return _score_placement_clearance(
+            coords, propose_geom, pt_push, propose_cfg, min_dist,
+        )
     if rank_mode == "hybrid":
         return _score_placement_hybrid(
             coords, base_shape, shape_to_place, boundary, pt_push, min_dist,
@@ -439,7 +473,7 @@ def _cast_squeeze_one(
     base_shape: BaseGeometry | None = None,
 ) -> Tuple[float, float, float]:
     placed_geom = propose_geom.placed_at(coords)
-    if not propose_geom.is_valid_placement(placed_geom, pt_push, (coords[0], coords[1])):
+    if not propose_geom.valid_at(coords, pt_push):
         return coords
     best = coords
     best_score = _rank_score_for_mode(
@@ -447,7 +481,7 @@ def _cast_squeeze_one(
         rank_mode=rank_mode,
         base_shape=base_shape or Polygon(),
         shape_to_place=shape_to_place,
-        boundary=propose_geom.boundary,
+        boundary=propose_geom.sheet,
         propose_geom=propose_geom,
         propose_cfg=propose_cfg,
         pt_push=pt_push,
@@ -468,7 +502,7 @@ def _cast_squeeze_one(
             x, y, theta, prop, use_full_cast=use_cast,
         )
         trial = propose_geom.placed_at(candidate)
-        if not propose_geom.is_valid_placement(
+        if not propose_geom.valid(
             trial, pt_push, (candidate[0], candidate[1]),
         ):
             continue
@@ -477,7 +511,7 @@ def _cast_squeeze_one(
             rank_mode=rank_mode,
             base_shape=base_shape or Polygon(),
             shape_to_place=shape_to_place,
-            boundary=propose_geom.boundary,
+            boundary=propose_geom.sheet,
             propose_geom=propose_geom,
             propose_cfg=propose_cfg,
             pt_push=pt_push,
@@ -647,10 +681,17 @@ def _trim_candidates_by_clearance(
     propose_geom: ProposeGeometry,
     pt_push: Point,
     limit: int,
+    propose_cfg: ProposeConfig | None = None,
+    min_dist: float = 0.0,
 ) -> List[Tuple[float, float, float]]:
     """Keep up to limit candidates with highest placement clearance."""
     if limit <= 0 or not candidates:
         return []
+    feedback_cache = (
+        _batch_placement_feedback(candidates, propose_geom, pt_push)
+        if len(candidates) >= 8
+        else None
+    )
     scored: list[tuple[float, Tuple[float, float, float]]] = []
     seen: set[tuple[float, float, float]] = set()
     for coords in candidates:
@@ -658,9 +699,17 @@ def _trim_candidates_by_clearance(
         if key in seen:
             continue
         seen.add(key)
-        score = _score_placement_clearance(coords, propose_geom, pt_push)
-        if score > float("-inf"):
-            scored.append((score, coords))
+        g = _placement_feedback(
+            coords, propose_geom, pt_push, feedback_cache=feedback_cache,
+        )
+        if g is None:
+            continue
+        score = float(g.clearance)
+        if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
+            prop = best_proposition(g)
+            if prop is not None and _is_cast_move(prop.move_type or ""):
+                score += propose_cfg.cast_rank_boost * min_dist
+        scored.append((score, coords))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [coords for _, coords in scored[:limit]]
 
@@ -710,7 +759,9 @@ def _rank_proposal_coords(
                 pt_push, min_dist, focal_shape, rules, group_id,
             )
         elif mode == "clearance":
-            score = _score_placement_clearance(coords, propose_geom, pt_push)
+            score = _score_placement_clearance(
+                coords, propose_geom, pt_push, propose_cfg, min_dist,
+            )
         elif mode == "hybrid":
             score = _score_placement_hybrid(
                 coords, base_shape, shape_to_place, boundary, pt_push, min_dist,

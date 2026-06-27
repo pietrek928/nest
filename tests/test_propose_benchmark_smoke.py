@@ -14,13 +14,14 @@ def test_shipped_preset_partial_pack_contact_smoke():
         preset_label="shipped",
     )
     assert row.valid_count >= 8
-    assert row.contact_dist_min < 0.05
+    # Shipped preset keeps neighbor_slide off; partial_pack contact_min ~0.15 (see docs/propose_benchmark.md).
+    assert row.contact_dist_min < 0.20
     assert row.final_count >= 8
 
 
 def test_phase2_shapely_proposers_default_off():
     cfg = ProposeConfig()
-    assert cfg.use_neighbor_slide is True
+    assert cfg.use_neighbor_slide is False
     assert cfg.use_axis_push is False
     assert cfg.use_bottom_left is False
     assert cfg.use_nfp_vertices is False

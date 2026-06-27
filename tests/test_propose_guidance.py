@@ -103,7 +103,7 @@ def test_evaluate_ray_placement_nudge_moves_part(board):
     assert score < 1e6
     assert settled[0] != params[0] or settled[1] != params[1]
     placed = geom.placed_at(tuple(settled))
-    assert geom.is_valid_placement(placed, push, (settled[0], settled[1]))
+    assert geom.valid(placed, push, (settled[0], settled[1]))
 
 
 def test_proposed_transforms_board_valid(nest_board, rect_poly, tri_poly, build_graph_config):
@@ -132,5 +132,5 @@ def test_propose_geometry_validation(board):
     )
     placed = geom.placed_at((0.5, 0.5, 0.0))
     push = board.centroid
-    assert geom.inside_board(placed)
-    assert not geom.hits_base(placed, push, (0.5, 0.5))
+    assert geom.footprint_clear_of_voids(placed)
+    assert not geom.hits_base(placed)

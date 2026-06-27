@@ -20,7 +20,7 @@ Python exposes it through [`nest_graph/geometry/bindings/api.cc`](../nest_graph/
 | **Diversity filter** | `l_snap_to_bar` — 6 distinct propositions under penetration |
 | **Empty-menu guard** | `evaluate_local_placement` always returns ≥1 proposition via gravity fallback |
 | **Sheet + void context** | All scenarios use `PlacementScene` with outline, padded sheet, corner voids, optional `board_holes` |
-| **Performance** | All scenarios &lt; 0.05 ms per call on test hardware |
+| **Performance** | Hardened scenarios &lt; 0.31 ms (`hex_ring_cavity` 0.21 ms) on test hardware |
 | **Bindings** | Full `GuidanceConfig` round-trip; out-of-bounds `placed_poly_idx` raises `IndexError` |
 
 ## 3. Fixes applied (this pass)
@@ -32,19 +32,28 @@ Python exposes it through [`nest_graph/geometry/bindings/api.cc`](../nest_graph/
 | **No rotation near walls** | `alignment_normal` was `(0,0)` when not penetrating | Set from placed→closest-obstacle vector in `aggregate_physics_feedback` |
 | **Single-neighbor snap** | Only `closest_poly_idx` tracked | Added `second_closest_*` fields; dual snap + dual corner alignment |
 | **Attractor-only propose** | Interior propose used attractor pass alone | Dual-pass guidance in [`placements_guidance.py`](../nest_graph/propose/placements_guidance.py) (tight cast + attractor merge) |
+| **Sweep aura conflation** | `search_radius` passed as `aura_multiplier` → disabled broad-phase pruning, radius-relative horizon | Absolute `distance_margin` in [`sweep_engine.h`](../nest_graph/geometry/sweep/sweep_engine.h); guide passes `aura=0`, `distance_margin=search_radius` |
+| **Rotation recursion cost** | Full nested `evaluate_local_placement` per alt angle | Lightweight rotate + cast-only pass (single distance query per angle) |
+| **Vertex-corner blow-up** | O(V_a × V_b) brute force on stars/gears | Top-K edge-endpoint matching (`collect_edge_endpoints`) |
+| **Hole-seek spam** | Unbounded void loop on dense sheets | `max_hole_seeks` + `max_void_polygons_for_holes` budget |
+| **Zero-MTV penetration** | Touching overlap reported `penetration_sq=0` → zero ejection | Center-separation fallback MTV in `aggregate_physics_feedback` |
+| **Alignment from bbox** | `alignment_normal` used circle centers | Closest feature normal from `ComplexDistanceResult::closest_normal` |
+| **Post-ejection menu** | Ejection-only under overlap | Virtual ejection pose + cast snap / re-seat toward other obstacles |
+| **Border dock** | Gravity diagonal only | `use_board_edge_cast` axis-aligned casts when `border_focus` |
+| **Debug attribution** | No obstacle index on propositions | `PlacementProposition.closest_poly_idx` exposed in bindings |
 
 ## 4. Remaining gaps (ranked by nesting impact)
 
 | Area | Limitation | Impact | Mitigation today |
 |------|------------|--------|------------------|
-| **Horizon** | `find_polygon_distances` capped by `search_radius` | Weak inter-cluster context | Full obstacle union in `PlacementScene`; voronoi / ribbon proposers |
+| **Horizon** | `search_radius` is absolute cast/distance margin (not sweep aura) | Tune per board via `guidance_config_for_scene`; tracer bench in [`scripts/benchmark_guidance_tracer.py`](../scripts/benchmark_guidance_tracer.py) |
 | **Pose semantics** | Returns translation **deltas**, not absolute `(x,y,θ)` | Easy to mis-apply | `proposition_translation`, `_is_cast_move`, `apply_transform` in propose layer |
-| **Border packing** | No native outline-kiss move; gravity only along `gravity_vector` | Border density relies on Python | `guidance_config_for_board_edge_anchor`, `placements_edge.py` |
+| **Border packing** | Axis-aligned `Board Edge Cast X/Y` when `use_board_edge_cast`; diagonal gravity still primary | Residual border kiss on jagged boards | `guidance_config_for_board_edge_anchor`, `placements_edge.py` |
 | **Hole seek on sheet voids** | **By design:** board voids are *forbidden* regions, not fillable cavities | `void_corner`, `board_hole_mouth` correctly suppress `Hole Seek` | Do not raise `max_hole_size_ratio` for sheet voids |
 | **Validity** | `clearance` is pairwise min in horizon, not board standoff | Some props may still fail `board_valid` | `is_valid_placement` filter in propose layer |
 | **Scoring** | Fixed heuristic tiers (95/85/75…) | Misaligned with graph/rule ranking | Guide seeds only; `rule_hybrid` ranks in propose |
 | **Exploration** | `enable_grid_exploration` = floor walk L/R only | Limited pocket search | `voronoi`, `erosion`, `ribbon_free` |
-| **API / debug** | `PhysicsContext` not exposed; no per-obstacle attribution | Hard to explain move choice | Infer from `move_type` string; viz quiver plot |
+| **API / debug** | `closest_poly_idx` on propositions; `evaluate_local_placement_traced` for GJK counts | Full `PhysicsContext` still internal | Viz quiver + tracer bench |
 
 ## 5. Python workarounds today
 
@@ -65,18 +74,29 @@ Re-run `scripts/visualize_guidance_placement.py` for PNGs. Key changes vs pre-fi
 | `void_corner` | `Target Attractor`; hole seek absent | `Exact Neighbor Snap` + corner match (hole seek correctly absent) |
 | `board_hole_mouth` | `Target Attractor`, `board_valid=False` | Cast snaps; validity filtered in propose |
 
-## 7. Recommendations (remaining)
+## 7. Performance (post-improvement pass)
+
+Tracer baseline: [`docs/guidance_tracer_bench.txt`](guidance_tracer_bench.txt) via `scripts/benchmark_guidance_tracer.py`.
+
+| Scenario | exec_ms (before hardening pass) | exec_ms (now) |
+|----------|--------------------------------|---------------|
+| `hex_ring_cavity` | 0.63 | 0.21 |
+| `jagged_inner_dock` | 0.49 | 0.22 |
+| `triple_void_lane` | 0.30 | 0.31 |
+| `l_shaped_sheet_corner` | 0.18 | 0.19 |
+
+Move menus on all 19 scenarios unchanged under `tests/test_guidance_scenarios.py` (55 tests).
+
+## 8. Recommendations (remaining)
 
 | Priority | Change | Where |
 |----------|--------|-------|
-| Medium | Re-run casts after rotation change | `formulate_rotations` + cast phase |
-| Medium | Expose optional `PhysicsContext` or obstacle index on propositions | `api.cc` |
-| Low | Border-outline kiss move native in C++ | `guide.h` |
+| Low | Expose optional full `PhysicsContext` on `PlacementGuidance` | `api.cc` |
 | Pipeline | Keep guide as **seed** proposer; do not rely on it for final collision-free output | `refine_selection` / `finalize_selection` |
 
-C++ unit tests for cast forward-only, ejection, secondary snap, and non-empty menu: [`nest_graph/geometry/tests/test_guide.cc`](../nest_graph/geometry/tests/test_guide.cc).
+C++ unit tests: [`nest_graph/geometry/tests/test_guide.cc`](../nest_graph/geometry/tests/test_guide.cc) — includes star-ring cavity and penetrating escape hardened cases.
 
-## 8. How to reproduce
+## 9. How to reproduce
 
 ```bash
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
@@ -84,6 +104,7 @@ cmake --build build --target geometry geometry_cpp_tests
 ./build/nest_graph/geometry/geometry_cpp_tests "[guide]"
 
 uv run pytest tests/test_guide_bindings.py tests/test_guidance_scenarios.py -q
+uv run python scripts/benchmark_guidance_tracer.py
 uv run python scripts/visualize_guidance_placement.py --scenarios all --out docs/guidance_viz/
 ```
 

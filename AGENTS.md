@@ -5,6 +5,7 @@
 - **Do not use `from __future__ import …`** — not needed on this project’s Python (3.12+). Never add `__future__` imports (including `annotations`).
 - If you remove `__future__` imports that were added by mistake, do not reintroduce them.
 - Prefer normal type hints (`X | None`, quoted forward refs like `"BuildGraphConfig"` only when required).
+- Import only on file top unless u have a good reason
 
 ## Native extensions
 

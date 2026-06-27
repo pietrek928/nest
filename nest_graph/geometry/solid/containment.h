@@ -122,42 +122,80 @@ inline bool cached_narrow_phase_intersect(
 }
 
 template <class VecType>
+inline bool boundaries_intersect(
+    const SolidGeometry<VecType>& poly_a,
+    const SolidGeometry<VecType>& poly_b
+) {
+    using Scalar = typename VecType::Scalar;
+    const Scalar touch_eps_sq = static_cast<Scalar>(1e-12);
+
+    for (std::size_t i = 0; i < poly_a.line_parts.size(); ++i) {
+        if (poly_a.line_parts[i].is_subtractive) continue;
+        const auto& circ_a = poly_a.line_parts[i].bounding_circle;
+
+        for (std::size_t j = 0; j < poly_b.line_parts.size(); ++j) {
+            if (poly_b.line_parts[j].is_subtractive) continue;
+            if (!circles_overlap(circ_a, poly_b.line_parts[j].bounding_circle)) continue;
+
+            const VecType* pts_a = poly_a.get_part_points(i);
+            const int n_a = poly_a.get_part_size(i);
+            const VecType* pts_b = poly_b.get_part_points(j);
+            const int n_b = poly_b.get_part_size(j);
+
+            for (int k = 0; k < std::max(1, n_a - 1); ++k) {
+                const VecType a0 = pts_a[k];
+                const VecType a1 = pts_a[std::min(k + 1, n_a - 1)];
+                for (int l = 0; l < std::max(1, n_b - 1); ++l) {
+                    const VecType b0 = pts_b[l];
+                    const VecType b1 = pts_b[std::min(l + 1, n_b - 1)];
+                    VecType pa;
+                    VecType pb;
+                    Scalar dsq = static_cast<Scalar>(0);
+                    closest_points_between_segments(a0, a1, b0, b1, pa, pb, dsq);
+                    if (dsq <= touch_eps_sq) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    return false;
+}
+
+template <class VecType>
 inline bool is_solid_fully_contained(
     const SolidGeometry<VecType>& inner,
     const SolidGeometry<VecType>& outer,
     std::vector<int>* optional_outer_cache = nullptr
 ) {
+    (void)optional_outer_cache;
     if (!global_bounding_circles_overlap(inner, outer)) return false;
 
-    const auto& outer_env = outer.get_bounding_circle();
-
+    bool any_inside = false;
     for (size_t i = 0; i < inner.line_parts.size(); ++i) {
         if (inner.line_parts[i].is_subtractive) continue;
 
-        const auto& inner_circ = inner.line_parts[i].bounding_circle;
-        if (!circles_overlap(inner_circ, outer_env)) return false;
-
         const VecType* inner_pts = inner.get_part_points(i);
         const int inner_n = inner.get_part_size(i);
+        if (inner_n <= 0) continue;
 
-        if (!is_point_inside_solid_space(inner_pts[0], outer)) return false;
+        for (int v = 0; v < inner_n; ++v) {
+            if (!is_point_inside_solid_space(inner_pts[v], outer)) {
+                return false;
+            }
+            any_inside = true;
+        }
 
-        for (size_t j = 0; j < outer.line_parts.size(); ++j) {
-            if (!circles_overlap(inner_circ, outer.line_parts[j].bounding_circle)) continue;
-
-            const VecType* outer_pts = outer.get_part_points(j);
-            const int outer_n = outer.get_part_size(j);
-
-            // Feed the persistent cache to the router
-            int dummy_cache = 0;
-            int& cache_ref = optional_outer_cache ? (*optional_outer_cache)[j] : dummy_cache;
-
-            if (cached_narrow_phase_intersect(inner_pts, inner_n, outer_pts, outer_n, cache_ref)) {
+        for (int e = 0; e < std::max(0, inner_n - 1); ++e) {
+            const VecType mid = (inner_pts[e] + inner_pts[e + 1]) * static_cast<typename VecType::Scalar>(0.5);
+            if (!is_point_inside_solid_space(mid, outer)) {
                 return false;
             }
         }
     }
-    return true;
+
+    if (!any_inside) return false;
+    return !boundaries_intersect(inner, outer);
 }
 
 template <class VecType>

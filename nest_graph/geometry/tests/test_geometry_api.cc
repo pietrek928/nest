@@ -161,6 +161,30 @@ TEST_CASE("Geometry API: footprint_inside donut hole", "[geometry_api][holes]") 
     REQUIRE_FALSE(solid_footprint_inside(in_hole, donut));
 }
 
+TEST_CASE("Geometry API: footprint_inside concave c_shape gap", "[geometry_api][holes]") {
+    SolidGeometry2 c_shape = polygon_from_ring({
+        {0, 0},
+        {10, 0},
+        {10, 2},
+        {2, 2},
+        {2, 8},
+        {10, 8},
+        {10, 10},
+        {0, 10},
+    });
+    SolidGeometry2 in_gap = make_box(5.0, 5.0, 1.0, 1.0);
+    SolidGeometry2 spans_gap = polygon_from_quad({
+        {1, 1},
+        {9, 1},
+        {9, 9},
+        {1, 9},
+    });
+    SolidGeometry2 in_leg = make_box(1.0, 1.0, 0.5, 0.5);
+    REQUIRE(solid_footprint_inside(in_leg, c_shape));
+    REQUIRE_FALSE(solid_footprint_inside(in_gap, c_shape));
+    REQUIRE_FALSE(solid_footprint_inside(spans_gap, c_shape));
+}
+
 TEST_CASE("Geometry API: footprint_inside_batch", "[geometry_api]") {
     SolidGeometry2 board = polygon_from_quad({
         {0, 0},

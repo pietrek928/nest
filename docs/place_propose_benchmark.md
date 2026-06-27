@@ -1,5 +1,7 @@
 # Place propose benchmark
 
+**Run date:** 2026-06-26. Seeds 0–9. Winner by mean composite: `place_inter_cluster` (5.871), `place_routed` (5.751).
+
 | preset | scenario | composite | graph_yield | graph_nodes |
 |--------|----------|-----------|-------------|-------------|
 | local_compact | border_gap | 3.838 | 1.000 | 40.0 |

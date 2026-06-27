@@ -8,6 +8,7 @@ from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .board import board_context_from_geometry
+from .config import ProposeConfig
 from .geometry import Geometry, GuidanceConfig, evaluate_local_placement
 
 
@@ -71,14 +72,11 @@ def _apply_guidance_scaling(
     )
 
 
-def guidance_config_for_scene(
+def _base_guidance_config(
     min_dist: float,
     *,
-    pt_push: Point | None = None,
     board_bounds: tuple[float, float, float, float] | None = None,
     epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
-    for_propose: bool = False,
-    border_focus: bool = False,
     max_propositions: int = 6,
     use_tight_packing: bool = False,
     use_corner_alignment: bool = True,
@@ -103,11 +101,56 @@ def guidance_config_for_scene(
         board_bounds,
         diversity_dist_ratio=diversity_dist_ratio,
     )
+    return cfg
+
+
+def guidance_kwargs_for_propose(propose_cfg: ProposeConfig | None) -> dict:
+    if propose_cfg is None:
+        return {
+            "max_propositions": 6,
+            "use_tight_packing": False,
+            "enable_grid_exploration": False,
+            "diversity_dist_ratio": 4.0,
+        }
+    return {
+        "max_propositions": propose_cfg.guidance_max_propositions,
+        "use_tight_packing": propose_cfg.guidance_use_tight_packing,
+        "use_corner_alignment": propose_cfg.guidance_use_corner_alignment,
+        "enable_grid_exploration": propose_cfg.guidance_enable_grid,
+        "diversity_dist_ratio": propose_cfg.guidance_diversity_dist_ratio,
+    }
+
+
+def guidance_config_for_scene(
+    min_dist: float,
+    *,
+    pt_push: Point | None = None,
+    board_bounds: tuple[float, float, float, float] | None = None,
+    epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+    for_propose: bool = False,
+    border_focus: bool = False,
+    max_propositions: int = 6,
+    use_tight_packing: bool = False,
+    use_corner_alignment: bool = True,
+    enable_grid_exploration: bool = False,
+    diversity_dist_ratio: float = 4.0,
+) -> GuidanceConfig:
+    cfg = _base_guidance_config(
+        min_dist,
+        board_bounds=board_bounds,
+        epsilon_ratio=epsilon_ratio,
+        max_propositions=max_propositions,
+        use_tight_packing=use_tight_packing,
+        use_corner_alignment=use_corner_alignment,
+        enable_grid_exploration=enable_grid_exploration,
+        diversity_dist_ratio=diversity_dist_ratio,
+    )
     if for_propose and pt_push is not None:
         if border_focus:
             cfg.use_gravity = True
             cfg.use_target_attractor = False
             cfg.gravity_vector = (-1.0, -1.0)
+            cfg.use_board_edge_cast = True
         else:
             cfg.use_target_attractor = True
             cfg.use_gravity = False
@@ -185,20 +228,15 @@ def guidance_config_for_board_edge_anchor(
     diversity_dist_ratio: float = 4.0,
 ) -> GuidanceConfig:
     """Per-edge-anchor cast config: gravity pulls toward nest outline, target on anchor."""
-    eps = placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
-    cfg = GuidanceConfig()
-    cfg.minimum_placing_distance = min_dist + eps
-    cfg.search_radius = max(
-        _search_radius_for_bounds(board_bounds),
-        float(cfg.search_radius),
-    )
-    cfg.max_propositions = max_propositions
-    cfg.use_tight_packing = use_tight_packing
-    cfg.use_corner_alignment = use_corner_alignment
-    cfg.use_hole_seeking = True
-    cfg.enable_grid_exploration = enable_grid_exploration
-    _apply_guidance_scaling(
-        cfg, min_dist, board_bounds, diversity_dist_ratio=diversity_dist_ratio,
+    cfg = _base_guidance_config(
+        min_dist,
+        board_bounds=board_bounds,
+        epsilon_ratio=epsilon_ratio,
+        max_propositions=max_propositions,
+        use_tight_packing=use_tight_packing,
+        use_corner_alignment=use_corner_alignment,
+        enable_grid_exploration=enable_grid_exploration,
+        diversity_dist_ratio=diversity_dist_ratio,
     )
     ix, iy = inward
     ilen = math.hypot(ix, iy)
@@ -306,6 +344,45 @@ class PlacementScene:
             0, self.all_geometries(placed), (float(xy[0]), float(xy[1])), config
         )
 
+    def is_valid(
+        self,
+        placed: Geometry,
+        xy: Tuple[float, float],
+        min_dist: float,
+        config: GuidanceConfig,
+        *,
+        epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+        skip_footprint: bool = False,
+    ) -> bool:
+        if not skip_footprint and not placement_footprint_inside_board(placed, self.board_geom):
+            return False
+        g = self.guidance(placed, xy, config)
+        if g.is_penetrating:
+            return False
+        if min_dist <= 0.0:
+            return True
+        margin = min_dist + placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
+        return float(g.clearance) >= margin
+
+    def valid_at(
+        self,
+        coords: Tuple[float, float, float],
+        min_dist: float,
+        config: GuidanceConfig,
+        *,
+        epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
+        skip_footprint: bool = False,
+    ) -> bool:
+        placed = self.placed_at(coords)
+        return self.is_valid(
+            placed,
+            (coords[0], coords[1]),
+            min_dist,
+            config,
+            epsilon_ratio=epsilon_ratio,
+            skip_footprint=skip_footprint,
+        )
+
 
 def build_placement_scene(
     board: BaseGeometry,
@@ -350,8 +427,8 @@ def board_placement_valid(
             min_dist, board_bounds=bounds, epsilon_ratio=epsilon_ratio
         )
     cx, cy = placed.center()
-    return is_valid_placement(
-        scene, placed, (cx, cy), min_dist, config, epsilon_ratio=epsilon_ratio
+    return scene.is_valid(
+        placed, (cx, cy), min_dist, config, epsilon_ratio=epsilon_ratio
     )
 
 
@@ -365,15 +442,14 @@ def is_valid_placement(
     epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
     skip_footprint: bool = False,
 ) -> bool:
-    if not skip_footprint and not placement_footprint_inside_board(placed, scene.board_geom):
-        return False
-    g = scene.guidance(placed, xy, config)
-    if g.is_penetrating:
-        return False
-    if min_dist <= 0.0:
-        return True
-    margin = min_dist + placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
-    return float(g.clearance) >= margin
+    return scene.is_valid(
+        placed,
+        xy,
+        min_dist,
+        config,
+        epsilon_ratio=epsilon_ratio,
+        skip_footprint=skip_footprint,
+    )
 
 
 def placement_ok_for_outline(

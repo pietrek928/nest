@@ -1,39 +1,22 @@
-import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Tuple
 
+import math
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
+from shapely import Point, Polygon
 from shapely.affinity import rotate, translate
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
-    best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
-    tiered_propositions,
-)
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
+from nest_graph.config import ProposeConfig
+from nest_graph.utils import get_shape_exteriors, transform_poly
 
 from nest_graph.propose.context import _placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placement_common import (
     _angles_for_edge_contact,
-    _edge_inward_at_point,
     _exterior_anchor_points,
     _finalize_edge_propositions,
     _inward_at_contact,
-    _propose_valid_at,
+    _outline_ring_geom,
     _select_stratified_by_segment,
     _snap_coords_along_exterior,
 )
@@ -79,6 +62,7 @@ def _board_edge_snap_seeds(
                 min_dist,
                 container=sheet,
                 propose_geom=propose_geom,
+                boundary_ring_geom=propose_geom.boundary_ring_geom,
             )
             if coords is None:
                 continue
@@ -91,7 +75,7 @@ def _board_edge_snap_seeds(
                     for base_geom in propose_geom.base_geoms
                 ):
                     continue
-            if not _propose_valid_at(coords, propose_geom, pt_push):
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
             err = _placement_contact_error(placed_geom, sheet, min_dist, None)
             _add_seed(coords, snap_contact, inward, err)
@@ -214,9 +198,14 @@ def propose_placements_group_fit(
     propositions: list[dict] = []
     anchor_pts = _exterior_anchor_points(focal_shape, samples_per_edge)
     stratify_boundary = focal_shape if isinstance(focal_shape, Polygon) else sheet
+    focal_ring_geom = (
+        _outline_ring_geom(focal_shape) if propose_geom is not None else None
+    )
 
     for contact in anchor_pts:
         snap_contact, inward = _inward_at_contact(focal_shape, contact)
+        # focal_shape is a solid obstacle: place the part against its outside.
+        inward = (-inward[0], -inward[1])
         for angle in _angles_for_edge_contact(focal_shape, contact, num_angles):
             coords = _snap_coords_along_exterior(
                 shape_to_place,
@@ -227,6 +216,7 @@ def propose_placements_group_fit(
                 min_dist,
                 container=sheet,
                 propose_geom=propose_geom,
+                boundary_ring_geom=focal_ring_geom,
             )
             if coords is None:
                 continue
@@ -242,7 +232,7 @@ def propose_placements_group_fit(
                         for base_geom in propose_geom.base_geoms
                     ):
                         continue
-                if pt_push is not None and not _propose_valid_at(coords, propose_geom, pt_push):
+                if pt_push is not None and not propose_geom.valid_at(coords, pt_push):
                     continue
                 err = _placement_contact_error(placed_geom, sheet, min_dist, focal_shape)
             else:
@@ -337,7 +327,7 @@ def propose_placements_sheet_corners(
                     continue
 
                 coords = (dx, dy, float(angle))
-                if not _propose_valid_at(coords, propose_geom, pt_push):
+                if not propose_geom.valid_at(coords, pt_push):
                     continue
 
                 propositions.append({
@@ -375,7 +365,6 @@ def propose_placements_sheet_edge(
 ) -> List[Tuple[float, float, float]]:
     """Slide the part along the exact perimeter of the safe zone."""
     propositions: list[dict] = []
-    obstacle = base_shape if base_shape is not None else Polygon()
 
     safe_halo = sheet.buffer(-min_dist)
     if safe_halo.is_empty:
@@ -383,7 +372,6 @@ def propose_placements_sheet_edge(
 
     halo_pts = _exterior_anchor_points(safe_halo, samples_per_edge)
 
-    ring_geom = propose_geom.boundary_ring_geom
     for h_pt in halo_pts:
         for angle in _angles_for_edge_contact(safe_halo, h_pt, num_angles):
             rotated = propose_geom.part.rotate(float(angle))
@@ -409,7 +397,7 @@ def propose_placements_sheet_edge(
                     ):
                         continue
                 coords = (dx, dy, float(angle))
-                if not _propose_valid_at(coords, propose_geom, pt_push):
+                if not propose_geom.valid_at(coords, pt_push):
                     continue
                 err = _placement_contact_error(placed, sheet, min_dist, None)
                 propositions.append({"coords": coords, "anchor": h_pt, "cost": err})
@@ -425,6 +413,8 @@ def propose_placements_ribbon_free(
     *,
     num_angles: int = 8,
     top_n: int = 8,
+    propose_geom: Optional[ProposeGeometry] = None,
+    pt_push: Optional[Point] = None,
 ) -> List[Tuple[float, float, float]]:
     """Seed placements along the gap ribbon inside the free region."""
     free = placement_free_region(sheet, base_shape, min_dist)
@@ -443,11 +433,22 @@ def propose_placements_ribbon_free(
         return []
 
     base_centroid = free.centroid
+    base_cx, base_cy = float(base_centroid.x), float(base_centroid.y)
     propositions: list[dict] = []
     angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
     for angle in angles:
-        rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
         for pt in seeds:
+            coords = (float(pt.x), float(pt.y), float(angle))
+            if propose_geom is not None and pt_push is not None:
+                if not propose_geom.valid_at(coords, pt_push):
+                    continue
+                propositions.append({
+                    "coords": coords,
+                    "cost": math.hypot(pt.x - base_cx, pt.y - base_cy),
+                })
+                continue
+
+            rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
             placed_shape = translate(rotated_shape, pt.x, pt.y)
             if not free.contains(placed_shape):
                 continue
@@ -457,7 +458,7 @@ def propose_placements_ribbon_free(
                 if base_shape.distance(placed_shape) < min_dist - 1e-6:
                     continue
             propositions.append({
-                "coords": (pt.x, pt.y, angle),
+                "coords": coords,
                 "cost": float(pt.distance(base_centroid)),
             })
     propositions.sort(key=lambda x: x["cost"])

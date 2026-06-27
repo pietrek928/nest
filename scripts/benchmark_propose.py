@@ -68,6 +68,17 @@ PROPOSE_BENCHMARK_PRESETS = {
         use_neighbor_slide=False,
         use_ribbon_seeds=False,
     ),
+    "cast_first_quality": shipped_propose_config(
+        use_guidance_propositions=True,
+        guidance_use_tight_packing=True,
+        guidance_enable_grid=True,
+        guidance_cast_refine_top_k=16,
+        cast_rank_boost=0.5,
+        cast_squeeze_top_k=8,
+        cast_squeeze_passes=1,
+        trim_candidates_by_clearance=True,
+        use_full_packed_obstacle=True,
+    ),
     "free_clearance": _benchmark_propose_cfg(
         candidate_pool=12,
         trim_candidates_by_clearance=False,
@@ -88,21 +99,22 @@ def _format_table(rows: list[ProposeBenchmarkMetrics]) -> str:
         by_key.setdefault((r.preset, r.scenario), []).append(r)
 
     lines = [
-        "| preset | scenario | valid | contact_min | clearance_min | kiss_frac | pool | final | graph+ | time_s |",
-        "|--------|----------|-------|-------------|---------------|-----------|------|-------|--------|--------|",
+        "| preset | scenario | valid | contact_min | clearance_min | kiss_frac | prop_yield | pool | final | graph+ | time_s |",
+        "|--------|----------|-------|-------------|---------------|-----------|------------|------|-------|--------|--------|",
     ]
     for (preset, scenario), agg in sorted(by_key.items()):
         valid = float(np.mean([a.valid_count for a in agg]))
         cd_min = float(np.mean([a.contact_dist_min for a in agg]))
         c_min = float(np.mean([a.top_clearance_min for a in agg]))
         kiss = float(np.mean([a.kiss_fraction for a in agg]))
+        prop_y = float(np.mean([a.proposal_yield for a in agg]))
         pool = float(np.mean([a.raw_pool_size for a in agg]))
         final = float(np.mean([a.final_count for a in agg]))
         delta = float(np.mean([a.graph_nodes_vs_random for a in agg]))
         t = float(np.mean([a.propose_time_s for a in agg]))
         lines.append(
             f"| {preset} | {scenario} | {valid:.1f} | {cd_min:.4f} | {c_min:.4f} | "
-            f"{kiss:.2f} | {pool:.0f} | {final:.1f} | {delta:+.1f} | {t:.3f} |"
+            f"{kiss:.2f} | {prop_y:.2f} | {pool:.0f} | {final:.1f} | {delta:+.1f} | {t:.3f} |"
         )
     return "\n".join(lines)
 

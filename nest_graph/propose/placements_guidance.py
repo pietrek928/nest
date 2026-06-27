@@ -1,32 +1,20 @@
 import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Sequence, Tuple
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
-from shapely.affinity import rotate, translate
+from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
+from nest_graph.config import ProposeConfig
 from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
-    best_proposition,
-    build_placement_scene,
     guidance_config_for_board_edge_anchor,
     guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
+    guidance_kwargs_for_propose,
     proposition_translation,
     tiered_propositions,
 )
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
 
-from nest_graph.propose.geometry import ProposeGeometry, _guidance_kwargs
+from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_edge import sample_placement_points_ribbon
 
 _CAST_MOVE_TAGS = (
@@ -83,7 +71,7 @@ def _merged_guidance_propositions(
         )
         return _sorted_guidance_propositions(g), g
 
-    gkw = _guidance_kwargs(propose_geom._propose_cfg)
+    gkw = guidance_kwargs_for_propose(propose_geom._propose_cfg)
     tight_cfg = guidance_config_for_propose(
         pt_push,
         min_dist=propose_geom._min_dist,
@@ -195,14 +183,14 @@ def propose_placements_guidance_walk(
                         delta += 2 * np.pi
                     ntheta = theta + delta * (1.0 if _is_cast_move(prop.move_type or "") else 0.2)
                 trial = propose_geom.placed_at((nx, ny, ntheta))
-                if propose_geom.is_valid_placement(trial, pt_push, (nx, ny)):
+                if propose_geom.valid(trial, pt_push, (nx, ny)):
                     x, y, theta = nx, ny, ntheta
                     moved = True
                     break
             if not moved:
                 break
         placed = propose_geom.placed_at((x, y, theta))
-        if propose_geom.is_valid_placement(placed, pt_push, (x, y)):
+        if propose_geom.valid(placed, pt_push, (x, y)):
             key = (round(x, 3), round(y, 3), round(theta, 3))
             if key not in seen:
                 seen.add(key)
@@ -292,7 +280,7 @@ def propose_placements_guidance_cast(
             if key in seen:
                 continue
             trial = propose_geom.placed_at(candidate)
-            if propose_geom.is_valid_placement(trial, pt_push, (candidate[0], candidate[1])):
+            if propose_geom.valid(trial, pt_push, (candidate[0], candidate[1])):
                 seen.add(key)
                 out.append(candidate)
     return out
@@ -358,7 +346,7 @@ def propose_placements_board_edge_guidance_cast(
             if key in seen:
                 continue
             trial = propose_geom.placed_at(candidate)
-            if propose_geom.is_valid_placement(trial, pt_push, (candidate[0], candidate[1])):
+            if propose_geom.valid(trial, pt_push, (candidate[0], candidate[1])):
                 seen.add(key)
                 out.append(candidate)
     return out

@@ -1,31 +1,16 @@
 import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Tuple
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
+from shapely import LineString, LinearRing, MultiLineString, MultiPoint, Point, Polygon
 from shapely.affinity import rotate, translate
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
+from shapely.ops import voronoi_diagram
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
-    best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
-    tiered_propositions,
-)
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
+from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import search_region_for_placement
+from nest_graph.propose.geometry import ProposeGeometry
 
 def densify_points(geometry, distance):
     """Adds points along the perimeter of the shape for a better Voronoi map."""
@@ -58,6 +43,8 @@ def propose_placements_voronoi(
     max_sites: int = 64,
     focal_shape: Optional[BaseGeometry] = None,
     border_focus: bool = False,
+    propose_geom: Optional[ProposeGeometry] = None,
+    pt_push: Optional[Point] = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements using Voronoi vertices as candidate centers.
@@ -98,15 +85,23 @@ def propose_placements_voronoi(
         idx = np.linspace(0, len(candidate_points) - 1, max_sites, dtype=int)
         candidate_points = [candidate_points[i] for i in idx]
 
-    # 3. Normalize the shape to place
-    orig_centroid = shape_to_place.centroid
-    centered_shape = translate(shape_to_place, -orig_centroid.x, -orig_centroid.y)
-
     angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
+    attract_x, attract_y = float(attract.x), float(attract.y)
 
-    # 4. Evaluate candidates
     for pt in candidate_points:
         for angle in angles:
+            coords = (float(pt.x), float(pt.y), float(angle))
+            if propose_geom is not None and pt_push is not None:
+                if not propose_geom.valid_at(coords, pt_push):
+                    continue
+                propositions.append({
+                    "coords": coords,
+                    "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
+                })
+                continue
+
+            orig_centroid = shape_to_place.centroid
+            centered_shape = translate(shape_to_place, -orig_centroid.x, -orig_centroid.y)
             rotated_shape = rotate(centered_shape, angle, origin=(0, 0), use_radians=True)
             placed_shape = translate(rotated_shape, pt.x, pt.y)
 
@@ -115,7 +110,7 @@ def propose_placements_voronoi(
                 continue
 
             propositions.append({
-                "coords": (pt.x, pt.y, angle),
+                "coords": coords,
                 "cost": float(pt.distance(attract)),
             })
 
@@ -136,6 +131,8 @@ def propose_placements_raycasting(
     anchor_stride: int = 2,
     focal_shape: Optional[BaseGeometry] = None,
     border_focus: bool = False,
+    propose_geom: Optional[ProposeGeometry] = None,
+    pt_push: Optional[Point] = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements by casting rays from boundary vertices into the interior.
@@ -160,6 +157,8 @@ def propose_placements_raycasting(
         if focal_shape is not None and not focal_shape.is_empty
         else region.centroid
     )
+
+    attract_x, attract_y = float(attract.x), float(attract.y)
 
     safe_base = region.buffer(-min_dist)
     if safe_base.is_empty:
@@ -202,12 +201,22 @@ def propose_placements_raycasting(
 
             for pt in coords_to_test:
                 for p_angle in placement_angles:
+                    coords = (float(pt.x), float(pt.y), float(p_angle))
+                    if propose_geom is not None and pt_push is not None:
+                        if not propose_geom.valid_at(coords, pt_push):
+                            continue
+                        propositions.append({
+                            "coords": coords,
+                            "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
+                        })
+                        continue
+
                     rotated_shape = rotate(shape_to_place, p_angle, origin=(0, 0), use_radians=True)
                     placed_shape = translate(rotated_shape, pt.x, pt.y)
 
                     if safe_base.contains(placed_shape):
                         propositions.append({
-                            "coords": (pt.x, pt.y, p_angle),
+                            "coords": coords,
                             "cost": float(pt.distance(attract)),
                         })
 

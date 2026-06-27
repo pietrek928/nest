@@ -25,7 +25,8 @@ inline void append_poly_parts_to_sweep(
     const VecType& sweep_axis,
     typename VecType::Scalar axis_len_sqrt,
     std::vector<PartSweepElement<VecType>>& out_elements,
-    typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0)
+    typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0)
 ) {
     using Scalar = typename VecType::Scalar;
     for (size_t part = 0; part < poly.line_parts.size(); ++part) {
@@ -34,7 +35,7 @@ inline void append_poly_parts_to_sweep(
         const auto& bounds = poly.line_parts[part].bounding_circle;
         const Scalar proj = bounds.center().dp(sweep_axis);
         const Scalar r = circle_radius(bounds) * axis_len_sqrt;
-        const Scalar margin = r * aura_multiplier;
+        const Scalar margin = (r * aura_multiplier) + distance_margin;
         out_elements.push_back({
             poly_idx, static_cast<int>(part), group_id,
             (proj - r) - margin, (proj + r) + margin,
@@ -276,6 +277,7 @@ struct ComplexDistanceResult {
     Scalar distance_sq;
     Scalar penetration_sq;
     VecType mtv;
+    VecType closest_normal{};
 };
 
 template <class VecType>
@@ -299,6 +301,7 @@ template <class VecType, class Tracer = DefaultTracer>
 inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
     std::vector<PartSweepElement<VecType>>& elements,
     typename VecType::Scalar aura_multiplier,
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     SweepMode mode = SweepMode::Monopartite,
     int bipartite_set_a_size = -1,
     Tracer* tracer = nullptr
@@ -335,7 +338,8 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             const Scalar rB = circle_radius(circleB);
             const Scalar r_sum = rA + rB;
             const Scalar center_dist_sq = circle_center_distance_sq(circleA, circleB);
-            const Scalar dynamic_threshold = r_sum + (rA * aura_multiplier) + (rB * aura_multiplier);
+            const Scalar dynamic_threshold =
+                r_sum + (rA * aura_multiplier) + (rB * aura_multiplier) + distance_margin;
 
             if (center_dist_sq > dynamic_threshold * dynamic_threshold) {
                 if constexpr (!std::is_same_v<Tracer, NullTracer>) if (tracer) tracer->count_circle_prune();
@@ -420,7 +424,8 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             pen_res.intersect,
             pen_res.intersect ? 0 : std::numeric_limits<Scalar>::max(),
             pen_res.intersect ? pen_res.penetration_sq : 0,
-            pen_res.intersect ? pen_res.mtv : VecType{}
+            pen_res.intersect ? pen_res.mtv : VecType{},
+            VecType{}
         };
 
         if (!pen_res.intersect) {
@@ -432,6 +437,9 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                 current_eval.distance_sq = 0;
             } else {
                 current_eval.distance_sq = dist_res.distance_sq;
+                VecType pA = ptsA[dist_res.it1];
+                VecType pB = ptsB[dist_res.it2];
+                current_eval.closest_normal = pA - pB;
             }
         }
 

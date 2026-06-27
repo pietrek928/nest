@@ -19,6 +19,7 @@ from nest_graph.build_graph import (
     _late_border_saturation_active,
     _make_initial_rule_sets,
     _propose_rules_for_iter,
+    _transform_row_key,
     active_rule_set,
     apply_dfs_refinement,
     improve_rules,
@@ -111,6 +112,18 @@ def _propose_preset(name: str, **overrides: Any) -> ProposeConfig:
             "place_profiles_enabled": True,
             "late_border_saturation": True,
         },
+        "cast_first_quality": {
+            **shipped,
+            "use_guidance_propositions": True,
+            "guidance_use_tight_packing": True,
+            "guidance_enable_grid": True,
+            "guidance_cast_refine_top_k": 16,
+            "cast_rank_boost": 0.5,
+            "cast_squeeze_top_k": 8,
+            "cast_squeeze_passes": 1,
+            "trim_candidates_by_clearance": True,
+            "use_full_packed_obstacle": True,
+        },
     }
     base = dict(presets[name])
     base.update(overrides)
@@ -119,6 +132,7 @@ def _propose_preset(name: str, **overrides: Any) -> ProposeConfig:
 
 PROPOSE_PRESET_NAMES = (
     "shipped_prev", "shipped", "density_heavy", "local_compact",
+    "cast_first_quality",
     "place_routed",
     "rule_propose", "rule_propose_repulsor",
 )
@@ -134,6 +148,7 @@ class PipelineRow:
     graph_nodes_final: int
     score_sum_final: float
     border_min_final: float
+    proposal_yield_final: float
     time_s: float
 
 
@@ -192,6 +207,7 @@ def run_pipeline(
     parts_final = 0
     graph_nodes_final = 0
     score_sum_final = 0.0
+    proposal_yield_final = 0.0
     selected_polys: list[int] = []
     polys: list = []
 
@@ -221,11 +237,21 @@ def run_pipeline(
             epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
         )
         prop_n = int(propose_stats.get("proposal_count", 0))
+        proposal_keys = propose_stats.get("proposal_keys", {})
+        proposal_nodes = sum(
+            1
+            for gid, t in zip(group_id, transform, strict=True)
+            if _transform_row_key(np.asarray(t, dtype=np.float64))
+            in proposal_keys.get(gid, set())
+        )
+        propose_stats["proposal_nodes"] = proposal_nodes
         if prop_n > 0 and cfg.propose.place_profiles_enabled:
             graph_yield = min(1.0, len(polys) / prop_n)
+            proposal_yield = min(1.0, proposal_nodes / prop_n)
             propose_feedback.record_iteration(
                 proposer_counts=proposer_counts,
                 graph_yield=graph_yield,
+                proposal_yield=proposal_yield,
             )
             if propose_feedback.proposer_pool_scales:
                 cfg = cfg.model_copy(update={
@@ -267,6 +293,8 @@ def run_pipeline(
             )
         parts_final = len(selected_polys)
         graph_nodes_final = len(polys)
+        if prop_n > 0:
+            proposal_yield_final = min(1.0, proposal_nodes / prop_n)
 
         selected_t = ([], [])
         for i in selected_polys:
@@ -294,6 +322,7 @@ def run_pipeline(
         graph_nodes_final=graph_nodes_final,
         score_sum_final=score_sum_final,
         border_min_final=border_min,
+        proposal_yield_final=proposal_yield_final,
         time_s=time.perf_counter() - t0,
     )
 
@@ -328,18 +357,20 @@ def _aggregate_table(rows: list[PipelineRow]) -> str:
         keys.setdefault((r.propose, r.dfs_mode), []).append(r)
 
     lines = [
-        "| propose | dfs_mode | parts_final | graph_nodes | border_err_min | score_sum | time_s |",
-        "|---------|----------|-------------|-------------|----------------|-----------|--------|",
+        "| propose | dfs_mode | parts_final | graph_nodes | border_err_min | prop_yield | score_sum | time_s |",
+        "|---------|----------|-------------|-------------|----------------|------------|-----------|--------|",
     ]
     ranked: list[tuple[float, str, str]] = []
     for (propose, dfs_mode), group in sorted(keys.items()):
         parts = float(np.mean([g.parts_final for g in group]))
         nodes = float(np.mean([g.graph_nodes_final for g in group]))
         border = float(np.nanmean([g.border_min_final for g in group]))
+        prop_y = float(np.mean([g.proposal_yield_final for g in group]))
         score = float(np.mean([g.score_sum_final for g in group]))
         t = float(np.mean([g.time_s for g in group]))
         lines.append(
-            f"| {propose} | {dfs_mode} | {parts:.1f} | {nodes:.0f} | {border:.4f} | {score:.2f} | {t:.2f} |",
+            f"| {propose} | {dfs_mode} | {parts:.1f} | {nodes:.0f} | {border:.4f} | "
+            f"{prop_y:.2f} | {score:.2f} | {t:.2f} |",
         )
         ranked.append((parts, propose, dfs_mode))
     lines.append("")

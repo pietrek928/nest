@@ -1,29 +1,12 @@
-import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import List, Optional, Tuple
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon
-from shapely.affinity import rotate, translate
+from shapely import MultiPolygon, Point, Polygon
+from shapely.affinity import rotate
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, polylabel, unary_union, voronoi_diagram
+from shapely.ops import polylabel
 
-from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
-from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
-    PLACEMENT_EPSILON_RATIO,
-    best_proposition,
-    build_placement_scene,
-    guidance_config_for_propose,
-    guidance_config_for_scene,
-    guidance_ray_direction_candidates,
-    is_valid_placement,
-    placement_footprint_inside_board,
-    footprints_inside_board,
-    proposition_translation,
-    tiered_propositions,
-)
-from nest_graph.utils import get_shape_exteriors, get_shape_polygons_coords, transform_poly
+from nest_graph.utils import get_shape_exteriors, transform_poly
 
 from nest_graph.propose.context import placement_free_region, search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry
@@ -35,8 +18,8 @@ from nest_graph.propose.placement_common import (
     _obstacle_parts,
     _perimeter_ring_vertices,
     _placement_safe_zone,
-    _propose_valid_at,
     _slide_toward_obstacle,
+    resolve_placement_angles,
 )
 
 _BOTTOM_LEFT_VERTICES_PER_ANGLE = 8
@@ -95,6 +78,7 @@ def propose_placements_perimeter_walk(
     border_focus: bool,
     num_angles: int,
     top_n: int,
+    placement_angles: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Trace the safe-zone boundary for kiss placements against walls or neighbors."""
     if base_shape is None:
@@ -107,7 +91,7 @@ def propose_placements_perimeter_walk(
         return []
 
     propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+    angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
         rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
@@ -121,13 +105,16 @@ def propose_placements_perimeter_walk(
                 dx = px - rc.x
                 dy = py - rc.y
                 coords = (dx, dy, float(angle))
-                if not _propose_valid_at(coords, propose_geom, pt_push):
+                if not propose_geom.valid_at(coords, pt_push):
                     continue
-                placed = transform_poly(shape_to_place, coords)
-                if not base_shape.is_empty:
-                    score = float(base_shape.distance(placed))
+                placed_geom = propose_geom.placed_at(coords)
+                if propose_geom.base_geoms:
+                    score = min(
+                        placed_geom.distance(base_geom)
+                        for base_geom in propose_geom.base_geoms
+                    )
                 else:
-                    score = float(placed.distance(sheet.exterior))
+                    score = placed_geom.standoff_distance(propose_geom.boundary_ring_geom)
                 propositions.append({"coords": coords, "cost": score})
 
     return _finalize_placement_propositions(propositions, top_n)
@@ -143,6 +130,7 @@ def propose_placements_neighbor_slide(
     pt_push: Point,
     num_angles: int,
     top_n: int,
+    placement_angles: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Slide toward each packed part along the contact normal until min_dist clearance."""
     if base_shape is None or base_shape.is_empty:
@@ -153,7 +141,7 @@ def propose_placements_neighbor_slide(
         return []
 
     propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+    angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
         for obstacle in obstacles:
@@ -167,7 +155,7 @@ def propose_placements_neighbor_slide(
             )
             if coords is None:
                 continue
-            if not _propose_valid_at(coords, propose_geom, pt_push):
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
             placed_geom = propose_geom.placed_at(coords)
             score = min(
@@ -209,7 +197,7 @@ def propose_placements_nfp_vertices(
                 dx = px - rc.x
                 dy = py - rc.y
                 coords = (dx, dy, float(angle))
-                if not _propose_valid_at(coords, propose_geom, pt_push):
+                if not propose_geom.valid_at(coords, pt_push):
                     continue
                 placed = transform_poly(shape_to_place, coords)
                 if not base_shape.is_empty:
@@ -252,11 +240,9 @@ def propose_placements_axis_push(
 
         for direction in CARDINAL_DIRECTIONS:
             pushed = _axis_push_from_seed(
-                rotated,
                 seed_dx,
                 seed_dy,
                 direction,
-                sheet,
                 obstacle_geom,
                 min_dist,
                 propose_geom=propose_geom,
@@ -266,7 +252,7 @@ def propose_placements_axis_push(
                 continue
             dx, dy = pushed
             coords = (dx, dy, float(angle))
-            if not _propose_valid_at(coords, propose_geom, pt_push):
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
             placed = transform_poly(shape_to_place, coords)
             score = float(base_shape.distance(placed))
@@ -320,7 +306,7 @@ def propose_placements_bottom_left(
             dx = px - rc.x
             dy = py - rc.y
             coords = (dx, dy, float(angle))
-            if not _propose_valid_at(coords, propose_geom, pt_push):
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
             placed = transform_poly(shape_to_place, coords)
             bl_key = _bottom_left_sort_key(px, py)
@@ -347,6 +333,7 @@ def propose_placements_erosion(
     focal_shape: Optional[BaseGeometry],
     num_angles: int,
     top_n: int,
+    placement_angles: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Polylabel seeds in large voids; perimeter walk handles edge kissing."""
     if base_shape is None:
@@ -364,7 +351,7 @@ def propose_placements_erosion(
         else region.centroid
     )
     propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
+    angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
         rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
@@ -382,7 +369,7 @@ def propose_placements_erosion(
 
         for pt in candidate_points:
             coords = (float(pt.x), float(pt.y), float(angle))
-            if not _propose_valid_at(coords, propose_geom, pt_push):
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
             propositions.append({
                 "coords": coords,

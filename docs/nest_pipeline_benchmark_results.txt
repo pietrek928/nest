@@ -1,11 +1,15 @@
-# Nest pipeline benchmark 2026-06-12 20:36
-# seeds=[0, 1, 2] iters=2
+# Nest pipeline benchmark 2026-06-26 11:57
+# seeds=[0, 1, 2, 3, 4] iters=3
 
-| propose | dfs_mode | parts_final | graph_nodes | border_err_min | score_sum | time_s |
-|---------|----------|-------------|-------------|----------------|-----------|--------|
-| density_heavy | merged_loose_tight | 49.0 | 1770 | 0.0003 | 6.09 | 99.07 |
-| place_routed | merged_loose_tight | 49.7 | 1740 | 0.0001 | 5.65 | 83.00 |
+| propose | dfs_mode | parts_final | graph_nodes | border_err_min | prop_yield | score_sum | time_s |
+|---------|----------|-------------|-------------|----------------|------------|-----------|--------|
+| cast_first_quality | merged_loose_tight | 54.0 | 1855 | 0.0001 | 0.00 | 7.00 | 591.83 |
+| local_compact | merged_loose_tight | 55.2 | 1860 | 0.0000 | 0.00 | 7.05 | 406.97 |
+| place_routed | merged_loose_tight | 55.4 | 1838 | 0.0001 | 0.00 | 7.75 | 389.15 |
+| shipped | merged_loose_tight | 54.4 | 1899 | 0.0001 | 0.00 | 6.65 | 674.85 |
 
 ## Ranking by mean parts_final
-- **49.7** — `place_routed` + `merged_loose_tight`
-- **49.0** — `density_heavy` + `merged_loose_tight`
+- **55.4** — `place_routed` + `merged_loose_tight`
+- **55.2** — `local_compact` + `merged_loose_tight`
+- **54.4** — `shipped` + `merged_loose_tight`
+- **54.0** — `cast_first_quality` + `merged_loose_tight`

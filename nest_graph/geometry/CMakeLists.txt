@@ -1,7 +1,15 @@
 nanobind_add_module(geometry
   bindings/module.cc
-  bindings/api.cc
+  bindings/bind_module.cc
+  bindings/types.cc
+  bindings/python_converters.cc
   bindings/shapely.cc
+  bindings/bind_geometry.cc
+  bindings/bind_guidance.cc
+  bindings/bind_distance.cc
+  bindings/bind_intersect.cc
+  bindings/bind_cast.cc
+  bindings/bind_batch.cc
 )
 target_link_libraries(geometry PRIVATE nest_graph_headers)
 target_include_directories(geometry PRIVATE

@@ -59,9 +59,10 @@ def ablation_propose_config(
         "use_contact_ranking": True,
         "use_contact_clearance_hybrid": True,
     }
-    if enabled_name == "guidance_propositions":
+    if enabled_name in ("guidance_cast_refine", "guidance_propositions"):
         on["use_guidance_propositions"] = True
         on["guidance_use_tight_packing"] = True
+        on["guidance_cast_refine_top_k"] = 16
     elif enabled_name in ("sheet_corners", "sheet_edge"):
         on["use_border_edge_seeds"] = True
         on["use_border_focus"] = True
@@ -202,6 +203,8 @@ class ProposeBenchmarkMetrics:
     squeeze_improved_count: int = 0
     squeeze_contact_delta: float = 0.0
     graph_yield: float = 0.0
+    proposal_yield: float = 0.0
+    proposal_nodes: int = 0
     unique_transforms: int = 0
     rule_score_top1: float = 0.0
     place_zone: str = ""
@@ -219,14 +222,15 @@ SCENARIO_WEIGHTS: dict[str, float] = {
 
 
 def composite_place_score(metrics: "ProposeBenchmarkMetrics") -> float:
-    """Graph-focused composite; higher is better."""
+    """Balanced composite; higher is better."""
     rule_norm = metrics.rule_score_top1
     return (
-        2.0 * metrics.graph_yield
-        + metrics.kiss_fraction
+        2.0 * metrics.proposal_yield
+        + 1.5 * metrics.graph_yield
+        + 2.0 * metrics.kiss_fraction
         - 3.0 * metrics.contact_dist_min
         + 0.5 * rule_norm
-        - 0.01 * metrics.propose_time_s
+        - 0.02 * metrics.propose_time_s
     )
 
 
@@ -271,7 +275,7 @@ def evaluate_proposal_coords(
     for coords in coords_list:
         placed_g = geom.placed_at(coords)
         placed = transform_poly(part_poly, coords)
-        if not geom.is_valid_placement(placed_g, pt_push, (coords[0], coords[1])):
+        if not geom.valid(placed_g, pt_push, (coords[0], coords[1])):
             continue
         valid += 1
         cd = _contact_distance(placed, base_shape)
@@ -378,6 +382,9 @@ def run_propose_with_metrics(
     proposals = np.asarray(final, dtype=np.float64) if final else np.zeros((0, 3))
     n_rand = 0
     n_both = 0
+    proposal_nodes = 0
+    graph_yield = 0.0
+    proposal_yield = 0.0
     if not skip_graph:
         from nest_graph.build_graph import make_polygon_graph
 
@@ -390,6 +397,14 @@ def run_propose_with_metrics(
         if proposals.shape[0] == 0:
             n_both = n_rand
         else:
+            graph_prop, _, _, _ = make_polygon_graph(
+                board, [(part_poly, proposals)], min_dist=min_dist, epsilon_ratio=eps,
+            )
+            proposal_nodes = len(graph_prop.elems)
+            prop_n = len(final)
+            if prop_n > 0:
+                proposal_yield = min(1.0, proposal_nodes / prop_n)
+                graph_yield = proposal_yield
             graph_both, _, _, _ = make_polygon_graph(
                 board, [(part_poly, np.concatenate([random_t, proposals]))],
                 min_dist=0.0,
@@ -413,6 +428,9 @@ def run_propose_with_metrics(
         propose_time_s=elapsed,
         per_proposer_counts=dict(proposer_counts),
         border_standoff_min=border_min,
+        graph_yield=graph_yield,
+        proposal_yield=proposal_yield,
+        proposal_nodes=proposal_nodes,
     )
 
 
@@ -690,13 +708,17 @@ def run_place_propose_metrics(
 
     graph_nodes = 0
     graph_yield = 0.0
+    proposal_nodes = 0
+    proposal_yield = 0.0
     rule_top1 = 0.0
     if proposals.shape[0] > 0:
         graph, _, _, _ = make_polygon_graph(
             board, [(part_poly, proposals)], min_dist=min_dist, epsilon_ratio=eps,
         )
         graph_nodes = len(graph.elems)
+        proposal_nodes = graph_nodes
         graph_yield = graph_nodes / proposals.shape[0]
+        proposal_yield = graph_yield
         if graph.elems:
             scores = score_elems(graph, PlacementRuleSet())
             rule_top1 = max(scores) if scores else 0.0
@@ -719,7 +741,9 @@ def run_place_propose_metrics(
         per_proposer_counts=dict(proposer_counts),
         border_standoff_min=border_min,
         graph_yield=graph_yield,
+        proposal_yield=proposal_yield,
+        proposal_nodes=proposal_nodes,
         unique_transforms=_unique_transform_count(final),
         rule_score_top1=rule_top1,
-        place_zone=zones_used[0] if zones_used else zone,
+        place_zone=zone,
     )

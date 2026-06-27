@@ -127,7 +127,7 @@ def _border_stats(
     valid = 0
     for coords in coords_list:
         placed = geom.placed_at(coords)
-        if not geom.is_valid_placement(placed, pt_push, (coords[0], coords[1])):
+        if not geom.valid(placed, pt_push, (coords[0], coords[1])):
             continue
         valid += 1
         placed_poly = transform_poly(part_poly, coords)

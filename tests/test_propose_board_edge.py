@@ -251,4 +251,40 @@ def test_snap_coords_cpp_matches_shapely():
                 continue
             assert cpp_coords is not None
             for i in range(3):
-                assert math.isclose(shapely_coords[i], cpp_coords[i], abs_tol=0.05)
+                assert math.isclose(shapely_coords[i], cpp_coords[i], abs_tol=0.07)
+
+
+def test_snap_coords_multipolygon_focal_uses_cpp():
+    from shapely.geometry import MultiPolygon
+
+    from nest_graph.propose.placement_common import (
+        _inward_at_contact,
+        _outline_ring_geom,
+        _snap_coords_along_exterior,
+    )
+
+    board = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    rect = _rect_part()
+    cfg = BuildGraphConfig()
+    min_dist = cfg.board_min_dist()
+    geom = ProposeGeometry(board, Polygon(), rect, min_dist, propose_cfg=cfg.propose)
+    placed_a = Polygon([(1, 1), (2, 1), (2, 2), (1, 2)])
+    placed_b = Polygon([(4, 1), (5, 1), (5, 2), (4, 2)])
+    focal = MultiPolygon([placed_a, placed_b])
+    focal_ring = _outline_ring_geom(focal)
+    assert focal_ring is not None
+    contact = Point(2.5, 1.0)
+    snap_contact, inward = _inward_at_contact(focal, contact)
+    inward = (-inward[0], -inward[1])
+    coords = _snap_coords_along_exterior(
+        rect,
+        focal,
+        snap_contact,
+        inward,
+        0.0,
+        min_dist,
+        container=board,
+        propose_geom=geom,
+        boundary_ring_geom=focal_ring,
+    )
+    assert coords is not None

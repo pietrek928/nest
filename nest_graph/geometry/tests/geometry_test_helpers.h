@@ -41,6 +41,34 @@ inline PolyTestSolidGeometry2 polygon_from_quad(
     return poly;
 }
 
+// Concave or arbitrary closed ring: boundary ring + convex decomposition.
+inline PolyTestSolidGeometry2 polygon_from_ring(
+    std::initializer_list<std::initializer_list<double>> pts
+) {
+    PolyTestSolidGeometry2 poly;
+    std::vector<PolyTestVec2> ring;
+    ring.reserve(pts.size() + 1);
+    for (const auto& p : pts) {
+        auto it = p.begin();
+        ring.emplace_back(std::initializer_list<double>{*it, *++it});
+    }
+    if (ring.size() < 3) {
+        return poly;
+    }
+    if (ring.front()[0] != ring.back()[0] || ring.front()[1] != ring.back()[1]) {
+        ring.push_back(ring.front());
+    }
+    std::vector<PolyTestVec2> boundary = ring;
+    if (!boundary.empty()) {
+        boundary.pop_back();
+    }
+    poly.add_boundary_ring(boundary);
+    std::mt19937 gen(42);
+    process_boundary_to_convex_segments<PolyTestVec2>(ring, poly, gen, false);
+    poly.finalize(gen);
+    return poly;
+}
+
 inline PolyTestSolidGeometry2 make_box(double cx, double cy, double half_w, double half_h) {
     return polygon_from_quad({
         {cx - half_w, cy - half_h},

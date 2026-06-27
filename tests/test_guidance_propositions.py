@@ -72,7 +72,7 @@ def test_proposition_seeds_partial_pack():
     assert expanded
     for coords in expanded:
         placed = geom.placed_at(coords)
-        assert geom.is_valid_placement(placed, push, (coords[0], coords[1]))
+        assert geom.valid(placed, push, (coords[0], coords[1]))
 
 
 def test_propose_with_guidance_propositions_smoke():
@@ -95,4 +95,4 @@ def test_propose_with_guidance_propositions_smoke():
     geom = ProposeGeometry(board, base, part, 0.05, propose_cfg=cfg)
     for c in coords:
         placed = geom.placed_at(c)
-        assert geom.is_valid_placement(placed, Point(base.centroid), (c[0], c[1]))
+        assert geom.valid(placed, Point(base.centroid), (c[0], c[1]))

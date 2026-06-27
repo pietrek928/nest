@@ -12,7 +12,6 @@ from nest_graph.build_graph import (
     _append_selection_window,
     _base_geometries,
     _border_pack_graph,
-    _border_placement_ok,
     _border_tightness_cost,
     _build_transform_batch,
     _first_pass_border_ring_selection,
@@ -40,6 +39,7 @@ from nest_graph.placement_scene import (
     board_placement_valid,
     guidance_config_for_graph,
     placement_footprint_inside_board,
+    placement_ok_for_outline,
     placement_scene_for_part,
 )
 from nest_graph.board import default_sheet_padding, padded_board_bounds
@@ -518,15 +518,16 @@ def test_border_placement_ok_rejects_hypotenuse_overhang(nest_board, rect_poly):
         epsilon_ratio=eps,
     )
     scene = placement_scene_for_part(sheet, board_geom, voids, part)
-    assert not _border_placement_ok(
+    assert not placement_ok_for_outline(
         scene,
         placed,
         poly,
-        [],
         nest_board,
+        [],
         min_dist,
         guidance_cfg,
-        eps,
+        epsilon_ratio=eps,
+        require_outline_kiss=True,
     )
 
 

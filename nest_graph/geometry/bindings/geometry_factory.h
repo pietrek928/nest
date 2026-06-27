@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "common/geometry_common.h"
 #include "distance/polygon_distance.h"
 #include "guide/polygon_cast.h"
 #include "solid/decompose.h"
@@ -39,6 +40,35 @@ inline VecType solid_centroid(const SolidGeometry<VecType> &solid) {
 }
 
 template <class VecType>
+inline SolidGeometry<VecType> solid_from_rings_coords(
+    const std::vector<std::vector<VecType>> &rings,
+    std::mt19937 &rng
+) {
+    SolidGeometry<VecType> solid;
+    std::size_t added = 0;
+    for (const auto &ring_pts : rings) {
+        if (ring_pts.size() < 2) {
+            continue;
+        }
+        solid.add_boundary_ring(ring_pts, false);
+        std::vector<VecType> closed = ring_pts;
+        const VecType &first = closed.front();
+        const VecType &last = closed.back();
+        if (first[0] != last[0] || first[1] != last[1]) {
+            closed.push_back(first);
+        }
+        process_boundary_to_convex_segments<VecType>(closed, solid, rng, false);
+        ++added;
+    }
+    if (added == 0) {
+        throw std::invalid_argument(
+            "from_rings: need at least one ring with 2+ points");
+    }
+    solid.finalize(rng);
+    return solid;
+}
+
+template <class VecType>
 inline SolidGeometry<VecType> solid_from_ring_coords(
     const std::vector<VecType> &ring_pts,
     std::mt19937 &rng
@@ -46,108 +76,7 @@ inline SolidGeometry<VecType> solid_from_ring_coords(
     if (ring_pts.size() < 2) {
         throw std::invalid_argument("from_ring: need at least 2 distinct points");
     }
-    SolidGeometry<VecType> solid;
-    solid.add_boundary_ring(ring_pts, false);
-    std::vector<VecType> closed = ring_pts;
-    const VecType &first = closed.front();
-    const VecType &last = closed.back();
-    if (first[0] != last[0] || first[1] != last[1]) {
-        closed.push_back(first);
-    }
-    process_boundary_to_convex_segments<VecType>(closed, solid, rng, false);
-    solid.finalize(rng);
-    return solid;
-}
-
-template <class VecType>
-inline void closest_point_on_segment(
-    const VecType &a,
-    const VecType &b,
-    const VecType &p,
-    VecType &out,
-    typename VecType::Scalar &dist_sq
-) {
-    using Scalar = typename VecType::Scalar;
-    const VecType ab = b - a;
-    const Scalar ab_sq = ab.dp(ab);
-    if (ab_sq < static_cast<Scalar>(1e-18)) {
-        out = a;
-        const VecType d = p - a;
-        dist_sq = d.dp(d);
-        return;
-    }
-    Scalar t = (p - a).dp(ab) / ab_sq;
-    if (t < static_cast<Scalar>(0)) {
-        t = static_cast<Scalar>(0);
-    } else if (t > static_cast<Scalar>(1)) {
-        t = static_cast<Scalar>(1);
-    }
-    out = a + ab * t;
-    const VecType d = p - out;
-    dist_sq = d.dp(d);
-}
-
-template <class VecType>
-inline void closest_points_between_segments(
-    const VecType &a0,
-    const VecType &a1,
-    const VecType &b0,
-    const VecType &b1,
-    VecType &out_a,
-    VecType &out_b,
-    typename VecType::Scalar &dist_sq
-) {
-    using Scalar = typename VecType::Scalar;
-    const VecType da = a1 - a0;
-    const VecType db = b1 - b0;
-    const VecType r = a0 - b0;
-    const Scalar a = da.dp(da);
-    const Scalar e = db.dp(db);
-    const Scalar f = db.dp(r);
-
-    Scalar s = static_cast<Scalar>(0);
-    Scalar t = static_cast<Scalar>(0);
-
-    if (a <= static_cast<Scalar>(1e-18) && e <= static_cast<Scalar>(1e-18)) {
-        out_a = a0;
-        out_b = b0;
-        const VecType d = out_a - out_b;
-        dist_sq = d.dp(d);
-        return;
-    }
-    if (a <= static_cast<Scalar>(1e-18)) {
-        s = static_cast<Scalar>(0);
-        t = std::max(static_cast<Scalar>(0), std::min(static_cast<Scalar>(1), f / e));
-    } else {
-        const Scalar c = da.dp(r);
-        const Scalar denom = a * e - da.dp(db) * da.dp(db);
-        if (std::abs(denom) > static_cast<Scalar>(1e-18)) {
-            s = std::max(
-                static_cast<Scalar>(0),
-                std::min(static_cast<Scalar>(1), (da.dp(db) * f - c * e) / denom));
-        } else {
-            s = static_cast<Scalar>(0);
-        }
-        t = (da.dp(db) * s + f) / e;
-        if (t < static_cast<Scalar>(0)) {
-            t = static_cast<Scalar>(0);
-            s = std::max(
-                static_cast<Scalar>(0),
-                std::min(static_cast<Scalar>(1), -c / a));
-        } else if (t > static_cast<Scalar>(1)) {
-            t = static_cast<Scalar>(1);
-            s = std::max(
-                static_cast<Scalar>(0),
-                std::min(
-                    static_cast<Scalar>(1),
-                    (da.dp(db) - c) / a));
-        }
-    }
-
-    out_a = a0 + da * s;
-    out_b = b0 + db * t;
-    const VecType d = out_a - out_b;
-    dist_sq = d.dp(d);
+    return solid_from_rings_coords<VecType>({{ring_pts}}, rng);
 }
 
 template <class VecType>

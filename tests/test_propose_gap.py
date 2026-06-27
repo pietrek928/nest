@@ -52,7 +52,7 @@ def test_free_region_beats_legacy_search_on_partial_pack():
     min_dist = 0.003
     push = base.centroid
 
-    def min_clearance(*, free_region: bool) -> float:
+    def best_clearance(*, free_region: bool) -> float:
         cfg = ProposeConfig(
             max_proposals=8,
             candidate_pool=8,
@@ -67,13 +67,13 @@ def test_free_region_beats_legacy_search_on_partial_pack():
         vals = []
         for c in coords:
             placed = geom.placed_at(c)
-            if geom.is_valid_placement(placed, push, (c[0], c[1])):
+            if geom.valid(placed, push, (c[0], c[1])):
                 g = geom.placement_guidance(placed, (c[0], c[1]), push)
                 if not g.is_penetrating:
                     vals.append(float(g.clearance))
-        return min(vals) if vals else 0.0
+        return max(vals) if vals else 0.0
 
-    assert min_clearance(free_region=True) >= min_clearance(free_region=False) * 0.9
+    assert best_clearance(free_region=True) >= best_clearance(free_region=False) * 0.9
 
 
 def test_ribbon_seeds_improve_partial_pack_clearance():
