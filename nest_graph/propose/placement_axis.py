@@ -6,7 +6,7 @@ from shapely.geometry.base import BaseGeometry
 from nest_graph.geometry import Geometry
 
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_outline import _outline_ring_geom, _standoff_gap
+from nest_graph.propose.placement_outline import outline_ring_geom, standoff_gap
 
 CARDINAL_DIRECTIONS: tuple[tuple[float, float], ...] = (
     (-1.0, 0.0),
@@ -30,11 +30,11 @@ def _axis_placement_valid_geom(
             return False
         if placed.distance(obstacle) < min_dist - 1e-6:
             return False
-    ring_geom = _outline_ring_geom(standoff)
+    ring_geom = outline_ring_geom(standoff)
     if ring_geom is not None:
         if placed.standoff_distance(ring_geom) < min_dist - 1e-6:
             return False
-    elif _standoff_gap(placed, standoff) < min_dist - 1e-6:
+    elif standoff_gap(placed, standoff) < min_dist - 1e-6:
         return False
     return True
 
@@ -79,7 +79,7 @@ def _axis_push_from_seed_geom(
     return (seed_dx + dir_x * best, seed_dy + dir_y * best)
 
 
-def _axis_push_from_seed(
+def axis_push_from_seed(
     seed_dx: float,
     seed_dy: float,
     direction: Tuple[float, float],

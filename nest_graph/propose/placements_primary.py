@@ -10,17 +10,16 @@ from nest_graph.utils import get_shape_exteriors, transform_poly
 
 from nest_graph.propose.context import placement_free_region, search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.placement_axis import CARDINAL_DIRECTIONS, axis_push_from_seed
 from nest_graph.propose.placement_common import (
-    CARDINAL_DIRECTIONS,
-    _axis_push_from_seed,
-    _bottom_left_sort_key,
-    _nfp_valid_region,
-    _obstacle_parts,
-    _perimeter_ring_vertices,
-    _placement_safe_zone,
-    _slide_toward_obstacle,
+    bottom_left_sort_key,
+    nfp_valid_region,
+    obstacle_parts,
+    placement_safe_zone,
     resolve_placement_angles,
 )
+from nest_graph.propose.placement_outline import slide_toward_obstacle
+from nest_graph.propose.placement_perimeter import perimeter_ring_vertices
 
 _BOTTOM_LEFT_VERTICES_PER_ANGLE = 8
 
@@ -96,12 +95,12 @@ def propose_placements_perimeter_walk(
     for angle in angles:
         rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
         rc = rotated.centroid
-        safe_zone = _placement_safe_zone(region, base_shape, rotated, min_dist)
+        safe_zone = placement_safe_zone(region, base_shape, rotated, min_dist)
         if safe_zone.is_empty:
             continue
 
         for ring in get_shape_exteriors(safe_zone):
-            for px, py in _perimeter_ring_vertices(ring):
+            for px, py in perimeter_ring_vertices(ring):
                 dx = px - rc.x
                 dy = py - rc.y
                 coords = (dx, dy, float(angle))
@@ -136,7 +135,7 @@ def propose_placements_neighbor_slide(
     if base_shape is None or base_shape.is_empty:
         return []
 
-    obstacles = _obstacle_parts(base_shape)
+    obstacles = obstacle_parts(base_shape)
     if not obstacles:
         return []
 
@@ -145,7 +144,7 @@ def propose_placements_neighbor_slide(
 
     for angle in angles:
         for obstacle in obstacles:
-            coords = _slide_toward_obstacle(
+            coords = slide_toward_obstacle(
                 shape_to_place,
                 obstacle,
                 float(angle),
@@ -188,12 +187,12 @@ def propose_placements_nfp_vertices(
     for angle in angles:
         rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
         rc = rotated.centroid
-        valid = _nfp_valid_region(sheet, base_shape, rotated, min_dist)
+        valid = nfp_valid_region(sheet, base_shape, rotated, min_dist)
         if valid.is_empty:
             continue
 
         for ring in get_shape_exteriors(valid):
-            for px, py in _perimeter_ring_vertices(ring):
+            for px, py in perimeter_ring_vertices(ring):
                 dx = px - rc.x
                 dy = py - rc.y
                 coords = (dx, dy, float(angle))
@@ -239,7 +238,7 @@ def propose_placements_axis_push(
         seed_dy = seed_pt.y - rc.y
 
         for direction in CARDINAL_DIRECTIONS:
-            pushed = _axis_push_from_seed(
+            pushed = axis_push_from_seed(
                 seed_dx,
                 seed_dy,
                 direction,
@@ -291,17 +290,17 @@ def propose_placements_bottom_left(
     for angle in angles:
         rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
         rc = rotated.centroid
-        safe_zone = _placement_safe_zone(region, base_shape, rotated, min_dist)
+        safe_zone = placement_safe_zone(region, base_shape, rotated, min_dist)
         if safe_zone.is_empty:
             continue
 
         vertices: list[tuple[float, float]] = []
         for ring in get_shape_exteriors(safe_zone):
-            vertices.extend(_perimeter_ring_vertices(ring))
+            vertices.extend(perimeter_ring_vertices(ring))
         if not vertices:
             continue
 
-        vertices.sort(key=lambda v: _bottom_left_sort_key(v[0], v[1]))
+        vertices.sort(key=lambda v: bottom_left_sort_key(v[0], v[1]))
         for px, py in vertices[:vertices_per_angle]:
             dx = px - rc.x
             dy = py - rc.y
@@ -309,7 +308,7 @@ def propose_placements_bottom_left(
             if not propose_geom.valid_at(coords, pt_push):
                 continue
             placed = transform_poly(shape_to_place, coords)
-            bl_key = _bottom_left_sort_key(px, py)
+            bl_key = bottom_left_sort_key(px, py)
             if not base_shape.is_empty:
                 tie = float(base_shape.distance(placed))
             else:
@@ -355,7 +354,7 @@ def propose_placements_erosion(
 
     for angle in angles:
         rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-        safe_zone = _placement_safe_zone(region, base_shape, rotated_shape, min_dist)
+        safe_zone = placement_safe_zone(region, base_shape, rotated_shape, min_dist)
         if safe_zone.is_empty:
             continue
 

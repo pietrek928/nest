@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from nest_graph.config import BuildGraphConfig
-from nest_graph.propose import ALL_PROPOSER_NAMES
+from nest_graph.propose import ALL_PROPOSER_NAMES, ProposerName
 from scripts.benchmark_propose_common import (
     GUIDANCE_ABLATION_SEEDS,
     ProposeBenchmarkMetrics,
@@ -76,7 +76,7 @@ def main() -> None:
         for name in proposers:
             cfg = ablation_propose_config(name)
             seeds = None
-            if name in ("guidance_cast_refine", "guidance_propositions"):
+            if name == ProposerName.GUIDANCE_CAST_REFINE.value:
                 seeds = GUIDANCE_ABLATION_SEEDS.get(scenario, [(0.5, 0.5, 0.0)])
             for seed in args.seeds:
                 rows.append(

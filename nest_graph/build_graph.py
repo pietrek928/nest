@@ -40,19 +40,17 @@ from .placement_scene import (
     footprints_inside_board,
     proposition_translation,
 )
-from .propose.placement_common import (
-    _edge_inward_at_point,
-    _outline_ring_geom,
-    clear_of_geoms,
-    clear_of_polys,
-    outline_kiss_ok,
+from .propose.placement_common import clear_of_geoms
+from .propose.placement_outline import (
+    outline_ring_geom,
     outline_kiss_tolerance,
     outline_standoff_distance,
 )
+from .propose.placement_perimeter import edge_inward_at_point
 from .propose.placements_guidance import (
-    _candidate_from_proposition,
-    _is_cast_move,
-    _sorted_guidance_propositions,
+    candidate_from_proposition,
+    is_cast_move,
+    sorted_guidance_propositions,
 )
 from .board import (
     board_context_from_geometry,
@@ -66,13 +64,13 @@ from .propose import (
     border_edge_transforms_for_group,
 )
 from .propose.context import (
-    _outline_coverage_ratio,
+    outline_coverage_ratio,
     propose_push_point,
     should_use_border_focus,
 )
 from .propose.feedback import ProposeFeedbackState
 from .propose.pipeline import propose_coords_with_strategy
-from .propose.ranking import _score_placement_tightness
+from .propose.ranking import score_placement_tightness
 from .propose.geometry import ProposeGeometry
 from .track_perf import show_performance
 from .elem_graph import (
@@ -137,7 +135,7 @@ def _late_border_saturation_active(
         return False
     sheet, _ = board_context_from_geometry(board)
     min_dist = cfg.board_min_dist()
-    coverage = _outline_coverage_ratio(placed, sheet, min_dist)
+    coverage = outline_coverage_ratio(placed, sheet, min_dist)
     return coverage < cfg.propose.place_border_coverage_threshold
 
 
@@ -1085,7 +1083,7 @@ def _outline_anchor_inward(
     ring = _nest_outline_boundary(outline)
     anchor, _ = nearest_points(ring, poly)
     if isinstance(outline, Polygon):
-        edge_info = _edge_inward_at_point(outline, anchor)
+        edge_info = edge_inward_at_point(outline, anchor)
         if edge_info is not None:
             return edge_info
     if hasattr(outline, "representative_point"):
@@ -1127,7 +1125,7 @@ def _border_tightness_cost(
     if not polys:
         return 0.0
     geoms = [Geometry.from_shapely(p) for p in polys]
-    ring_geom = _outline_ring_geom(outline)
+    ring_geom = outline_ring_geom(outline)
     if ring_geom is not None:
         kiss = sum(
             abs(g.standoff_distance(ring_geom) - min_dist)
@@ -1162,9 +1160,9 @@ def _border_refine_candidates(
         seen.add(key)
         out.append(coords)
 
-    for prop in _sorted_guidance_propositions(g)[:max_props]:
-        use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
-        add(_candidate_from_proposition(x, y, theta, prop, use_full_cast=use_cast))
+    for prop in sorted_guidance_propositions(g)[:max_props]:
+        use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
+        add(candidate_from_proposition(x, y, theta, prop, use_full_cast=use_cast))
         if use_cast:
             continue
         tx, ty = proposition_translation(prop)
@@ -1202,7 +1200,7 @@ def _border_refine_micro_walk(
     """Step along top guidance slides from an accepted refine pose."""
     cx, cy, ctheta = x, y, theta
     for _ in range(walk_steps):
-        props = _sorted_guidance_propositions(g)[:3]
+        props = sorted_guidance_propositions(g)[:3]
         if not props:
             break
         moved = False
@@ -1211,7 +1209,7 @@ def _border_refine_micro_walk(
             mag = math.hypot(tx, ty)
             if mag < 1e-9:
                 continue
-            use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
+            use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
             if use_cast:
                 step_len = mag
             else:
@@ -1590,7 +1588,7 @@ def _first_pass_interior_fill(
                     board, pack_union, part_poly, min_dist,
                     epsilon_ratio=eps, propose_cfg=propose_cfg,
                 )
-                tight = _score_placement_tightness(
+                tight = score_placement_tightness(
                     (float(coords[0]), float(coords[1]), float(coords[2])),
                     pg, push, min_dist,
                 )

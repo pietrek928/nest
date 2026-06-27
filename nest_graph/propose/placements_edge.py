@@ -9,16 +9,18 @@ from shapely.geometry.base import BaseGeometry
 from nest_graph.config import ProposeConfig
 from nest_graph.utils import get_shape_exteriors, transform_poly
 
-from nest_graph.propose.context import _placement_contact_error, placement_free_region
+from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import (
-    _angles_for_edge_contact,
-    _exterior_anchor_points,
-    _finalize_edge_propositions,
-    _inward_at_contact,
-    _outline_ring_geom,
-    _select_stratified_by_segment,
-    _snap_coords_along_exterior,
+from nest_graph.propose.placement_outline import (
+    inward_at_contact,
+    outline_ring_geom,
+    snap_coords_along_exterior,
+)
+from nest_graph.propose.placement_perimeter import (
+    angles_for_edge_contact,
+    exterior_anchor_points,
+    finalize_edge_propositions,
+    select_stratified_by_segment,
 )
 
 def _board_edge_snap_seeds(
@@ -35,7 +37,7 @@ def _board_edge_snap_seeds(
 ) -> list[tuple[tuple[float, float, float], Point, tuple[float, float]]]:
     """Snap seeds along nest outline; return (coords, anchor, inward) for guidance refine."""
     propositions: list[dict] = []
-    anchor_pts = _exterior_anchor_points(sheet, samples_per_edge)
+    anchor_pts = exterior_anchor_points(sheet, samples_per_edge)
 
     def _add_seed(
         coords: tuple[float, float, float],
@@ -51,9 +53,9 @@ def _board_edge_snap_seeds(
         })
 
     for contact in anchor_pts:
-        snap_contact, inward = _inward_at_contact(sheet, contact)
-        for angle in _angles_for_edge_contact(sheet, contact, num_angles):
-            coords = _snap_coords_along_exterior(
+        snap_contact, inward = inward_at_contact(sheet, contact)
+        for angle in angles_for_edge_contact(sheet, contact, num_angles):
+            coords = snap_coords_along_exterior(
                 shape_to_place,
                 sheet,
                 snap_contact,
@@ -77,7 +79,7 @@ def _board_edge_snap_seeds(
                     continue
             if not propose_geom.valid_at(coords, pt_push):
                 continue
-            err = _placement_contact_error(placed_geom, sheet, min_dist, None)
+            err = placement_contact_error(placed_geom, sheet, min_dist, None)
             _add_seed(coords, snap_contact, inward, err)
 
     corner_coords = propose_placements_sheet_corners(
@@ -93,11 +95,11 @@ def _board_edge_snap_seeds(
         placed_geom = propose_geom.placed_at(coords)
         md = placed_geom.standoff_min_distance(propose_geom.boundary_ring_geom)
         anchor_pt = Point(md.closest_b[0], md.closest_b[1])
-        anchor_pt, inward = _inward_at_contact(sheet, anchor_pt)
-        err = _placement_contact_error(placed_geom, sheet, min_dist, None)
+        anchor_pt, inward = inward_at_contact(sheet, anchor_pt)
+        err = placement_contact_error(placed_geom, sheet, min_dist, None)
         _add_seed(coords, anchor_pt, inward, err)
 
-    selected = _select_stratified_by_segment(sheet, propositions, top_n)
+    selected = select_stratified_by_segment(sheet, propositions, top_n)
     return [(p["coords"], p["anchor"], p["inward"]) for p in selected]
 
 
@@ -172,7 +174,7 @@ def propose_placements_board_edge(
         if len(merged) >= top_n:
             break
     merged.sort(
-        key=lambda c: _placement_contact_error(
+        key=lambda c: placement_contact_error(
             transform_poly(shape_to_place, c), sheet, min_dist, None,
         ),
     )
@@ -196,18 +198,18 @@ def propose_placements_group_fit(
     if focal_shape is None or focal_shape.is_empty:
         return []
     propositions: list[dict] = []
-    anchor_pts = _exterior_anchor_points(focal_shape, samples_per_edge)
+    anchor_pts = exterior_anchor_points(focal_shape, samples_per_edge)
     stratify_boundary = focal_shape if isinstance(focal_shape, Polygon) else sheet
     focal_ring_geom = (
-        _outline_ring_geom(focal_shape) if propose_geom is not None else None
+        outline_ring_geom(focal_shape) if propose_geom is not None else None
     )
 
     for contact in anchor_pts:
-        snap_contact, inward = _inward_at_contact(focal_shape, contact)
+        snap_contact, inward = inward_at_contact(focal_shape, contact)
         # focal_shape is a solid obstacle: place the part against its outside.
         inward = (-inward[0], -inward[1])
-        for angle in _angles_for_edge_contact(focal_shape, contact, num_angles):
-            coords = _snap_coords_along_exterior(
+        for angle in angles_for_edge_contact(focal_shape, contact, num_angles):
+            coords = snap_coords_along_exterior(
                 shape_to_place,
                 focal_shape,
                 snap_contact,
@@ -234,7 +236,7 @@ def propose_placements_group_fit(
                         continue
                 if pt_push is not None and not propose_geom.valid_at(coords, pt_push):
                     continue
-                err = _placement_contact_error(placed_geom, sheet, min_dist, focal_shape)
+                err = placement_contact_error(placed_geom, sheet, min_dist, focal_shape)
             else:
                 placed = transform_poly(shape_to_place, coords)
                 if not sheet.contains(placed):
@@ -244,14 +246,14 @@ def propose_placements_group_fit(
                         continue
                     if base_shape.distance(placed) < min_dist - 1e-6:
                         continue
-                err = _placement_contact_error(placed, sheet, min_dist, focal_shape)
+                err = placement_contact_error(placed, sheet, min_dist, focal_shape)
             propositions.append({
                 "coords": coords,
                 "anchor": snap_contact,
                 "cost": err,
             })
 
-    return _finalize_edge_propositions(propositions, stratify_boundary, top_n)
+    return finalize_edge_propositions(propositions, stratify_boundary, top_n)
 
 
 def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist):
@@ -370,10 +372,10 @@ def propose_placements_sheet_edge(
     if safe_halo.is_empty:
         return []
 
-    halo_pts = _exterior_anchor_points(safe_halo, samples_per_edge)
+    halo_pts = exterior_anchor_points(safe_halo, samples_per_edge)
 
     for h_pt in halo_pts:
-        for angle in _angles_for_edge_contact(safe_halo, h_pt, num_angles):
+        for angle in angles_for_edge_contact(safe_halo, h_pt, num_angles):
             rotated = propose_geom.part.rotate(float(angle))
             minx, miny, maxx, maxy = rotated.bounds()
             dx_center = (maxx + minx) / 2.0
@@ -399,10 +401,10 @@ def propose_placements_sheet_edge(
                 coords = (dx, dy, float(angle))
                 if not propose_geom.valid_at(coords, pt_push):
                     continue
-                err = _placement_contact_error(placed, sheet, min_dist, None)
+                err = placement_contact_error(placed, sheet, min_dist, None)
                 propositions.append({"coords": coords, "anchor": h_pt, "cost": err})
 
-    return _finalize_edge_propositions(propositions, safe_halo, top_n)
+    return finalize_edge_propositions(propositions, safe_halo, top_n)
 
 
 def propose_placements_ribbon_free(

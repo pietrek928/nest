@@ -1,6 +1,7 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
+from enum import StrEnum
 from typing import Any, Literal, Optional
 
 import numpy as np
@@ -9,17 +10,20 @@ from shapely.geometry import Polygon
 
 from .board import board_sheet_from_outline, board_void_geometries
 from .elem_graph import Circle, RuleMutationSettings
+from .proposer_names import ProposerName
 from .utils import normalize_poly
 
 
-PLACE_ZONES: tuple[str, ...] = (
-    "empty_border",
-    "border_gap",
-    "interior_pocket",
-    "cluster_edge",
-    "inter_cluster",
-    "void_seek",
-)
+class PlaceZone(StrEnum):
+    EMPTY_BORDER = "empty_border"
+    BORDER_GAP = "border_gap"
+    INTERIOR_POCKET = "interior_pocket"
+    CLUSTER_EDGE = "cluster_edge"
+    INTER_CLUSTER = "inter_cluster"
+    VOID_SEEK = "void_seek"
+
+
+PLACE_ZONES: tuple[str, ...] = tuple(z.value for z in PlaceZone)
 
 
 def _env_int(key: str, default: int) -> int:
@@ -364,39 +368,66 @@ class ProposeConfig(BaseModel):
 
     @classmethod
     def proposers_for_place(cls, zone: str) -> frozenset[str] | None:
-        sets: dict[str, frozenset[str]] = {
-            "empty_border": frozenset({
-                "board_edge", "sheet_corners", "perimeter_walk",
+        sets: dict[PlaceZone, frozenset[ProposerName]] = {
+            PlaceZone.EMPTY_BORDER: frozenset({
+                ProposerName.BOARD_EDGE,
+                ProposerName.SHEET_CORNERS,
+                ProposerName.PERIMETER_WALK,
             }),
-            "border_gap": frozenset({
-                "board_edge", "sheet_corners", "perimeter_walk",
-                "group_fit", "neighbor_slide", "ribbon_free",
+            PlaceZone.BORDER_GAP: frozenset({
+                ProposerName.BOARD_EDGE,
+                ProposerName.SHEET_CORNERS,
+                ProposerName.PERIMETER_WALK,
+                ProposerName.GROUP_FIT,
+                ProposerName.NEIGHBOR_SLIDE,
+                ProposerName.RIBBON_FREE,
             }),
-            "interior_pocket": frozenset({
-                "erosion", "voronoi", "ribbon_free", "guidance_cast_refine",
-                "raycasting",
+            PlaceZone.INTERIOR_POCKET: frozenset({
+                ProposerName.EROSION,
+                ProposerName.VORONOI,
+                ProposerName.RIBBON_FREE,
+                ProposerName.GUIDANCE_CAST_REFINE,
+                ProposerName.RAYCASTING,
             }),
-            "cluster_edge": frozenset({
-                "group_fit", "neighbor_slide", "guidance_cast_refine",
-                "perimeter_walk", "erosion",
+            PlaceZone.CLUSTER_EDGE: frozenset({
+                ProposerName.GROUP_FIT,
+                ProposerName.NEIGHBOR_SLIDE,
+                ProposerName.GUIDANCE_CAST_REFINE,
+                ProposerName.PERIMETER_WALK,
+                ProposerName.EROSION,
             }),
-            "inter_cluster": frozenset({
-                "ribbon_free", "raycasting", "voronoi", "erosion",
+            PlaceZone.INTER_CLUSTER: frozenset({
+                ProposerName.RIBBON_FREE,
+                ProposerName.RAYCASTING,
+                ProposerName.VORONOI,
+                ProposerName.EROSION,
             }),
-            "void_seek": frozenset({
-                "erosion", "voronoi", "ribbon_free", "raycasting",
-                "guidance_cast_refine",
+            PlaceZone.VOID_SEEK: frozenset({
+                ProposerName.EROSION,
+                ProposerName.VORONOI,
+                ProposerName.RIBBON_FREE,
+                ProposerName.RAYCASTING,
+                ProposerName.GUIDANCE_CAST_REFINE,
             }),
         }
-        return sets.get(zone)
+        try:
+            place_zone = PlaceZone(zone)
+        except ValueError:
+            return None
+        proposers = sets.get(place_zone)
+        return frozenset(proposers) if proposers is not None else None
 
     @classmethod
     def obstacle_scope_for_place(cls, zone: str) -> tuple[bool, int]:
-        if zone in ("interior_pocket", "inter_cluster", "void_seek"):
+        if zone in (
+            PlaceZone.INTERIOR_POCKET.value,
+            PlaceZone.INTER_CLUSTER.value,
+            PlaceZone.VOID_SEEK.value,
+        ):
             return True, 0
-        if zone == "border_gap":
+        if zone == PlaceZone.BORDER_GAP.value:
             return False, 2
-        if zone == "cluster_edge":
+        if zone == PlaceZone.CLUSTER_EDGE.value:
             return False, 3
         return False, 3
 
@@ -409,14 +440,14 @@ class ProposeConfig(BaseModel):
     ) -> "ProposeConfig":
         root = base.model_dump() if base is not None else cls().model_dump()
         profiles: dict[str, dict[str, Any]] = {
-            "empty_border": {
+            PlaceZone.EMPTY_BORDER.value: {
                 "ranking_mode": "border",
                 "border_focus_ranking": True,
                 "use_border_focus": True,
                 "use_contact_ranking": False,
                 "cast_squeeze_top_k": 12,
             },
-            "border_gap": {
+            PlaceZone.BORDER_GAP.value: {
                 "ranking_mode": "border",
                 "border_focus_ranking": True,
                 "use_contact_ranking": False,
@@ -426,7 +457,7 @@ class ProposeConfig(BaseModel):
                 "use_board_edge_seeds": True,
                 "use_neighbor_slide": True,
             },
-            "interior_pocket": {
+            PlaceZone.INTERIOR_POCKET.value: {
                 "ranking_mode": "contact_hybrid",
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
@@ -436,7 +467,7 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 6,
                 "use_board_edge_seeds": False,
             },
-            "cluster_edge": {
+            PlaceZone.CLUSTER_EDGE.value: {
                 "use_guidance_propositions": True,
                 "guidance_use_tight_packing": True,
                 "guidance_use_corner_alignment": True,
@@ -448,7 +479,7 @@ class ProposeConfig(BaseModel):
                 "use_full_packed_obstacle": False,
                 "obstacle_nearest_k": 3,
             },
-            "inter_cluster": {
+            PlaceZone.INTER_CLUSTER.value: {
                 "ranking_mode": "clearance",
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": True,
@@ -458,7 +489,7 @@ class ProposeConfig(BaseModel):
                 "use_ribbon_seeds": True,
                 "use_voronoi": True,
             },
-            "void_seek": {
+            PlaceZone.VOID_SEEK.value: {
                 "ranking_mode": "clearance",
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": True,

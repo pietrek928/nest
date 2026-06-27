@@ -32,7 +32,7 @@ def _point_segment_distance_sq(
     return dist_sq, cx, cy, t
 
 
-def _perimeter_ring_vertices(ring: LineString | LinearRing) -> list[tuple[float, float]]:
+def perimeter_ring_vertices(ring: LineString | LinearRing) -> list[tuple[float, float]]:
     if ring.length < 1e-5:
         return []
     coords = list(ring.coords)
@@ -80,7 +80,7 @@ def _edge_tangent_angles(sheet: Polygon, segment_index: int) -> list[float]:
     return [tang + k * math.pi / 2.0 for k in range(4)]
 
 
-def _edge_inward_at_point(
+def edge_inward_at_point(
     sheet: Polygon,
     contact: Point,
 ) -> tuple[Point, tuple[float, float]] | None:
@@ -115,7 +115,7 @@ def _edge_inward_at_point(
     return best_anchor, best_inward
 
 
-def _exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Point]:
+def exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Point]:
     anchors: list[Point] = []
     for line in get_shape_exteriors(geom):
         if line.length <= 0:
@@ -140,7 +140,7 @@ def _exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[P
     return anchors
 
 
-def _angles_for_edge_contact(
+def angles_for_edge_contact(
     boundary: BaseGeometry,
     contact: Point,
     num_angles: int,
@@ -152,7 +152,7 @@ def _angles_for_edge_contact(
     return angles
 
 
-def _select_stratified_by_segment(
+def select_stratified_by_segment(
     boundary: Polygon,
     propositions: list[dict],
     top_n: int,
@@ -200,13 +200,13 @@ def _select_stratified_by_segment(
     return out
 
 
-def _finalize_edge_propositions(
+def finalize_edge_propositions(
     propositions: list[dict],
     boundary: BaseGeometry,
     top_n: int,
 ) -> list[tuple[float, float, float]]:
     if isinstance(boundary, Polygon):
-        selected = _select_stratified_by_segment(boundary, propositions, top_n)
+        selected = select_stratified_by_segment(boundary, propositions, top_n)
     else:
         selected = sorted(propositions, key=lambda row: row["cost"])
     seen: set[tuple[float, float, float]] = set()

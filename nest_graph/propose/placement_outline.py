@@ -7,11 +7,11 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import nearest_points
 
 from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
+from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
 from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_perimeter import _edge_inward_at_point
+from nest_graph.propose.placement_perimeter import edge_inward_at_point
 
 _AXIS_PUSH_STEPS = 24
 
@@ -28,8 +28,8 @@ def _geom_max_dim(geom: Geometry) -> float:
     return max(maxx - minx, maxy - miny) / 2.0
 
 
-def _standoff_gap(placed: Geometry, standoff: BaseGeometry) -> float:
-    ring_geom = _outline_ring_geom(standoff)
+def standoff_gap(placed: Geometry, standoff: BaseGeometry) -> float:
+    ring_geom = outline_ring_geom(standoff)
     if ring_geom is not None:
         return placed.standoff_distance(ring_geom)
     if isinstance(standoff, Polygon):
@@ -49,7 +49,7 @@ def _nest_outline_ring(outline: BaseGeometry):
     return outline.boundary
 
 
-def _outline_ring_geom(
+def outline_ring_geom(
     outline: BaseGeometry,
     *,
     propose_geom: Optional[ProposeGeometry] = None,
@@ -93,10 +93,10 @@ def _outline_ring_geom(
 
 def outline_standoff_distance(poly, outline: BaseGeometry) -> float:
     if isinstance(poly, Geometry):
-        ring_geom = _outline_ring_geom(outline)
+        ring_geom = outline_ring_geom(outline)
         if ring_geom is not None:
             return poly.standoff_distance(ring_geom)
-        return _standoff_gap(poly, _nest_outline_ring(outline))
+        return standoff_gap(poly, _nest_outline_ring(outline))
     return float(poly.distance(_nest_outline_ring(outline)))
 
 
@@ -175,7 +175,7 @@ def _snap_coords_along_exterior_geom(
     return (float(pcx) - rcx, float(pcy) - rcy, angle)
 
 
-def _snap_coords_along_exterior(
+def snap_coords_along_exterior(
     shape_to_place: Polygon,
     boundary: BaseGeometry,
     contact: Point,
@@ -192,7 +192,7 @@ def _snap_coords_along_exterior(
     if propose_geom is not None:
         ring_geom = boundary_ring_geom
         if ring_geom is None:
-            ring_geom = _outline_ring_geom(boundary, propose_geom=propose_geom)
+            ring_geom = outline_ring_geom(boundary, propose_geom=propose_geom)
         if ring_geom is None:
             return None
         board_geom = propose_geom.board_geom if container is not None else None
@@ -239,12 +239,12 @@ def _snap_coords_along_exterior(
     return (seed_x, seed_y, angle)
 
 
-def _inward_at_contact(
+def inward_at_contact(
     boundary: BaseGeometry,
     contact: Point,
 ) -> tuple[Point, tuple[float, float]]:
     if isinstance(boundary, Polygon):
-        edge_info = _edge_inward_at_point(boundary, contact)
+        edge_info = edge_inward_at_point(boundary, contact)
         if edge_info is not None:
             return edge_info
     interior = boundary.representative_point()
@@ -256,7 +256,7 @@ def _inward_at_contact(
     return contact, (ox / dist, oy / dist)
 
 
-def _slide_toward_obstacle(
+def slide_toward_obstacle(
     shape_to_place: Polygon,
     obstacle: Polygon,
     angle: float,
@@ -267,7 +267,7 @@ def _slide_toward_obstacle(
 ) -> Optional[Tuple[float, float, float]]:
     """Slide the part along the contact normal until it kisses this obstacle at min_dist."""
     if propose_geom is not None:
-        obstacle_ring = _outline_ring_geom(obstacle)
+        obstacle_ring = outline_ring_geom(obstacle)
         if obstacle_ring is None:
             return None
         rotated = propose_geom.part.rotate(angle)
@@ -305,7 +305,7 @@ def _slide_toward_obstacle(
     margin = min_dist + placement_clearance_epsilon(
         min_dist, ratio=PLACEMENT_EPSILON_RATIO,
     )
-    return _snap_coords_along_exterior(
+    return snap_coords_along_exterior(
         shape_to_place,
         obstacle,
         p_obs,

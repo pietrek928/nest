@@ -3,9 +3,9 @@ from shapely.geometry import Point, Polygon
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.propose import proposed_transforms_for_groups
-from nest_graph.propose.placements_batch import (
+from nest_graph.propose.pipeline import (
     _batch_pack_pair_order,
-    _parts_by_group,
+    _batch_parts_by_group,
     augment_batch_pack_proposals,
 )
 from nest_graph.utils import transform_poly
@@ -60,7 +60,7 @@ def test_batch_pack_pairs_are_mutually_valid(
     per_group = proposed_transforms_for_groups(
         nest_board, parts, [], [], cfg.propose, min_dist=min_dist,
     )
-    parts_by_group = _parts_by_group(parts)
+    parts_by_group = _batch_parts_by_group(parts)
     pairs = _batch_pack_pair_order(
         nest_board,
         0,

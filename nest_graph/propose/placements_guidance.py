@@ -1,4 +1,5 @@
 import math
+from enum import StrEnum
 from typing import List, Sequence, Tuple
 
 import numpy as np
@@ -17,41 +18,56 @@ from nest_graph.placement_scene import (
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_edge import sample_placement_points_ribbon
 
-_CAST_MOVE_TAGS = (
-    "Exact Neighbor Snap",
-    "Vertex Corner Match",
-    "Corner Match",
-    "Exact Gravity Dock",
-    "Safe Hole Seek",
-    "Long Range Gravity Dock",
-    "Floor Walk",
+
+class GuidanceMoveType(StrEnum):
+    EXACT_NEIGHBOR_SNAP = "Exact Neighbor Snap"
+    VERTEX_CORNER_MATCH = "Vertex Corner Match"
+    CORNER_MATCH = "Corner Match"
+    EXACT_GRAVITY_DOCK = "Exact Gravity Dock"
+    SAFE_HOLE_SEEK = "Safe Hole Seek"
+    HOLE_SEEK = "Hole Seek"
+    LONG_RANGE_GRAVITY_DOCK = "Long Range Gravity Dock"
+    FLOOR_WALK = "Floor Walk"
+
+
+_CAST_MOVE_TYPES: frozenset[GuidanceMoveType] = frozenset({
+    GuidanceMoveType.EXACT_NEIGHBOR_SNAP,
+    GuidanceMoveType.VERTEX_CORNER_MATCH,
+    GuidanceMoveType.CORNER_MATCH,
+    GuidanceMoveType.EXACT_GRAVITY_DOCK,
+    GuidanceMoveType.SAFE_HOLE_SEEK,
+    GuidanceMoveType.LONG_RANGE_GRAVITY_DOCK,
+    GuidanceMoveType.FLOOR_WALK,
+})
+
+_PROPOSITION_PRIORITIES: tuple[tuple[GuidanceMoveType, float], ...] = (
+    (GuidanceMoveType.EXACT_NEIGHBOR_SNAP, 100.0),
+    (GuidanceMoveType.VERTEX_CORNER_MATCH, 95.0),
+    (GuidanceMoveType.CORNER_MATCH, 88.0),
+    (GuidanceMoveType.FLOOR_WALK, 85.0),
+    (GuidanceMoveType.EXACT_GRAVITY_DOCK, 80.0),
+    (GuidanceMoveType.LONG_RANGE_GRAVITY_DOCK, 80.0),
+    (GuidanceMoveType.SAFE_HOLE_SEEK, 70.0),
+    (GuidanceMoveType.HOLE_SEEK, 70.0),
 )
 
 
-def _is_cast_move(move_type: str) -> bool:
+def is_cast_move(move_type: str) -> bool:
     mt = move_type or ""
-    return any(tag in mt for tag in _CAST_MOVE_TAGS) or "Exact" in mt
+    return any(tag in mt for tag in _CAST_MOVE_TYPES) or "Exact" in mt
 
 
 def _proposition_sort_key(prop) -> tuple[float, float]:
     mt = prop.move_type or ""
     priority = 0.0
-    if "Exact Neighbor Snap" in mt:
-        priority = 100.0
-    elif "Vertex Corner Match" in mt:
-        priority = 95.0
-    elif "Corner Match" in mt:
-        priority = 88.0
-    elif "Floor Walk" in mt:
-        priority = 85.0
-    elif "Exact Gravity Dock" in mt or "Long Range Gravity Dock" in mt:
-        priority = 80.0
-    elif "Safe Hole Seek" in mt or "Hole Seek" in mt:
-        priority = 70.0
+    for tag, score in _PROPOSITION_PRIORITIES:
+        if tag in mt:
+            priority = score
+            break
     return (priority, float(prop.heuristic_score))
 
 
-def _sorted_guidance_propositions(g) -> list:
+def sorted_guidance_propositions(g) -> list:
     props = tiered_propositions(g)
     props.sort(key=_proposition_sort_key, reverse=True)
     return props
@@ -69,7 +85,7 @@ def _merged_guidance_propositions(
         g = propose_geom.placement_guidance(
             placed, xy, pt_push, target_angle_rad=theta, border_focus=True,
         )
-        return _sorted_guidance_propositions(g), g
+        return sorted_guidance_propositions(g), g
 
     gkw = guidance_kwargs_for_propose(propose_geom._propose_cfg)
     tight_cfg = guidance_config_for_propose(
@@ -100,7 +116,7 @@ def _merged_guidance_propositions(
     merged: list = []
     seen: set[tuple] = set()
     for g in (g_tight, g_attr):
-        for prop in _sorted_guidance_propositions(g):
+        for prop in sorted_guidance_propositions(g):
             tx, ty = proposition_translation(prop)
             key = (
                 round(tx, 6),
@@ -166,7 +182,7 @@ def propose_placements_guidance_walk(
                 mag = math.hypot(tx, ty)
                 if mag < 1e-9:
                     continue
-                if not g.is_penetrating and _is_cast_move(prop.move_type or ""):
+                if not g.is_penetrating and is_cast_move(prop.move_type or ""):
                     step_len = mag
                 else:
                     step_len = step_scale * max(min_dist, 1e-4)
@@ -181,7 +197,7 @@ def propose_placements_guidance_walk(
                         delta -= 2 * np.pi
                     while delta < -np.pi:
                         delta += 2 * np.pi
-                    ntheta = theta + delta * (1.0 if _is_cast_move(prop.move_type or "") else 0.2)
+                    ntheta = theta + delta * (1.0 if is_cast_move(prop.move_type or "") else 0.2)
                 trial = propose_geom.placed_at((nx, ny, ntheta))
                 if propose_geom.valid(trial, pt_push, (nx, ny)):
                     x, y, theta = nx, ny, ntheta
@@ -217,7 +233,7 @@ def _coords_too_close(
     return False
 
 
-def _candidate_from_proposition(
+def candidate_from_proposition(
     x: float,
     y: float,
     theta: float,
@@ -270,8 +286,8 @@ def propose_placements_guidance_cast(
         for prop in props:
             if len(out) >= cap:
                 return out
-            use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
-            candidate = _candidate_from_proposition(
+            use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
+            candidate = candidate_from_proposition(
                 x, y, theta, prop, use_full_cast=use_cast,
             )
             if _coords_too_close(candidate, out, dist_thresh, angle_thresh):
@@ -333,11 +349,11 @@ def propose_placements_board_edge_guidance_cast(
         g = propose_geom.placement_guidance(
             placed, (x, y), pt_push, guidance_cfg=edge_cfg,
         )
-        for prop in _sorted_guidance_propositions(g):
+        for prop in sorted_guidance_propositions(g):
             if len(out) >= cap:
                 return out
-            use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
-            candidate = _candidate_from_proposition(
+            use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
+            candidate = candidate_from_proposition(
                 x, y, theta, prop, use_full_cast=use_cast,
             )
             if _coords_too_close(candidate, out, dist_thresh, angle_thresh):

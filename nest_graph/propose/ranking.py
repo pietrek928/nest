@@ -15,12 +15,12 @@ from nest_graph.placement_scene import (
 )
 from nest_graph.utils import get_shape_polygons_coords, transform_poly
 
-from nest_graph.propose.context import _placement_contact_error
-from nest_graph.propose.placement_common import outline_standoff_distance
+from nest_graph.propose.context import placement_contact_error
+from nest_graph.propose.placement_outline import outline_standoff_distance
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_guidance import (
-    _candidate_from_proposition,
-    _is_cast_move,
+    candidate_from_proposition,
+    is_cast_move,
 )
 from nest_graph.propose.context import should_use_border_focus
 
@@ -96,7 +96,7 @@ def _neighbor_excess_gap_for_placed(
     return max(0.0, nearest - min_dist)
 
 
-def _score_placement_tightness(
+def score_placement_tightness(
     coords: Tuple[float, float, float],
     propose_geom: ProposeGeometry,
     pt_push: Point,
@@ -172,7 +172,6 @@ def _score_placement_coords(
     propose_geom: Optional[ProposeGeometry] = None,
 ) -> float:
     if propose_geom is not None:
-        placed_geom = propose_geom.placed_at(coords)
         if not propose_geom.valid_at(coords, pt_push):
             return float("inf")
         placed = transform_poly(shape_to_place, coords)  # hull metrics still need Shapely
@@ -207,7 +206,6 @@ def _score_placement_legacy(
     min_dist: float,
     propose_geom: ProposeGeometry,
 ) -> float:
-    placed_geom = propose_geom.placed_at(coords)
     if not propose_geom.valid_at(coords, pt_push):
         return float("inf")
     placed = transform_poly(shape_to_place, coords)
@@ -275,7 +273,7 @@ def _score_placement_clearance(
     score = float(g.clearance)
     if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
         prop = best_proposition(g)
-        if prop is not None and _is_cast_move(prop.move_type or ""):
+        if prop is not None and is_cast_move(prop.move_type or ""):
             score += propose_cfg.cast_rank_boost * min_dist
     return score
 
@@ -330,7 +328,7 @@ def _score_placement_contact(
     if _placement_feedback(coords, propose_geom, pt_push) is None:
         return float("-inf")
     placed_geom = propose_geom.placed_at(coords)
-    err = _placement_contact_error(
+    err = placement_contact_error(
         placed_geom, propose_geom.sheet, min_dist, focal_shape,
     )
     return -err
@@ -358,7 +356,7 @@ def _score_placement_contact_hybrid(
     else:
         score = contact + clearance_weight * clearance
     if tightness_weight > 0.0:
-        tightness = _score_placement_tightness(
+        tightness = score_placement_tightness(
             coords, propose_geom, pt_push, min_dist,
         )
         if tightness > float("-inf"):
@@ -495,10 +493,10 @@ def _cast_squeeze_one(
         return coords
     x, y, theta = float(coords[0]), float(coords[1]), float(coords[2])
     for prop in g.propositions[: propose_cfg.guidance_max_propositions]:
-        if not _is_cast_move(prop.move_type or ""):
+        if not is_cast_move(prop.move_type or ""):
             continue
-        use_cast = not g.is_penetrating and _is_cast_move(prop.move_type or "")
-        candidate = _candidate_from_proposition(
+        use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
+        candidate = candidate_from_proposition(
             x, y, theta, prop, use_full_cast=use_cast,
         )
         trial = propose_geom.placed_at(candidate)
@@ -707,7 +705,7 @@ def _trim_candidates_by_clearance(
         score = float(g.clearance)
         if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
             prop = best_proposition(g)
-            if prop is not None and _is_cast_move(prop.move_type or ""):
+            if prop is not None and is_cast_move(prop.move_type or ""):
                 score += propose_cfg.cast_rank_boost * min_dist
         scored.append((score, coords))
     scored.sort(key=lambda x: x[0], reverse=True)

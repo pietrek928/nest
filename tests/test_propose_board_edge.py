@@ -1,6 +1,5 @@
 import math
 
-import numpy as np
 from shapely.geometry import LineString, Point, Polygon
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
@@ -11,6 +10,11 @@ from nest_graph.propose import (
     propose_placements_sheet_edge,
 )
 from nest_graph.propose.placements_edge import _board_edge_snap_seeds
+from nest_graph.propose.placement_outline import (
+    inward_at_contact,
+    outline_ring_geom,
+    snap_coords_along_exterior,
+)
 from nest_graph.propose.placements_guidance import propose_placements_board_edge_guidance_cast
 from nest_graph.utils import normalize_poly, transform_poly
 
@@ -100,16 +104,16 @@ def test_board_edge_beats_sheet_edge_bbox_on_triangle():
         pt_push=pt_push,
         top_n=16,
     )
-    from nest_graph.propose.context import _placement_contact_error
+    from nest_graph.propose.context import placement_contact_error
 
     assert board_coords
     board_err = min(
-        _placement_contact_error(transform_poly(rect, c), board, min_dist, None)
+        placement_contact_error(transform_poly(rect, c), board, min_dist, None)
         for c in board_coords
     )
     if sheet_coords:
         sheet_err = min(
-            _placement_contact_error(transform_poly(rect, c), board, min_dist, None)
+            placement_contact_error(transform_poly(rect, c), board, min_dist, None)
             for c in sheet_coords
         )
         assert board_err <= sheet_err * 1.1 + 1e-6
@@ -208,8 +212,6 @@ def test_default_config_enables_board_edge():
 
 
 def test_snap_coords_cpp_matches_shapely():
-    from nest_graph.propose.placement_common import _snap_coords_along_exterior
-
     board = _triangle_board()
     rect = _rect_part()
     cfg = BuildGraphConfig()
@@ -221,12 +223,11 @@ def test_snap_coords_cpp_matches_shapely():
         Point(0.55, 0.55),
     ]
     angles = [0.0, math.pi / 4, math.pi / 2]
-    from nest_graph.propose.placement_common import _inward_at_contact
 
     for contact in anchors:
         for angle in angles:
-            snap_contact, inward = _inward_at_contact(board, contact)
-            shapely_coords = _snap_coords_along_exterior(
+            snap_contact, inward = inward_at_contact(board, contact)
+            shapely_coords = snap_coords_along_exterior(
                 rect,
                 board,
                 snap_contact,
@@ -236,7 +237,7 @@ def test_snap_coords_cpp_matches_shapely():
                 container=board,
                 propose_geom=None,
             )
-            cpp_coords = _snap_coords_along_exterior(
+            cpp_coords = snap_coords_along_exterior(
                 rect,
                 board,
                 snap_contact,
@@ -257,12 +258,6 @@ def test_snap_coords_cpp_matches_shapely():
 def test_snap_coords_multipolygon_focal_uses_cpp():
     from shapely.geometry import MultiPolygon
 
-    from nest_graph.propose.placement_common import (
-        _inward_at_contact,
-        _outline_ring_geom,
-        _snap_coords_along_exterior,
-    )
-
     board = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
     rect = _rect_part()
     cfg = BuildGraphConfig()
@@ -271,12 +266,12 @@ def test_snap_coords_multipolygon_focal_uses_cpp():
     placed_a = Polygon([(1, 1), (2, 1), (2, 2), (1, 2)])
     placed_b = Polygon([(4, 1), (5, 1), (5, 2), (4, 2)])
     focal = MultiPolygon([placed_a, placed_b])
-    focal_ring = _outline_ring_geom(focal)
+    focal_ring = outline_ring_geom(focal)
     assert focal_ring is not None
     contact = Point(2.5, 1.0)
-    snap_contact, inward = _inward_at_contact(focal, contact)
+    snap_contact, inward = inward_at_contact(focal, contact)
     inward = (-inward[0], -inward[1])
-    coords = _snap_coords_along_exterior(
+    coords = snap_coords_along_exterior(
         rect,
         focal,
         snap_contact,

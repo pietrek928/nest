@@ -12,6 +12,7 @@ from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.placement_scene import placement_clearance_epsilon
 from nest_graph.propose import (
     ProposeGeometry,
+    ProposerName,
     base_shape_from_selection,
     border_focal_for_propose,
     collect_propose_candidates,
@@ -20,7 +21,7 @@ from nest_graph.propose import (
     propose_push_point,
     should_use_border_focus,
 )
-from nest_graph.propose.pipeline import _propose_coords_from_candidates
+from nest_graph.propose.pipeline import propose_coords_from_candidates
 from nest_graph.utils import normalize_poly, transform_poly
 
 
@@ -59,7 +60,7 @@ def ablation_propose_config(
         "use_contact_ranking": True,
         "use_contact_clearance_hybrid": True,
     }
-    if enabled_name in ("guidance_cast_refine", "guidance_propositions"):
+    if enabled_name in (ProposerName.GUIDANCE_CAST_REFINE.value,):
         on["use_guidance_propositions"] = True
         on["guidance_use_tight_packing"] = True
         on["guidance_cast_refine_top_k"] = 16
@@ -359,7 +360,7 @@ def run_propose_with_metrics(
         proposer_counts=proposer_counts,
         guidance_seed_coords=guidance_seed_coords,
     )
-    final = _propose_coords_from_candidates(
+    final = propose_coords_from_candidates(
         obstacle,
         part_poly,
         board,
@@ -606,7 +607,7 @@ def _run_propose_coords_only(
         proposer_counts=None,
         guidance_seed_coords=guidance_seed_coords,
     )
-    return _propose_coords_from_candidates(
+    return propose_coords_from_candidates(
         obstacle,
         part_poly,
         board,

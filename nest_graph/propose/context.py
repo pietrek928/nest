@@ -208,7 +208,7 @@ def effective_ranking_mode(
     return base_mode
 
 
-def _outline_coverage_ratio(
+def outline_coverage_ratio(
     placed: Sequence[BaseGeometry],
     sheet: Polygon,
     min_dist: float,
@@ -253,7 +253,7 @@ def classify_propose_zone(
     part_c = part_poly.centroid
     border_dist = float(part_c.distance(sheet.exterior))
 
-    coverage = _outline_coverage_ratio(placed, sheet, min_dist)
+    coverage = outline_coverage_ratio(placed, sheet, min_dist)
     if coverage < propose_cfg.place_border_coverage_threshold:
         return "border_gap"
 
@@ -299,14 +299,14 @@ def apply_proposer_pool_scales(
     return ProposeConfig(**data)
 
 
-def _placement_contact_error(
+def placement_contact_error(
     placed: BaseGeometry,
     sheet: Polygon,
     min_dist: float,
     focal_shape: Optional[BaseGeometry] = None,
 ) -> float:
     """Distance from ideal standoff (0 = flush against border or group)."""
-    from nest_graph.propose.placement_common import outline_standoff_distance
+    from nest_graph.propose.placement_outline import outline_standoff_distance
 
     if isinstance(placed, Geometry):
         border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)

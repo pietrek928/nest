@@ -34,15 +34,7 @@ def footprints_inside_board(
     return list(board_geom.footprint_inside_batch(list(placed)))
 
 
-PLACEMENT_EPSILON_RATIO = 0.05
-
-
-def placement_clearance_epsilon(
-    min_dist: float,
-    *,
-    ratio: float = PLACEMENT_EPSILON_RATIO,
-) -> float:
-    return max(1e-6, min_dist * ratio)
+from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
 
 
 def _board_diag(board_bounds: tuple[float, float, float, float] | None) -> float:
@@ -466,10 +458,8 @@ def placement_ok_for_outline(
     kiss_tolerance_scale: float = 2.0,
 ) -> bool:
     """Footprint + optional outline kiss + neighbor clearance + guidance validity."""
-    from nest_graph.propose.placement_common import (
-        clear_of_polys,
-        outline_kiss_ok,
-    )
+    from nest_graph.propose.placement_common import clear_of_polys
+    from nest_graph.propose.placement_outline import outline_kiss_ok
 
     if not placement_footprint_inside_board(placed, scene.board_geom):
         return False

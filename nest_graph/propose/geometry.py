@@ -5,7 +5,7 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, GuidanceConfig
+from nest_graph.geometry import Geometry, GuidanceConfig, batch_check_validity, batch_evaluate_local_placement
 from nest_graph.placement_scene import (
     PLACEMENT_EPSILON_RATIO,
     best_proposition,
@@ -191,8 +191,6 @@ def batch_valid_flags(
     return_guidance: bool = False,
 ) -> list[bool] | list[object | None]:
     """Batch validity against void obstacles; optional guidance with base+void."""
-    from nest_graph.geometry import batch_check_validity, batch_evaluate_local_placement
-
     if not transforms:
         return []
     placed_list = [propose_geom.placed_at(c) for c in transforms]

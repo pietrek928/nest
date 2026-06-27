@@ -14,8 +14,11 @@ from nest_graph.propose.context import (
     should_use_border_focus,
 )
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.pipeline import (
+from nest_graph.proposer_names import (
     ALL_PROPOSER_NAMES,
+    ProposerName,
+)
+from nest_graph.propose.pipeline import (
     base_shape_from_selection,
     border_edge_transforms_for_group,
     collect_propose_candidates,
@@ -60,6 +63,7 @@ from nest_graph.propose.ranking import (
 
 __all__ = [
     "ALL_PROPOSER_NAMES",
+    "ProposerName",
     "ProposeGeometry",
     "border_focal_for_propose",
     "border_solid_focal",
