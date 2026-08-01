@@ -12,7 +12,7 @@ from nest_graph.config import BuildGraphConfig, SelectionConfig
 from nest_graph.build_graph import apply_dfs_refinement
 from nest_graph.elem_graph import selection_is_independent
 from scripts.nesting_evaluator import NestingPipelineEvaluator
-from scripts.nesting_fixtures import get_all_cases
+from scripts.nesting_fixtures import resolve_cases
 
 
 DFS_MODES = (
@@ -78,7 +78,7 @@ def _aggregate(rows: list[DfsBenchRow]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cases", nargs="*", default=["demo_triangle_s1.0"])
+    parser.add_argument("--cases", nargs="*", default=["demo_triangle"])
     parser.add_argument("--seeds", type=int, nargs="*", default=[0, 1, 2])
     parser.add_argument(
         "--quick",
@@ -113,8 +113,7 @@ def main() -> None:
                         sel,
                     ))
 
-    all_cases = get_all_cases()
-    cases_to_run = [c for c in all_cases if c.name in args.cases]
+    cases_to_run = resolve_cases(args.cases)
 
     for case in cases_to_run:
         print(f"\n=== Case: {case.name} ===")

@@ -393,6 +393,7 @@ class ProposeConfig(BaseModel):
                 ProposerName.GUIDANCE_CAST_REFINE,
                 ProposerName.RAYCASTING,
                 ProposerName.CLUSTER_COPY,
+                ProposerName.GROUP_FIT,
             }),
             PlaceZone.CLUSTER_EDGE: frozenset({
                 ProposerName.GROUP_FIT,
@@ -426,7 +427,15 @@ class ProposeConfig(BaseModel):
         return frozenset(proposers) if proposers is not None else None
 
     @classmethod
-    def obstacle_scope_for_place(cls, zone: str) -> tuple[bool, int]:
+    def obstacle_scope_for_place(
+        cls,
+        zone: str,
+        *,
+        n_clusters: int = 1,
+        free_ratio: float = 1.0,
+        outline_coverage: float = 0.0,
+        border_coverage_threshold: float = 0.35,
+    ) -> tuple[bool, int]:
         if zone in (
             PlaceZone.INTERIOR_POCKET.value,
             PlaceZone.INTER_CLUSTER.value,
@@ -434,7 +443,13 @@ class ProposeConfig(BaseModel):
         ):
             return True, 0
         if zone == PlaceZone.BORDER_GAP.value:
-            return False, 2
+            if (
+                n_clusters >= 3
+                or free_ratio < 0.5
+                or outline_coverage >= border_coverage_threshold
+            ):
+                return True, 0
+            return False, 4
         if zone == PlaceZone.CLUSTER_EDGE.value:
             return False, 3
         return False, 3
@@ -460,7 +475,7 @@ class ProposeConfig(BaseModel):
                 "border_focus_ranking": True,
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": False,
-                "obstacle_nearest_k": 2,
+                "obstacle_nearest_k": 4,
                 "cast_squeeze_top_k": 12,
                 "use_board_edge_seeds": True,
                 "use_neighbor_slide": True,
@@ -479,6 +494,7 @@ class ProposeConfig(BaseModel):
                 "border_focus_ranking": False,
                 "cast_squeeze_top_k": 6,
                 "use_board_edge_seeds": False,
+                "use_group_edge_seeds": True,
                 "use_cluster_copy": True,
             },
             PlaceZone.CLUSTER_EDGE.value: {

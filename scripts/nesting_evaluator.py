@@ -229,10 +229,61 @@ class NestingMetrics:
     area_coverage_seed: float = 0.0
     parts_delta: int = 0
     area_coverage_delta: float = 0.0
-    kiss_fraction: float = 0.0
+    kiss_fraction: float = 0.0  # alias of kiss_seed for compatibility
+    kiss_seed: float = 0.0
+    kiss_outline: float = 0.0
+    kiss_standoff: float = 0.0
     contact_min: float = 0.0
     clearance_p50: float = 0.0
     border_standoff_err: float = 0.0
+    time_to_frac_final: float = -1.0
+    density_auc: float = 0.0
+    coverage_trajectory: tuple[tuple[float, float, int], ...] = ()
+
+
+def _angle_allowed(
+    angle: float,
+    allowed: tuple[float, ...] | None,
+    *,
+    tol: float = 0.05,
+) -> bool:
+    if allowed is None:
+        return True
+    two_pi = 2.0 * np.pi
+    a = float(angle) % two_pi
+    for b in allowed:
+        d = abs(((a - (float(b) % two_pi) + np.pi) % two_pi) - np.pi)
+        if d <= tol:
+            return True
+    return False
+
+
+def metrics_meet_floors(metrics: NestingMetrics, floors) -> list[str]:
+    """Return list of failed floor names (empty if all pass)."""
+    fails: list[str] = []
+    if metrics.parts_final < floors.parts_final:
+        fails.append("parts_final")
+    if metrics.area_coverage < floors.area_coverage:
+        fails.append("area_coverage")
+    if metrics.time_s > floors.time_s:
+        fails.append("time_s")
+    if metrics.kiss_seed < floors.kiss_seed:
+        fails.append("kiss_seed")
+    if metrics.kiss_outline < floors.kiss_outline:
+        fails.append("kiss_outline")
+    if metrics.kiss_standoff < floors.kiss_standoff:
+        fails.append("kiss_standoff")
+    if metrics.outline_coverage < floors.outline_coverage:
+        fails.append("outline_coverage")
+    if metrics.density_auc < floors.density_auc:
+        fails.append("density_auc")
+    if not metrics.independent_ok:
+        fails.append("independent_ok")
+    if not metrics.overlap_ok:
+        fails.append("overlap_ok")
+    if not metrics.void_ok:
+        fails.append("void_ok")
+    return fails
 
 
 class NestingPipelineEvaluator:
@@ -331,6 +382,7 @@ class NestingPipelineEvaluator:
             self.cfg, selected_t, history, rng,
             board=self.sheet, parts=self.parts, nest_state=nest_state,
             first_pass=nest_state is None,
+            group_allowed_angles=self.case.group_allowed_angles,
         )
 
         flat_parts = [
@@ -493,6 +545,7 @@ class NestingPipelineEvaluator:
         next_gids = list(seed_gids)
         next_tr = list(seed_tr)
         next_sel = list(range(len(seed_polys)))
+        trajectory: list[tuple[float, float, int]] = []
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
@@ -502,6 +555,7 @@ class NestingPipelineEvaluator:
                 parts=self.parts,
                 nest_state=nest_state,
                 first_pass=first_pass,
+                group_allowed_angles=self.case.group_allowed_angles,
             )
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
@@ -569,6 +623,16 @@ class NestingPipelineEvaluator:
                 transform=next_tr,
                 selected_indices=next_sel,
             )
+            # Per-iter coverage sample for trajectory metrics.
+            t_elapsed = time.perf_counter() - t0
+            usable = self.case.usable_area
+            cov = 0.0
+            if usable > 0:
+                part_area = sum(p.area for p in seed_polys) + sum(
+                    self.parts[group_id[i]][0].area for i in selected_polys
+                )
+                cov = part_area / usable
+            trajectory.append((t_elapsed, cov, len(seed_polys) + len(selected_polys)))
 
         time_s = time.perf_counter() - t0
         
@@ -605,15 +669,39 @@ class NestingPipelineEvaluator:
             placed_shapes, self.sheet, min_dist=min_dist,
         )
         
-        # Kiss: fraction of new parts whose nearest seed is within kiss_tol
-        kiss_fraction = 0.0
+        # Kiss metrics
+        kiss_seed = 0.0
+        kiss_outline = 0.0
+        kiss_standoff = 0.0
         contact_min = -1.0
+        new_geoms_shp = placed_shapes[len(seed_polys):]
+        if new_geoms_shp:
+            kiss_tol = max(min_dist * 2.0, 0.15)
+            standoff_tol = max(min_dist * 0.5, 1e-3)
+            outline_hits = 0
+            standoff_hits = 0
+            obstacle_union = None
+            if seed_polys or selected_polys:
+                from shapely.ops import unary_union
+                # Obstacle for standoff: seeds + sheet exterior as distance target
+                # Standoff = distance to nearest packed seed or other new parts? Plan says
+                # obstacle union of seeds (locked) for new parts.
+                if seed_polys:
+                    obstacle_union = unary_union(seed_polys)
+            for p in new_geoms_shp:
+                if float(p.distance(self.sheet.exterior)) <= kiss_tol:
+                    outline_hits += 1
+                if obstacle_union is not None and not obstacle_union.is_empty:
+                    err = abs(float(p.distance(obstacle_union)) - min_dist)
+                    if err <= standoff_tol:
+                        standoff_hits += 1
+            kiss_outline = outline_hits / len(new_geoms_shp)
+            if obstacle_union is not None:
+                kiss_standoff = standoff_hits / len(new_geoms_shp)
+
         if seed_polys and selected_polys:
             seed_geoms = [Geometry.from_shapely(p) for p in seed_polys]
-            new_geoms = [
-                Geometry.from_shapely(p)
-                for p in placed_shapes[len(seed_polys):]
-            ]
+            new_geoms = [Geometry.from_shapely(p) for p in new_geoms_shp]
             dists = find_polygon_distances_bipartite(new_geoms, seed_geoms)
             if dists:
                 nearest: dict[int, float] = {}
@@ -626,10 +714,30 @@ class NestingPipelineEvaluator:
                 dist_vals = list(nearest.values())
                 contact_min = min(dist_vals) if dist_vals else -1.0
                 kiss_tol = max(min_dist * 2.0, 0.15)
-                kiss_fraction = (
+                kiss_seed = (
                     sum(1 for v in dist_vals if v <= kiss_tol) / len(new_geoms)
                     if new_geoms else 0.0
                 )
+
+        # Trajectory: time to 90% of final coverage; AUC normalized efficiency.
+        time_to_frac = -1.0
+        density_auc = 0.0
+        if trajectory:
+            c_final = trajectory[-1][1]
+            t_total = max(trajectory[-1][0], 1e-12)
+            target = 0.9 * c_final
+            for t_i, c_i, _p in trajectory:
+                if c_i >= target - 1e-12:
+                    time_to_frac = t_i
+                    break
+            # Trapezoid ∫ c dt / (c_final * t_total)
+            area = 0.0
+            for i in range(1, len(trajectory)):
+                t0_, c0, _ = trajectory[i - 1]
+                t1_, c1, _ = trajectory[i]
+                area += 0.5 * (c0 + c1) * (t1_ - t0_)
+            if c_final > 1e-12:
+                density_auc = float(np.clip(area / (c_final * t_total), 0.0, 1.0))
 
         self.last_result = {
             "selected_polys": next_sel,
@@ -653,6 +761,12 @@ class NestingPipelineEvaluator:
             area_coverage_seed=area_coverage_seed,
             parts_delta=parts_final - parts_seed,
             area_coverage_delta=area_coverage - area_coverage_seed,
-            kiss_fraction=kiss_fraction,
+            kiss_fraction=kiss_seed,
+            kiss_seed=kiss_seed,
+            kiss_outline=kiss_outline,
+            kiss_standoff=kiss_standoff,
             contact_min=contact_min,
+            time_to_frac_final=time_to_frac,
+            density_auc=density_auc,
+            coverage_trajectory=tuple(trajectory),
         )

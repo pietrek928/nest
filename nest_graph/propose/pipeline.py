@@ -20,10 +20,12 @@ from nest_graph.propose.context import (
     placement_contact_error,
     apply_proposer_pool_scales,
     border_focal_for_propose,
-    classify_propose_zone,
+    classify_propose_zone_info,
     effective_ranking_mode,
     focal_shape_for_propose,
+    local_packed_near_target,
     obstacle_shape_for_propose,
+    part_extents,
     propose_push_point,
     should_use_border_focus,
     simplify_obstacle_union,
@@ -171,6 +173,7 @@ def collect_propose_candidates(
     guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
     cluster_patterns: Sequence | None = None,
     group_id: int = 0,
+    placement_angles_override: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     ctx = ProposeContext(
         base_shape,
@@ -184,6 +187,7 @@ def collect_propose_candidates(
         enabled_proposers=enabled_proposers,
         proposer_counts=proposer_counts,
         guidance_seed_coords=guidance_seed_coords,
+        placement_angles_override=placement_angles_override,
     )
     pool = ctx.pool
     border_focus = ctx.border_focus
@@ -691,6 +695,7 @@ def propose_coords_with_strategy(
     proposer_counts: dict[str, int] | None = None,
     full_packed_geoms: list[Geometry] | None = None,
     cluster_patterns: Sequence | None = None,
+    placement_angles_override: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -733,6 +738,7 @@ def propose_coords_with_strategy(
         proposer_counts=proposer_counts,
         cluster_patterns=cluster_patterns,
         group_id=group_id,
+        placement_angles_override=placement_angles_override,
     )
     return propose_coords_from_candidates(
         base_shape,
@@ -1044,6 +1050,7 @@ def _best_proposer_coords(
     proposer_counts: dict[str, int] | None = None,
     full_packed_geoms: list[Geometry] | None = None,
     cluster_patterns: Sequence | None = None,
+    placement_angles_override: np.ndarray | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -1060,6 +1067,7 @@ def _best_proposer_coords(
         proposer_counts=proposer_counts,
         full_packed_geoms=full_packed_geoms,
         cluster_patterns=cluster_patterns,
+        placement_angles_override=placement_angles_override,
     )
 
 
@@ -1123,12 +1131,15 @@ def proposed_transforms_for_groups(
     propose_feedback=None,
     packed_group_ids: Sequence[int] | None = None,
     packed_transforms: Sequence | None = None,
+    group_allowed_angles: Sequence[tuple[float, ...] | None] | None = None,
+    user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
     Propose uses the nearest packed cluster as obstacles only.
     ``make_polygon_graph`` still filters against the full selection.
     """
+    sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
     placed = [selected_polys[i] for i in selected_indices]
     full_packed_geoms = [Geometry.from_shapely(p) for p in placed]
     cluster_patterns = []
@@ -1153,27 +1164,38 @@ def proposed_transforms_for_groups(
                 min_dist=min_dist,
                 max_patterns=propose_cfg.cluster_copy_max_patterns,
                 min_members=propose_cfg.cluster_copy_min_members,
+                sheet=sheet,
             )
     out: dict[int, np.ndarray] = {}
     total_counts: dict[str, int] = {}
-    for part_poly, group_id in parts:
+    for part_idx, (part_poly, group_id) in enumerate(parts):
         zone: str | None = None
+        zone_info = None
         cfg = propose_cfg
+        primary_target = None
         if propose_cfg.place_profiles_enabled and not border_only_propose:
             if not placed:
                 zone = "empty_border"
             else:
                 obs_preview = obstacle_shape_for_propose(
-                    placed, part_poly, min_dist, propose_cfg=propose_cfg,
+                    placed,
+                    part_poly,
+                    min_dist,
+                    propose_cfg=propose_cfg,
+                    sheet=sheet,
                 )
-                zone = classify_propose_zone(
+                zone_info = classify_propose_zone_info(
                     board,
                     obs_preview,
                     part_poly,
                     min_dist=min_dist,
                     propose_cfg=propose_cfg,
                     selected_polys=placed,
+                    user_holes=user_holes,
+                    sheet=sheet,
                 )
+                zone = zone_info.zone
+                primary_target = zone_info.primary_target
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
             if zones_used_out is not None:
@@ -1181,7 +1203,16 @@ def proposed_transforms_for_groups(
 
         use_full = use_full_packed_obstacle
         if zone is not None:
-            use_full, nearest_k = ProposeConfig.obstacle_scope_for_place(zone)
+            n_clusters = zone_info.n_clusters if zone_info is not None else 1
+            free_ratio = zone_info.free_ratio if zone_info is not None else 1.0
+            coverage = zone_info.outline_coverage if zone_info is not None else 0.0
+            use_full, nearest_k = ProposeConfig.obstacle_scope_for_place(
+                zone,
+                n_clusters=n_clusters,
+                free_ratio=free_ratio,
+                outline_coverage=coverage,
+                border_coverage_threshold=propose_cfg.place_border_coverage_threshold,
+            )
             if nearest_k > 0:
                 cfg = cfg.model_copy(update={"obstacle_nearest_k": nearest_k})
 
@@ -1196,14 +1227,34 @@ def proposed_transforms_for_groups(
             obstacle_shape = simplify_obstacle_union(placed, min_dist)
         else:
             obstacle_shape = obstacle_shape_for_propose(
-                placed, part_poly, min_dist, propose_cfg=cfg,
+                placed,
+                part_poly,
+                min_dist,
+                propose_cfg=cfg,
+                sheet=sheet,
+                ref_point=primary_target,
             )
         # Reuse propose obstacle as focal when full-pack (avoids nearest-k mismatch).
         if use_full and placed:
             focal = obstacle_shape
+            if zone == "interior_pocket" and primary_target is not None:
+                pocket_proposers = ProposeConfig.proposers_for_place(zone) or frozenset()
+                if "group_fit" in pocket_proposers:
+                    _, part_max = part_extents(part_poly)
+                    local_focal = local_packed_near_target(
+                        placed, primary_target, part_max,
+                    )
+                    if local_focal is not None and not local_focal.is_empty:
+                        focal = local_focal
         else:
             focal = focal_shape_for_propose(
-                board, placed, part_poly, min_dist, cfg,
+                board,
+                placed,
+                part_poly,
+                min_dist,
+                cfg,
+                sheet=sheet,
+                ref_point=primary_target,
             )
         border_focus = should_use_border_focus(obstacle_shape, cfg)
         push = pt_push if pt_push is not None else propose_push_point(
@@ -1221,6 +1272,11 @@ def proposed_transforms_for_groups(
                 enabled = _FIRST_PASS_PACKED_BORDER_PROPOSERS
         elif zone is not None:
             enabled = ProposeConfig.proposers_for_place(zone)
+        angle_override = None
+        if group_allowed_angles is not None and part_idx < len(group_allowed_angles):
+            allowed = group_allowed_angles[part_idx]
+            if allowed is not None:
+                angle_override = np.asarray(allowed, dtype=np.float64)
         group_counts: dict[str, int] = {}
         coords = _best_proposer_coords(
             obstacle_shape,
@@ -1236,6 +1292,7 @@ def proposed_transforms_for_groups(
             proposer_counts=group_counts,
             full_packed_geoms=full_packed_geoms,
             cluster_patterns=cluster_patterns,
+            placement_angles_override=angle_override,
         )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n

@@ -31,6 +31,7 @@ def extract_cluster_patterns(
     min_dist: float,
     max_patterns: int = 2,
     min_members: int = 2,
+    sheet: Polygon | None = None,
 ) -> list[ClusterPattern]:
     """Build rigid motifs from contact-connected packed clusters."""
     if len(placed) < min_members:
@@ -39,7 +40,7 @@ def extract_cluster_patterns(
     if n < min_members:
         return []
 
-    index_groups = cluster_packed_indices(list(placed[:n]), min_dist)
+    index_groups = cluster_packed_indices(list(placed[:n]), min_dist, sheet=sheet)
     scored: list[tuple[float, list[int]]] = []
     for idxs in index_groups:
         if len(idxs) < min_members:

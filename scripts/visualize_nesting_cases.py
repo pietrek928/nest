@@ -18,7 +18,7 @@ from nest_graph.config import (
 )
 from nest_graph.utils import transform_poly
 from scripts.nesting_evaluator import NestingPipelineEvaluator
-from scripts.nesting_fixtures import NestCase, get_all_cases
+from scripts.nesting_fixtures import NestCase, resolve_cases
 
 
 GROUP_COLORS = (
@@ -240,10 +240,11 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=1024)
     args = parser.parse_args()
 
-    cases = get_all_cases()
-    if "all" not in args.cases:
-        wanted = set(args.cases)
-        cases = [c for c in cases if c.name in wanted or any(t in wanted for t in c.tags)]
+    if "all" in args.cases:
+        from scripts.nesting_fixtures import get_all_cases
+        cases = get_all_cases()
+    else:
+        cases = resolve_cases(list(args.cases))
 
     args.out.mkdir(parents=True, exist_ok=True)
     for case in cases:

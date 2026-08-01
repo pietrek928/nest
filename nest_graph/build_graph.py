@@ -10,7 +10,7 @@ from shapely.geometry import Point
 from shapely.ops import nearest_points
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
-from typing import Iterator, NamedTuple, Tuple
+from typing import Iterator, NamedTuple, Sequence, Tuple
 
 from .config import (
     BuildGraphConfig,
@@ -1823,6 +1823,26 @@ def _boost_border_scores(
         scores[i] = sc + weight * max(0.0, 1.0 - err / scale)
 
 
+def _project_angles_to_allowed(
+    transforms: np.ndarray,
+    allowed: Sequence[float],
+) -> np.ndarray:
+    """Snap angle column to nearest allowed grain angle (mod 2π)."""
+    if transforms.size == 0 or not allowed:
+        return transforms
+    out = np.asarray(transforms, dtype=np.float64).copy()
+    allowed_arr = np.asarray(allowed, dtype=np.float64)
+    two_pi = 2.0 * np.pi
+    angles = np.mod(out[:, 2], two_pi)
+    allowed_mod = np.mod(allowed_arr, two_pi)
+    # Circular distance to each allowed angle
+    diffs = angles[:, None] - allowed_mod[None, :]
+    diffs = (diffs + np.pi) % two_pi - np.pi
+    nearest = np.argmin(np.abs(diffs), axis=1)
+    out[:, 2] = allowed_mod[nearest]
+    return out
+
+
 def _build_transform_batch(
     cfg: BuildGraphConfig,
     selected_t: tuple[np.ndarray, ...],
@@ -1839,6 +1859,7 @@ def _build_transform_batch(
     proposer_counts_out: dict[str, int] | None = None,
     propose_stats_out: dict | None = None,
     propose_feedback=None,
+    group_allowed_angles: Sequence[tuple[float, ...] | None] | tuple = (),
 ) -> tuple[np.ndarray, ...]:
     sc = cfg.sampling
     scale = sc.transform_scale
@@ -1885,6 +1906,8 @@ def _build_transform_batch(
             packed_transforms=(
                 nest_state.transform if nest_state is not None else None
             ),
+            group_allowed_angles=group_allowed_angles,
+            user_holes=cfg.rules.board_holes,
         )
         if propose_stats_out is not None:
             propose_stats_out["proposal_count"] = sum(
@@ -1982,12 +2005,21 @@ def _build_transform_batch(
                 )
         merged = dedupe_transforms(np.concatenate(batch_parts))
         merged = shuffle_transforms(merged, rng)
+        allowed = None
+        if group_allowed_angles and group_id < len(group_allowed_angles):
+            allowed = group_allowed_angles[group_id]
+        if allowed is not None and merged.shape[0] > 0:
+            merged = _project_angles_to_allowed(merged, allowed)
+            merged = dedupe_transforms(merged)
         pin_budget = min(proposed.shape[0], max(cfg.propose.max_proposals, 1))
         proposal_pins = proposed[:pin_budget] if pin_budget > 0 else np.zeros((0, 3))
         if pinned.shape[0] > 0 or proposal_pins.shape[0] > 0:
             all_pinned = dedupe_transforms(
                 np.concatenate([pinned, proposal_pins], axis=0)
             )
+            if allowed is not None and all_pinned.shape[0] > 0:
+                all_pinned = _project_angles_to_allowed(all_pinned, allowed)
+                all_pinned = dedupe_transforms(all_pinned)
         else:
             all_pinned = pinned
         return subsample_transforms_with_pinned(

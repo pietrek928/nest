@@ -28,6 +28,7 @@ class ProposeContext:
     enabled_proposers: frozenset[str] | None = None
     proposer_counts: dict[str, int] | None = None
     guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None
+    placement_angles_override: np.ndarray | None = None
 
     @property
     def pool(self) -> int:
@@ -43,6 +44,8 @@ class ProposeContext:
 
     @property
     def placement_angles(self) -> np.ndarray:
+        if self.placement_angles_override is not None and len(self.placement_angles_override) > 0:
+            return np.asarray(self.placement_angles_override, dtype=np.float64)
         return placement_angle_grid(
             self.sheet,
             self.base_shape,

@@ -9,7 +9,7 @@ import numpy as np
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from scripts.nesting_evaluator import NestingPipelineEvaluator, ProposeBenchmarkMetrics
-from scripts.nesting_fixtures import get_all_cases
+from scripts.nesting_fixtures import resolve_cases
 
 
 def shipped_propose_config(**overrides: Any) -> ProposeConfig:
@@ -126,15 +126,14 @@ def main() -> None:
     parser.add_argument(
         "--cases",
         nargs="*",
-        default=["border_then_fill_s4"],
+        default=["border_then_fill"],
     )
     parser.add_argument("--seeds", type=int, nargs="*", default=list(range(3)))
     args = parser.parse_args()
 
     presets = args.presets or list(PROPOSE_BENCHMARK_PRESETS.keys())
 
-    all_cases = get_all_cases()
-    cases_to_run = [c for c in all_cases if c.name in args.cases]
+    cases_to_run = resolve_cases(args.cases)
 
     if not cases_to_run:
         print("No cases matched.")

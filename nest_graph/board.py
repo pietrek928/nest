@@ -83,6 +83,18 @@ def board_sheet_from_outline(
     return Polygon(outline)  # type: ignore[arg-type]
 
 
+def sheet_hole_polygons(sheet: Polygon) -> list[Polygon]:
+    """Interior hole polygons of the nestable sheet (real voids, not padding)."""
+    if sheet.is_empty or not getattr(sheet, "interiors", None):
+        return []
+    holes: list[Polygon] = []
+    for ring in sheet.interiors:
+        poly = Polygon(ring)
+        if not poly.is_empty and poly.area > 0.0:
+            holes.append(poly)
+    return holes
+
+
 def board_void_geometries(
     sheet: Polygon,
     *,

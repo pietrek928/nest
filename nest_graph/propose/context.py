@@ -1,13 +1,16 @@
+from dataclasses import dataclass
+from statistics import median
 from typing import Optional, Sequence
 
 from shapely import MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
+from shapely.ops import polylabel, unary_union
 
-from nest_graph.board import board_context_from_geometry
+from nest_graph.board import board_context_from_geometry, sheet_hole_polygons
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
 from nest_graph.propose.placement_outline import outline_standoff_distance
+
 
 def placement_free_region(
     sheet: Polygon,
@@ -23,12 +26,74 @@ def placement_free_region(
     return free
 
 
+def _polygon_components(geom: BaseGeometry) -> list[Polygon]:
+    if geom is None or geom.is_empty:
+        return []
+    if isinstance(geom, Polygon):
+        return [geom]
+    if isinstance(geom, MultiPolygon):
+        return [g for g in geom.geoms if isinstance(g, Polygon) and not g.is_empty]
+    if hasattr(geom, "geoms"):
+        out: list[Polygon] = []
+        for g in geom.geoms:
+            out.extend(_polygon_components(g))
+        return out
+    return []
+
+
+def free_space_targets(
+    free: BaseGeometry,
+    min_dist: float,
+) -> list[Point]:
+    """One polylabel (or representative) point per free polygon component."""
+    tol = max(float(min_dist), 1e-3)
+    targets: list[Point] = []
+    for poly in sorted(_polygon_components(free), key=lambda p: -p.area):
+        try:
+            targets.append(Point(polylabel(poly, tolerance=tol)))
+        except Exception:
+            targets.append(poly.representative_point())
+    return targets
+
+
+def part_extents(part_poly: Polygon) -> tuple[float, float]:
+    """Return (min_extent, max_extent) of a catalog part bbox."""
+    minx, miny, maxx, maxy = part_poly.bounds
+    w = max(maxx - minx, 1e-9)
+    h = max(maxy - miny, 1e-9)
+    return min(w, h), max(w, h)
+
+
+def _cluster_merge_gap(
+    polys: Sequence[BaseGeometry],
+    min_dist: float,
+    sheet: Polygon | None,
+) -> float:
+    gap = max(min_dist * 0.5, 1e-6)
+    extents: list[float] = []
+    for p in polys:
+        if p is None or p.is_empty:
+            continue
+        minx, miny, maxx, maxy = p.bounds
+        extents.append(max(maxx - minx, maxy - miny))
+    if extents:
+        gap = max(gap, 0.35 * float(median(extents)))
+    if sheet is not None and not sheet.is_empty:
+        minx, miny, maxx, maxy = sheet.bounds
+        characteristic = min(maxx - minx, maxy - miny)
+        if characteristic > 0.0:
+            gap = min(gap, 0.15 * characteristic)
+    return gap
+
+
 def cluster_packed_solid_groups(
     polys: Sequence[BaseGeometry],
     min_dist: float,
+    *,
+    sheet: Polygon | None = None,
 ) -> list[BaseGeometry]:
     """Connected clusters of packed parts (touching within clearance gap)."""
-    index_groups = cluster_packed_indices(polys, min_dist)
+    index_groups = cluster_packed_indices(polys, min_dist, sheet=sheet)
     groups: list[BaseGeometry] = []
     for idxs in index_groups:
         members = [polys[i] for i in idxs]
@@ -39,6 +104,8 @@ def cluster_packed_solid_groups(
 def cluster_packed_indices(
     polys: Sequence[BaseGeometry],
     min_dist: float,
+    *,
+    sheet: Polygon | None = None,
 ) -> list[list[int]]:
     """Indices of packed parts grouped into contact-connected clusters."""
     placed_idx = [i for i, p in enumerate(polys) if p is not None and not p.is_empty]
@@ -47,7 +114,7 @@ def cluster_packed_indices(
     if len(placed_idx) == 1:
         return [placed_idx]
 
-    gap = max(min_dist * 0.5, 1e-6)
+    gap = _cluster_merge_gap([polys[i] for i in placed_idx], min_dist, sheet)
     buffered = {i: polys[i].buffer(gap) for i in placed_idx}
     merged = unary_union(list(buffered.values()))
     if merged.is_empty:
@@ -63,6 +130,15 @@ def cluster_packed_indices(
         if members:
             groups.append(members)
     return groups
+
+
+def significant_cluster_groups(
+    groups: Sequence[BaseGeometry],
+    part_area: float,
+) -> list[BaseGeometry]:
+    """Drop tiny noise islands before inter_cluster decisions."""
+    floor = max(part_area * 0.25, 1e-9)
+    return [g for g in groups if not g.is_empty and float(g.area) >= floor]
 
 
 def border_solid_focal(sheet: Polygon, min_dist: float) -> BaseGeometry:
@@ -82,6 +158,8 @@ def obstacle_polys_for_propose(
     *,
     nearest_k: int | None = None,
     propose_cfg: ProposeConfig | None = None,
+    sheet: Polygon | None = None,
+    ref_point: Point | None = None,
 ) -> list[BaseGeometry]:
     """Parts in the k nearest packed clusters; graph still checks the full layout."""
     if not placed:
@@ -91,13 +169,22 @@ def obstacle_polys_for_propose(
         k_val = propose_cfg.obstacle_nearest_k
     if k_val is None:
         k_val = 2
-    groups = cluster_packed_solid_groups(placed, min_dist)
+    groups = cluster_packed_solid_groups(placed, min_dist, sheet=sheet)
     if not groups:
         return []
-    gap = max(min_dist * 0.5, 1e-6)
     if len(groups) == 1:
         return list(placed)
-    ref = part_poly.centroid
+    ref = ref_point
+    if ref is None and sheet is not None and not sheet.is_empty:
+        free = placement_free_region(sheet, unary_union(list(placed)), min_dist)
+        targets = free_space_targets(free, min_dist)
+        if targets:
+            ref = targets[0]
+    if ref is None:
+        if sheet is not None and not sheet.is_empty:
+            ref = sheet.centroid
+        else:
+            ref = Point(0.0, 0.0)
     k = max(1, min(k_val, len(groups)))
     ranked = sorted(groups, key=lambda g: g.distance(ref))[:k]
     obstacle = unary_union(ranked)
@@ -110,9 +197,16 @@ def obstacle_shape_for_propose(
     min_dist: float,
     *,
     propose_cfg: ProposeConfig | None = None,
+    sheet: Polygon | None = None,
+    ref_point: Point | None = None,
 ) -> BaseGeometry:
     polys = obstacle_polys_for_propose(
-        placed, part_poly, min_dist, propose_cfg=propose_cfg,
+        placed,
+        part_poly,
+        min_dist,
+        propose_cfg=propose_cfg,
+        sheet=sheet,
+        ref_point=ref_point,
     )
     if not polys:
         return Polygon()
@@ -135,9 +229,14 @@ def simplify_obstacle_union(
     if merged.is_empty:
         return unary_union(list(polys))
     # Preserve concavities for moderate packs (group_fit / neighbor_slide).
+    # Skip hull when it would fill a rim/donut interior (area blows up).
     if len(polys) >= 12:
         hull = merged.convex_hull
-        if not hull.is_empty:
+        if (
+            not hull.is_empty
+            and float(merged.area) > 0.0
+            and float(hull.area) <= float(merged.area) * 1.5
+        ):
             return hull
     return merged
 
@@ -148,16 +247,39 @@ def focal_shape_for_propose(
     part_poly: Polygon,
     min_dist: float,
     propose_cfg: ProposeConfig,
+    *,
+    sheet: Polygon | None = None,
+    ref_point: Point | None = None,
 ) -> Optional[BaseGeometry]:
     """Focal geometry for ray anchors and group/board edge seeds."""
     obstacle = obstacle_shape_for_propose(
-        placed, part_poly, min_dist, propose_cfg=propose_cfg,
+        placed,
+        part_poly,
+        min_dist,
+        propose_cfg=propose_cfg,
+        sheet=sheet,
+        ref_point=ref_point,
     )
     if obstacle is not None and not obstacle.is_empty:
         return obstacle
     if propose_cfg.use_border_focus:
         return border_focal_for_propose(board, min_dist)
     return None
+
+
+def local_packed_near_target(
+    placed: Sequence[BaseGeometry],
+    target: Point,
+    part_max_extent: float,
+) -> BaseGeometry:
+    """Packed subset within 3·part_max of a free-space target (GROUP_FIT cap)."""
+    radius = max(3.0 * part_max_extent, 1e-6)
+    near = [p for p in placed if p is not None and not p.is_empty and float(p.distance(target)) <= radius]
+    if not near:
+        return Polygon()
+    if len(near) == 1:
+        return near[0]
+    return unary_union(near)
 
 
 def search_region_for_placement(
@@ -253,7 +375,7 @@ def outline_coverage_ratio(
     if sheet.is_empty or not placed:
         return 0.0
     perimeter = float(sheet.exterior.length)
-    if perimeter <= 0:
+    if perimeter <= 0.0:
         return 0.0
     tol = max(min_dist * 2.0, 1e-4)
     merged = unary_union(placed)
@@ -261,6 +383,193 @@ def outline_coverage_ratio(
         return 0.0
     covered_len = merged.buffer(tol).intersection(sheet.exterior).length
     return float(covered_len / perimeter)
+
+
+def _hole_mouth_void_seek(
+    free_poly: Polygon,
+    target: Point,
+    holes: Sequence[Polygon],
+    *,
+    min_dist: float,
+    part_max_extent: float,
+) -> bool:
+    if not holes or free_poly.is_empty:
+        return False
+    hole_union = unary_union(list(holes))
+    if hole_union.is_empty:
+        return False
+    near_tol = max(min_dist * 8.0, part_max_extent)
+    if float(target.distance(hole_union)) < near_tol:
+        return True
+    band = hole_union.buffer(max(min_dist * 8.0, 2.0 * part_max_extent))
+    inter = free_poly.intersection(band)
+    if inter.is_empty or free_poly.area <= 0.0:
+        return False
+    return float(inter.area / free_poly.area) >= 0.12
+
+
+def _local_interior_pocket(
+    free: BaseGeometry,
+    packed: BaseGeometry,
+    sheet: Polygon,
+    *,
+    min_dist: float,
+    part_min_extent: float,
+) -> bool:
+    if free.is_empty or packed is None or packed.is_empty:
+        return False
+    local_buf = max(4.0 * min_dist, part_min_extent)
+    local = free.intersection(packed.buffer(local_buf))
+    if local.is_empty:
+        return False
+    ring_w = max(2.0 * min_dist, 0.5 * part_min_extent)
+    exterior_ring = sheet.exterior.buffer(ring_w)
+    return local.intersection(exterior_ring).is_empty
+
+
+def _free_width_at_target(free_poly: Polygon, target: Point) -> float:
+    if free_poly.is_empty or free_poly.exterior is None:
+        return 0.0
+    return 2.0 * float(target.distance(free_poly.exterior))
+
+
+@dataclass(frozen=True)
+class PlaceZoneInfo:
+    zone: str
+    free_ratio: float = 1.0
+    n_clusters: int = 0
+    outline_coverage: float = 0.0
+    primary_target: Point | None = None
+
+
+def classify_propose_zone_info(
+    board: BaseGeometry,
+    obstacle_shape: BaseGeometry,
+    part_poly: Polygon,
+    *,
+    min_dist: float,
+    propose_cfg: ProposeConfig,
+    selected_polys: Sequence[BaseGeometry] | None = None,
+    selected_indices: Sequence[int] | None = None,
+    user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    sheet: Polygon | None = None,
+) -> PlaceZoneInfo:
+    """Classify propose zone with metrics for obstacle-scope decisions."""
+    del selected_indices  # reserved for callers that mirror pipeline selection
+    if sheet is None:
+        sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
+    placed = list(selected_polys or [])
+    if not placed or obstacle_shape is None or obstacle_shape.is_empty:
+        return PlaceZoneInfo(zone="empty_border")
+
+    free = placement_free_region(sheet, obstacle_shape, min_dist)
+    free_ratio = float(free.area / sheet.area) if not sheet.is_empty and sheet.area > 0 else 0.0
+    coverage = outline_coverage_ratio(placed, sheet, min_dist)
+    clusters = cluster_packed_solid_groups(placed, min_dist, sheet=sheet)
+    part_min, part_max = part_extents(part_poly)
+    part_area = max(float(part_poly.area), 1e-9)
+    sig_clusters = significant_cluster_groups(clusters, part_area)
+    components = sorted(_polygon_components(free), key=lambda p: -p.area)
+    targets = free_space_targets(free, min_dist)
+    primary_target = targets[0] if targets else None
+    primary_free = components[0] if components else None
+
+    holes = sheet_hole_polygons(sheet)
+    if primary_free is not None and primary_target is not None:
+        if _hole_mouth_void_seek(
+            primary_free,
+            primary_target,
+            holes,
+            min_dist=min_dist,
+            part_max_extent=part_max,
+        ):
+            return PlaceZoneInfo(
+                zone="void_seek",
+                free_ratio=free_ratio,
+                n_clusters=len(sig_clusters),
+                outline_coverage=coverage,
+                primary_target=primary_target,
+            )
+
+    if len(sig_clusters) >= 2 and free_ratio > 0.08:
+        minx, miny, maxx, maxy = sheet.bounds
+        char = min(maxx - minx, maxy - miny)
+        prox = min(4.0 * part_max, 0.35 * char if char > 0 else 4.0 * part_max)
+        # Ignore nearly-adjacent seeds (should merge); require a true gap between islands.
+        min_half = 2.0 * part_max
+        # Closest cluster-pair midpoint (not global free polylabel) so a giant empty
+        # free region cannot sample far from both islands.
+        best_half: float | None = None
+        for i in range(len(sig_clusters)):
+            for j in range(i + 1, len(sig_clusters)):
+                ci = sig_clusters[i]
+                cj = sig_clusters[j]
+                if float(free.distance(ci)) > min_dist * 2.0:
+                    continue
+                if float(free.distance(cj)) > min_dist * 2.0:
+                    continue
+                pi = ci.centroid
+                pj = cj.centroid
+                mid = Point(0.5 * (pi.x + pj.x), 0.5 * (pi.y + pj.y))
+                if float(mid.distance(free)) > part_max:
+                    continue
+                half = 0.5 * float(pi.distance(pj))
+                if half < min_half:
+                    continue
+                if best_half is None or half < best_half:
+                    best_half = half
+        if best_half is not None and best_half <= prox:
+            return PlaceZoneInfo(
+                zone="inter_cluster",
+                free_ratio=free_ratio,
+                n_clusters=len(sig_clusters),
+                outline_coverage=coverage,
+                primary_target=primary_target,
+            )
+
+    packed_union = unary_union(placed)
+    if _local_interior_pocket(
+        free,
+        packed_union,
+        sheet,
+        min_dist=min_dist,
+        part_min_extent=part_min,
+    ):
+        return PlaceZoneInfo(
+            zone="interior_pocket",
+            free_ratio=free_ratio,
+            n_clusters=len(sig_clusters),
+            outline_coverage=coverage,
+            primary_target=primary_target,
+        )
+
+    ring_w = max(2.0 * min_dist, 0.5 * part_min)
+    exterior_ring = sheet.exterior.buffer(ring_w)
+    touches_exterior = (
+        primary_free is not None
+        and not primary_free.intersection(exterior_ring).is_empty
+    )
+    if touches_exterior and primary_free is not None and primary_target is not None:
+        width = _free_width_at_target(primary_free, primary_target)
+        if width < 1.5 * part_min:
+            zone = "cluster_edge"
+        else:
+            zone = "border_gap"
+        return PlaceZoneInfo(
+            zone=zone,
+            free_ratio=free_ratio,
+            n_clusters=len(sig_clusters),
+            outline_coverage=coverage,
+            primary_target=primary_target,
+        )
+
+    return PlaceZoneInfo(
+        zone="cluster_edge",
+        free_ratio=free_ratio,
+        n_clusters=len(sig_clusters),
+        outline_coverage=coverage,
+        primary_target=primary_target,
+    )
 
 
 def classify_propose_zone(
@@ -272,54 +581,21 @@ def classify_propose_zone(
     propose_cfg: ProposeConfig,
     selected_polys: Sequence[BaseGeometry] | None = None,
     selected_indices: Sequence[int] | None = None,
+    user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    sheet: Polygon | None = None,
 ) -> str:
     """Classify where on the sheet this part should be proposed."""
-    sheet, voids = board_context_from_geometry(board)
-    placed = list(selected_polys or [])
-    if not placed or obstacle_shape is None or obstacle_shape.is_empty:
-        return "empty_border"
-
-    free = placement_free_region(sheet, obstacle_shape, min_dist)
-    free_ratio = float(free.area / sheet.area) if not sheet.is_empty else 0.0
-    clusters = cluster_packed_solid_groups(placed, min_dist)
-    part_c = part_poly.centroid
-    border_dist = float(part_c.distance(sheet.exterior))
-
-    coverage = outline_coverage_ratio(placed, sheet, min_dist)
-    border_touch_tol = max(min_dist * 8.0, 1e-3)
-    packed_near_border = any(
-        float(p.distance(sheet.exterior)) <= border_touch_tol for p in placed
-    )
-    # Interior-only packs (e.g. center interlock seeds) must not use border_gap.
-    if (
-        coverage < propose_cfg.place_border_coverage_threshold
-        and packed_near_border
-    ):
-        return "border_gap"
-
-    if voids:
-        part_geom = Geometry.from_shapely(part_poly)
-        void_tol = min_dist * 8.0
-        for void_g in voids:
-            if void_g.distance(part_geom) < void_tol:
-                return "void_seek"
-
-    if len(clusters) >= 2 and free_ratio > 0.08:
-        return "inter_cluster"
-
-    if free_ratio >= propose_cfg.place_free_area_interior_threshold:
-        return "interior_pocket"
-
-    inset = max(min_dist * 4.0, 1e-4)
-    inner = sheet.buffer(-inset)
-    if (
-        not inner.is_empty
-        and inner.contains(part_c)
-        and border_dist > min_dist * 6.0
-    ):
-        return "interior_pocket"
-
-    return "cluster_edge"
+    return classify_propose_zone_info(
+        board,
+        obstacle_shape,
+        part_poly,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        selected_polys=selected_polys,
+        selected_indices=selected_indices,
+        user_holes=user_holes,
+        sheet=sheet,
+    ).zone
 
 
 def apply_proposer_pool_scales(
@@ -348,7 +624,7 @@ def placement_contact_error(
         border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)
     else:
         border_err = abs(float(placed.distance(sheet.exterior)) - min_dist)
-    
+
     if focal_shape is not None:
         is_empty = False
         if not isinstance(focal_shape, Geometry):
@@ -365,4 +641,3 @@ def placement_contact_error(
                 group_err = abs(float(focal_shape.distance(placed)) - min_dist)
             return border_err + group_err
     return border_err
-
