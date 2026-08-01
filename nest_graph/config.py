@@ -8,8 +8,8 @@ import numpy as np
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
-from .board import board_sheet_from_outline, board_void_geometries
-from .elem_graph import Circle, RuleMutationSettings
+from .board import board_sheet_from_outline, board_void_geometries, default_sheet_padding
+from .elem_graph import Circle, RuleMutationSettings, ScoreAggregation, SelectMode, SelectOptions, ScoreRulesOptions
 from .proposer_names import ProposerName
 from .utils import normalize_poly
 
@@ -159,8 +159,6 @@ class RulesConfig(BaseModel):
         return Polygon(list(self.board_coords))
 
     def effective_sheet_padding(self) -> float:
-        from .board import default_sheet_padding
-
         outline = self.board_polygon()
         return default_sheet_padding(
             outline,
@@ -332,6 +330,11 @@ class ProposeConfig(BaseModel):
     batch_pack_follow_proposals: int = 6
     batch_pack_follow_pool: int = 24
     batch_pack_max_pairs: int = 12
+    use_cluster_copy: bool = True
+    """Rigid-copy packed cluster motifs into free pockets / between clusters."""
+    cluster_copy_max_patterns: int = 2
+    cluster_copy_anchor_seeds: int = 6
+    cluster_copy_min_members: int = 2
     use_board_edge_seeds: bool = True
     board_edge_samples_per_edge: int = 24
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
@@ -381,6 +384,7 @@ class ProposeConfig(BaseModel):
                 ProposerName.GROUP_FIT,
                 ProposerName.NEIGHBOR_SLIDE,
                 ProposerName.RIBBON_FREE,
+                ProposerName.GUIDANCE_CAST_REFINE,
             }),
             PlaceZone.INTERIOR_POCKET: frozenset({
                 ProposerName.EROSION,
@@ -388,6 +392,7 @@ class ProposeConfig(BaseModel):
                 ProposerName.RIBBON_FREE,
                 ProposerName.GUIDANCE_CAST_REFINE,
                 ProposerName.RAYCASTING,
+                ProposerName.CLUSTER_COPY,
             }),
             PlaceZone.CLUSTER_EDGE: frozenset({
                 ProposerName.GROUP_FIT,
@@ -395,12 +400,15 @@ class ProposeConfig(BaseModel):
                 ProposerName.GUIDANCE_CAST_REFINE,
                 ProposerName.PERIMETER_WALK,
                 ProposerName.EROSION,
+                ProposerName.CLUSTER_COPY,
             }),
             PlaceZone.INTER_CLUSTER: frozenset({
                 ProposerName.RIBBON_FREE,
                 ProposerName.RAYCASTING,
                 ProposerName.VORONOI,
                 ProposerName.EROSION,
+                ProposerName.CLUSTER_COPY,
+                ProposerName.GUIDANCE_CAST_REFINE,
             }),
             PlaceZone.VOID_SEEK: frozenset({
                 ProposerName.EROSION,
@@ -456,6 +464,11 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 12,
                 "use_board_edge_seeds": True,
                 "use_neighbor_slide": True,
+                "board_edge_guidance_refine": False,
+                "contact_clearance_hybrid_weight": 0.1,
+                "board_edge_samples_per_edge": 12,
+                "group_edge_samples_per_edge": 8,
+                "placement_num_angles": 8,
             },
             PlaceZone.INTERIOR_POCKET.value: {
                 "ranking_mode": "contact_hybrid",
@@ -466,6 +479,7 @@ class ProposeConfig(BaseModel):
                 "border_focus_ranking": False,
                 "cast_squeeze_top_k": 6,
                 "use_board_edge_seeds": False,
+                "use_cluster_copy": True,
             },
             PlaceZone.CLUSTER_EDGE.value: {
                 "use_guidance_propositions": True,
@@ -478,6 +492,9 @@ class ProposeConfig(BaseModel):
                 "use_neighbor_slide": True,
                 "use_full_packed_obstacle": False,
                 "obstacle_nearest_k": 3,
+                "contact_clearance_hybrid_weight": 0.1,
+                "contact_tightness_hybrid_weight": 0.25,
+                "use_cluster_copy": True,
             },
             PlaceZone.INTER_CLUSTER.value: {
                 "ranking_mode": "clearance",
@@ -488,6 +505,7 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 4,
                 "use_ribbon_seeds": True,
                 "use_voronoi": True,
+                "use_cluster_copy": True,
             },
             PlaceZone.VOID_SEEK.value: {
                 "ranking_mode": "clearance",
@@ -498,6 +516,11 @@ class ProposeConfig(BaseModel):
         }
         patch = dict(profiles.get(zone, {}))
         patch.update(overrides)
+        # Never re-enable a flag the caller already turned off (seeded/bench caps).
+        if base is not None:
+            for key, val in list(patch.items()):
+                if key in root and root[key] is False and val is True:
+                    del patch[key]
         root.update(patch)
         return cls(**root)
 
@@ -534,14 +557,22 @@ class BuildGraphConfig(BaseModel):
     propose: ProposeConfig = Field(default_factory=ProposeConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
 
-    def board_min_dist(self, *, first_pass: bool = False) -> float:
-        board = self.rules.board_polygon()
+    def board_min_dist_for(
+        self,
+        board,
+        *,
+        first_pass: bool = False,
+    ) -> float:
+        """Clearance from sheet diagonal × min_dist_ratio (use the nest sheet, not demo rules)."""
         xmin, ymin, xmax, ymax = board.bounds
         diag = float(np.hypot(xmax - xmin, ymax - ymin))
         ratio = self.propose.min_dist_ratio
         if first_pass:
             ratio = self.propose.first_pass_min_dist_ratio
         return diag * ratio
+
+    def board_min_dist(self, *, first_pass: bool = False) -> float:
+        return self.board_min_dist_for(self.rules.board_polygon(), first_pass=first_pass)
 
     def placement_epsilon_ratio(self, *, first_pass: bool = False) -> float:
         if first_pass:
@@ -763,8 +794,6 @@ def _make_rule_mutation_settings(
 
 def _make_select_options(mode: str, local_swap: bool, aggregation: str = "sum"):
     """Build SelectOptions for elem_graph tests and benchmarks."""
-    from nest_graph.elem_graph import ScoreAggregation, SelectMode, SelectOptions
-
     opts = SelectOptions()
     if mode == "weighted_greedy":
         opts.mode = SelectMode.WeightedGreedy
@@ -779,8 +808,6 @@ def _make_select_options(mode: str, local_swap: bool, aggregation: str = "sum"):
 
 def score_rules_options(sel: SelectionConfig):
     """ScoreRulesOptions aligned with nest_by_graph selection."""
-    from nest_graph.elem_graph import ScoreRulesOptions
-
     opts = ScoreRulesOptions()
     opts.latest_graph_only = sel.score_rules_latest_graph_only
     opts.count_weight = sel.score_rules_count_weight

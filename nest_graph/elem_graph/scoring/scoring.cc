@@ -105,10 +105,11 @@ Tscore score_transform(
     Tvertex group,
     Vec2f pos,
     float angle_rad,
-    ScoreAggregation aggregation
+    ScoreAggregation aggregation,
+    float radius
 ) {
     Tscore total = 0.0f;
-    const Circle2f circle(pos, 0.25f);
+    const Circle2f circle(pos, radius * radius);
 
     for (const PointPlaceRule &p : rules.point_rules) {
         if (p.group != group) {

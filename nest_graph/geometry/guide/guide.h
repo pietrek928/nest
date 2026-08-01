@@ -125,12 +125,22 @@ inline void aggregate_physics_feedback(
     const Scalar placed_radius = std::sqrt(placed_bounds.square_radius());
 
     for (const auto& res : results) {
+        const bool poly_a_is_placed = (res.polyA_idx == placed_poly_idx);
+        const int obstacle_idx = poly_a_is_placed ? res.polyB_idx : res.polyA_idx;
+        const int obstacle_part_idx = poly_a_is_placed ? res.partB_idx : res.partA_idx;
+        if (obstacle_idx < 0 || obstacle_idx >= static_cast<int>(all_polygons.size())) {
+            continue;
+        }
+        const auto& obstacle = all_polygons[obstacle_idx];
+        if (obstacle_part_idx < 0
+            || obstacle_part_idx >= static_cast<int>(obstacle.line_parts.size())) {
+            continue;
+        }
+        const auto& obstacle_part = obstacle.line_parts[obstacle_part_idx];
+
         if (res.intersect) {
             ctx.is_penetrating = true;
             ctx.penetration_count++;
-
-            const auto& obstacle = all_polygons[res.polyB_idx];
-            const auto& obstacle_part = obstacle.line_parts[res.partB_idx];
 
             if (res.penetration_sq == std::numeric_limits<Scalar>::max()) {
                 VecType push_dir = placed_bounds.center() - obstacle_part.bounding_circle.center();
@@ -150,12 +160,12 @@ inline void aggregate_physics_feedback(
                     ctx.max_mtv_sq = fake_mtv.len_sq();
                     ctx.max_mtv = fake_mtv;
                     ctx.alignment_normal = fake_mtv;
-                    ctx.closest_poly_idx = res.polyB_idx;
+                    ctx.closest_poly_idx = obstacle_idx;
                     ctx.closest_obstacle_center = obstacle_part.bounding_circle.center();
                 }
             } else {
                 VecType localized_mtv = res.mtv;
-                if (res.polyB_idx == placed_poly_idx) localized_mtv = -localized_mtv;
+                if (!poly_a_is_placed) localized_mtv = -localized_mtv;
 
                 Scalar mtv_len_sq = localized_mtv.len_sq();
                 if (mtv_len_sq < static_cast<Scalar>(1e-8)) {
@@ -181,31 +191,32 @@ inline void aggregate_physics_feedback(
                     ctx.max_mtv_sq = mtv_len_sq;
                     ctx.max_mtv = localized_mtv;
                     ctx.alignment_normal = localized_mtv;
-                    ctx.closest_poly_idx = res.polyB_idx;
-                    ctx.closest_obstacle_center =
-                        all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
+                    ctx.closest_poly_idx = obstacle_idx;
+                    ctx.closest_obstacle_center = obstacle_part.bounding_circle.center();
                 }
             }
         } else if (!ctx.is_penetrating) {
             const Scalar dist_sq = res.distance_sq;
             if (dist_sq < ctx.min_clearance * ctx.min_clearance) {
-                if (ctx.closest_poly_idx >= 0 && res.polyB_idx != ctx.closest_poly_idx) {
+                if (ctx.closest_poly_idx >= 0 && obstacle_idx != ctx.closest_poly_idx) {
                     ctx.second_min_clearance = ctx.min_clearance;
                     ctx.second_closest_obstacle_center = ctx.closest_obstacle_center;
                     ctx.second_closest_poly_idx = ctx.closest_poly_idx;
                 }
 
                 ctx.min_clearance = std::sqrt(static_cast<double>(dist_sq));
-                ctx.closest_obstacle_center = all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
-                ctx.closest_poly_idx = res.polyB_idx;
+                ctx.closest_obstacle_center = obstacle_part.bounding_circle.center();
+                ctx.closest_poly_idx = obstacle_idx;
                 if (res.closest_normal.len_sq() > static_cast<Scalar>(1e-8)) {
-                    ctx.closest_feature_normal = res.closest_normal;
+                    ctx.closest_feature_normal = poly_a_is_placed
+                        ? res.closest_normal
+                        : -res.closest_normal;
                 }
-            } else if (res.polyB_idx != ctx.closest_poly_idx &&
+            } else if (obstacle_idx != ctx.closest_poly_idx &&
                        dist_sq < ctx.second_min_clearance * ctx.second_min_clearance) {
                 ctx.second_min_clearance = std::sqrt(static_cast<double>(dist_sq));
-                ctx.second_closest_obstacle_center = all_polygons[res.polyB_idx].line_parts[res.partB_idx].bounding_circle.center();
-                ctx.second_closest_poly_idx = res.polyB_idx;
+                ctx.second_closest_obstacle_center = obstacle_part.bounding_circle.center();
+                ctx.second_closest_poly_idx = obstacle_idx;
             }
         }
     }
@@ -800,32 +811,50 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
 
     if (!config.is_post_rotation_pass && !ctx.is_penetrating) {
         constexpr Scalar rot_decay = static_cast<Scalar>(0.95);
+
+        // One working copy of the scene; only the placed slot changes per rotation.
+        std::vector<SolidGeometry<VecType>> working_polys = all_polygons;
+        auto sweep_ctx = prepare_sweep_axis<VecType>(all_polygons);
+        std::vector<PartSweepElement<VecType>> obstacle_elements;
+        obstacle_elements.reserve(all_polygons.size() * 4);
+        for (size_t i = 0; i < all_polygons.size(); ++i) {
+            if (static_cast<int>(i) == placed_poly_idx) continue;
+            append_poly_parts_to_sweep(
+                static_cast<int>(i), 0, all_polygons[i],
+                sweep_ctx.axis, sweep_ctx.axis_len_sqrt, obstacle_elements,
+                static_cast<Scalar>(0), config.search_radius);
+        }
+
         for (Scalar rot : ctx.raw_rotations) {
             if (std::fabs(static_cast<double>(rot)) <= 1e-6) {
                 continue;
             }
 
-            SolidGeometry<VecType> rotated_part = all_polygons[placed_poly_idx];
-            rotated_part.rotate(rot, current_position);
+            working_polys[placed_poly_idx] =
+                all_polygons[placed_poly_idx].rotate(rot, current_position);
 
-            std::vector<SolidGeometry<VecType>> rotated_polys = all_polygons;
-            rotated_polys[placed_poly_idx] = rotated_part;
+            std::vector<PartSweepElement<VecType>> elements = obstacle_elements;
+            append_poly_parts_to_sweep(
+                placed_poly_idx, 1, working_polys[placed_poly_idx],
+                sweep_ctx.axis, sweep_ctx.axis_len_sqrt, elements,
+                static_cast<Scalar>(0), config.search_radius);
 
-            auto rot_results = find_polygon_distances<VecType, Tracer>(
-                rotated_polys,
-                active_indices,
+            auto rot_results = execute_distance_sweep<VecType, Tracer>(
+                elements,
                 static_cast<Scalar>(0),
                 config.search_radius,
+                SweepMode::Subset,
+                -1,
                 tracer
             );
 
             PhysicsContext<VecType> rot_ctx;
-            aggregate_physics_feedback(placed_poly_idx, rotated_polys, rot_results, config, rot_ctx);
+            aggregate_physics_feedback(placed_poly_idx, working_polys, rot_results, config, rot_ctx);
 
             if (!rot_ctx.is_penetrating) {
                 std::vector<PlacementProposition<VecType>> rot_props;
                 formulate_exact_casting_translation(
-                    placed_poly_idx, rotated_polys, current_position, rot_ctx, config, rot_props
+                    placed_poly_idx, working_polys, current_position, rot_ctx, config, rot_props
                 );
                 for (auto prop : rot_props) {
                     prop.rotation_rad += rot;

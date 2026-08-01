@@ -11,6 +11,12 @@
 #endif
 using DefaultTracer = NEST_GRAPH_DEFAULT_TRACER;
 
+// Shared touch threshold for solid-distance and outline-standoff near-contact.
+template <class Scalar = double>
+inline constexpr Scalar nest_touch_eps_sq() {
+    return static_cast<Scalar>(1e-10);
+}
+
 inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
 }

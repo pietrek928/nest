@@ -4,7 +4,8 @@ from shapely.affinity import translate
 from shapely.geometry import Point, Polygon
 
 from nest_graph.config import ProposeConfig
-from nest_graph.propose import ProposeGeometry, collect_propose_candidates
+from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.pipeline import collect_propose_candidates
 from nest_graph.propose.ranking import select_guidance_cast_seeds
 
 

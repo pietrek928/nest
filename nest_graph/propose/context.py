@@ -7,6 +7,7 @@ from shapely.ops import unary_union
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
+from nest_graph.propose.placement_outline import outline_standoff_distance
 
 def placement_free_region(
     sheet: Polygon,
@@ -27,15 +28,28 @@ def cluster_packed_solid_groups(
     min_dist: float,
 ) -> list[BaseGeometry]:
     """Connected clusters of packed parts (touching within clearance gap)."""
-    placed = [p for p in polys if p is not None and not p.is_empty]
-    if not placed:
+    index_groups = cluster_packed_indices(polys, min_dist)
+    groups: list[BaseGeometry] = []
+    for idxs in index_groups:
+        members = [polys[i] for i in idxs]
+        groups.append(unary_union(members) if len(members) > 1 else members[0])
+    return groups
+
+
+def cluster_packed_indices(
+    polys: Sequence[BaseGeometry],
+    min_dist: float,
+) -> list[list[int]]:
+    """Indices of packed parts grouped into contact-connected clusters."""
+    placed_idx = [i for i, p in enumerate(polys) if p is not None and not p.is_empty]
+    if not placed_idx:
         return []
-    if len(placed) == 1:
-        return [unary_union(placed)]
+    if len(placed_idx) == 1:
+        return [placed_idx]
 
     gap = max(min_dist * 0.5, 1e-6)
-    buffered = [p.buffer(gap) for p in placed]
-    merged = unary_union(buffered)
+    buffered = {i: polys[i].buffer(gap) for i in placed_idx}
+    merged = unary_union(list(buffered.values()))
     if merged.is_empty:
         return []
 
@@ -43,11 +57,11 @@ def cluster_packed_solid_groups(
         blobs: list[BaseGeometry] = list(merged.geoms)
     else:
         blobs = [merged]
-    groups: list[BaseGeometry] = []
+    groups: list[list[int]] = []
     for blob in blobs:
-        members = [p for p in placed if p.buffer(gap).intersects(blob)]
+        members = [i for i, b in buffered.items() if b.intersects(blob)]
         if members:
-            groups.append(unary_union(members))
+            groups.append(members)
     return groups
 
 
@@ -87,7 +101,7 @@ def obstacle_polys_for_propose(
     k = max(1, min(k_val, len(groups)))
     ranked = sorted(groups, key=lambda g: g.distance(ref))[:k]
     obstacle = unary_union(ranked)
-    return [p for p in placed if p.buffer(gap).intersects(obstacle)]
+    return [p for p in placed if p.intersects(obstacle)]
 
 
 def obstacle_shape_for_propose(
@@ -102,7 +116,30 @@ def obstacle_shape_for_propose(
     )
     if not polys:
         return Polygon()
-    return unary_union(polys)
+    if len(polys) == 1:
+        return polys[0]
+    return simplify_obstacle_union(polys, min_dist)
+
+
+def simplify_obstacle_union(
+    polys: Sequence[BaseGeometry],
+    min_dist: float,
+) -> BaseGeometry:
+    """Merge packed parts; hull only for very dense clusters to keep proposers cheap."""
+    if not polys:
+        return Polygon()
+    if len(polys) == 1:
+        return polys[0]
+    gap = max(min_dist * 0.5, 1e-6)
+    merged = unary_union([p.buffer(gap) for p in polys]).buffer(-gap)
+    if merged.is_empty:
+        return unary_union(list(polys))
+    # Preserve concavities for moderate packs (group_fit / neighbor_slide).
+    if len(polys) >= 12:
+        hull = merged.convex_hull
+        if not hull.is_empty:
+            return hull
+    return merged
 
 
 def focal_shape_for_propose(
@@ -219,16 +256,11 @@ def outline_coverage_ratio(
     if perimeter <= 0:
         return 0.0
     tol = max(min_dist * 2.0, 1e-4)
-    covered = 0.0
-    n_samples = max(32, int(perimeter / max(min_dist, 1e-4)))
-    for i in range(n_samples):
-        t = i / n_samples
-        pt = sheet.exterior.interpolate(t, normalized=True)
-        for p in placed:
-            if float(p.distance(pt)) <= tol:
-                covered += 1.0
-                break
-    return covered / n_samples
+    merged = unary_union(placed)
+    if merged.is_empty:
+        return 0.0
+    covered_len = merged.buffer(tol).intersection(sheet.exterior).length
+    return float(covered_len / perimeter)
 
 
 def classify_propose_zone(
@@ -254,12 +286,18 @@ def classify_propose_zone(
     border_dist = float(part_c.distance(sheet.exterior))
 
     coverage = outline_coverage_ratio(placed, sheet, min_dist)
-    if coverage < propose_cfg.place_border_coverage_threshold:
+    border_touch_tol = max(min_dist * 8.0, 1e-3)
+    packed_near_border = any(
+        float(p.distance(sheet.exterior)) <= border_touch_tol for p in placed
+    )
+    # Interior-only packs (e.g. center interlock seeds) must not use border_gap.
+    if (
+        coverage < propose_cfg.place_border_coverage_threshold
+        and packed_near_border
+    ):
         return "border_gap"
 
     if voids:
-        from nest_graph.geometry import Geometry
-
         part_geom = Geometry.from_shapely(part_poly)
         void_tol = min_dist * 8.0
         for void_g in voids:
@@ -306,22 +344,25 @@ def placement_contact_error(
     focal_shape: Optional[BaseGeometry] = None,
 ) -> float:
     """Distance from ideal standoff (0 = flush against border or group)."""
-    from nest_graph.propose.placement_outline import outline_standoff_distance
-
     if isinstance(placed, Geometry):
         border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)
     else:
         border_err = abs(float(placed.distance(sheet.exterior)) - min_dist)
-    if focal_shape is not None and not focal_shape.is_empty:
-        if isinstance(placed, Geometry):
-            focal_geom = (
-                focal_shape
-                if isinstance(focal_shape, Geometry)
-                else Geometry.from_shapely(focal_shape)
-            )
-            group_err = abs(placed.distance(focal_geom) - min_dist)
-        else:
-            group_err = abs(float(focal_shape.distance(placed)) - min_dist)
-        return min(border_err, group_err)
+    
+    if focal_shape is not None:
+        is_empty = False
+        if not isinstance(focal_shape, Geometry):
+            is_empty = focal_shape.is_empty
+        if not is_empty:
+            if isinstance(placed, Geometry):
+                focal_geom = (
+                    focal_shape
+                    if isinstance(focal_shape, Geometry)
+                    else Geometry.from_shapely(focal_shape)
+                )
+                group_err = abs(placed.distance(focal_geom) - min_dist)
+            else:
+                group_err = abs(float(focal_shape.distance(placed)) - min_dist)
+            return border_err + group_err
     return border_err
 

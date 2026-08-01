@@ -1,9 +1,9 @@
+import cv2 as cv
 import numpy as np
 from vec_test import transform_points_g3, points_line_string_distance_g3
 
 
 def render_boundary(im, coords, color, size=(1.0, 1.0), thickness=1):
-    import cv2 as cv
     coords = np.rint(
         coords * (np.array(im.shape[:2][::-1]) / size)
     ).astype(np.int32).reshape((-1, 1, 2))
@@ -11,7 +11,6 @@ def render_boundary(im, coords, color, size=(1.0, 1.0), thickness=1):
 
 
 def test():
-    import cv2 as cv
     box = np.array([
         [1, 1],
         [9, 1],

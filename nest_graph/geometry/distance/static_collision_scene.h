@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <vector>
 
 #include "distance/polygon_distance.h"
@@ -40,7 +41,8 @@ struct StaticCollisionScene {
     }
 
     std::vector<ComplexDistanceResult<VecType>> query_placed(
-        const SolidGeometry<VecType>& placed
+        const SolidGeometry<VecType>& placed,
+        Scalar distance_margin = static_cast<Scalar>(0)
     ) const {
         if (obstacles.empty()) {
             return {};
@@ -48,11 +50,12 @@ struct StaticCollisionScene {
         std::vector<PartSweepElement<VecType>> elements;
         elements.reserve(obstacle_elements.size() + 4);
         append_poly_parts_to_sweep(
-            0, 0, placed, ctx.axis, ctx.axis_len_sqrt, elements, aura_multiplier);
+            0, 0, placed, ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
         elements.insert(
             elements.end(), obstacle_elements.begin(), obstacle_elements.end());
         return execute_distance_sweep<VecType>(
-            elements, aura_multiplier, static_cast<Scalar>(0), SweepMode::Bipartite, 1);
+            elements, aura_multiplier, distance_margin, SweepMode::Bipartite, 1);
     }
 
     bool is_valid_placement(
@@ -62,16 +65,31 @@ struct StaticCollisionScene {
         if (obstacles.empty()) {
             return true;
         }
-        const auto results = query_placed(placed);
-        for (const auto& res : results) {
-            if (res.intersect) {
-                return false;
-            }
-            if (margin_sq > static_cast<Scalar>(0)
-                && static_cast<Scalar>(res.distance_sq) < margin_sq) {
-                return false;
-            }
+        const Scalar distance_margin = margin_sq > static_cast<Scalar>(0)
+            ? static_cast<Scalar>(std::sqrt(static_cast<double>(margin_sq)))
+            : static_cast<Scalar>(0);
+        return !query_any_violation(placed, margin_sq, distance_margin);
+    }
+
+    // Returns true if any obstacle intersects or is closer than margin_sq.
+    // Uses distance_margin in the broad-phase prune and stops on first violation.
+    bool query_any_violation(
+        const SolidGeometry<VecType>& placed,
+        Scalar margin_sq,
+        Scalar distance_margin
+    ) const {
+        if (obstacles.empty()) {
+            return false;
         }
-        return true;
+        std::vector<PartSweepElement<VecType>> elements;
+        elements.reserve(obstacle_elements.size() + 4);
+        append_poly_parts_to_sweep(
+            0, 0, placed, ctx.axis, ctx.axis_len_sqrt, elements,
+            aura_multiplier, distance_margin);
+        elements.insert(
+            elements.end(), obstacle_elements.begin(), obstacle_elements.end());
+        return execute_distance_sweep_any_violation<VecType>(
+            elements, aura_multiplier, distance_margin, margin_sq,
+            SweepMode::Bipartite, 1);
     }
 };

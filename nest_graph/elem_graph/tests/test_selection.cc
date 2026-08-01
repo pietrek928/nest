@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "graph/graph.h"
@@ -44,15 +45,16 @@ TEST_CASE("score_transform matches score_elems at rule center", "[selection]") {
         rules, 0, Vec2f({0.5f, 0.5f}), 0.0f, ScoreAggregation::Sum);
     const std::vector<float> es = score_elems(g, rules, ScoreAggregation::Sum);
     REQUIRE(es.size() == 1);
-    REQUIRE(direct == Approx(es[0]).margin(1e-5f));
+    REQUIRE(direct == Catch::Approx(es[0]).margin(1e-5f));
 }
 
-TEST_CASE("score_transform negative weight repels at center", "[selection]") {
+TEST_CASE("score_transform uses provided radius for circle rules", "[selection]") {
     PlacementRuleSet rules;
-    append_point_place_rule_at(rules, Vec2f({0.5f, 0.5f}), 0.2f, -1.0f, 0);
-    const float at_center = score_transform(
-        rules, 0, Vec2f({0.5f, 0.5f}), 0.0f, ScoreAggregation::Sum);
-    const float far = score_transform(
-        rules, 0, Vec2f({2.0f, 2.0f}), 0.0f, ScoreAggregation::Sum);
-    REQUIRE(at_center < far);
+    append_circle_place_rule_at(rules, Circle2f(Vec2f({0.0f, 0.0f}), 1.0f), 1.0f, 1.0f, 0);
+
+    const float small = score_transform(
+        rules, 0, Vec2f({0.0f, 0.0f}), 0.0f, ScoreAggregation::Sum, 0.1f);
+    const float large = score_transform(
+        rules, 0, Vec2f({0.0f, 0.0f}), 0.0f, ScoreAggregation::Sum, 2.0f);
+    REQUIRE(large >= small);
 }

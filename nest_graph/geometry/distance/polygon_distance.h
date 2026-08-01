@@ -22,6 +22,8 @@ inline DistanceResult<VecType> narrow_phase_distance(
     const VecType* lsA, int nA,
     const VecType* lsB, int nB,
     bool known_overlap,
+    int& it1,
+    int& it2,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
@@ -29,15 +31,44 @@ inline DistanceResult<VecType> narrow_phase_distance(
         if (tracer) tracer->record_distance();
     }
 
-    const VecType* p1 = (nA <= nB) ? lsA : lsB;
-    const int s1 = (nA <= nB) ? nA : nB;
-    const VecType* p2 = (nA <= nB) ? lsB : lsA;
-    const int s2 = (nA <= nB) ? nB : nA;
+    const bool swapped = (nA > nB);
+    const VecType* p1 = swapped ? lsB : lsA;
+    const int s1 = swapped ? nB : nA;
+    const VecType* p2 = swapped ? lsA : lsB;
+    const int s2 = swapped ? nA : nB;
+    int warm1 = swapped ? it2 : it1;
+    int warm2 = swapped ? it1 : it2;
+    if (warm1 < 0 || warm1 >= s1) warm1 = 0;
+    if (warm2 < 0 || warm2 >= s2) warm2 = 0;
 
-    if (s1 + s2 > GRADIENT_THRESHOLD) {
-        return convex_linestrings_distance_gjk_gradient<VecType>(p1, s1, p2, s2, known_overlap);
+    auto res = (s1 + s2 > GRADIENT_THRESHOLD)
+        ? convex_linestrings_distance_gjk_gradient<VecType>(
+            p1, s1, p2, s2, known_overlap, warm1, warm2)
+        : convex_linestrings_distance_gjk<VecType>(
+            p1, s1, p2, s2, known_overlap, warm1, warm2);
+
+    if (swapped) {
+        it1 = res.it2;
+        it2 = res.it1;
+    } else {
+        it1 = res.it1;
+        it2 = res.it2;
     }
-    return convex_linestrings_distance_gjk<VecType>(p1, s1, p2, s2, known_overlap);
+    return res;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+inline DistanceResult<VecType> narrow_phase_distance(
+    const VecType* lsA, int nA,
+    const VecType* lsB, int nB,
+    bool known_overlap,
+    int GRADIENT_THRESHOLD = 24,
+    Tracer* tracer = nullptr
+) {
+    int it1 = 0;
+    int it2 = 0;
+    return narrow_phase_distance<VecType, Tracer>(
+        lsA, nA, lsB, nB, known_overlap, it1, it2, GRADIENT_THRESHOLD, tracer);
 }
 
 template <class VecType, class Tracer = DefaultTracer>

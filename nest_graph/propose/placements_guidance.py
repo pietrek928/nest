@@ -16,7 +16,14 @@ from nest_graph.placement_scene import (
 )
 
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_edge import sample_placement_points_ribbon
+def sample_placement_points_ribbon(
+    focal: BaseGeometry,
+    part_poly: Polygon,
+    min_dist: float,
+    num_samples: int,
+) -> list[tuple[float, float, float]]:
+    from nest_graph.propose.placements_edge import sample_placement_points_ribbon as _sample
+    return _sample(focal, part_poly, min_dist, num_samples)
 
 
 class GuidanceMoveType(StrEnum):

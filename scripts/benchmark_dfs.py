@@ -4,27 +4,15 @@
 import argparse
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from nest_graph.build_graph import (
-    _build_transform_batch,
-    _make_initial_rule_sets,
-    active_rule_set,
-    apply_dfs_refinement,
-    improve_rules,
-    make_polygon_graph,
-)
-from nest_graph.config import (
-    BuildGraphConfig,
-    ProposeConfig,
-    SamplingConfig,
-    SelectionConfig,
-    score_rules_options,
-)
-from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
+from nest_graph.config import BuildGraphConfig, SelectionConfig
+from nest_graph.build_graph import apply_dfs_refinement
+from nest_graph.elem_graph import selection_is_independent
+from scripts.nesting_evaluator import NestingPipelineEvaluator
+from scripts.nesting_fixtures import get_all_cases
 
 
 DFS_MODES = (
@@ -45,90 +33,6 @@ class DfsBenchRow:
     delta_nest: int
     dfs_time_s: float
     total_time_s: float
-
-
-def _shipped_cfg(selection: SelectionConfig) -> BuildGraphConfig:
-    return BuildGraphConfig(
-        sampling=SamplingConfig(
-            random_per_iter=128,
-            random_per_iter_when_proposed=48,
-            structured_jitter_per_proposal=8,
-            initial_random=256,
-            max_transforms_per_group=900,
-        ),
-        propose=ProposeConfig(),
-        selection=selection,
-    )
-
-
-def _prepare_graph(cfg: BuildGraphConfig, seed: int):
-    rng = np.random.default_rng(seed)
-    sc = cfg.sampling
-    sel = cfg.selection
-    p_board = cfg.rules.board_polygon()
-    p1 = cfg.rules.rect_polygon()
-    p2 = cfg.rules.tri_polygon()
-    parts = [(p1, 0), (p2, 1)]
-
-    selected_t = (
-        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
-        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
-    )
-    history = (np.zeros((1, 3)), np.zeros((1, 3)))
-    rule_sets = _make_initial_rule_sets(cfg)
-
-    t0 = time.perf_counter()
-    selected_t = _build_transform_batch(
-        cfg, selected_t, history, rng,
-        board=p_board, parts=parts, nest_state=None,
-    )
-    graph, polys, _gid, _tr = make_polygon_graph(
-        p_board,
-        [(p1, selected_t[0]), (p2, selected_t[1])],
-        min_dist=cfg.board_min_dist(),
-        epsilon_ratio=cfg.propose.placement_clearance_epsilon_ratio,
-    )
-    graphs = [graph]
-    for round_idx in range(sel.improve_rules_rounds):
-        rule_sets = improve_rules(
-            graphs, rule_sets, sel.rules_kept, p_board,
-            mutation_presets=cfg.rules.mutation_presets(),
-            rule_score_penalty=sel.rule_score_penalty,
-            elite_count=sel.improve_rules_elite_count,
-            seed=seed + round_idx,
-            score_options=score_rules_options(sel),
-            max_rules_per_set=cfg.rules.max_rules_per_set,
-        )
-    active_rules = active_rule_set(rule_sets)
-    scores = score_elems(graph, active_rules)
-    selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
-    prep_time = time.perf_counter() - t0
-    return graph, active_rules, selected, scores, len(selected), prep_time
-
-
-def run_dfs_variant(
-    cfg: BuildGraphConfig,
-    *,
-    seed: int,
-    label: str,
-) -> DfsBenchRow:
-    graph, rule_set, selected, scores, nest_sel, prep_time = _prepare_graph(cfg, seed)
-    t0 = time.perf_counter()
-    _raw, final, _score = apply_dfs_refinement(
-        graph, rule_set, selected, scores, selection=cfg.selection,
-    )
-    dfs_time = time.perf_counter() - t0
-    if not selection_is_independent(graph, final):
-        raise AssertionError(f"{label} seed={seed}: overlapping final selection")
-    return DfsBenchRow(
-        label=label,
-        seed=seed,
-        nest_sel=nest_sel,
-        dfs_sel_final=len(final),
-        delta_nest=len(final) - nest_sel,
-        dfs_time_s=dfs_time,
-        total_time_s=prep_time + dfs_time,
-    )
 
 
 def _selection_label(
@@ -174,6 +78,7 @@ def _aggregate(rows: list[DfsBenchRow]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cases", nargs="*", default=["demo_triangle_s1.0"])
     parser.add_argument("--seeds", type=int, nargs="*", default=[0, 1, 2])
     parser.add_argument(
         "--quick",
@@ -196,44 +101,54 @@ def main() -> None:
     else:
         for mode in DFS_MODES:
             for passes in (2, 3, 4):
-                for max_tries in (2, 4, 8):
-                    for max_passes in (8, 12, 16):
-                        for repair in (4, 6, 8):
-                            sel = SelectionConfig(
-                                dfs_mode=mode,
-                                dfs_passes=passes,
-                                dfs_max_tries=max_tries,
-                                dfs_refine_max_passes=max_passes,
-                                dfs_finalize_repair_passes=repair,
-                            )
-                            variants.append((
-                                _selection_label(
-                                    mode, passes, max_tries, max_passes, repair,
-                                ),
-                                sel,
-                            ))
+                for max_tries in (2, 4):
+                    sel = SelectionConfig(
+                        dfs_mode=mode,
+                        dfs_passes=passes,
+                        dfs_max_tries=max_tries,
+                    )
+                    variants.append((
+                        _selection_label(mode, passes, max_tries,
+                                         sel.dfs_refine_max_passes, sel.dfs_finalize_repair_passes),
+                        sel,
+                    ))
 
-    rows: list[DfsBenchRow] = []
-    for label, sel in variants:
-        cfg = _shipped_cfg(sel)
+    all_cases = get_all_cases()
+    cases_to_run = [c for c in all_cases if c.name in args.cases]
+
+    for case in cases_to_run:
+        print(f"\n=== Case: {case.name} ===")
+        rows: list[DfsBenchRow] = []
+        
         for seed in args.seeds:
-            row = run_dfs_variant(cfg, seed=seed, label=label)
-            rows.append(row)
-            print(
-                f"{label} seed={seed}: nest={row.nest_sel} final={row.dfs_sel_final} "
-                f"Δ={row.delta_nest:+d} dfs={row.dfs_time_s:.2f}s",
-            )
-
-    table = _aggregate(rows)
-    print("\n" + table)
-
-    out = Path(__file__).resolve().parents[1] / "docs" / "dfs_benchmark_results.txt"
-    out.write_text(
-        f"# DFS benchmark {time.strftime('%Y-%m-%d %H:%M')}\n"
-        f"# seeds={list(args.seeds)} quick={args.quick}\n\n{table}\n",
-        encoding="utf-8",
-    )
-    print(f"\nWrote {out}")
+            # Prepare graph once per seed
+            t0 = time.perf_counter()
+            cfg = BuildGraphConfig()
+            evaluator = NestingPipelineEvaluator(case, cfg)
+            graph, rule_set, selected, scores, polys, group_id, transform = evaluator.prepare_first_iteration(seed)
+            prep_time = time.perf_counter() - t0
+            
+            for label, sel_cfg in variants:
+                t1 = time.perf_counter()
+                _raw, final, _score = apply_dfs_refinement(
+                    graph, rule_set, selected, scores, selection=sel_cfg,
+                )
+                dfs_time = time.perf_counter() - t1
+                
+                if not selection_is_independent(graph, final):
+                    raise AssertionError(f"{label} seed={seed}: overlapping final selection")
+                    
+                rows.append(DfsBenchRow(
+                    label=label,
+                    seed=seed,
+                    nest_sel=len(selected),
+                    dfs_sel_final=len(final),
+                    delta_nest=len(final) - len(selected),
+                    dfs_time_s=dfs_time,
+                    total_time_s=prep_time + dfs_time,
+                ))
+                
+        print(_aggregate(rows))
 
 
 if __name__ == "__main__":

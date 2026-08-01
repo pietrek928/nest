@@ -160,8 +160,19 @@ inline PairDistanceResult<VecType> standoff_distance_pair(
         if (part.line_parts[i].is_subtractive) {
             continue;
         }
+        const auto& circ_a = part.line_parts[i].bounding_circle;
         for (std::size_t j = 0; j < ring.line_parts.size(); ++j) {
             if (ring.line_parts[j].is_subtractive) {
+                continue;
+            }
+            const auto& circ_b = ring.line_parts[j].bounding_circle;
+            const Scalar center_dist_sq = circle_center_distance_sq(circ_a, circ_b);
+            const Scalar r_sum = circle_radius(circ_a) + circle_radius(circ_b);
+            const Scalar center_dist = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(center_dist_sq)));
+            const Scalar min_possible = std::max(
+                static_cast<Scalar>(0), center_dist - r_sum);
+            if (min_possible * min_possible >= out.core.distance_sq) {
                 continue;
             }
             auto pts = closest_points_between_parts(
@@ -176,7 +187,7 @@ inline PairDistanceResult<VecType> standoff_distance_pair(
         }
     }
 
-    const Scalar touch_eps_sq = static_cast<Scalar>(1e-12);
+    const Scalar touch_eps_sq = nest_touch_eps_sq<Scalar>();
     if (out.core.distance_sq <= touch_eps_sq) {
         out.core.intersect = true;
         out.core.distance_sq = static_cast<Scalar>(0);

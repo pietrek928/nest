@@ -81,40 +81,49 @@ void bind_distance_types(nb::module_ &m) {
 void bind_distance_api(nb::module_ &m) {
     m.def(
         "find_polygon_distances",
-        [](const std::vector<GeometryHolder> &polygons, double aura) {
+        [](const std::vector<GeometryHolder> &polygons, double aura, double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(polygons), static_cast<Vec2d::Scalar>(aura));
+                solids_from_holders(polygons),
+                static_cast<Vec2d::Scalar>(aura),
+                static_cast<Vec2d::Scalar>(distance_margin));
         },
         nb::arg("polygons"),
-        nb::arg("aura") = 0.5);
+        nb::arg("aura") = 0.5,
+        nb::arg("distance_margin") = 0.0);
 
     m.def(
         "find_polygon_distances_active",
         [](const std::vector<GeometryHolder> &polygons,
            const std::vector<int> &active_indices,
-           double aura) {
+           double aura,
+           double distance_margin) {
             return find_polygon_distances<Vec2d>(
                 solids_from_holders(polygons),
                 active_indices,
-                static_cast<Vec2d::Scalar>(aura));
+                static_cast<Vec2d::Scalar>(aura),
+                static_cast<Vec2d::Scalar>(distance_margin));
         },
         nb::arg("polygons"),
         nb::arg("active_indices"),
-        nb::arg("aura") = 0.5);
+        nb::arg("aura") = 0.5,
+        nb::arg("distance_margin") = 0.0);
 
     m.def(
         "find_polygon_distances_bipartite",
         [](const std::vector<GeometryHolder> &set_a,
            const std::vector<GeometryHolder> &set_b,
-           double aura) {
+           double aura,
+           double distance_margin) {
             return find_polygon_distances<Vec2d>(
                 solids_from_holders(set_a),
                 solids_from_holders(set_b),
-                static_cast<Vec2d::Scalar>(aura));
+                static_cast<Vec2d::Scalar>(aura),
+                static_cast<Vec2d::Scalar>(distance_margin));
         },
         nb::arg("set_a"),
         nb::arg("set_b"),
-        nb::arg("aura") = 0.5);
+        nb::arg("aura") = 0.5,
+        nb::arg("distance_margin") = 0.0);
 
     m.def(
         "min_distance_pair",

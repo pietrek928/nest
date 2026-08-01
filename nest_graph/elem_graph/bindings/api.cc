@@ -64,16 +64,18 @@ void bind_elem_graph_api(nb::module_ &m) {
            float x,
            float y,
            float angle,
-           ScoreAggregation agg) {
+           ScoreAggregation agg,
+           float radius) {
             return ::score_transform(
-                rules, group, Vec2f({x, y}), angle, agg);
+                rules, group, Vec2f({x, y}), angle, agg, radius);
         },
         nb::arg("rules"),
         nb::arg("group"),
         nb::arg("x"),
         nb::arg("y"),
         nb::arg("angle"),
-        nb::arg("aggregation") = ScoreAggregation::Sum);
+        nb::arg("aggregation") = ScoreAggregation::Sum,
+        nb::arg("radius") = 0.5f);
 
     m.def(
         "refine_selection_dfs",

@@ -14,6 +14,7 @@ from nest_graph.build_graph import (
     _first_pass_layered_selection,
     _guidance_border_refine,
     _make_initial_rule_sets,
+    _selection_coverage_pct,
     active_rule_set,
     make_polygon_graph,
     score_elems,
@@ -22,7 +23,6 @@ from nest_graph.config import BuildGraphConfig, SamplingConfig
 
 
 def _coverage_pct(selected, group_id, part_areas, board_area):
-    from nest_graph.build_graph import _selection_coverage_pct
     return _selection_coverage_pct(selected, group_id, part_areas, board_area)
 
 

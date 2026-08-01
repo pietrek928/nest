@@ -8,7 +8,6 @@ from shapely.geometry import Point, Polygon
 
 from nest_graph.build_graph import (
     Geometry,
-    find_polygon_intersections_bipartite,
     _append_selection_window,
     _base_geometries,
     _border_pack_graph,
@@ -35,6 +34,7 @@ from nest_graph.build_graph import (
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import BuildGraphConfig, SamplingConfig, SelectionConfig
 from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph
+from nest_graph.geometry import find_polygon_intersections_bipartite
 from nest_graph.placement_scene import (
     board_placement_valid,
     guidance_config_for_graph,
@@ -183,11 +183,12 @@ def test_run_build_graph_fast(tmp_path, build_graph_config):
     assert (tmp_path / "out.jpg").is_file()
 
 
+from nest_graph.config import score_rules_options
+
 def test_improve_rules_uses_config_presets(nest_board, build_graph_config):
     rules = [PlacementRuleSet()]
     presets = build_graph_config.rules.mutation_presets()
     sel = build_graph_config.selection
-    from nest_graph.config import score_rules_options
 
     improved = improve_rules(
         [], rules, 1, nest_board,
@@ -360,8 +361,6 @@ def test_placement_board_score_positive_inside(nest_board, rect_poly):
 
 
 def _refine_selection_like_build_graph(graph, rule_sets, sel: SelectionConfig):
-    from nest_graph.build_graph import active_rule_set
-
     active = active_rule_set(rule_sets)
     selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
     scores = score_elems(graph, active)
@@ -445,10 +444,10 @@ def test_shipped_config_matches_benchmarks():
     cfg = BuildGraphConfig()
     assert cfg.selection.dfs_mode == "merged_loose_tight"
     assert cfg.propose.use_guidance_propositions is True
-    assert cfg.propose.guidance_enable_grid is True
+    assert cfg.propose.guidance_enable_grid is False
     assert cfg.propose.guidance_use_corner_alignment is True
     assert cfg.propose.guidance_max_propositions == 8
-    assert cfg.propose.use_neighbor_slide is True
+    assert cfg.propose.use_neighbor_slide is False
     assert cfg.propose.placement_num_angles == 18
     assert cfg.sampling.initial_random == 256
     assert cfg.sampling.max_transforms_per_group == 1200
@@ -456,7 +455,7 @@ def test_shipped_config_matches_benchmarks():
     bench = BuildGraphConfig.benchmark_aligned(seed=7)
     assert bench.sampling.seed == 7
     assert bench.selection.dfs_mode == "merged_loose_tight"
-    assert bench.propose.guidance_enable_grid is True
+    assert bench.propose.guidance_enable_grid is False
 
 
 def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly, tri_poly):

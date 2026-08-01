@@ -168,6 +168,12 @@ def propose_placements_raycasting(
     anchors = []
     for line in get_shape_exteriors(anchor_source):
         anchors.extend([Point(pt) for pt in line.coords])
+        
+    # Limit anchors to avoid explosion on complex shapes
+    max_anchors = 200
+    if len(anchors) > max_anchors:
+        step = len(anchors) / max_anchors
+        anchors = [anchors[int(i * step)] for i in range(max_anchors)]
 
     min_x, min_y, max_x, max_y = region.bounds
     ray_len = np.sqrt((max_x - min_x)**2 + (max_y - min_y)**2)

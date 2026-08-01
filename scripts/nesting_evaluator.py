@@ -1,0 +1,658 @@
+"""Unified pipeline evaluator for nesting quality benchmarks."""
+
+import time
+from dataclasses import dataclass
+
+import numpy as np
+from shapely.geometry import Point, Polygon
+from shapely.geometry.base import BaseGeometry
+
+from nest_graph.board import board_context_from_geometry
+from nest_graph.build_graph import (
+    NestState,
+    _build_transform_batch,
+    _make_initial_rule_sets,
+    active_rule_set,
+    apply_dfs_refinement,
+    improve_rules,
+    make_polygon_graph,
+)
+from nest_graph.config import BuildGraphConfig, score_rules_options
+from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
+from nest_graph.placement_scene import placement_clearance_epsilon
+from nest_graph.propose import (
+    ProposeGeometry,
+    border_focal_for_propose,
+    collect_propose_candidates,
+    effective_ranking_mode,
+    obstacle_shape_for_propose,
+)
+from nest_graph.propose.context import (
+    outline_coverage_ratio,
+    propose_push_point,
+    should_use_border_focus,
+)
+from nest_graph.propose.pipeline import propose_coords_from_candidates
+from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
+from nest_graph.utils import transform_poly
+from scripts.nesting_fixtures import NestCase
+
+
+def _seed_transforms_by_group(case: NestCase) -> list[np.ndarray]:
+    """Initial selected transforms from NestCase.seed_placements."""
+    by_group: list[list[list[float]]] = [[] for _ in case.groups]
+    gid_to_idx = {gid: i for i, (_poly, gid) in enumerate(case.groups)}
+    for _poly, gid, t in case.seed_placements:
+        idx = gid_to_idx.get(gid)
+        if idx is None:
+            continue
+        by_group[idx].append([float(t[0]), float(t[1]), float(t[2])])
+    out: list[np.ndarray] = []
+    for rows in by_group:
+        if rows:
+            out.append(np.asarray(rows, dtype=np.float64))
+        else:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+    return out
+
+
+def _case_user_holes(case: NestCase) -> tuple[tuple[tuple[float, float], ...], ...]:
+    return tuple(tuple(h.exterior.coords) for h in case.board_holes)
+
+
+def _build_seed_state(case: NestCase) -> tuple[list, list[int], list[np.ndarray]]:
+    """Return (seed_polys, seed_gids, seed_transforms) from NestCase.seed_placements."""
+    seed_t = _seed_transforms_by_group(case)
+    seed_polys: list = []
+    seed_gids: list[int] = []
+    seed_tr: list[np.ndarray] = []
+    if not any(t.shape[0] > 0 for t in seed_t):
+        return seed_polys, seed_gids, seed_tr
+    for gi, (poly, gid) in enumerate(case.groups):
+        for row in seed_t[gi]:
+            seed_polys.append(transform_poly(poly, row))
+            seed_gids.append(int(gid))
+            seed_tr.append(np.asarray(row, dtype=np.float64))
+    return seed_polys, seed_gids, seed_tr
+
+
+def _seed_extra_voids(seed_polys: list) -> list[Geometry] | None:
+    if not seed_polys:
+        return None
+    return [Geometry.from_shapely(p) for p in seed_polys]
+
+
+def _selection_validity(
+    case: NestCase,
+    sheet: Polygon,
+    selected_polys: list[int],
+    group_id: list[int],
+    transform: np.ndarray,
+    graph,
+    *,
+    seed_polys: list | None = None,
+    min_dist: float = 0.0,
+) -> tuple[bool, bool]:
+    """Return (overlap_ok, void_ok) for the final selection (incl. seed clearance)."""
+    if not selected_polys:
+        return True, True
+
+    selected_set = set(selected_polys)
+    overlap_ok = True
+    if graph is not None:
+        for i in selected_polys:
+            for j in graph.collisions[i]:
+                if j in selected_set:
+                    overlap_ok = False
+                    break
+            if not overlap_ok:
+                break
+
+    placed = [
+        transform_poly(case.groups[group_id[i]][0], transform[i])
+        for i in selected_polys
+    ]
+    # Selection must not collide with locked seeds (beyond clearance).
+    if overlap_ok and seed_polys:
+        eps = max(min_dist - 1e-6, 0.0)
+        for poly in placed:
+            for seed in seed_polys:
+                if poly.intersects(seed) or poly.distance(seed) < eps:
+                    overlap_ok = False
+                    break
+            if not overlap_ok:
+                break
+
+    void_ok = True
+    for poly in placed:
+        # Footprint must stay in the nestable sheet (tiny shrink for numeric edges).
+        if not sheet.buffer(1e-5).covers(poly):
+            void_ok = False
+            break
+        for hole in case.board_holes:
+            inter = poly.intersection(hole)
+            if not inter.is_empty and inter.area > 1e-6:
+                void_ok = False
+                break
+        if not void_ok:
+            break
+    return overlap_ok, void_ok
+
+
+@dataclass
+class ProposeBenchmarkMetrics:
+    preset: str
+    scenario: str
+    seed: int
+    valid_count: int
+    top_clearance_mean: float
+    top_clearance_min: float
+    contact_dist_mean: float
+    contact_dist_min: float
+    kiss_fraction: float
+    raw_pool_size: int
+    final_count: int
+    graph_nodes: int
+    graph_nodes_vs_random: int
+    propose_time_s: float
+
+
+def _contact_distance(placed_shapely: BaseGeometry, base_shape: BaseGeometry) -> float:
+    if base_shape is None or base_shape.is_empty:
+        return float("inf")
+    return float(base_shape.distance(placed_shapely))
+
+
+def evaluate_proposal_coords(
+    coords_list: list[tuple[float, float, float]],
+    board: Polygon,
+    base_shape: BaseGeometry,
+    part_poly: Polygon,
+    min_dist: float,
+    pt_push: Point,
+    epsilon_ratio: float,
+) -> tuple[int, float, float, float, float, float, float]:
+    if not coords_list:
+        return 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    geom = ProposeGeometry(
+        board, base_shape, part_poly, min_dist, epsilon_ratio=epsilon_ratio,
+    )
+    margin = min_dist + placement_clearance_epsilon(min_dist, ratio=epsilon_ratio)
+    clearances: list[float] = []
+    contacts: list[float] = []
+    kisses = 0
+    valid = 0
+    border_errs: list[float] = []
+
+    for coords in coords_list:
+        placed_g = geom.placed_at(coords)
+        placed = transform_poly(part_poly, coords)
+        if not geom.valid(placed_g, pt_push, (coords[0], coords[1])):
+            continue
+        valid += 1
+        cd = _contact_distance(placed, base_shape)
+        if cd < float("inf"):
+            contacts.append(cd)
+            if cd <= margin + 1e-5:
+                kisses += 1
+        g = geom.placement_guidance(placed_g, (coords[0], coords[1]), pt_push)
+        if not g.is_penetrating:
+            clearances.append(float(g.clearance))
+        sheet, _ = board_context_from_geometry(board)
+        border_errs.append(abs(float(placed.distance(sheet.exterior)) - min_dist))
+
+    kiss_frac = kisses / valid if valid else 0.0
+    return (
+        valid,
+        float(np.mean(clearances)) if clearances else 0.0,
+        float(np.min(clearances)) if clearances else 0.0,
+        float(np.mean(contacts)) if contacts else 0.0,
+        float(np.min(contacts)) if contacts else 0.0,
+        kiss_frac,
+        float(np.min(border_errs)) if border_errs else 0.0,
+    )
+
+
+@dataclass
+class NestingMetrics:
+    parts_final: int
+    area_coverage: float
+    outline_coverage: float
+    independent_ok: bool
+    overlap_ok: bool
+    void_ok: bool
+    graph_nodes: int
+    proposal_yield: float
+    time_s: float
+    parts_seed: int = 0
+    area_coverage_seed: float = 0.0
+    parts_delta: int = 0
+    area_coverage_delta: float = 0.0
+    kiss_fraction: float = 0.0
+    contact_min: float = 0.0
+    clearance_p50: float = 0.0
+    border_standoff_err: float = 0.0
+
+
+class NestingPipelineEvaluator:
+    def __init__(self, case: NestCase, cfg: BuildGraphConfig):
+        self.case = case
+        # Seeded / late-stage runs blow up under the full production propose budget.
+        if case.seed_placements:
+            cap = min(cfg.sampling.max_transforms_per_group or 120, 120)
+            cfg = cfg.model_copy(
+                update={
+                    "sampling": cfg.sampling.model_copy(
+                        update={
+                            "max_transforms_per_group": cap,
+                            "initial_random": min(cfg.sampling.initial_random, 48),
+                            "random_per_iter": min(cfg.sampling.random_per_iter, 32),
+                            "random_per_iter_when_proposed": min(
+                                cfg.sampling.random_per_iter_when_proposed, 16,
+                            ),
+                            "shuffle_passes": min(cfg.sampling.shuffle_passes, 1),
+                        },
+                    ),
+                    "selection": cfg.selection.model_copy(
+                        update={
+                            "improve_rules_rounds": min(cfg.selection.improve_rules_rounds, 1),
+                            "rules_kept": min(cfg.selection.rules_kept, 8),
+                            "improve_rules_elite_count": min(
+                                cfg.selection.improve_rules_elite_count, 4,
+                            ),
+                            "dfs_passes": min(cfg.selection.dfs_passes, 1),
+                            "dfs_max_tries": min(cfg.selection.dfs_max_tries, 2),
+                            "dfs_finalize_repair_passes": min(
+                                cfg.selection.dfs_finalize_repair_passes, 2,
+                            ),
+                        },
+                    ),
+                    "propose": cfg.propose.model_copy(
+                        update={
+                            "use_batch_pack": False,
+                            "candidate_pool": min(cfg.propose.candidate_pool, 24),
+                            "max_proposals": min(cfg.propose.max_proposals, 16),
+                            "obstacle_nearest_k": 1,
+                            "use_voronoi": False,
+                            "use_point_cloud": False,
+                            "use_guidance_walk": False,
+                            "use_ribbon_seeds": False,
+                            "raycast_num_rays": min(cfg.propose.raycast_num_rays, 8),
+                            "cast_squeeze_top_k": min(cfg.propose.cast_squeeze_top_k, 4),
+                        },
+                    ),
+                },
+            )
+        self.cfg = cfg
+        self.parts = list(case.groups)
+        self.user_holes = _case_user_holes(case)
+        # Nestable sheet for propose/validity (outline + holes).
+        self.sheet, _ = board_context_from_geometry(
+            case.board, user_holes=self.user_holes,
+        )
+        self.last_result: dict | None = None
+
+    def _min_dist(self, *, first_pass: bool = False) -> float:
+        return self.cfg.board_min_dist_for(self.sheet, first_pass=first_pass)
+
+    def _initial_selected_t(
+        self,
+        rng: np.random.Generator,
+    ) -> tuple[tuple[np.ndarray, ...], tuple[np.ndarray, ...]]:
+        sc = self.cfg.sampling
+        selected_t: list[np.ndarray] = []
+        history: list[np.ndarray] = []
+        for _ in self.case.groups:
+            selected_t.append(
+                rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale
+            )
+            history.append(np.zeros((1, 3), dtype=np.float64))
+        return tuple(selected_t), tuple(history)
+
+    def prepare_first_iteration(self, seed: int):
+        """Build the graph for the first iteration (useful for isolated DFS/Propose benchmarks)."""
+        rng = np.random.default_rng(seed)
+        sel = self.cfg.selection
+        selected_t, history = self._initial_selected_t(rng)
+        rule_sets = _make_initial_rule_sets(self.cfg)
+        seed_polys, seed_gids, seed_tr = _build_seed_state(self.case)
+        nest_state = None
+        if seed_polys:
+            nest_state = NestState(
+                polys=list(seed_polys),
+                group_id=list(seed_gids),
+                transform=list(seed_tr),
+                selected_indices=list(range(len(seed_polys))),
+            )
+        extra_voids = _seed_extra_voids(seed_polys)
+
+        selected_t = _build_transform_batch(
+            self.cfg, selected_t, history, rng,
+            board=self.sheet, parts=self.parts, nest_state=nest_state,
+            first_pass=nest_state is None,
+        )
+
+        flat_parts = [
+            (self.parts[group_idx][0], transforms)
+            for group_idx, transforms in enumerate(selected_t)
+        ]
+        graph, polys, group_id, transform = make_polygon_graph(
+            self.case.board,
+            flat_parts,
+            min_dist=self._min_dist(first_pass=nest_state is None),
+            epsilon_ratio=self.cfg.propose.placement_clearance_epsilon_ratio,
+            user_holes=self.user_holes,
+            extra_voids=extra_voids,
+        )
+
+        graphs = [graph]
+        for round_idx in range(sel.improve_rules_rounds):
+            rule_sets = improve_rules(
+                graphs,
+                rule_sets,
+                sel.rules_kept,
+                self.case.board,
+                mutation_presets=self.cfg.rules.mutation_presets(),
+                rule_score_penalty=sel.rule_score_penalty,
+                elite_count=sel.improve_rules_elite_count,
+                seed=int(rng.integers(0, 2**31)) + round_idx,
+                score_options=score_rules_options(sel),
+                max_rules_per_set=self.cfg.rules.max_rules_per_set,
+            )
+
+        active_rules = active_rule_set(rule_sets)
+        scores = score_elems(graph, active_rules)
+        selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
+        return graph, active_rules, selected, scores, polys, group_id, transform
+
+    def run_propose_only(self, seed: int, preset_label: str) -> ProposeBenchmarkMetrics:
+        """Run only the propose phase for the first part group, using seed_placements as obstacles."""
+        min_dist = self._min_dist()
+        eps = self.cfg.propose.placement_clearance_epsilon_ratio
+
+        placed_polys = [p for p, _, _ in self.case.seed_placements]
+        part_poly, _ = self.case.groups[0]
+
+        obstacle = obstacle_shape_for_propose(placed_polys, part_poly, min_dist)
+        border_focus = should_use_border_focus(obstacle, self.cfg.propose)
+        push = propose_push_point(
+            self.sheet,
+            obstacle,
+            smart_push=self.cfg.propose.smart_push_target,
+            min_dist=min_dist,
+            use_border_focus=border_focus,
+        )
+
+        focal = None
+        if border_focus:
+            focal = border_focal_for_propose(self.sheet, min_dist)
+        elif obstacle is not None and not obstacle.is_empty:
+            focal = obstacle
+
+        geom = ProposeGeometry(
+            self.sheet, obstacle, part_poly, min_dist,
+            epsilon_ratio=eps,
+            propose_cfg=self.cfg.propose,
+        )
+        rank_mode = effective_ranking_mode(self.cfg.propose, obstacle)
+
+        t0 = time.perf_counter()
+        raw = collect_propose_candidates(
+            obstacle,
+            part_poly,
+            self.sheet,
+            self.cfg.propose,
+            min_dist=min_dist,
+            pt_push=push,
+            propose_geom=geom,
+            focal_shape=focal,
+        )
+        final = propose_coords_from_candidates(
+            obstacle,
+            part_poly,
+            self.sheet,
+            self.cfg.propose,
+            min_dist=min_dist,
+            pt_push=push,
+            candidates=raw,
+            rank_mode=rank_mode,
+            focal_shape=focal,
+        )
+        elapsed = time.perf_counter() - t0
+
+        valid, c_mean, c_min, cd_mean, cd_min, kiss_frac, _border_min = evaluate_proposal_coords(
+            final, self.sheet, obstacle, part_poly, min_dist, push, eps,
+        )
+
+        proposals = np.asarray(final, dtype=np.float64) if final else np.zeros((0, 3))
+        rng = np.random.default_rng(seed)
+        random_t = rng.uniform(-0.2, 0.2, (8, 3)) * [0.4, 0.4, np.pi]
+
+        graph_rand, _, _, _ = make_polygon_graph(
+            self.case.board, [(part_poly, random_t)], min_dist=0.0,
+            user_holes=self.user_holes,
+        )
+        n_rand = len(graph_rand.elems)
+
+        if proposals.shape[0] == 0:
+            n_both = n_rand
+        else:
+            graph_both, _, _, _ = make_polygon_graph(
+                self.case.board,
+                [(part_poly, np.vstack([random_t, proposals]))],
+                min_dist=0.0,
+                user_holes=self.user_holes,
+            )
+            n_both = len(graph_both.elems)
+
+        return ProposeBenchmarkMetrics(
+            preset=preset_label,
+            scenario=self.case.name,
+            seed=seed,
+            valid_count=valid,
+            top_clearance_mean=c_mean,
+            top_clearance_min=c_min,
+            contact_dist_mean=cd_mean,
+            contact_dist_min=cd_min,
+            kiss_fraction=kiss_frac,
+            raw_pool_size=len(raw),
+            final_count=len(final),
+            graph_nodes=n_both,
+            graph_nodes_vs_random=n_both - n_rand,
+            propose_time_s=elapsed,
+        )
+
+    def run_full_pipeline(self, seed: int) -> NestingMetrics:
+        """Run a short nest loop for the case and return standardized metrics."""
+        t0 = time.perf_counter()
+        rng = np.random.default_rng(seed)
+        sel = self.cfg.selection
+        selected_t, history = self._initial_selected_t(rng)
+        rule_sets = _make_initial_rule_sets(self.cfg)
+
+        selected_polys: list[int] = []
+        polys: list = []
+        group_id: list[int] = []
+        transform = np.zeros((0, 3))
+        graph = None
+        nest_state: NestState | None = None
+
+        seed_polys, seed_gids, seed_tr = _build_seed_state(self.case)
+        if seed_polys:
+            nest_state = NestState(
+                polys=list(seed_polys),
+                group_id=list(seed_gids),
+                transform=list(seed_tr),
+                selected_indices=list(range(len(seed_polys))),
+            )
+        
+        extra_voids = _seed_extra_voids(seed_polys)
+
+        next_polys = list(seed_polys)
+        next_gids = list(seed_gids)
+        next_tr = list(seed_tr)
+        next_sel = list(range(len(seed_polys)))
+
+        for iter_idx in range(self.case.iters):
+            first_pass = nest_state is None
+            selected_t = _build_transform_batch(
+                self.cfg, selected_t, history, rng,
+                board=self.sheet,
+                parts=self.parts,
+                nest_state=nest_state,
+                first_pass=first_pass,
+            )
+            flat_parts = [
+                (self.parts[group_idx][0], transforms)
+                for group_idx, transforms in enumerate(selected_t)
+            ]
+            graph, polys, group_id, transform = make_polygon_graph(
+                self.case.board,
+                flat_parts,
+                min_dist=self._min_dist(first_pass=first_pass),
+                epsilon_ratio=self.cfg.propose.placement_clearance_epsilon_ratio,
+                user_holes=self.user_holes,
+                extra_voids=extra_voids,
+            )
+
+            graphs = [graph]
+            for round_idx in range(sel.improve_rules_rounds):
+                rule_sets = improve_rules(
+                    graphs,
+                    rule_sets,
+                    sel.rules_kept,
+                    self.case.board,
+                    mutation_presets=self.cfg.rules.mutation_presets(),
+                    rule_score_penalty=sel.rule_score_penalty,
+                    elite_count=sel.improve_rules_elite_count,
+                    seed=int(rng.integers(0, 2**31)) + round_idx + 17 * iter_idx,
+                    score_options=score_rules_options(sel),
+                    max_rules_per_set=self.cfg.rules.max_rules_per_set,
+                )
+
+            active_rules = active_rule_set(rule_sets)
+            scores = score_elems(graph, active_rules)
+            selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
+            _, selected_polys, _score_sum = apply_dfs_refinement(
+                graph,
+                active_rules,
+                selected,
+                scores,
+                selection=sel,
+            )
+
+            new_selected_t = [[] for _ in range(len(self.case.groups))]
+            for i in selected_polys:
+                new_selected_t[group_id[i]].append(transform[i])
+            selected_t = tuple(
+                np.asarray(t, dtype=np.float64) if t else np.zeros((0, 3))
+                for t in new_selected_t
+            )
+            history = selected_t
+
+            # Obstacles for the next propose pass: locked seeds + this iter's selection only.
+            # group_id from make_polygon_graph is the parts-list index; map to NestCase gid.
+            placed_new = [polys[i] for i in selected_polys]
+            placed_gids = [int(self.case.groups[group_id[i]][1]) for i in selected_polys]
+            placed_tr = [
+                np.asarray(transform[i], dtype=np.float64) for i in selected_polys
+            ]
+            next_polys = list(seed_polys) + placed_new
+            next_gids = list(seed_gids) + placed_gids
+            next_tr = list(seed_tr) + placed_tr
+            next_sel = list(range(len(next_polys)))
+
+            nest_state = NestState(
+                polys=next_polys,
+                group_id=next_gids,
+                transform=next_tr,
+                selected_indices=next_sel,
+            )
+
+        time_s = time.perf_counter() - t0
+        
+        # Metrics calculation
+        parts_seed = len(seed_polys)
+        area_coverage_seed = 0.0
+        if self.case.usable_area > 0 and parts_seed > 0:
+            area_coverage_seed = sum(p.area for p in seed_polys) / self.case.usable_area
+
+        parts_final = parts_seed + len(selected_polys)
+        graph_nodes = len(polys)
+        independent_ok = (
+            selection_is_independent(graph, selected_polys) if graph is not None else False
+        )
+        min_dist = self._min_dist()
+        overlap_ok, void_ok = _selection_validity(
+            self.case, self.sheet, selected_polys, group_id, transform, graph,
+            seed_polys=seed_polys, min_dist=min_dist,
+        )
+
+        usable_area = self.case.usable_area
+        area_coverage = 0.0
+        if usable_area > 0 and parts_final > 0:
+            part_area = sum(p.area for p in seed_polys) + sum(
+                self.parts[group_id[i]][0].area for i in selected_polys
+            )
+            area_coverage = part_area / usable_area
+
+        placed_shapes = seed_polys + [
+            transform_poly(self.parts[group_id[i]][0], transform[i])
+            for i in selected_polys
+        ]
+        out_cov = outline_coverage_ratio(
+            placed_shapes, self.sheet, min_dist=min_dist,
+        )
+        
+        # Kiss: fraction of new parts whose nearest seed is within kiss_tol
+        kiss_fraction = 0.0
+        contact_min = -1.0
+        if seed_polys and selected_polys:
+            seed_geoms = [Geometry.from_shapely(p) for p in seed_polys]
+            new_geoms = [
+                Geometry.from_shapely(p)
+                for p in placed_shapes[len(seed_polys):]
+            ]
+            dists = find_polygon_distances_bipartite(new_geoms, seed_geoms)
+            if dists:
+                nearest: dict[int, float] = {}
+                for d in dists:
+                    i = int(d.polyA_idx)
+                    j_dist = float(d.distance)
+                    prev = nearest.get(i)
+                    if prev is None or j_dist < prev:
+                        nearest[i] = j_dist
+                dist_vals = list(nearest.values())
+                contact_min = min(dist_vals) if dist_vals else -1.0
+                kiss_tol = max(min_dist * 2.0, 0.15)
+                kiss_fraction = (
+                    sum(1 for v in dist_vals if v <= kiss_tol) / len(new_geoms)
+                    if new_geoms else 0.0
+                )
+
+        self.last_result = {
+            "selected_polys": next_sel,
+            "polys": next_polys,
+            "group_id": next_gids,
+            "transform": np.asarray(next_tr) if next_tr else np.zeros((0, 3)),
+            "graph": graph,
+        }
+
+        return NestingMetrics(
+            parts_final=parts_final,
+            area_coverage=area_coverage,
+            outline_coverage=out_cov,
+            independent_ok=independent_ok,
+            overlap_ok=overlap_ok,
+            void_ok=void_ok,
+            graph_nodes=graph_nodes,
+            proposal_yield=0.0,
+            time_s=time_s,
+            parts_seed=parts_seed,
+            area_coverage_seed=area_coverage_seed,
+            parts_delta=parts_final - parts_seed,
+            area_coverage_delta=area_coverage - area_coverage_seed,
+            kiss_fraction=kiss_fraction,
+            contact_min=contact_min,
+        )

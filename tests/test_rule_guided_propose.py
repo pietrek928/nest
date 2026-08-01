@@ -2,7 +2,7 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import PlacementRuleSet, PointPlaceRule, Vec2
+from nest_graph.elem_graph import PlacementRuleSet, PointPlaceRule, Vec2, score_transform
 from nest_graph.propose.context import effective_ranking_mode
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import proposed_transforms_for_groups
@@ -51,8 +51,6 @@ def test_rule_hybrid_prefers_rule_center(nest_board, rect_poly):
 
 
 def test_score_transform_peak_at_rule_center():
-    from nest_graph.elem_graph import score_transform
-
     rules = PlacementRuleSet()
     target = (0.35, 0.3)
     rules.append_rule(PointPlaceRule(

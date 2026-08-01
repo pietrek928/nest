@@ -127,7 +127,7 @@ inline bool boundaries_intersect(
     const SolidGeometry<VecType>& poly_b
 ) {
     using Scalar = typename VecType::Scalar;
-    const Scalar touch_eps_sq = static_cast<Scalar>(1e-12);
+    const Scalar touch_eps_sq = nest_touch_eps_sq<Scalar>();
 
     for (std::size_t i = 0; i < poly_a.line_parts.size(); ++i) {
         if (poly_a.line_parts[i].is_subtractive) continue;
@@ -165,10 +165,8 @@ inline bool boundaries_intersect(
 template <class VecType>
 inline bool is_solid_fully_contained(
     const SolidGeometry<VecType>& inner,
-    const SolidGeometry<VecType>& outer,
-    std::vector<int>* optional_outer_cache = nullptr
+    const SolidGeometry<VecType>& outer
 ) {
-    (void)optional_outer_cache;
     if (!global_bounding_circles_overlap(inner, outer)) return false;
 
     bool any_inside = false;
@@ -206,43 +204,15 @@ inline bool solid_footprint_inside(
     return is_solid_fully_contained(inner, outer);
 }
 
-// -------------------------------------------------------------------------
-// CACHE-COHERENT BATCH EVALUATOR
-// -------------------------------------------------------------------------
 template <class VecType>
 inline std::vector<bool> solid_footprint_inside(
     const std::vector<SolidGeometry<VecType>>& inners,
     const SolidGeometry<VecType>& outer
 ) {
-    using Scalar = typename VecType::Scalar;
     int n_inners = static_cast<int>(inners.size());
     std::vector<bool> results(n_inners, false);
-    if (n_inners == 0) return results;
-
-    // 1. Spatial Sort Tracker
-    struct BatchItem {
-        int original_idx;
-        Scalar sort_key;
-    };
-
-    std::vector<BatchItem> items(n_inners);
     for (int i = 0; i < n_inners; ++i) {
-        // Sort by X-axis to group physically adjacent shapes together
-        items[i] = { i, inners[i].get_bounding_circle().center()[0] };
+        results[i] = is_solid_fully_contained(inners[i], outer);
     }
-
-    std::sort(items.begin(), items.end(), [](const BatchItem& a, const BatchItem& b) {
-        return a.sort_key < b.sort_key;
-    });
-
-    // 2. Thread the Cache Array
-    // We create an array storing the last known GJK extremal index for EVERY part of the outer boundary.
-    std::vector<int> outer_cache(outer.line_parts.size(), 0);
-
-    for (int i = 0; i < n_inners; ++i) {
-        int orig_idx = items[i].original_idx;
-        results[orig_idx] = is_solid_fully_contained(inners[orig_idx], outer, &outer_cache);
-    }
-
     return results;
 }

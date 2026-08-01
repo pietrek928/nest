@@ -68,8 +68,10 @@ def test_classify_two_clusters_inter_cluster():
     assert zone == "inter_cluster"
 
 
+from shapely.ops import unary_union
+from nest_graph.propose.pipeline import proposed_transforms_for_groups
+
 def test_classify_void_seek(nest_board, rect_poly):
-    from shapely.ops import unary_union
 
     placed = [
         transform_poly(rect_poly, (0.08, 0.08, 0.0)),
@@ -94,10 +96,51 @@ def test_classify_void_seek(nest_board, rect_poly):
 
 
 def test_zone_proposers_include_cast_refine():
-    for zone in ("interior_pocket", "cluster_edge", "void_seek"):
+    for zone in ("border_gap", "interior_pocket", "cluster_edge", "void_seek"):
         proposers = ProposeConfig.proposers_for_place(zone)
         assert proposers is not None
         assert "guidance_cast_refine" in proposers
+
+
+def test_for_place_preserves_base_false():
+    base = ProposeConfig(use_voronoi=False, use_cluster_copy=False)
+    cfg = ProposeConfig.for_place("inter_cluster", base=base)
+    assert cfg.use_voronoi is False
+    assert cfg.use_cluster_copy is False
+
+
+def test_for_place_border_gap_caps_samples():
+    cfg = ProposeConfig.for_place("border_gap")
+    assert cfg.board_edge_samples_per_edge <= 12
+    assert cfg.group_edge_samples_per_edge <= 8
+    assert cfg.board_edge_guidance_refine is False
+    assert cfg.contact_clearance_hybrid_weight <= 0.1
+
+
+def test_classify_interior_pack_not_border_gap():
+    """Center-only seeds must not route through expensive border_gap proposers."""
+    board = Polygon([(0, 0), (12, 0), (12, 12), (0, 12)])
+    rect = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    placed = [transform_poly(rect, (5.5, 5.5, 0.0))]
+    obstacle = unary_union(placed)
+    cfg = ProposeConfig(place_border_coverage_threshold=0.35)
+    zone = classify_propose_zone(
+        board,
+        obstacle,
+        transform_poly(rect, (7.0, 5.5, 0.0)),
+        min_dist=0.05,
+        propose_cfg=cfg,
+        selected_polys=placed,
+    )
+    assert zone != "border_gap"
+    assert zone in ("cluster_edge", "interior_pocket", "inter_cluster")
+
+
+def test_zone_proposers_include_cluster_copy():
+    for zone in ("interior_pocket", "cluster_edge", "inter_cluster"):
+        proposers = ProposeConfig.proposers_for_place(zone)
+        assert proposers is not None
+        assert "cluster_copy" in proposers
 
 
 def test_for_place_profiles_exist():
@@ -131,8 +174,6 @@ def test_propose_feedback_scales_on_low_yield():
 
 
 def test_place_routed_propose_runs(nest_board, rect_poly):
-    from nest_graph.propose.pipeline import proposed_transforms_for_groups
-
     cfg = ProposeConfig(place_profiles_enabled=True)
     placed = transform_poly(rect_poly, (0.35, 0.25, 0.0))
     counts: dict[str, int] = {}

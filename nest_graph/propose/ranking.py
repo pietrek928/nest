@@ -7,7 +7,8 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry
+from nest_graph.elem_graph import score_transform
+from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.placement_scene import (
     best_proposition,
     placement_clearance_epsilon,
@@ -15,25 +16,34 @@ from nest_graph.placement_scene import (
 )
 from nest_graph.utils import get_shape_polygons_coords, transform_poly
 
-from nest_graph.propose.context import placement_contact_error
+from nest_graph.propose.context import placement_contact_error, should_use_border_focus
 from nest_graph.propose.placement_outline import outline_standoff_distance
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_guidance import (
     candidate_from_proposition,
     is_cast_move,
 )
-from nest_graph.propose.context import should_use_border_focus
 
 
 def _score_placement_rule(
     coords: Tuple[float, float, float],
     rules,
     group_id: int,
+    *,
+    radius: float = 0.5,
 ) -> float:
-    from nest_graph.elem_graph import score_transform
     return float(score_transform(
         rules, group_id, float(coords[0]), float(coords[1]), float(coords[2]),
+        radius=float(radius),
     ))
+
+
+def _part_rule_radius(shape_to_place: Polygon, propose_geom: ProposeGeometry) -> float:
+    try:
+        return float(propose_geom.part.radius())
+    except Exception:
+        minx, miny, maxx, maxy = shape_to_place.bounds
+        return 0.5 * math.hypot(maxx - minx, maxy - miny)
 
 
 def _rule_hybrid_geometry_mode(
@@ -75,7 +85,10 @@ def _score_placement_rule_hybrid(
         )
     if score == float("-inf") or rules is None or rules.size() == 0:
         return score
-    rule_score = _score_placement_rule(coords, rules, group_id)
+    rule_score = _score_placement_rule(
+        coords, rules, group_id,
+        radius=_part_rule_radius(shape_to_place, propose_geom),
+    )
     return score + propose_cfg.rule_ranking_weight * rule_score
 
 def _neighbor_excess_gap_for_placed(
@@ -85,7 +98,6 @@ def _neighbor_excess_gap_for_placed(
 ) -> float:
     if not base_geoms:
         return 0.0
-    from nest_graph.geometry import find_polygon_distances_bipartite
     results = find_polygon_distances_bipartite([placed_geom], base_geoms, aura=0.5)
     nearest = float("inf")
     for r in results:
@@ -307,13 +319,20 @@ def _score_placement_border(
     propose_geom: ProposeGeometry,
     pt_push: Point,
     min_dist: float,
+    propose_cfg: ProposeConfig | None = None,
 ) -> float:
     """Higher score = tighter fit to sheet border (lower exterior distance)."""
-    if _placement_feedback(coords, propose_geom, pt_push) is None:
+    g = _placement_feedback(coords, propose_geom, pt_push)
+    if g is None:
         return float("-inf")
     placed_geom = propose_geom.placed_at(coords)
     err = abs(outline_standoff_distance(placed_geom, propose_geom.sheet) - min_dist)
-    return -err
+    score = -err
+    if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
+        prop = best_proposition(g)
+        if prop is not None and is_cast_move(prop.move_type or ""):
+            score += propose_cfg.cast_rank_boost * min_dist
+    return score
 
 
 def _score_placement_contact(
@@ -323,15 +342,22 @@ def _score_placement_contact(
     pt_push: Point,
     min_dist: float,
     focal_shape: Optional[BaseGeometry] = None,
+    propose_cfg: ProposeConfig | None = None,
 ) -> float:
     """Higher score = tighter fit to sheet border and/or focal group."""
-    if _placement_feedback(coords, propose_geom, pt_push) is None:
+    g = _placement_feedback(coords, propose_geom, pt_push)
+    if g is None:
         return float("-inf")
     placed_geom = propose_geom.placed_at(coords)
     err = placement_contact_error(
         placed_geom, propose_geom.sheet, min_dist, focal_shape,
     )
-    return -err
+    score = -err
+    if propose_cfg is not None and propose_cfg.cast_rank_boost > 0.0 and min_dist > 0.0:
+        prop = best_proposition(g)
+        if prop is not None and is_cast_move(prop.move_type or ""):
+            score += propose_cfg.cast_rank_boost * min_dist
+    return score
 
 
 def _score_placement_contact_hybrid(
@@ -344,9 +370,11 @@ def _score_placement_contact_hybrid(
     clearance_weight: float,
     *,
     tightness_weight: float = 0.0,
+    propose_cfg: ProposeConfig | None = None,
 ) -> float:
     contact = _score_placement_contact(
         coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
+        propose_cfg,
     )
     if contact == float("-inf"):
         return float("-inf")
@@ -386,17 +414,19 @@ def _rank_score_for_mode(
         )
     if rank_mode == "border":
         return _score_placement_border(
-            coords, shape_to_place, propose_geom, pt_push, min_dist,
+            coords, shape_to_place, propose_geom, pt_push, min_dist, propose_cfg,
         )
     if rank_mode == "contact":
         return _score_placement_contact(
             coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
+            propose_cfg,
         )
     if rank_mode == "contact_hybrid":
         return _score_placement_contact_hybrid(
             coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
             propose_cfg.contact_clearance_hybrid_weight,
             tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
+            propose_cfg=propose_cfg,
         )
     if rank_mode == "clearance":
         return _score_placement_clearance(

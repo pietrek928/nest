@@ -27,6 +27,7 @@ from .geometry import (
     GuidanceConfig,
     batch_check_validity,
     find_polygon_distances,
+    find_polygon_intersections,
     find_polygon_intersections_bipartite,
 )
 from .placement_scene import (
@@ -178,38 +179,14 @@ def _iter_candidates(
             yield Candidate(i, w, t, placed)
 
 
-def _bounds_overlap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
-    return a[0] <= b[2] and b[0] <= a[2] and a[1] <= b[3] and b[1] <= a[3]
-
-
-def _collision_partners_vs_existing(
-    placed: Geometry,
-    placed_bbox: tuple[float, float, float, float],
-    existing_geoms: list[Geometry],
-    existing_bboxes: list[tuple[float, float, float, float]],
-) -> list[int]:
-    if not existing_geoms:
-        return []
-    index_map: list[int] = []
-    candidates: list[Geometry] = []
-    for j, bb in enumerate(existing_bboxes):
-        if _bounds_overlap(placed_bbox, bb):
-            index_map.append(j)
-            candidates.append(existing_geoms[j])
-    if not candidates:
-        return []
-    hits = find_polygon_intersections_bipartite([placed], candidates)
-    return [index_map[k] for _i, k in hits]
-
-
 def _fill_collision_matrix(
     M: np.ndarray,
     geoms: list[Geometry],
     bboxes: list[tuple[float, float, float, float]],
 ) -> None:
-    for i, placed in enumerate(geoms):
-        for j in _collision_partners_vs_existing(placed, bboxes[i], geoms[:i], bboxes[:i]):
-            M[i, j] = M[j, i] = 1.0
+    hits = find_polygon_intersections(geoms)
+    for i, j in hits:
+        M[i, j] = M[j, i] = 1.0
 
 
 def placement_board_score(
@@ -339,8 +316,12 @@ def make_polygon_graph(
     *,
     min_dist: float = 0.0,
     epsilon_ratio: float = 0.05,
+    user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    extra_voids: list[Geometry] | None = None,
 ):
-    sheet, void_geoms = board_context_from_geometry(b)
+    sheet, void_geoms = board_context_from_geometry(b, user_holes=user_holes)
+    if extra_voids:
+        void_geoms.extend(extra_voids)
     board_geom = Geometry.from_shapely(sheet)
     pad = default_sheet_padding(b)
     guidance_cfg = guidance_config_for_graph(
@@ -350,8 +331,6 @@ def make_polygon_graph(
     )
     graph = ElemGraph()
     selected_polys = []
-    selected_geoms: list[Geometry] = []
-    selected_bboxes: list[tuple[float, float, float, float]] = []
     selected_group_id = []
     selected_transform = []
     bases = _base_geometries(polygons)
@@ -405,23 +384,21 @@ def make_polygon_graph(
         pending.append((i, p, t, placed))
 
     graph.reserve_elems(len(pending))
-    for i, p, t, placed in pending:
-        bbox = placed.bounds()
-        n = len(selected_geoms)
+    pending_geoms = []
+    for k, (i, p, t, placed) in enumerate(pending):
         graph.append_elem(
             i,
             Vec2(x=placed.center()[0], y=placed.center()[1]),
             Circle.from_center_radius(*placed.center(), placed.radius()),
         )
-        for j in _collision_partners_vs_existing(
-            placed, bbox, selected_geoms, selected_bboxes
-        ):
-            graph.add_collision(n, j)
         selected_polys.append(transform_poly(p, t))
-        selected_geoms.append(placed)
-        selected_bboxes.append(bbox)
+        pending_geoms.append(placed)
         selected_group_id.append(i)
         selected_transform.append(t)
+
+    hits = find_polygon_intersections(pending_geoms)
+    for i, j in hits:
+        graph.add_collision(i, j)
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -858,24 +835,21 @@ def score_rule_sets_with_dfs(
 
 
 def window_selected_transforms(
-    selection_window: list[tuple[np.ndarray, np.ndarray]] | None,
-) -> tuple[np.ndarray, np.ndarray]:
+    selection_window: list[tuple[np.ndarray, ...]] | None,
+    ngroups: int = 2,
+) -> tuple[np.ndarray, ...]:
     """Merge per-iteration nest selections from the graph window (deduped per group)."""
     if not selection_window:
-        return (np.zeros((0, 3)), np.zeros((0, 3)))
-    parts0 = [w[0] for w in selection_window if w[0].shape[0] > 0]
-    parts1 = [w[1] for w in selection_window if w[1].shape[0] > 0]
-    t0 = (
-        dedupe_transforms(np.concatenate(parts0, axis=0))
-        if parts0
-        else np.zeros((0, 3))
-    )
-    t1 = (
-        dedupe_transforms(np.concatenate(parts1, axis=0))
-        if parts1
-        else np.zeros((0, 3))
-    )
-    return (t0, t1)
+        return tuple(np.zeros((0, 3)) for _ in range(ngroups))
+    
+    out = []
+    for i in range(ngroups):
+        parts = [w[i] for w in selection_window if len(w) > i and w[i].shape[0] > 0]
+        if parts:
+            out.append(dedupe_transforms(np.concatenate(parts, axis=0)))
+        else:
+            out.append(np.zeros((0, 3)))
+    return tuple(out)
 
 
 def _append_selection_window(
@@ -1408,7 +1382,6 @@ def _border_pack_graph(
         pack_polys, pack_gids, pack_tr = kept_polys, kept_gids, kept_tr
     placed_geoms = [Geometry.from_shapely(p) for p in pack_polys]
     graph = ElemGraph()
-    bboxes = [g.bounds() for g in placed_geoms]
     graph.reserve_elems(len(placed_geoms))
     for n, geom in enumerate(placed_geoms):
         cx, cy = geom.center()
@@ -1417,10 +1390,9 @@ def _border_pack_graph(
             Vec2(x=cx, y=cy),
             Circle.from_center_radius(cx, cy, geom.radius()),
         )
-        for j in _collision_partners_vs_existing(
-            geom, bboxes[n], placed_geoms[:n], bboxes[:n],
-        ):
-            graph.add_collision(n, j)
+    hits = find_polygon_intersections(placed_geoms)
+    for i, j in hits:
+        graph.add_collision(i, j)
     selected_out = list(range(len(pack_polys)))
     assert selection_is_independent(graph, selected_out)
     return graph, pack_polys, pack_gids, pack_tr, selected_out
@@ -1853,21 +1825,21 @@ def _boost_border_scores(
 
 def _build_transform_batch(
     cfg: BuildGraphConfig,
-    selected_t: tuple[np.ndarray, np.ndarray],
-    history: tuple[np.ndarray, np.ndarray],
+    selected_t: tuple[np.ndarray, ...],
+    history: tuple[np.ndarray, ...],
     rng: np.random.Generator,
     *,
     board: BaseGeometry | None = None,
     parts: list[tuple[Polygon, int]] | None = None,
     nest_state: NestState | None = None,
-    selection_window: list[tuple[np.ndarray, np.ndarray]] | None = None,
+    selection_window: list[tuple[np.ndarray, ...]] | None = None,
     first_pass: bool = False,
     border_saturation: bool = False,
     rules: PlacementRuleSet | None = None,
     proposer_counts_out: dict[str, int] | None = None,
     propose_stats_out: dict | None = None,
     propose_feedback=None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, ...]:
     sc = cfg.sampling
     scale = sc.transform_scale
     propose_by_group: dict[int, np.ndarray] = {}
@@ -1907,6 +1879,12 @@ def _build_transform_batch(
             proposer_counts_out=proposer_counts_out,
             zones_used_out=zones_used if propose_stats_out is not None else None,
             propose_feedback=propose_feedback,
+            packed_group_ids=(
+                nest_state.group_id if nest_state is not None else None
+            ),
+            packed_transforms=(
+                nest_state.transform if nest_state is not None else None
+            ),
         )
         if propose_stats_out is not None:
             propose_stats_out["proposal_count"] = sum(
@@ -1927,7 +1905,9 @@ def _build_transform_batch(
                     min_dist=min_dist,
                 )
 
-    window_t = window_selected_transforms(selection_window)
+    window_t = window_selected_transforms(
+        selection_window, ngroups=max(len(selected_t), 2),
+    )
 
     def one_group(
         group_id: int,
@@ -2014,10 +1994,13 @@ def _build_transform_batch(
             merged, all_pinned, sc.max_transforms_per_group, rng,
         )
 
-    return (
-        one_group(0, selected_t[0], history[0], window_t[0]),
-        one_group(1, selected_t[1], history[1], window_t[1]),
-    )
+    out = []
+    for i in range(len(selected_t)):
+        sel = selected_t[i] if i < len(selected_t) else np.zeros((0, 3))
+        hist = history[i] if i < len(history) else np.zeros((0, 3))
+        win = window_t[i] if i < len(window_t) else np.zeros((0, 3))
+        out.append(one_group(i, sel, hist, win))
+    return tuple(out)
 
 
 def _make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:

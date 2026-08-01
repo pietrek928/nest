@@ -18,7 +18,6 @@ from nest_graph.placement_scene import (
     footprints_inside_board,
     proposition_translation,
 )
-from nest_graph.propose.context import should_use_border_focus
 
 
 class ProposeGeometry:
@@ -35,6 +34,8 @@ class ProposeGeometry:
         propose_cfg: ProposeConfig | None = None,
         full_packed_geoms: list[Geometry] | None = None,
     ):
+        from nest_graph.propose.context import should_use_border_focus
+
         part = Geometry.from_shapely(part_poly)
         base_geoms: list[Geometry] = []
         if base_shape is not None and not base_shape.is_empty:

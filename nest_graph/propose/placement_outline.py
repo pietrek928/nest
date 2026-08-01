@@ -1,5 +1,5 @@
 import math
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, Optional, Tuple
 
 from shapely import LineString, LinearRing, Point, Polygon
 from shapely.affinity import rotate, translate
@@ -10,8 +10,10 @@ from nest_graph.geometry import Geometry
 from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
 from nest_graph.utils import get_shape_exteriors
 
-from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
+
+if TYPE_CHECKING:
+    from nest_graph.propose.geometry import ProposeGeometry
 
 _AXIS_PUSH_STEPS = 24
 
@@ -52,7 +54,7 @@ def _nest_outline_ring(outline: BaseGeometry):
 def outline_ring_geom(
     outline: BaseGeometry,
     *,
-    propose_geom: Optional[ProposeGeometry] = None,
+    propose_geom: Optional["ProposeGeometry"] = None,
 ) -> Optional[Geometry]:
     if propose_geom is not None and outline is propose_geom.sheet:
         return propose_geom.boundary_ring_geom

@@ -10,6 +10,7 @@ from nest_graph.utils import get_shape_exteriors, transform_poly
 
 from nest_graph.propose.context import placement_free_region, search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.ranking import find_polygon_distances_bipartite
 from nest_graph.propose.placement_axis import CARDINAL_DIRECTIONS, axis_push_from_seed
 from nest_graph.propose.placement_common import (
     bottom_left_sort_key,
@@ -108,10 +109,8 @@ def propose_placements_perimeter_walk(
                     continue
                 placed_geom = propose_geom.placed_at(coords)
                 if propose_geom.base_geoms:
-                    score = min(
-                        placed_geom.distance(base_geom)
-                        for base_geom in propose_geom.base_geoms
-                    )
+                    dists = find_polygon_distances_bipartite([placed_geom], propose_geom.base_geoms)
+                    score = min(d.distance for d in dists) if dists else 10.0
                 else:
                     score = placed_geom.standoff_distance(propose_geom.boundary_ring_geom)
                 propositions.append({"coords": coords, "cost": score})
@@ -157,10 +156,11 @@ def propose_placements_neighbor_slide(
             if not propose_geom.valid_at(coords, pt_push):
                 continue
             placed_geom = propose_geom.placed_at(coords)
-            score = min(
-                placed_geom.distance(base_geom)
-                for base_geom in propose_geom.base_geoms
-            ) if propose_geom.base_geoms else 10.0
+            if propose_geom.base_geoms:
+                dists = find_polygon_distances_bipartite([placed_geom], propose_geom.base_geoms)
+                score = min(d.distance for d in dists) if dists else 10.0
+            else:
+                score = 10.0
             propositions.append({"coords": coords, "cost": score})
 
     return _finalize_placement_propositions(propositions, top_n)

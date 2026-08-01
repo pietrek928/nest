@@ -2,24 +2,21 @@
 """Benchmark propose config presets for gap-fitting quality."""
 
 import argparse
-import json
 import sys
-from dataclasses import asdict
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
-from scripts.benchmark_propose_common import (
-    ProposeBenchmarkMetrics,
-    run_propose_with_metrics,
-    shipped_propose_config,
-)
+from scripts.nesting_evaluator import NestingPipelineEvaluator, ProposeBenchmarkMetrics
+from scripts.nesting_fixtures import get_all_cases
 
 
-def _benchmark_propose_cfg(**overrides: Any):
-    return shipped_propose_config(**overrides)
+def shipped_propose_config(**overrides: Any) -> ProposeConfig:
+    cfg = ProposeConfig()
+    for key, val in overrides.items():
+        setattr(cfg, key, val)
+    return cfg
 
 
 PROPOSE_BENCHMARK_PRESETS = {
@@ -79,13 +76,13 @@ PROPOSE_BENCHMARK_PRESETS = {
         trim_candidates_by_clearance=True,
         use_full_packed_obstacle=True,
     ),
-    "free_clearance": _benchmark_propose_cfg(
+    "free_clearance": shipped_propose_config(
         candidate_pool=12,
         trim_candidates_by_clearance=False,
         use_ribbon_seeds=False,
         use_contact_ranking=False,
     ),
-    "ribbon_free": _benchmark_propose_cfg(
+    "ribbon_free": shipped_propose_config(
         candidate_pool=12,
         use_ribbon_seeds=True,
         use_contact_ranking=False,
@@ -99,22 +96,21 @@ def _format_table(rows: list[ProposeBenchmarkMetrics]) -> str:
         by_key.setdefault((r.preset, r.scenario), []).append(r)
 
     lines = [
-        "| preset | scenario | valid | contact_min | clearance_min | kiss_frac | prop_yield | pool | final | graph+ | time_s |",
-        "|--------|----------|-------|-------------|---------------|-----------|------------|------|-------|--------|--------|",
+        "| preset | scenario | valid | contact_min | clearance_min | kiss_frac | pool | final | graph+ | time_s |",
+        "|--------|----------|-------|-------------|---------------|-----------|------|-------|--------|--------|",
     ]
     for (preset, scenario), agg in sorted(by_key.items()):
         valid = float(np.mean([a.valid_count for a in agg]))
         cd_min = float(np.mean([a.contact_dist_min for a in agg]))
         c_min = float(np.mean([a.top_clearance_min for a in agg]))
         kiss = float(np.mean([a.kiss_fraction for a in agg]))
-        prop_y = float(np.mean([a.proposal_yield for a in agg]))
         pool = float(np.mean([a.raw_pool_size for a in agg]))
         final = float(np.mean([a.final_count for a in agg]))
         delta = float(np.mean([a.graph_nodes_vs_random for a in agg]))
         t = float(np.mean([a.propose_time_s for a in agg]))
         lines.append(
             f"| {preset} | {scenario} | {valid:.1f} | {cd_min:.4f} | {c_min:.4f} | "
-            f"{kiss:.2f} | {prop_y:.2f} | {pool:.0f} | {final:.1f} | {delta:+.1f} | {t:.3f} |"
+            f"{kiss:.2f} | {pool:.0f} | {final:.1f} | {delta:+.1f} | {t:.3f} |"
         )
     return "\n".join(lines)
 
@@ -124,55 +120,45 @@ def main() -> None:
     parser.add_argument(
         "--presets",
         nargs="*",
-        default=None,
+        default=["shipped"],
         help=f"Presets: {', '.join(PROPOSE_BENCHMARK_PRESETS)}",
     )
     parser.add_argument(
-        "--scenarios",
+        "--cases",
         nargs="*",
-        default=["empty_base", "partial_pack", "two_clusters", "hole_board"],
+        default=["border_then_fill_s4"],
     )
-    parser.add_argument("--seeds", type=int, nargs="*", default=list(range(10)))
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=Path("docs/propose_benchmark_results.txt"),
-    )
+    parser.add_argument("--seeds", type=int, nargs="*", default=list(range(3)))
     args = parser.parse_args()
 
-    base_cfg = BuildGraphConfig()
     presets = args.presets or list(PROPOSE_BENCHMARK_PRESETS.keys())
 
+    all_cases = get_all_cases()
+    cases_to_run = [c for c in all_cases if c.name in args.cases]
+
+    if not cases_to_run:
+        print("No cases matched.")
+        sys.exit(1)
+
     rows: list[ProposeBenchmarkMetrics] = []
-    for name in presets:
-        if name not in PROPOSE_BENCHMARK_PRESETS:
-            print(f"Unknown preset: {name}", file=sys.stderr)
-            sys.exit(1)
-    for scenario in args.scenarios:
-        for preset_name in presets:
+    
+    for case in cases_to_run:
+        for name in presets:
+            if name not in PROPOSE_BENCHMARK_PRESETS:
+                print(f"Unknown preset: {name}", file=sys.stderr)
+                sys.exit(1)
+                
+            cfg = BuildGraphConfig()
+            cfg.propose = PROPOSE_BENCHMARK_PRESETS[name]
+            
+            evaluator = NestingPipelineEvaluator(case, cfg)
+            
             for seed in args.seeds:
-                rows.append(
-                    run_propose_with_metrics(
-                        PROPOSE_BENCHMARK_PRESETS[preset_name],
-                        scenario,
-                        seed,
-                        base_cfg,
-                        preset_label=preset_name,
-                    )
-                )
+                print(f"Running {name} on {case.name} seed={seed}...")
+                metrics = evaluator.run_propose_only(seed, name)
+                rows.append(metrics)
 
-    table = _format_table(rows)
-    print(table)
-
-    out_path = args.output
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w") as f:
-        f.write("# Propose preset benchmark\n\n")
-        f.write(table)
-        f.write("\n\n## Raw rows (JSON lines)\n\n")
-        for r in rows:
-            f.write(json.dumps(asdict(r)) + "\n")
-    print(f"\nWrote {out_path}", file=sys.stderr)
+    print("\n" + _format_table(rows))
 
 
 if __name__ == "__main__":

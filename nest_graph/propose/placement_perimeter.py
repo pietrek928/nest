@@ -117,7 +117,17 @@ def edge_inward_at_point(
 
 def exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Point]:
     anchors: list[Point] = []
-    for line in get_shape_exteriors(geom):
+    lines = list(get_shape_exteriors(geom))
+    total_length = sum(line.length for line in lines)
+    if total_length <= 0:
+        return []
+        
+    # Scale total samples by the square root of the number of components
+    # so we don't explode with 1000s of points for disjoint clusters
+    base_samples = max(16, samples_per_edge * 4)
+    total_samples = int(base_samples * math.sqrt(len(lines)))
+    
+    for line in lines:
         if line.length <= 0:
             continue
         coords = list(line.coords)
@@ -131,12 +141,18 @@ def exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Po
             if sl > 1e-9:
                 seg_lens.append(sl)
                 seg_endpoints.append(((x0, y0), (x1, y1)))
-        total = sum(seg_lens) or 1.0
-        n_seg = len(seg_endpoints) or 1
+        
+        # Allocate samples to this line based on its fraction of total length
+        line_samples = max(1, int(round(total_samples * (line.length / total_length))))
+        line_total_sl = sum(seg_lens) or 1.0
+        
         for sl, ((x0, y0), (x1, y1)) in zip(seg_lens, seg_endpoints, strict=True):
-            n = max(2, int(round(samples_per_edge * sl / total * n_seg)))
-            for t in np.linspace(0.02, 0.98, n):
-                anchors.append(Point(x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
+            n = max(1, int(round(line_samples * (sl / line_total_sl))))
+            if n == 1:
+                anchors.append(Point((x0 + x1) / 2, (y0 + y1) / 2))
+            else:
+                for t in np.linspace(0.05, 0.95, n):
+                    anchors.append(Point(x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
     return anchors
 
 

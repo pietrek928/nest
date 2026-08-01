@@ -134,7 +134,9 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
 
         // 2. Part-by-Part Evaluation
         for (size_t pA = 0; pA < active_poly.line_parts.size(); ++pA) {
+            if (active_poly.line_parts[pA].is_subtractive) continue;
             for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                if (obstacle.line_parts[pB].is_subtractive) continue;
 
                 if (!moving_circle_intersects_static_circle(
                     active_poly.line_parts[pA].bounding_circle, slide_vector,
@@ -194,7 +196,9 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
         }
 
         for (size_t pA = 0; pA < active_poly.line_parts.size(); ++pA) {
+            if (active_poly.line_parts[pA].is_subtractive) continue;
             for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                if (obstacle.line_parts[pB].is_subtractive) continue;
 
                 if (!moving_circle_intersects_static_circle(
                     active_poly.line_parts[pA].bounding_circle, slide_vector,

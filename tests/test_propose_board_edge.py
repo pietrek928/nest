@@ -1,6 +1,6 @@
 import math
 
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.propose import (
@@ -82,6 +82,8 @@ def test_board_edge_hybrid_tighter_than_snap_only():
     assert hybrid_min <= snap_min * 1.05 + 1e-6
 
 
+from nest_graph.propose.context import placement_contact_error
+
 def test_board_edge_beats_sheet_edge_bbox_on_triangle():
     board = _triangle_board()
     rect = _rect_part()
@@ -104,7 +106,6 @@ def test_board_edge_beats_sheet_edge_bbox_on_triangle():
         pt_push=pt_push,
         top_n=16,
     )
-    from nest_graph.propose.context import placement_contact_error
 
     assert board_coords
     board_err = min(
@@ -256,8 +257,6 @@ def test_snap_coords_cpp_matches_shapely():
 
 
 def test_snap_coords_multipolygon_focal_uses_cpp():
-    from shapely.geometry import MultiPolygon
-
     board = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
     rect = _rect_part()
     cfg = BuildGraphConfig()

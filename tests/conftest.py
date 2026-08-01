@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 
 from nest_graph.utils import normalize_poly
 
@@ -86,23 +86,22 @@ def small_transforms():
 
 @pytest.fixture
 def nest_board_donut() -> Polygon:
-    from shapely.geometry import box
     outer = box(0, 0, 10, 10)
     hole = box(3, 3, 7, 7)
     return outer.difference(hole)
 
 
+from nest_graph.config import (
+    BuildGraphConfig,
+    OutputConfig,
+    ProposeConfig,
+    SamplingConfig,
+    SelectionConfig,
+)
+
 @pytest.fixture
 def build_graph_config():
     """Small limits for fast CI / single-iteration smoke tests."""
-    from nest_graph.config import (
-        BuildGraphConfig,
-        OutputConfig,
-        ProposeConfig,
-        SamplingConfig,
-        SelectionConfig,
-    )
-
     return BuildGraphConfig(
         sampling=SamplingConfig(
             random_per_iter=32,

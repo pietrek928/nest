@@ -69,11 +69,11 @@ def test_user_board_holes():
     assert not is_valid_placement(scene, placed, (cx, cy), 0.0, GuidanceConfig())
 
 
-def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_config):
-    from nest_graph.config import ProposeConfig
-    from nest_graph.placement_scene import guidance_config_for_scene, is_valid_placement
-    from nest_graph.propose import proposed_transforms_for_groups
+from nest_graph.config import ProposeConfig
+from nest_graph.placement_scene import build_placement_scene, guidance_config_for_scene, is_valid_placement, placement_outside_outer
+from nest_graph.propose.pipeline import proposed_transforms_for_groups
 
+def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_config):
     cfg = build_graph_config
     min_dist = cfg.board_min_dist()
     eps_ratio = cfg.propose.placement_clearance_epsilon_ratio
@@ -89,7 +89,6 @@ def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_con
         min_dist=min_dist,
     )
     part = Geometry.from_shapely(rect_poly)
-    from nest_graph.placement_scene import build_placement_scene
 
     scene = build_placement_scene(nest_board, part)
     margin = min_dist + min_dist * eps_ratio
@@ -103,8 +102,6 @@ def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_con
 
 def test_center_outside_nest_rejected(nest_board, rect_poly):
     """Bbox inside padded sheet but anchor outside nest outline is invalid."""
-    from nest_graph.placement_scene import placement_outside_outer
-
     sheet, void_geoms = board_context_from_geometry(nest_board)
     board_geom = Geometry.from_shapely(sheet)
     part = Geometry.from_shapely(rect_poly)

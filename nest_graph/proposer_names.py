@@ -18,6 +18,7 @@ class ProposerName(StrEnum):
     BOARD_EDGE = "board_edge"
     GUIDANCE_CAST_REFINE = "guidance_cast_refine"
     BATCH_PACK = "batch_pack"
+    CLUSTER_COPY = "cluster_copy"
 
 
 ALL_PROPOSER_NAMES: tuple[str, ...] = tuple(p.value for p in ProposerName)

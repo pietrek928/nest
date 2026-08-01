@@ -28,4 +28,5 @@ Tscore score_transform(
     Tvertex group,
     Vec2f pos,
     float angle_rad,
-    ScoreAggregation aggregation = ScoreAggregation::Sum);
+    ScoreAggregation aggregation = ScoreAggregation::Sum,
+    float radius = 0.5f);

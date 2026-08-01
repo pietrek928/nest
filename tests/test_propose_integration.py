@@ -11,6 +11,7 @@ from nest_graph.placement_scene import board_placement_valid
 from nest_graph.config import BuildGraphConfig, ProposeConfig, dedupe_transforms
 from nest_graph.geometry import Geometry
 from nest_graph.propose import (
+    ProposeGeometry,
     base_shape_from_selection,
     proposed_transforms_for_groups,
     propositions_to_ndarray,
@@ -164,8 +165,6 @@ def test_default_config_first_pass_tuned():
 
 
 def test_propose_geometry_validation(nest_board, rect_poly):
-    from nest_graph.propose import ProposeGeometry
-
     geom = ProposeGeometry(nest_board, Polygon(), rect_poly, min_dist=0.001)
     placed = geom.placed_at((0.5, 0.5, 0.0))
     assert geom.footprint_clear_of_voids(placed)

@@ -26,6 +26,7 @@ from nest_graph.propose.context import (
     obstacle_shape_for_propose,
     propose_push_point,
     should_use_border_focus,
+    simplify_obstacle_union,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_edge import (
@@ -47,6 +48,10 @@ from nest_graph.propose.placements_primary import (
 )
 from nest_graph.propose.placement_common import cluster_seed_coords
 from nest_graph.propose.query_context import ProposeContext
+from nest_graph.propose.placements_pattern import (
+    extract_cluster_patterns,
+    propose_placements_cluster_copy,
+)
 from nest_graph.propose.placements_pso import propose_placements_point_cloud
 from nest_graph.propose.ranking import (
     _rank_proposal_coords,
@@ -164,6 +169,8 @@ def collect_propose_candidates(
     enabled_proposers: frozenset[str] | None = None,
     proposer_counts: dict[str, int] | None = None,
     guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
+    cluster_patterns: Sequence | None = None,
+    group_id: int = 0,
 ) -> List[Tuple[float, float, float]]:
     ctx = ProposeContext(
         base_shape,
@@ -357,6 +364,8 @@ def collect_propose_candidates(
         and not base_shape.is_empty
         and use_free_region
     ):
+        # Packed packs: keep angles/samples modest (profiles already lower samples).
+        gf_angles = min(n_angles, 8)
         _extend_counted(
             candidates,
             proposer_counts,
@@ -367,7 +376,7 @@ def collect_propose_candidates(
                 sheet,
                 base_shape,
                 min_dist=min_dist,
-                num_angles=max(n_angles, 12),
+                num_angles=gf_angles,
                 top_n=pool * 2,
                 samples_per_edge=propose_cfg.group_edge_samples_per_edge,
                 propose_geom=propose_geom,
@@ -417,20 +426,54 @@ def collect_propose_candidates(
             or propose_cfg.board_edge_when_packed
         )
     ):
+        # Skip expensive outline snaps when packed mass is far from the border.
+        packed_near_border = True
+        if base_shape is not None and not base_shape.is_empty:
+            packed_near_border = float(base_shape.distance(sheet.exterior)) <= max(
+                min_dist * 8.0, 1e-3,
+            )
+        if packed_near_border or should_use_border_focus(base_shape, propose_cfg):
+            be_angles = (
+                max(n_angles, 12)
+                if base_shape is None or base_shape.is_empty
+                else min(n_angles, 8)
+            )
+            _extend_counted(
+                candidates,
+                proposer_counts,
+                "board_edge",
+                propose_placements_board_edge(
+                    shape_to_place,
+                    sheet,
+                    base_shape,
+                    min_dist=min_dist,
+                    propose_cfg=propose_cfg,
+                    propose_geom=propose_geom,
+                    pt_push=pt_push,
+                    num_angles=be_angles,
+                    top_n=pool * 2,
+                ),
+            )
+    if (
+        _proposer_enabled("cluster_copy", enabled_proposers)
+        and propose_cfg.use_cluster_copy
+        and cluster_patterns
+    ):
         _extend_counted(
             candidates,
             proposer_counts,
-            "board_edge",
-            propose_placements_board_edge(
+            "cluster_copy",
+            propose_placements_cluster_copy(
+                cluster_patterns,
+                group_id,
                 shape_to_place,
                 sheet,
                 base_shape,
                 min_dist=min_dist,
-                propose_cfg=propose_cfg,
                 propose_geom=propose_geom,
                 pt_push=pt_push,
-                num_angles=max(n_angles, 12),
-                top_n=pool * 2,
+                propose_cfg=propose_cfg,
+                top_n=pool,
             ),
         )
     if (
@@ -647,6 +690,7 @@ def propose_coords_with_strategy(
     group_id: int = 0,
     proposer_counts: dict[str, int] | None = None,
     full_packed_geoms: list[Geometry] | None = None,
+    cluster_patterns: Sequence | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -687,6 +731,8 @@ def propose_coords_with_strategy(
         focal_shape=focal_shape,
         enabled_proposers=enabled_proposers,
         proposer_counts=proposer_counts,
+        cluster_patterns=cluster_patterns,
+        group_id=group_id,
     )
     return propose_coords_from_candidates(
         base_shape,
@@ -932,10 +978,12 @@ def augment_batch_pack_proposals(
     if len(group_ids) == 2:
         orders = [(group_ids[0], group_ids[1]), (group_ids[1], group_ids[0])]
     else:
-        for anchor in group_ids:
-            for follow in group_ids:
-                if follow != anchor:
-                    orders.append((anchor, follow))
+        # Limit the number of pairs to avoid combinatorial explosion
+        # Just pair each group with the next one or two
+        for i, anchor in enumerate(group_ids):
+            for j in range(1, min(3, len(group_ids))):
+                follow = group_ids[(i + j) % len(group_ids)]
+                orders.append((anchor, follow))
 
     seen_orders: set[tuple[int, int]] = set()
     for anchor_gid, follow_gid in orders:
@@ -995,6 +1043,7 @@ def _best_proposer_coords(
     group_id: int = 0,
     proposer_counts: dict[str, int] | None = None,
     full_packed_geoms: list[Geometry] | None = None,
+    cluster_patterns: Sequence | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -1010,6 +1059,7 @@ def _best_proposer_coords(
         group_id=group_id,
         proposer_counts=proposer_counts,
         full_packed_geoms=full_packed_geoms,
+        cluster_patterns=cluster_patterns,
     )
 
 
@@ -1071,6 +1121,8 @@ def proposed_transforms_for_groups(
     proposer_counts_out: dict[str, int] | None = None,
     zones_used_out: list[str] | None = None,
     propose_feedback=None,
+    packed_group_ids: Sequence[int] | None = None,
+    packed_transforms: Sequence | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -1079,6 +1131,29 @@ def proposed_transforms_for_groups(
     """
     placed = [selected_polys[i] for i in selected_indices]
     full_packed_geoms = [Geometry.from_shapely(p) for p in placed]
+    cluster_patterns = []
+    if (
+        propose_cfg.use_cluster_copy
+        and packed_group_ids is not None
+        and packed_transforms is not None
+        and placed
+    ):
+        # Align packed arrays with selected_indices order used for `placed`.
+        gids = [int(packed_group_ids[i]) for i in selected_indices if i < len(packed_group_ids)]
+        trs = [
+            packed_transforms[i]
+            for i in selected_indices
+            if i < len(packed_transforms)
+        ]
+        if len(gids) == len(placed) and len(trs) == len(placed):
+            cluster_patterns = extract_cluster_patterns(
+                placed,
+                gids,
+                trs,
+                min_dist=min_dist,
+                max_patterns=propose_cfg.cluster_copy_max_patterns,
+                min_members=propose_cfg.cluster_copy_min_members,
+            )
     out: dict[int, np.ndarray] = {}
     total_counts: dict[str, int] = {}
     for part_poly, group_id in parts:
@@ -1118,14 +1193,18 @@ def proposed_transforms_for_groups(
                 use_full = True
 
         if use_full and placed:
-            obstacle_shape = unary_union(placed)
+            obstacle_shape = simplify_obstacle_union(placed, min_dist)
         else:
             obstacle_shape = obstacle_shape_for_propose(
                 placed, part_poly, min_dist, propose_cfg=cfg,
             )
-        focal = focal_shape_for_propose(
-            board, placed, part_poly, min_dist, cfg,
-        )
+        # Reuse propose obstacle as focal when full-pack (avoids nearest-k mismatch).
+        if use_full and placed:
+            focal = obstacle_shape
+        else:
+            focal = focal_shape_for_propose(
+                board, placed, part_poly, min_dist, cfg,
+            )
         border_focus = should_use_border_focus(obstacle_shape, cfg)
         push = pt_push if pt_push is not None else propose_push_point(
             board,
@@ -1156,6 +1235,7 @@ def proposed_transforms_for_groups(
             group_id=group_id,
             proposer_counts=group_counts,
             full_packed_geoms=full_packed_geoms,
+            cluster_patterns=cluster_patterns,
         )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n
@@ -1179,7 +1259,8 @@ def proposed_transforms_for_groups(
         proposer_counts_out.clear()
         proposer_counts_out.update(total_counts)
 
-    if propose_cfg.use_batch_pack and len(out) >= 2:
+    # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
+    if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:
         batch_extra = augment_batch_pack_proposals(
             board,
             parts,

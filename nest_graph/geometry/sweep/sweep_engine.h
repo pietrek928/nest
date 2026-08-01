@@ -297,24 +297,18 @@ struct DistanceCandidate {
     }
 };
 
-template <class VecType, class Tracer = DefaultTracer>
-inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
-    std::vector<PartSweepElement<VecType>>& elements,
+template <class VecType>
+inline void collect_distance_candidates(
+    const std::vector<PartSweepElement<VecType>>& elements,
     typename VecType::Scalar aura_multiplier,
-    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
-    SweepMode mode = SweepMode::Monopartite,
-    int bipartite_set_a_size = -1,
-    Tracer* tracer = nullptr
+    typename VecType::Scalar distance_margin,
+    SweepMode mode,
+    int bipartite_set_a_size,
+    std::vector<DistanceCandidate<VecType>>& candidates
 ) {
     using Scalar = typename VecType::Scalar;
-    if (elements.empty()) return {};
-
-    std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
-        return a.min_proj < b.min_proj;
-    });
-
-    // 1. COLLECT: Gather bounds with aura threshold
-    std::vector<DistanceCandidate<VecType>> candidates;
+    candidates.clear();
+    candidates.reserve(elements.size() * 2);
     for (size_t i = 0; i < elements.size(); ++i) {
         for (size_t j = i + 1; j < elements.size(); ++j) {
             if (elements[j].min_proj > elements[i].max_proj) break;
@@ -322,9 +316,10 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
 
             std::pair<int, int> pair_id;
             bool reverse = false;
-            if (!resolve_sweep_pair_id(elements[i], elements[j], mode, bipartite_set_a_size, pair_id, reverse)) continue;
-
-            if constexpr (!std::is_same_v<Tracer, NullTracer>) if (tracer) tracer->count_sweep_pair();
+            if (!resolve_sweep_pair_id(
+                    elements[i], elements[j], mode, bipartite_set_a_size, pair_id, reverse)) {
+                continue;
+            }
 
             const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
             const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
@@ -342,45 +337,110 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
                 r_sum + (rA * aura_multiplier) + (rB * aura_multiplier) + distance_margin;
 
             if (center_dist_sq > dynamic_threshold * dynamic_threshold) {
-                if constexpr (!std::is_same_v<Tracer, NullTracer>) if (tracer) tracer->count_circle_prune();
                 continue;
             }
 
             candidates.push_back({pair_id, partA, partB, polyA, polyB, center_dist_sq, r_sum});
         }
     }
-
-    // 2. SORT: Group pairs and put closest parts at the top of the group
     std::sort(candidates.begin(), candidates.end());
+}
 
-    // 3. EVALUATE: Sequentially evaluate pairs with dynamic pruning
+template <class VecType, class Tracer = DefaultTracer>
+inline ComplexDistanceResult<VecType> evaluate_distance_candidate(
+    const DistanceCandidate<VecType>& cand,
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    const VecType* ptsA = cand.polyA->get_part_points(cand.partA_idx);
+    int nA = cand.polyA->get_part_size(cand.partA_idx);
+    const VecType* ptsB = cand.polyB->get_part_points(cand.partB_idx);
+    int nB = cand.polyB->get_part_size(cand.partB_idx);
+
+    if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+        if (tracer) tracer->count_gjk_eval();
+    }
+
+    ComplexDistanceResult<VecType> current_eval{
+        cand.pair_id.first, cand.pair_id.second, cand.partA_idx, cand.partB_idx,
+        false,
+        std::numeric_limits<Scalar>::max(),
+        static_cast<Scalar>(0),
+        VecType{},
+        VecType{}
+    };
+
+    const bool circles_may_overlap = cand.center_dist_sq <= cand.r_sum * cand.r_sum;
+    int warm1 = 0;
+    int warm2 = 0;
+    if (circles_may_overlap) {
+        auto pen_res = narrow_phase_penetration(ptsA, nA, ptsB, nB, 24, tracer);
+        if (pen_res.intersect) {
+            current_eval.intersect = true;
+            current_eval.distance_sq = 0;
+            current_eval.penetration_sq = pen_res.penetration_sq;
+            current_eval.mtv = pen_res.mtv;
+            return current_eval;
+        }
+        warm1 = pen_res.it1;
+        warm2 = pen_res.it2;
+        // Penetration may evaluate on swapped arrays; map indices back to A/B order.
+        if (nA > nB) {
+            std::swap(warm1, warm2);
+        }
+    }
+
+    auto dist_res = narrow_phase_distance(
+        ptsA, nA, ptsB, nB, false, warm1, warm2, 24, tracer);
+
+    const Scalar touch_eps_sq = nest_touch_eps_sq<Scalar>();
+    if (dist_res.intersect || dist_res.distance_sq <= touch_eps_sq) {
+        current_eval.intersect = true;
+        current_eval.distance_sq = 0;
+    } else {
+        current_eval.distance_sq = dist_res.distance_sq;
+        current_eval.closest_normal = ptsA[dist_res.it1] - ptsB[dist_res.it2];
+    }
+    return current_eval;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
+    std::vector<PartSweepElement<VecType>>& elements,
+    typename VecType::Scalar aura_multiplier,
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    if (elements.empty()) return {};
+
+    std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
+        return a.min_proj < b.min_proj;
+    });
+
+    std::vector<DistanceCandidate<VecType>> candidates;
+    collect_distance_candidates(
+        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size, candidates);
+
     std::vector<ComplexDistanceResult<VecType>> final_results;
     if (candidates.empty()) return final_results;
 
     std::pair<int, int> current_pair = candidates[0].pair_id;
     ComplexDistanceResult<VecType> best_eval;
+    const SolidGeometry<VecType>* current_polyA = nullptr;
+    const SolidGeometry<VecType>* current_polyB = nullptr;
     bool has_eval = false;
 
-    // Helper lambda to finalize and push the previous polygon pair
     auto commit_best_eval = [&]() {
         if (!has_eval) return;
-        // If no intersection occurred, we MUST check if one is fully swallowed by the other
-        if (!best_eval.intersect) {
-            const auto* pA = candidates.back().polyA; // Any candidate in the group holds the pointers
-            const auto* pB = candidates.back().polyB;
-
-            if (pA->line_parts.size() > 0 && pB->line_parts.size() > 0) {
-                const VecType* ptsA = pA->get_part_points(0);
-                const VecType* ptsB = pB->get_part_points(0);
-
-                // Uses the O(1) containment optimization!
-                if (narrow_phase_contain(ptsA, pA->get_part_size(0), *pB) ||
-                    narrow_phase_contain(ptsB, pB->get_part_size(0), *pA)) {
-                    best_eval.intersect = true;
-                    best_eval.distance_sq = 0;
-                    best_eval.penetration_sq = std::numeric_limits<Scalar>::max();
-                    best_eval.mtv = VecType{};
-                }
+        if (!best_eval.intersect && current_polyA != nullptr && current_polyB != nullptr) {
+            if (check_mutual_containment(*current_polyA, *current_polyB)) {
+                best_eval.intersect = true;
+                best_eval.distance_sq = 0;
+                best_eval.penetration_sq = std::numeric_limits<Scalar>::max();
+                best_eval.mtv = VecType{};
             }
         }
         final_results.push_back(best_eval);
@@ -393,70 +453,136 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
             commit_best_eval();
             current_pair = cand.pair_id;
             has_eval = false;
+            current_polyA = nullptr;
+            current_polyB = nullptr;
         }
 
-        // DYNAMIC PRUNING: Because candidates are sorted by distance, best_eval.distance_sq
-        // drops rapidly, causing this check to skip thousands of unnecessary GJK evaluations!
         if (has_eval && !best_eval.intersect) {
-            const Scalar center_dist = static_cast<Scalar>(std::sqrt(static_cast<double>(cand.center_dist_sq)));
-            const Scalar min_possible_dist = std::max(static_cast<Scalar>(0), center_dist - cand.r_sum);
+            const Scalar center_dist = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(cand.center_dist_sq)));
+            const Scalar min_possible_dist = std::max(
+                static_cast<Scalar>(0), center_dist - cand.r_sum);
             if (min_possible_dist * min_possible_dist >= best_eval.distance_sq) {
                 continue;
             }
         }
 
         TracerScope<Tracer> scope(tracer, cand.pair_id.first, cand.pair_id.second);
-
-        const VecType* ptsA = cand.polyA->get_part_points(cand.partA_idx);
-        int nA = cand.polyA->get_part_size(cand.partA_idx);
-        const VecType* ptsB = cand.polyB->get_part_points(cand.partB_idx);
-        int nB = cand.polyB->get_part_size(cand.partB_idx);
-
         if constexpr (!std::is_same_v<Tracer, NullTracer>) {
-            if (tracer) tracer->count_gjk_eval();
+            if (tracer) tracer->count_sweep_pair();
         }
 
-        // Uses the wrapper to handle the swapping internally!
-        auto pen_res = narrow_phase_penetration(ptsA, nA, ptsB, nB, 24, tracer);
+        auto current_eval = evaluate_distance_candidate<VecType, Tracer>(cand, tracer);
 
-        ComplexDistanceResult<VecType> current_eval{
-            cand.pair_id.first, cand.pair_id.second, cand.partA_idx, cand.partB_idx,
-            pen_res.intersect,
-            pen_res.intersect ? 0 : std::numeric_limits<Scalar>::max(),
-            pen_res.intersect ? pen_res.penetration_sq : 0,
-            pen_res.intersect ? pen_res.mtv : VecType{},
-            VecType{}
-        };
+        if (!has_eval) {
+            best_eval = current_eval;
+            current_polyA = cand.polyA;
+            current_polyB = cand.polyB;
+            has_eval = true;
+        } else if (current_eval.intersect && !best_eval.intersect) {
+            best_eval = current_eval;
+        } else if (current_eval.intersect && best_eval.intersect) {
+            if (current_eval.penetration_sq > best_eval.penetration_sq) best_eval = current_eval;
+        } else if (!current_eval.intersect && !best_eval.intersect) {
+            if (current_eval.distance_sq < best_eval.distance_sq) best_eval = current_eval;
+        }
+    }
+    commit_best_eval();
 
-        if (!pen_res.intersect) {
-            auto dist_res = narrow_phase_distance(ptsA, nA, ptsB, nB, false, 24, tracer);
+    return final_results;
+}
 
-            const Scalar touch_eps_sq = static_cast<Scalar>(1e-10);
-            if (dist_res.intersect || dist_res.distance_sq <= touch_eps_sq) {
-                current_eval.intersect = true;
-                current_eval.distance_sq = 0;
-            } else {
-                current_eval.distance_sq = dist_res.distance_sq;
-                VecType pA = ptsA[dist_res.it1];
-                VecType pB = ptsB[dist_res.it2];
-                current_eval.closest_normal = pA - pB;
+template <class VecType, class Tracer = DefaultTracer>
+inline bool execute_distance_sweep_any_violation(
+    std::vector<PartSweepElement<VecType>>& elements,
+    typename VecType::Scalar aura_multiplier,
+    typename VecType::Scalar distance_margin,
+    typename VecType::Scalar margin_sq,
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    if (elements.empty()) return false;
+
+    std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
+        return a.min_proj < b.min_proj;
+    });
+
+    std::vector<DistanceCandidate<VecType>> candidates;
+    collect_distance_candidates(
+        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size, candidates);
+    if (candidates.empty()) return false;
+
+    std::pair<int, int> current_pair = candidates[0].pair_id;
+    ComplexDistanceResult<VecType> best_eval;
+    const SolidGeometry<VecType>* current_polyA = nullptr;
+    const SolidGeometry<VecType>* current_polyB = nullptr;
+    bool has_eval = false;
+
+    auto pair_violates = [&]() -> bool {
+        if (!has_eval) return false;
+        if (!best_eval.intersect && current_polyA != nullptr && current_polyB != nullptr) {
+            if (check_mutual_containment(*current_polyA, *current_polyB)) {
+                return true;
             }
+        }
+        if (best_eval.intersect) return true;
+        return margin_sq > static_cast<Scalar>(0)
+            && best_eval.distance_sq < margin_sq;
+    };
+
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        const auto& cand = candidates[i];
+
+        if (cand.pair_id != current_pair) {
+            if (pair_violates()) return true;
+            current_pair = cand.pair_id;
+            has_eval = false;
+            current_polyA = nullptr;
+            current_polyB = nullptr;
+        }
+
+        if (has_eval && best_eval.intersect) {
+            continue;
+        }
+        if (has_eval && !best_eval.intersect
+            && margin_sq > static_cast<Scalar>(0)
+            && best_eval.distance_sq < margin_sq) {
+            return true;
+        }
+        if (has_eval && !best_eval.intersect) {
+            const Scalar center_dist = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(cand.center_dist_sq)));
+            const Scalar min_possible_dist = std::max(
+                static_cast<Scalar>(0), center_dist - cand.r_sum);
+            if (margin_sq > static_cast<Scalar>(0)
+                && min_possible_dist * min_possible_dist >= margin_sq
+                && min_possible_dist * min_possible_dist >= best_eval.distance_sq) {
+                continue;
+            }
+            if (min_possible_dist * min_possible_dist >= best_eval.distance_sq) {
+                continue;
+            }
+        }
+
+        auto current_eval = evaluate_distance_candidate<VecType, Tracer>(cand, tracer);
+        if (current_eval.intersect) {
+            return true;
+        }
+        if (margin_sq > static_cast<Scalar>(0)
+            && current_eval.distance_sq < margin_sq) {
+            return true;
         }
 
         if (!has_eval) {
             best_eval = current_eval;
+            current_polyA = cand.polyA;
+            current_polyB = cand.polyB;
             has_eval = true;
-        } else {
-            if (current_eval.intersect && !best_eval.intersect) {
-                best_eval = current_eval;
-            } else if (current_eval.intersect && best_eval.intersect) {
-                if (current_eval.penetration_sq > best_eval.penetration_sq) best_eval = current_eval;
-            } else if (!current_eval.intersect && !best_eval.intersect) {
-                if (current_eval.distance_sq < best_eval.distance_sq) best_eval = current_eval;
-            }
+        } else if (current_eval.distance_sq < best_eval.distance_sq) {
+            best_eval = current_eval;
         }
     }
-    commit_best_eval(); // Ensure final pair is pushed
-
-    return final_results;
+    return pair_violates();
 }

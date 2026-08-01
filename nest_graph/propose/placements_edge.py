@@ -69,14 +69,6 @@ def _board_edge_snap_seeds(
             if coords is None:
                 continue
             placed_geom = propose_geom.placed_at(coords)
-            if propose_geom.base_geoms:
-                if placed_geom.intersects_any(propose_geom.base_geoms):
-                    continue
-                if any(
-                    placed_geom.distance(base_geom) < min_dist - 1e-6
-                    for base_geom in propose_geom.base_geoms
-                ):
-                    continue
             if not propose_geom.valid_at(coords, pt_push):
                 continue
             err = placement_contact_error(placed_geom, sheet, min_dist, None)
@@ -197,6 +189,10 @@ def propose_placements_group_fit(
     """Snap the part along the nearest packed-group exterior at standoff min_dist."""
     if focal_shape is None or focal_shape.is_empty:
         return []
+    
+    from nest_graph.geometry import Geometry
+    focal_geom = Geometry.from_shapely(focal_shape) if not isinstance(focal_shape, Geometry) else focal_shape
+    
     propositions: list[dict] = []
     anchor_pts = exterior_anchor_points(focal_shape, samples_per_edge)
     stratify_boundary = focal_shape if isinstance(focal_shape, Polygon) else sheet
@@ -226,17 +222,9 @@ def propose_placements_group_fit(
                 placed_geom = propose_geom.placed_at(coords)
                 if not placed_geom.footprint_inside(propose_geom.board_geom):
                     continue
-                if propose_geom.base_geoms:
-                    if placed_geom.intersects_any(propose_geom.base_geoms):
-                        continue
-                    if any(
-                        placed_geom.distance(base_geom) < min_dist - 1e-6
-                        for base_geom in propose_geom.base_geoms
-                    ):
-                        continue
                 if pt_push is not None and not propose_geom.valid_at(coords, pt_push):
                     continue
-                err = placement_contact_error(placed_geom, sheet, min_dist, focal_shape)
+                err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
             else:
                 placed = transform_poly(shape_to_place, coords)
                 if not sheet.contains(placed):
@@ -246,7 +234,7 @@ def propose_placements_group_fit(
                         continue
                     if base_shape.distance(placed) < min_dist - 1e-6:
                         continue
-                err = placement_contact_error(placed, sheet, min_dist, focal_shape)
+                err = placement_contact_error(placed, sheet, min_dist, focal_geom)
             propositions.append({
                 "coords": coords,
                 "anchor": snap_contact,
@@ -390,14 +378,6 @@ def propose_placements_sheet_edge(
                 placed = rotated.translate(dx, dy)
                 if not placed.footprint_inside(propose_geom.board_geom):
                     continue
-                if propose_geom.base_geoms:
-                    if placed.intersects_any(propose_geom.base_geoms):
-                        continue
-                    if any(
-                        placed.distance(base_geom) < min_dist - 1e-6
-                        for base_geom in propose_geom.base_geoms
-                    ):
-                        continue
                 coords = (dx, dy, float(angle))
                 if not propose_geom.valid_at(coords, pt_push):
                     continue
