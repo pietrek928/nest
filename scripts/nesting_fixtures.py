@@ -14,7 +14,15 @@ from nest_graph.utils import normalize_poly, transform_poly
 
 @dataclass(frozen=True)
 class NestFloors:
-    """Pass/fail floors for CI gating."""
+    """Pass/fail floors for CI gating.
+
+    Kiss metrics (see evaluator):
+    - kiss_seed: fraction of *newly placed* parts within ~standoff of a seed.
+      Saturated rim cases often have no residual seed-facing gaps → kiss_seed≈0
+      is not alone a failure; prefer kiss_standoff / ΔParts / area_coverage.
+    - kiss_outline: fraction flush to the nest outline.
+    - kiss_standoff: fraction near ideal clearance to border or packed groups.
+    """
 
     parts_final: int = 0
     area_coverage: float = 0.0
@@ -24,6 +32,9 @@ class NestFloors:
     kiss_standoff: float = 0.0
     outline_coverage: float = 0.0
     density_auc: float = 0.0
+    # Optional max floors (fail if metric exceeds); unset = Infinity.
+    largest_free_over_part: float = float("inf")
+    clearance_p50: float = float("inf")
 
 
 @dataclass(frozen=True)
@@ -561,6 +572,83 @@ def make_demo_triangle(scale: float = 1.0, target_demand: float = 1.25) -> NestC
     )
 
 
+def make_demo_triangle_corner_cluster(
+    scale: float = 1.0,
+    target_demand: float = 1.2,
+) -> NestCase:
+    """Loose cluster near the right-angle corner; large hypotenuse void (Mode A)."""
+    board = Polygon([(0, 0), (1.2 * scale, 0), (0, 1.1 * scale)])
+    rect = _make_rect(0.1 * scale, 0.1 * scale)
+    tri = _make_tri(0.15 * scale, 0.07 * scale)
+    counts = _counts_for_demand([rect, tri], board.area, target_demand, (0.55, 0.45))
+    # Pack a few parts near (0,0); leave the long free region along the hypotenuse.
+    pitch = 0.13 * scale
+    half = 0.05 * scale
+    seeds: list[tuple[Polygon, int, tuple[float, float, float]]] = []
+    for i, j in ((0, 0), (1, 0), (0, 1), (2, 0), (0, 2), (1, 1)):
+        t = (half + i * pitch, half + j * pitch, 0.0)
+        placed = transform_poly(rect, t)
+        if board.contains(placed) or board.intersects(placed):
+            seeds.append((placed, 0, t))
+    seed_cov = sum(s[0].area for s in seeds) / max(board.area, 1e-12)
+    return NestCase(
+        name=f"demo_triangle_corner_cluster_s{len(seeds)}",
+        board=board,
+        board_holes=(),
+        groups=((rect, 0), (tri, 1)),
+        group_counts=counts,
+        seed_placements=tuple(seeds),
+        iters=4,
+        tags=frozenset(["mid_pack", "void_fill", "seeded"]),
+        floors=NestFloors(
+            parts_final=len(seeds) + 8,
+            area_coverage=seed_cov + 0.08,
+            # Void shrinks but need not vanish in a short mid-pack run.
+            largest_free_over_part=60.0,
+        ),
+        family="demo_triangle_corner_cluster",
+    )
+
+
+def make_loose_cluster_compact(
+    board_size: tuple[float, float] = (12.0, 12.0),
+    target_demand: float = 1.0,
+) -> NestCase:
+    """Deliberately gappy L-border seeds for Mode B compaction."""
+    case = build_nest_case(
+        CaseSpec(
+            family="loose_cluster_compact",
+            board="rect",
+            board_params=board_size,
+            part_catalog=("rect", "tri"),
+            part_scales=(1.0, 1.0),
+            seed_layout="l_border",
+            # Wide pitch → loose clearances that compaction should shrink.
+            seed_params=(0.55, 2.6),
+            target_demand=target_demand,
+            iters=3,
+            max_per_group=60,
+            tags=frozenset(["mid_pack", "compact", "seeded"]),
+            mix=(0.55, 0.45),
+            floors=NestFloors(parts_final=2, area_coverage=0.12),
+        ),
+    )
+    n_seed = len(case.seed_placements)
+    seed_cov = (
+        sum(s[0].area for s in case.seed_placements) / max(case.usable_area, 1e-12)
+        if n_seed else 0.0
+    )
+    return replace(
+        case,
+        name=f"loose_cluster_compact_s{n_seed}",
+        floors=NestFloors(
+            parts_final=max(n_seed, 2),
+            area_coverage=seed_cov + 0.03,
+            # clearance_p50 max deferred while gravity compaction is experiment-gated off
+        ),
+    )
+
+
 def make_rect_sheet_mixed(
     board_size: tuple[float, float] = (18.0, 18.0),
     part_scale: float = 1.2,
@@ -680,7 +768,7 @@ def make_border_then_fill(
             target_demand=target_demand,
             iters=2,
             max_per_group=60,
-            tags=frozenset(["late_stage", "seeded", "tight_pack"]),
+            tags=frozenset(["late_stage", "seeded", "tight_pack", "mid_pack"]),
             mix=(0.5, 0.5),
             floors=NestFloors(parts_final=2, area_coverage=0.2),
         ),
@@ -689,7 +777,7 @@ def make_border_then_fill(
         case,
         name=f"border_then_fill_s{len(case.seed_placements)}",
         floors=NestFloors(
-            parts_final=len(case.seed_placements) + 2, area_coverage=0.2,
+            parts_final=len(case.seed_placements) + 2, area_coverage=0.15,
         ),
     )
 
@@ -768,7 +856,7 @@ def make_dense_cluster_with_pockets(
             seed_params=(1.6,),
             target_demand=target_demand,
             iters=2,
-            tags=frozenset(["late_stage", "tight_pack", "seeded"]),
+            tags=frozenset(["late_stage", "tight_pack", "seeded", "mid_pack"]),
             mix=(0.4, 0.6),
             floors=NestFloors(parts_final=2, area_coverage=0.15),
         ),
@@ -777,7 +865,7 @@ def make_dense_cluster_with_pockets(
         case,
         name=f"dense_cluster_pockets_s{len(case.seed_placements)}",
         floors=NestFloors(
-            parts_final=len(case.seed_placements) + 2, area_coverage=0.15,
+            parts_final=len(case.seed_placements) + 2, area_coverage=0.1,
         ),
     )
 
@@ -1138,11 +1226,13 @@ def get_all_cases() -> list[NestCase]:
     """Return the standard suite of benchmark cases."""
     return [
         make_demo_triangle(),
+        make_demo_triangle_corner_cluster(),
         make_rect_sheet_mixed(),
         make_donut_void(),
         make_concave_interlock(),
         make_swiss_cheese(),
         make_border_then_fill(),
+        make_loose_cluster_compact(),
         make_mixed_scale_stress(),
         make_tight_border_ring(),
         make_dense_cluster_with_pockets(),

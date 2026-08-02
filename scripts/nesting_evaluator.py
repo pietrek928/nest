@@ -10,8 +10,19 @@ from shapely.geometry.base import BaseGeometry
 from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
+    _boost_void_island_scores,
     _build_transform_batch,
+    _count_graph_in_free,
+    _count_props_in_free,
+    _count_props_near_pole,
+    _count_selected_in_free,
+    _late_border_saturation_info,
     _make_initial_rule_sets,
+    _make_void_attractor_rule_set,
+    _merge_void_attractor_into_rule_sets,
+    _nest_seed_from_boosted_scores,
+    _void_attractor_radius,
+    _zones_have_void_hijack,
     active_rule_set,
     apply_dfs_refinement,
     improve_rules,
@@ -27,8 +38,11 @@ from nest_graph.propose import (
     effective_ranking_mode,
     obstacle_shape_for_propose,
 )
+from nest_graph.propose.compaction import compact_selection
 from nest_graph.propose.context import (
+    analyze_free_space,
     outline_coverage_ratio,
+    part_is_concave,
     propose_push_point,
     should_use_border_focus,
 )
@@ -235,6 +249,13 @@ class NestingMetrics:
     kiss_standoff: float = 0.0
     contact_min: float = 0.0
     clearance_p50: float = 0.0
+    largest_free_comp_area: float = 0.0
+    largest_free_over_part: float = 0.0
+    void_props: int = 0
+    void_graph: int = 0
+    void_selected_nest: int = 0
+    void_selected_refine: int = 0
+    free_kind: str = ""
     border_standoff_err: float = 0.0
     time_to_frac_final: float = -1.0
     density_auc: float = 0.0
@@ -277,6 +298,12 @@ def metrics_meet_floors(metrics: NestingMetrics, floors) -> list[str]:
         fails.append("outline_coverage")
     if metrics.density_auc < floors.density_auc:
         fails.append("density_auc")
+    max_free = getattr(floors, "largest_free_over_part", float("inf"))
+    if max_free < float("inf") and metrics.largest_free_over_part > max_free:
+        fails.append("largest_free_over_part")
+    max_clear = getattr(floors, "clearance_p50", float("inf"))
+    if max_clear < float("inf") and metrics.clearance_p50 > max_clear:
+        fails.append("clearance_p50")
     if not metrics.independent_ok:
         fails.append("independent_ok")
     if not metrics.overlap_ok:
@@ -289,59 +316,36 @@ def metrics_meet_floors(metrics: NestingMetrics, floors) -> list[str]:
 class NestingPipelineEvaluator:
     def __init__(self, case: NestCase, cfg: BuildGraphConfig):
         self.case = case
-        # Seeded / late-stage runs blow up under the full production propose budget.
-        if case.seed_placements:
-            cap = min(cfg.sampling.max_transforms_per_group or 120, 120)
-            cfg = cfg.model_copy(
-                update={
-                    "sampling": cfg.sampling.model_copy(
-                        update={
-                            "max_transforms_per_group": cap,
-                            "initial_random": min(cfg.sampling.initial_random, 48),
-                            "random_per_iter": min(cfg.sampling.random_per_iter, 32),
-                            "random_per_iter_when_proposed": min(
-                                cfg.sampling.random_per_iter_when_proposed, 16,
-                            ),
-                            "shuffle_passes": min(cfg.sampling.shuffle_passes, 1),
-                        },
-                    ),
-                    "selection": cfg.selection.model_copy(
-                        update={
-                            "improve_rules_rounds": min(cfg.selection.improve_rules_rounds, 1),
-                            "rules_kept": min(cfg.selection.rules_kept, 8),
-                            "improve_rules_elite_count": min(
-                                cfg.selection.improve_rules_elite_count, 4,
-                            ),
-                            "dfs_passes": min(cfg.selection.dfs_passes, 1),
-                            "dfs_max_tries": min(cfg.selection.dfs_max_tries, 2),
-                            "dfs_finalize_repair_passes": min(
-                                cfg.selection.dfs_finalize_repair_passes, 2,
-                            ),
-                        },
-                    ),
-                    "propose": cfg.propose.model_copy(
-                        update={
-                            "use_batch_pack": False,
-                            "candidate_pool": min(cfg.propose.candidate_pool, 24),
-                            "max_proposals": min(cfg.propose.max_proposals, 16),
-                            "obstacle_nearest_k": 1,
-                            "use_voronoi": False,
-                            "use_point_cloud": False,
-                            "use_guidance_walk": False,
-                            "use_ribbon_seeds": False,
-                            "raycast_num_rays": min(cfg.propose.raycast_num_rays, 8),
-                            "cast_squeeze_top_k": min(cfg.propose.cast_squeeze_top_k, 4),
-                        },
-                    ),
-                },
-            )
-        self.cfg = cfg
-        self.parts = list(case.groups)
         self.user_holes = _case_user_holes(case)
-        # Nestable sheet for propose/validity (outline + holes).
         self.sheet, _ = board_context_from_geometry(
             case.board, user_holes=self.user_holes,
         )
+        max_verts = 0
+        max_interiors = 0
+        concave_parts = False
+        for poly, _gid in case.groups:
+            max_verts = max(max_verts, len(list(poly.exterior.coords)))
+            max_interiors = max(
+                max_interiors, len(getattr(poly, "interiors", ()) or ()),
+            )
+            if part_is_concave(poly):
+                concave_parts = True
+        n_holes = len(case.board_holes)
+        sheet_vertices = (
+            len(list(self.sheet.exterior.coords))
+            if hasattr(self.sheet, "exterior") else 0
+        )
+        seeded = bool(case.seed_placements)
+        cfg = cfg.with_runtime_lean(
+            n_holes=n_holes,
+            max_part_vertices=max_verts,
+            max_part_interiors=max_interiors,
+            sheet_vertices=sheet_vertices,
+            concave_parts=concave_parts,
+            seeded=seeded,
+        )
+        self.cfg = cfg
+        self.parts = list(case.groups)
         self.last_result: dict | None = None
 
     def _min_dist(self, *, first_pass: bool = False) -> float:
@@ -375,6 +379,7 @@ class NestingPipelineEvaluator:
                 group_id=list(seed_gids),
                 transform=list(seed_tr),
                 selected_indices=list(range(len(seed_polys))),
+                seed_count=len(seed_polys),
             )
         extra_voids = _seed_extra_voids(seed_polys)
 
@@ -537,6 +542,7 @@ class NestingPipelineEvaluator:
                 group_id=list(seed_gids),
                 transform=list(seed_tr),
                 selected_indices=list(range(len(seed_polys))),
+                seed_count=len(seed_polys),
             )
         
         extra_voids = _seed_extra_voids(seed_polys)
@@ -546,16 +552,38 @@ class NestingPipelineEvaluator:
         next_tr = list(seed_tr)
         next_sel = list(range(len(seed_polys)))
         trajectory: list[tuple[float, float, int]] = []
+        last_void_leak: dict = {
+            "free_kind": "",
+            "props": 0,
+            "graph": 0,
+            "nest": 0,
+            "refine": 0,
+        }
+        last_proposal_yield = 0.0
+        had_void_override = False
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
+            sat_info = _late_border_saturation_info(
+                self.cfg, nest_state, self.sheet,
+                had_void_override=had_void_override,
+            )
+            if sat_info.sat_override:
+                had_void_override = True
+            propose_stats: dict = {
+                "outline_cov": sat_info.outline_cov,
+                "sat_override": sat_info.sat_override,
+                "rim_progress": sat_info.rim_progress,
+            }
             selected_t = _build_transform_batch(
                 self.cfg, selected_t, history, rng,
                 board=self.sheet,
                 parts=self.parts,
                 nest_state=nest_state,
                 first_pass=first_pass,
+                border_saturation=sat_info.active,
                 group_allowed_angles=self.case.group_allowed_angles,
+                propose_stats_out=propose_stats,
             )
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
@@ -586,15 +614,128 @@ class NestingPipelineEvaluator:
                 )
 
             active_rules = active_rule_set(rule_sets)
-            scores = score_elems(graph, active_rules)
-            selected = list(nest_by_graph(graph, rule_sets[: sel.nest_rule_sets_used])[0])
+            scores = list(score_elems(graph, active_rules))
+            min_dist = self._min_dist(first_pass=False)
+
+            packed_for_free = list(next_polys) if next_polys else []
+            mean_part = float(np.mean([p[0].area for p in self.parts])) if self.parts else 1.0
+            free_info = analyze_free_space(
+                self.sheet, packed_for_free, mean_part, min_dist,
+            )
+            free_poly = free_info.target_poly
+            nest_rules = rule_sets
+            refine_rules = active_rules
+            sheet_diag = 0.0
+            if self.sheet is not None and not self.sheet.is_empty:
+                minx, miny, maxx, maxy = self.sheet.bounds
+                sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
+            attr_w = float(self.cfg.propose.void_attractor_rule_weight)
+            pole_w = float(self.cfg.propose.void_island_score_boost)
+            void_r = _void_attractor_radius(
+                min_dist, sheet_diag, self.cfg.rules.place_rule_radius,
+            )
+            if (
+                free_info.kind == "large_void"
+                and free_info.target_pt is not None
+                and (pole_w > 0.0 or attr_w > 0.0)
+            ):
+                if attr_w > 0.0:
+                    attractor = _make_void_attractor_rule_set(
+                        free_info.target_pt,
+                        ngroups=len(self.parts),
+                        radius=void_r,
+                        weight=attr_w,
+                    )
+                    nest_rules = _merge_void_attractor_into_rule_sets(
+                        rule_sets,
+                        attractor,
+                        nest_rule_sets_used=sel.nest_rule_sets_used,
+                        max_rules_per_set=self.cfg.rules.max_rules_per_set,
+                    )
+                    refine_rules = active_rule_set(nest_rules)
+                    scores = list(score_elems(graph, refine_rules))
+                if pole_w > 0.0:
+                    _boost_void_island_scores(
+                        polys,
+                        scores,
+                        free_poly,
+                        weight=pole_w,
+                        pole=free_info.target_pt,
+                        pole_radius=void_r,
+                        sheet_diag=sheet_diag,
+                    )
+
+            use_greedy_nest = (
+                bool(self.cfg.propose.void_greedy_nest_seed)
+                and free_info.kind == "large_void"
+                and pole_w > 0.0
+                and scores
+            )
+            if use_greedy_nest:
+                selected = _nest_seed_from_boosted_scores(graph, scores)
+            else:
+                selected = list(
+                    nest_by_graph(graph, nest_rules[: sel.nest_rule_sets_used])[0]
+                )
+            n_void_nest = _count_selected_in_free(polys, selected, free_poly)
             _, selected_polys, _score_sum = apply_dfs_refinement(
                 graph,
-                active_rules,
+                refine_rules,
                 selected,
                 scores,
                 selection=sel,
             )
+            n_void_refine = _count_selected_in_free(
+                polys, selected_polys, free_poly,
+            )
+            proposed_map = propose_stats.get("proposed_by_group") or {}
+            proposed_list = [
+                proposed_map[g] for g in sorted(proposed_map)
+            ] if proposed_map else None
+            n_void_props = _count_props_in_free(proposed_list, free_poly)
+            n_void_graph = _count_graph_in_free(polys, free_poly)
+            pole_radius_metric = 0.25 * sheet_diag if sheet_diag > 0.0 else 0.0
+            n_props_pole = _count_props_near_pole(
+                proposed_list, free_info.target_pt, pole_radius_metric,
+            )
+            zones = propose_stats.get("zones_used") or []
+            last_void_leak = {
+                "free_kind": free_info.kind,
+                "max_void_ratio": float(free_info.max_void_ratio),
+                "props": n_void_props,
+                "props_pole": n_props_pole,
+                "hijack": _zones_have_void_hijack(zones),
+                "graph": n_void_graph,
+                "nest": n_void_nest,
+                "refine": n_void_refine,
+                "border_only": bool(propose_stats.get("border_only", False)),
+                "outline_cov": float(propose_stats.get("outline_cov", 0.0)),
+                "sat_override": bool(propose_stats.get("sat_override", False)),
+                "rim_progress": float(propose_stats.get("rim_progress", 0.0)),
+            }
+            prop_n = int(propose_stats.get("proposal_count", 0))
+            if prop_n > 0:
+                last_proposal_yield = min(1.0, n_void_graph / prop_n) if n_void_graph else (
+                    min(1.0, len(polys) / prop_n)
+                )
+
+            if (
+                self.cfg.propose.enable_gravity_compaction
+                and len(selected_polys) >= 2
+            ):
+                part_by_group = {
+                    i: self.parts[i][0] for i in range(len(self.parts))
+                }
+                polys, transform = compact_selection(
+                    self.sheet,
+                    list(polys),
+                    list(transform),
+                    group_id,
+                    selected_polys,
+                    part_by_group,
+                    min_dist,
+                    fixed_obstacles=seed_polys,
+                )
 
             new_selected_t = [[] for _ in range(len(self.case.groups))]
             for i in selected_polys:
@@ -617,11 +758,36 @@ class NestingPipelineEvaluator:
             next_tr = list(seed_tr) + placed_tr
             next_sel = list(range(len(next_polys)))
 
+            # Densify the full pack (incl. former seeds) so Mode B closes gaps.
+            n_seed = len(seed_polys)
+            if (
+                self.cfg.propose.enable_gravity_compaction
+                and len(next_sel) >= 2
+            ):
+                gid_to_part = {
+                    int(gid): poly for poly, gid in self.case.groups
+                }
+                next_polys, next_tr = compact_selection(
+                    self.sheet,
+                    next_polys,
+                    next_tr,
+                    next_gids,
+                    next_sel,
+                    gid_to_part,
+                    min_dist,
+                )
+                if n_seed > 0:
+                    seed_polys = list(next_polys[:n_seed])
+                    seed_tr = list(next_tr[:n_seed])
+                    seed_gids = list(next_gids[:n_seed])
+                    extra_voids = _seed_extra_voids(seed_polys)
+
             nest_state = NestState(
                 polys=next_polys,
                 group_id=next_gids,
                 transform=next_tr,
                 selected_indices=next_sel,
+                seed_count=n_seed,
             )
             # Per-iter coverage sample for trajectory metrics.
             t_elapsed = time.perf_counter() - t0
@@ -636,45 +802,92 @@ class NestingPipelineEvaluator:
 
         time_s = time.perf_counter() - t0
         
-        # Metrics calculation
-        parts_seed = len(seed_polys)
+        # Metrics calculation — use final compacted nest pack when available.
+        initial_seed_n = len(_build_seed_state(self.case)[0])
+        parts_seed = initial_seed_n
         area_coverage_seed = 0.0
         if self.case.usable_area > 0 and parts_seed > 0:
-            area_coverage_seed = sum(p.area for p in seed_polys) / self.case.usable_area
+            area_coverage_seed = (
+                sum(p.area for p, _g, _t in self.case.seed_placements)
+                / self.case.usable_area
+            )
 
-        parts_final = parts_seed + len(selected_polys)
+        parts_final = len(next_polys) if next_polys else (len(seed_polys) + len(selected_polys))
         graph_nodes = len(polys)
+        min_dist = self._min_dist()
         independent_ok = (
             selection_is_independent(graph, selected_polys) if graph is not None else False
         )
-        min_dist = self._min_dist()
-        overlap_ok, void_ok = _selection_validity(
-            self.case, self.sheet, selected_polys, group_id, transform, graph,
-            seed_polys=seed_polys, min_dist=min_dist,
-        )
+        # Geometric overlap: hard intersections only. Graph independence already
+        # encodes clearance edges; post-compact poses may sit slightly under
+        # numeric min_dist without being graph-adjacent.
+        if next_polys:
+            placed_shapes = list(next_polys)
+        else:
+            placed_shapes = list(seed_polys) + [
+                transform_poly(self.parts[group_id[i]][0], transform[i])
+                for i in selected_polys
+            ]
+        overlap_ok = True
+        void_ok = True
+        for a, pa in enumerate(placed_shapes):
+            if pa is None or pa.is_empty:
+                continue
+            if not self.sheet.buffer(1e-5).covers(pa):
+                void_ok = False
+            for hole in self.case.board_holes:
+                inter = pa.intersection(hole)
+                if not inter.is_empty and inter.area > 1e-6:
+                    void_ok = False
+            for b in range(a + 1, len(placed_shapes)):
+                pb = placed_shapes[b]
+                if pb is None or pb.is_empty:
+                    continue
+                if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
+                    overlap_ok = False
 
         usable_area = self.case.usable_area
         area_coverage = 0.0
         if usable_area > 0 and parts_final > 0:
-            part_area = sum(p.area for p in seed_polys) + sum(
-                self.parts[group_id[i]][0].area for i in selected_polys
-            )
+            part_area = sum(float(p.area) for p in placed_shapes)
             area_coverage = part_area / usable_area
 
-        placed_shapes = seed_polys + [
-            transform_poly(self.parts[group_id[i]][0], transform[i])
-            for i in selected_polys
-        ]
         out_cov = outline_coverage_ratio(
             placed_shapes, self.sheet, min_dist=min_dist,
         )
+
+        mean_part_area = float(np.mean([p[0].area for p in self.parts])) if self.parts else 1.0
+        free_info = analyze_free_space(
+            self.sheet, placed_shapes, mean_part_area, min_dist,
+        )
+        largest_free_comp_area = float(free_info.largest_area)
+        largest_free_over_part = float(free_info.max_void_ratio)
+
+        pair_gaps: list[float] = []
+        for a in range(len(placed_shapes)):
+            pa = placed_shapes[a]
+            if pa is None or pa.is_empty:
+                continue
+            nearest = None
+            for b in range(len(placed_shapes)):
+                if a == b:
+                    continue
+                pb = placed_shapes[b]
+                if pb is None or pb.is_empty:
+                    continue
+                d = float(pa.distance(pb))
+                if nearest is None or d < nearest:
+                    nearest = d
+            if nearest is not None:
+                pair_gaps.append(nearest)
+        clearance_p50 = float(np.median(pair_gaps)) if pair_gaps else 0.0
         
         # Kiss metrics
         kiss_seed = 0.0
         kiss_outline = 0.0
         kiss_standoff = 0.0
         contact_min = -1.0
-        new_geoms_shp = placed_shapes[len(seed_polys):]
+        new_geoms_shp = placed_shapes[initial_seed_n:]
         if new_geoms_shp:
             kiss_tol = max(min_dist * 2.0, 0.15)
             standoff_tol = max(min_dist * 0.5, 1e-3)
@@ -755,7 +968,7 @@ class NestingPipelineEvaluator:
             overlap_ok=overlap_ok,
             void_ok=void_ok,
             graph_nodes=graph_nodes,
-            proposal_yield=0.0,
+            proposal_yield=float(last_proposal_yield),
             time_s=time_s,
             parts_seed=parts_seed,
             area_coverage_seed=area_coverage_seed,
@@ -766,6 +979,14 @@ class NestingPipelineEvaluator:
             kiss_outline=kiss_outline,
             kiss_standoff=kiss_standoff,
             contact_min=contact_min,
+            clearance_p50=clearance_p50,
+            largest_free_comp_area=largest_free_comp_area,
+            largest_free_over_part=largest_free_over_part,
+            void_props=int(last_void_leak.get("props", 0)),
+            void_graph=int(last_void_leak.get("graph", 0)),
+            void_selected_nest=int(last_void_leak.get("nest", 0)),
+            void_selected_refine=int(last_void_leak.get("refine", 0)),
+            free_kind=str(last_void_leak.get("free_kind", "")),
             time_to_frac_final=time_to_frac,
             density_auc=density_auc,
             coverage_trajectory=tuple(trajectory),

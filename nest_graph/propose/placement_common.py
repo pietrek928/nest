@@ -10,7 +10,11 @@ from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 _MAX_OBSTACLE_PARTS = 32
 
 
-def obstacle_parts(base_shape: BaseGeometry) -> list[Polygon]:
+def obstacle_parts(
+    base_shape: BaseGeometry,
+    *,
+    max_parts: int | None = _MAX_OBSTACLE_PARTS,
+) -> list[Polygon]:
     """Split packed layout into individual polygons for per-neighbor slides."""
     if base_shape is None or base_shape.is_empty:
         return []
@@ -23,7 +27,9 @@ def obstacle_parts(base_shape: BaseGeometry) -> list[Polygon]:
         parts = [base_shape]
     else:
         parts = []
-    return parts[:_MAX_OBSTACLE_PARTS]
+    if max_parts is None or max_parts <= 0:
+        return parts
+    return parts[:max_parts]
 
 
 def _boundary_alignment_angles(poly: Polygon) -> list[float]:
@@ -129,12 +135,18 @@ def placement_safe_zone(
     rotated: Polygon,
     min_dist: float,
 ) -> BaseGeometry:
+    """Eroded search region minus per-part Minkowski buffers (same radius as NFP)."""
     total_buf = _rotated_max_dim(rotated) + min_dist
     safe_zone = region.buffer(-total_buf)
     if safe_zone.is_empty:
         return safe_zone
     if base_shape is not None and not base_shape.is_empty:
-        safe_zone = safe_zone.difference(base_shape.buffer(total_buf))
+        parts = obstacle_parts(base_shape, max_parts=None)
+        if parts:
+            obstacle_union = unary_union([p.buffer(total_buf) for p in parts])
+            safe_zone = safe_zone.difference(obstacle_union)
+        else:
+            safe_zone = safe_zone.difference(base_shape.buffer(total_buf))
     return safe_zone
 
 

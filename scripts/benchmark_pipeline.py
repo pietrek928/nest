@@ -22,6 +22,28 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
         pass
     elif propose_name == "local_compact":
         cfg.propose = ProposeConfig.local_compact_profile()
+    elif propose_name == "no_void_boost":
+        cfg.propose = cfg.propose.model_copy(update={
+            "void_island_score_boost": 0.0,
+            "void_attractor_rule_weight": 0.0,
+            "enable_gravity_compaction": False,
+        })
+    elif propose_name == "no_greedy_nest":
+        cfg.propose = cfg.propose.model_copy(update={
+            "void_greedy_nest_seed": False,
+        })
+    elif propose_name == "no_override":
+        cfg.propose = cfg.propose.model_copy(update={
+            "late_border_void_override_ratio": 0.0,
+            "late_border_void_release_ratio": 0.0,
+        })
+    elif propose_name == "no_void_hijack":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_void_large_hijack": False,
+            "void_island_score_boost": 0.0,
+            "void_attractor_rule_weight": 0.0,
+            "enable_gravity_compaction": False,
+        })
     elif propose_name == "no_propose":
         cfg.propose = ProposeConfig(
             use_neighbor_slide=False,
@@ -62,7 +84,20 @@ def main() -> None:
         help="Expand axes e.g. pitch=1.6,1.8 (reserved; currently filters only)",
     )
     parser.add_argument("--force", action="store_true", help="Allow >40 matrix/suite runs")
-    parser.add_argument("--propose", nargs="*", default=["shipped"], choices=["shipped", "local_compact", "no_propose"])
+    parser.add_argument(
+        "--propose",
+        nargs="*",
+        default=["shipped"],
+        choices=[
+            "shipped",
+            "local_compact",
+            "no_propose",
+            "no_void_boost",
+            "no_void_hijack",
+            "no_override",
+            "no_greedy_nest",
+        ],
+    )
     parser.add_argument("--dfs-modes", nargs="*", default=["merged_loose_tight"])
     parser.add_argument("--seeds", type=int, nargs="*", default=[0])
     parser.add_argument("--gate", action="store_true", help="Fail if case floors / baselines not met")
@@ -117,6 +152,9 @@ def main() -> None:
                         f"  -> parts={metrics.parts_final} area={metrics.area_coverage:.3f} "
                         f"kiss_s={metrics.kiss_seed:.2f} kiss_o={metrics.kiss_outline:.2f} "
                         f"auc={metrics.density_auc:.2f} ok={metrics.independent_ok} "
+                        f"free={metrics.free_kind}/{metrics.largest_free_over_part:.1f} "
+                        f"void={metrics.void_props}/{metrics.void_graph}/"
+                        f"{metrics.void_selected_nest}/{metrics.void_selected_refine} "
                         f"time={metrics.time_s:.2f}s"
                     )
 

@@ -37,3 +37,13 @@ exclude = [".venv", "venv", "build", "dist", "*.egg-info"]
 
 [tool.scikit-build.cmake]
 version = "CMakeLists.txt"
+
+# uv only rebuilds editables when cache-keys change (defaults: pyproject/setup only).
+# Setting this replaces the defaults, so keep pyproject.toml listed.
+[tool.uv]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "**/CMakeLists.txt" },
+    { file = "nest_graph/**/*.{h,hh,hpp,c,cc,cpp,cxx}" },
+]

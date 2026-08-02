@@ -124,6 +124,40 @@ def test_obstacle_polys_includes_two_nearest_clusters():
     assert single[0].distance(p1) < 0.02
 
 
+def test_obstacle_polys_single_blob_respects_nearest_k():
+    """One contact-connected cluster still returns only k nearest parts."""
+    rect = _rect()
+    tri = _tri()
+    # Touching chain → one solid group under default merge gap.
+    placed = [
+        transform_poly(rect, np.array([0.10 + 0.11 * i, 0.10, 0.0]))
+        for i in range(6)
+    ]
+    assert len(cluster_packed_solid_groups(placed, min_dist=0.01)) == 1
+    near = obstacle_polys_for_propose(
+        placed, tri, 0.01, nearest_k=3, ref_point=placed[0].centroid,
+    )
+    assert len(near) == 3
+    assert all(p.distance(placed[0]) <= placed[5].distance(placed[0]) + 1e-9 for p in near)
+
+
+def test_placement_safe_zone_nonempty_for_local_pocket():
+    from shapely.affinity import rotate
+
+    from nest_graph.propose.placement_common import placement_safe_zone
+
+    sheet, _ = board_context_from_geometry(_triangle_board())
+    rect = _rect()
+    # Two distant parts leave a large free pocket between them.
+    p1 = transform_poly(rect, np.array([0.12, 0.12, 0.0]))
+    p2 = transform_poly(rect, np.array([0.85, 0.12, 0.0]))
+    local = unary_union([p1, p2])
+    rotated = rotate(_tri(), 0.0, origin=(0, 0), use_radians=True)
+    sz = placement_safe_zone(sheet, local, rotated, min_dist=0.01)
+    assert not sz.is_empty
+    assert sz.area > 0.01
+
+
 def test_focal_obstacle_expands_free_region_with_three_clusters():
     board = _triangle_board()
     rect = _rect()

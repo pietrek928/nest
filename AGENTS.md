@@ -9,7 +9,7 @@
 
 ## Native extensions
 
-- After C++ changes, rebuild: `cmake --build build --target geometry elem_graph` (or `uv pip install -e .`).
+- After C++ changes, rebuild: `uv pip install -e .` (native sources are in `tool.uv.cache-keys`) or `cmake --build build --target geometry elem_graph`.
 - C++ unit tests: `cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON` then `geometry_cpp_tests` / `elem_graph_cpp_tests`.
 
 ### C++ style

@@ -1,4 +1,5 @@
 from typing import List, Optional, Sequence, Tuple, Union
+from math import hypot
 
 import numpy as np
 from shapely import Point, Polygon
@@ -18,17 +19,26 @@ from nest_graph.utils import transform_poly
 
 from nest_graph.propose.context import (
     placement_contact_error,
+    analyze_free_space,
     apply_proposer_pool_scales,
     border_focal_for_propose,
     classify_propose_zone_info,
+    corridor_channel_samples,
+    corridor_channel_target,
+    corridor_seed_coords_from_samples,
     effective_ranking_mode,
     focal_shape_for_propose,
     local_packed_near_target,
+    nearest_channel_attract,
     obstacle_shape_for_propose,
     part_extents,
+    part_is_concave,
     propose_push_point,
+    sheet_has_narrow_corridor,
     should_use_border_focus,
     simplify_obstacle_union,
+    void_pole_seed_coords,
+    PlaceZoneInfo,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_edge import (
@@ -195,6 +205,15 @@ def collect_propose_candidates(
     n_angles = ctx.n_angles
     placement_angles = ctx.placement_angles
     candidates: List[Tuple[float, float, float]] = []
+
+    if guidance_seed_coords:
+        _extend_counted(
+            candidates,
+            proposer_counts,
+            "corridor_channel",
+            list(guidance_seed_coords),
+            max_items=len(guidance_seed_coords),
+        )
 
     if _proposer_enabled("perimeter_walk", enabled_proposers):
         _extend_counted(
@@ -539,6 +558,55 @@ def _trim_candidates_by_border(
     return [coords for _, coords in scored[:limit]]
 
 
+def _merge_spaced_channel_seeds(
+    ranked: Sequence[Tuple[float, float, float]],
+    seeds: Sequence[Tuple[float, float, float]],
+    *,
+    max_n: int,
+    min_spacing: float,
+) -> List[Tuple[float, float, float]]:
+    """Prefer longitudinally spaced channel seeds in the final proposal set."""
+    if max_n <= 0:
+        return []
+    if not seeds:
+        return list(ranked)[:max_n]
+    kept: list[Tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+
+    def _try_add(coords: Tuple[float, float, float]) -> bool:
+        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        if key in seen:
+            return False
+        if any(
+            hypot(coords[0] - k[0], coords[1] - k[1]) < min_spacing
+            for k in kept
+        ):
+            return False
+        seen.add(key)
+        kept.append(coords)
+        return True
+
+    # Seed first so the tube is covered, then fill with ranked leftovers.
+    for coords in seeds:
+        if len(kept) >= max_n:
+            break
+        _try_add(coords)
+    for coords in ranked:
+        if len(kept) >= max_n:
+            break
+        _try_add(coords)
+    if len(kept) < max_n:
+        for coords in list(seeds) + list(ranked):
+            if len(kept) >= max_n:
+                break
+            key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            kept.append(coords)
+    return kept[:max_n]
+
+
 def propose_coords_from_candidates(
     base_shape: BaseGeometry,
     shape_to_place: Polygon,
@@ -552,6 +620,7 @@ def propose_coords_from_candidates(
     focal_shape: Optional[BaseGeometry] = None,
     rules=None,
     group_id: int = 0,
+    reserve_coords: Sequence[Tuple[float, float, float]] | None = None,
 ) -> List[Tuple[float, float, float]]:
     geom = ProposeGeometry(
         boundary,
@@ -628,7 +697,7 @@ def propose_coords_from_candidates(
         rules=rules,
         group_id=group_id,
     )
-    return _apply_cast_squeeze_if_enabled(
+    squeezed = _apply_cast_squeeze_if_enabled(
         ranked,
         shape_to_place=shape_to_place,
         propose_geom=geom,
@@ -641,6 +710,16 @@ def propose_coords_from_candidates(
         group_id=group_id,
         base_shape=base_shape,
     )
+    if reserve_coords:
+        minx, miny, maxx, maxy = shape_to_place.bounds
+        spacing = max(min_dist * 2.0, 0.9 * max(maxx - minx, maxy - miny, 1e-3))
+        return _merge_spaced_channel_seeds(
+            squeezed,
+            reserve_coords,
+            max_n=propose_cfg.max_proposals,
+            min_spacing=spacing,
+        )
+    return squeezed
 
 
 def _apply_cast_squeeze_if_enabled(
@@ -696,6 +775,7 @@ def propose_coords_with_strategy(
     full_packed_geoms: list[Geometry] | None = None,
     cluster_patterns: Sequence | None = None,
     placement_angles_override: np.ndarray | None = None,
+    guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -736,10 +816,17 @@ def propose_coords_with_strategy(
         focal_shape=focal_shape,
         enabled_proposers=enabled_proposers,
         proposer_counts=proposer_counts,
+        guidance_seed_coords=guidance_seed_coords,
         cluster_patterns=cluster_patterns,
         group_id=group_id,
         placement_angles_override=placement_angles_override,
     )
+    # Empty corridor falls through to clearance trim, which collapses longitudinal
+    # diversity; keep channel seeds by skipping clearance pool trim.
+    if guidance_seed_coords:
+        cfg = cfg.model_copy(update={"trim_candidates_by_clearance": False})
+        if rank_mode == "clearance" and cfg.ranking_mode == "contact_hybrid":
+            rank_mode = "contact_hybrid"
     return propose_coords_from_candidates(
         base_shape,
         shape_to_place,
@@ -752,6 +839,7 @@ def propose_coords_with_strategy(
         focal_shape=focal_shape,
         rules=rules,
         group_id=group_id,
+        reserve_coords=guidance_seed_coords,
     )
 
 
@@ -1051,6 +1139,7 @@ def _best_proposer_coords(
     full_packed_geoms: list[Geometry] | None = None,
     cluster_patterns: Sequence | None = None,
     placement_angles_override: np.ndarray | None = None,
+    guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """All proposers; rank with configured search region and ranking mode."""
     return propose_coords_with_strategy(
@@ -1068,6 +1157,7 @@ def _best_proposer_coords(
         full_packed_geoms=full_packed_geoms,
         cluster_patterns=cluster_patterns,
         placement_angles_override=placement_angles_override,
+        guidance_seed_coords=guidance_seed_coords,
     )
 
 
@@ -1133,6 +1223,7 @@ def proposed_transforms_for_groups(
     packed_transforms: Sequence | None = None,
     group_allowed_angles: Sequence[tuple[float, ...] | None] | None = None,
     user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    seeded: bool = False,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -1141,6 +1232,24 @@ def proposed_transforms_for_groups(
     """
     sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
     placed = [selected_polys[i] for i in selected_indices]
+    n_holes = len(getattr(sheet, "interiors", ()) or ())
+    sheet_vertices = len(list(sheet.exterior.coords)) if hasattr(sheet, "exterior") else 0
+    max_verts = 0
+    max_interiors = 0
+    concave_parts = False
+    for part_poly, _gid in parts:
+        max_verts = max(max_verts, len(list(part_poly.exterior.coords)))
+        max_interiors = max(max_interiors, len(getattr(part_poly, "interiors", ()) or ()))
+        if part_is_concave(part_poly):
+            concave_parts = True
+    propose_cfg = propose_cfg.with_complexity_lean(
+        n_holes=n_holes,
+        max_part_vertices=max_verts,
+        max_part_interiors=max_interiors,
+        sheet_vertices=sheet_vertices,
+        concave_parts=concave_parts,
+        seeded=seeded,
+    )
     full_packed_geoms = [Geometry.from_shapely(p) for p in placed]
     cluster_patterns = []
     if (
@@ -1173,17 +1282,26 @@ def proposed_transforms_for_groups(
         zone_info = None
         cfg = propose_cfg
         primary_target = None
+        void_hijack_from: str | None = None
         if propose_cfg.place_profiles_enabled and not border_only_propose:
             if not placed:
-                zone = "empty_border"
+                if sheet_has_narrow_corridor(sheet, part_poly, min_dist):
+                    zone = "cluster_edge"
+                    channel_pt = corridor_channel_target(sheet, min_dist)
+                    zone_info = PlaceZoneInfo(
+                        zone="cluster_edge",
+                        free_ratio=1.0,
+                        is_corridor=True,
+                        primary_target=channel_pt,
+                    )
+                    primary_target = channel_pt
+                else:
+                    zone = "empty_border"
+                    zone_info = PlaceZoneInfo(zone="empty_border")
             else:
-                obs_preview = obstacle_shape_for_propose(
-                    placed,
-                    part_poly,
-                    min_dist,
-                    propose_cfg=propose_cfg,
-                    sheet=sheet,
-                )
+                # Classify against the full pack so free_ratio / targets stay honest;
+                # nearest-k local obstacles are applied only when proposing.
+                obs_preview = simplify_obstacle_union(placed, min_dist)
                 zone_info = classify_propose_zone_info(
                     board,
                     obs_preview,
@@ -1196,10 +1314,94 @@ def proposed_transforms_for_groups(
                 )
                 zone = zone_info.zone
                 primary_target = zone_info.primary_target
+                # Mode A: large contiguous void → force void_seek + pole seeds.
+                free_analysis = analyze_free_space(
+                    sheet,
+                    placed,
+                    float(part_poly.area),
+                    min_dist,
+                )
+                if (
+                    getattr(propose_cfg, "enable_void_large_hijack", True)
+                    and free_analysis.kind == "large_void"
+                    and free_analysis.target_pt is not None
+                    and not (zone_info.is_corridor or zone_info.is_annulus)
+                ):
+                    void_hijack_from = zone
+                    zone = "void_seek"
+                    primary_target = free_analysis.target_pt
+                    zone_info = PlaceZoneInfo(
+                        zone="void_seek",
+                        free_ratio=zone_info.free_ratio,
+                        n_clusters=zone_info.n_clusters,
+                        outline_coverage=zone_info.outline_coverage,
+                        primary_target=primary_target,
+                        is_annulus=False,
+                        is_corridor=False,
+                    )
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
-            if zones_used_out is not None:
-                zones_used_out.append(zone)
+            if (
+                zone == "border_gap"
+                and zone_info is not None
+                and zone_info.is_annulus
+            ):
+                # Annulus rim: keep border docking but shoot inward toward the hole.
+                cfg = cfg.model_copy(update={
+                    "ranking_mode": "contact_hybrid",
+                    "use_contact_ranking": True,
+                    "use_contact_clearance_hybrid": True,
+                    "use_full_packed_obstacle": True,
+                    "border_focus_ranking": False,
+                })
+            if zone_info is not None and zone_info.is_corridor:
+                # for_place won't re-enable flags the base left False; force tube docking.
+                # Drop perimeter/border bias — those pin proposals to the channel mouth.
+                cfg = cfg.model_copy(update={
+                    "use_neighbor_slide": True,
+                    "use_ribbon_seeds": True,
+                    "use_full_packed_obstacle": True,
+                    "use_contact_ranking": True,
+                    "use_contact_clearance_hybrid": True,
+                    "use_border_focus": False,
+                    "border_focus_ranking": False,
+                    "ranking_mode": "contact_hybrid",
+                    "smart_push_target": True,
+                    "use_cluster_copy": True,
+                })
+                channel_mid = (
+                    zone_info.primary_target
+                    or corridor_channel_target(sheet, min_dist)
+                )
+                channel_samples = corridor_channel_samples(sheet, min_dist, n=12)
+                primary_target = nearest_channel_attract(
+                    channel_samples,
+                    channel_mid=channel_mid,
+                    packed=placed,
+                )
+                if primary_target is not None:
+                    zone_info = PlaceZoneInfo(
+                        zone=zone_info.zone,
+                        free_ratio=zone_info.free_ratio,
+                        n_clusters=zone_info.n_clusters,
+                        outline_coverage=zone_info.outline_coverage,
+                        primary_target=primary_target,
+                        is_annulus=zone_info.is_annulus,
+                        is_corridor=True,
+                    )
+
+        corridor_guidance_seeds: list[tuple[float, float, float]] | None = None
+        if zone_info is not None and zone_info.is_corridor:
+            samples = corridor_channel_samples(sheet, min_dist, n=12)
+            corridor_guidance_seeds = corridor_seed_coords_from_samples(
+                samples,
+                num_angles=min(4, int(cfg.placement_num_angles) if cfg.placement_num_angles else 4),
+            )
+        elif void_hijack_from is not None and primary_target is not None:
+            corridor_guidance_seeds = void_pole_seed_coords(
+                primary_target,
+                num_angles=min(4, int(cfg.placement_num_angles) if cfg.placement_num_angles else 4),
+            )
 
         use_full = use_full_packed_obstacle
         if zone is not None:
@@ -1215,6 +1417,8 @@ def proposed_transforms_for_groups(
             )
             if nearest_k > 0:
                 cfg = cfg.model_copy(update={"obstacle_nearest_k": nearest_k})
+            if zone_info is not None and (zone_info.is_annulus or zone_info.is_corridor):
+                use_full = True
 
         if propose_feedback is not None and propose_feedback.last_proposal_yield < 0.4:
             if placed:
@@ -1271,7 +1475,24 @@ def proposed_transforms_for_groups(
             elif placed:
                 enabled = _FIRST_PASS_PACKED_BORDER_PROPOSERS
         elif zone is not None:
-            enabled = ProposeConfig.proposers_for_place(zone)
+            if zone_info is not None and zone_info.is_corridor:
+                # Channel shooters only — perimeter_walk parks at the exterior mouth.
+                enabled = frozenset({
+                    ProposerName.RAYCASTING,
+                    ProposerName.RIBBON_FREE,
+                    ProposerName.NEIGHBOR_SLIDE,
+                    ProposerName.GROUP_FIT,
+                    ProposerName.EROSION,
+                    ProposerName.GUIDANCE_CAST_REFINE,
+                    ProposerName.CLUSTER_COPY,
+                })
+            else:
+                annulus = bool(zone_info is not None and zone_info.is_annulus)
+                enabled = ProposeConfig.proposers_for_place(zone, annulus=annulus)
+
+        if zone_info is not None and zone_info.is_corridor and primary_target is not None:
+            push = primary_target
+
         angle_override = None
         if group_allowed_angles is not None and part_idx < len(group_allowed_angles):
             allowed = group_allowed_angles[part_idx]
@@ -1293,6 +1514,7 @@ def proposed_transforms_for_groups(
             full_packed_geoms=full_packed_geoms,
             cluster_patterns=cluster_patterns,
             placement_angles_override=angle_override,
+            guidance_seed_coords=corridor_guidance_seeds,
         )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n
@@ -1310,6 +1532,87 @@ def proposed_transforms_for_groups(
                 arr = dedupe_transforms(
                     np.concatenate([edge_arr, arr], axis=0),
                 )[: cfg.max_proposals]
+
+        zone_label = zone if zone is not None else "default"
+        if void_hijack_from is not None:
+            zone_label = f"{void_hijack_from}→void_seek(large_void)"
+        free_ratio = zone_info.free_ratio if zone_info is not None else 1.0
+        sterile_zones = ("cluster_edge", "border_gap", "interior_pocket")
+        if (
+            arr.shape[0] < 4
+            and placed
+            and not border_only_propose
+            and free_ratio > 0.2
+            and zone in sterile_zones
+        ):
+            # Swiss-cheese pack: local profiles yielded nothing; densify via void_seek.
+            densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
+            densify_cfg = densify_cfg.model_copy(update={
+                "use_guidance_propositions": True,
+                "guidance_use_tight_packing": True,
+                "guidance_use_corner_alignment": True,
+                "guidance_enable_grid": False,
+                "cast_squeeze_top_k": max(4, int(densify_cfg.cast_squeeze_top_k)),
+                "use_neighbor_slide": True,
+                "use_ribbon_seeds": True,
+                "use_full_packed_obstacle": True,
+                "use_border_focus": False,
+                "border_focus_ranking": False,
+                "ranking_mode": "clearance",
+            })
+            densify_cfg = apply_proposer_pool_scales(
+                densify_cfg, propose_cfg.place_proposer_pool_scales,
+            )
+            # Prefer local pocket obstacles; fall back to full union.
+            densify_obs = obstacle_shape_for_propose(
+                placed,
+                part_poly,
+                min_dist,
+                propose_cfg=densify_cfg.model_copy(update={"obstacle_nearest_k": 6}),
+                sheet=sheet,
+                ref_point=primary_target,
+            )
+            if densify_obs is None or densify_obs.is_empty:
+                densify_obs = simplify_obstacle_union(placed, min_dist)
+            densify_push = propose_push_point(
+                board,
+                densify_obs,
+                smart_push=True,
+                min_dist=min_dist,
+                use_border_focus=False,
+            )
+            densify_enabled = ProposeConfig.proposers_for_place("void_seek")
+            densify_counts: dict[str, int] = {}
+            densify_coords = _best_proposer_coords(
+                densify_obs,
+                part_poly,
+                board,
+                densify_cfg,
+                min_dist=min_dist,
+                pt_push=densify_push,
+                focal_shape=densify_obs,
+                enabled_proposers=densify_enabled,
+                rules=rules,
+                group_id=group_id,
+                proposer_counts=densify_counts,
+                full_packed_geoms=full_packed_geoms,
+                cluster_patterns=cluster_patterns,
+                placement_angles_override=angle_override,
+            )
+            for name, n in densify_counts.items():
+                total_counts[name] = total_counts.get(name, 0) + n
+            densify_arr = propositions_to_ndarray(densify_coords)
+            if densify_arr.shape[0] > arr.shape[0]:
+                arr = densify_arr[: densify_cfg.max_proposals]
+                zone_label = f"{zone}→void_seek"
+
+        if (
+            zones_used_out is not None
+            and propose_cfg.place_profiles_enabled
+            and not border_only_propose
+        ):
+            zones_used_out.append(zone_label)
+
         out[group_id] = arr
 
     if proposer_counts_out is not None:

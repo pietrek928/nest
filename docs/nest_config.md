@@ -113,7 +113,11 @@ Benchmark presets: `rule_propose`, `rule_propose_repulsor` in `scripts/benchmark
 
 **Proposal quality feedback**: `proposal_yield = proposal_nodes / proposal_count` (graph nodes whose transform came from a propose row). Drives adaptive obstacle scope when `last_proposal_yield < 0.4`. Proposal rows are pinned through `subsample_transforms_with_pinned` up to `max_proposals`.
 
-**Place-aware routing** (shipped default: `place_profiles_enabled=True`, `late_border_saturation=True`): each group is routed through `classify_propose_zone()` → `ProposeConfig.for_place(zone)` with zone-specific proposers and obstacle scope (full packed union for interior/inter-cluster/void). Late border saturation reuses first-pass border propose when outline coverage is below `place_border_coverage_threshold`. Rolling `ProposeFeedbackState` adjusts `place_proposer_pool_scales` (e.g. `neighbor_slide_pool_fraction`) from graph yield. Disable with `place_profiles_enabled=False`. Benchmark: `scripts/benchmark_place_propose.py`; see [place_propose_benchmark.md](place_propose_benchmark.md). E2E alias: `place_routed` in `scripts/benchmark_nest_pipeline.py` (same as shipped).
+**Place-aware routing** (shipped default: `place_profiles_enabled=True`, `late_border_saturation=True`): each group is routed through `classify_propose_zone()` → `ProposeConfig.for_place(zone)` with zone-specific proposers and obstacle scope (full packed union for interior/inter-cluster/void). Late border saturation reuses first-pass border propose when outline coverage is below `place_border_coverage_threshold`. Rolling `ProposeFeedbackState` adjusts `place_proposer_pool_scales` (e.g. `neighbor_slide_pool_fraction`) from graph yield. Disable with `place_profiles_enabled=False`.
+
+Holed / irregular sheets apply `ProposeConfig.with_complexity_lean()` (smaller pools, fewer rays, voronoi off). Benchmarks: `scripts/benchmark_pipeline.py`. Demo loop uses `board_sheet_polygon()` + `board_holes` and threads `NestState.seed_count` locked parts as `extra_voids` into `make_polygon_graph`.
+
+**Kiss metrics** (evaluator): `kiss_seed` only scores new parts against *seed* obstacles — a full rim with no residual seed gaps can report ~0 without meaning packing failed; use `kiss_standoff` / ΔParts / coverage for saturated rims.
 
 For the guidance-flow pipeline preset, use `BuildGraphConfig.benchmark_aligned()` (`merged_loose_tight` DFS).
 

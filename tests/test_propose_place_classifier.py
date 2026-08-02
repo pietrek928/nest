@@ -7,6 +7,8 @@ from nest_graph.propose.context import (
     classify_propose_zone,
     classify_propose_zone_info,
     cluster_packed_indices,
+    corridor_channel_samples,
+    corridor_channel_target,
     free_space_targets,
     placement_free_region,
 )
@@ -231,6 +233,178 @@ def test_zone_proposers_include_cast_refine():
         assert "guidance_cast_refine" in proposers
 
 
+def test_cluster_edge_includes_ribbon():
+    proposers = ProposeConfig.proposers_for_place("cluster_edge")
+    assert proposers is not None
+    assert "ribbon_free" in proposers
+
+
+def test_complexity_lean_caps_holed_sheets():
+    base = ProposeConfig()
+    lean = base.with_complexity_lean(n_holes=2, max_part_vertices=8)
+    assert lean.candidate_pool <= 24
+    assert lean.use_voronoi is False
+    assert lean.use_batch_pack is False
+    untouched = base.with_complexity_lean(n_holes=0, max_part_vertices=4)
+    assert untouched.candidate_pool == base.candidate_pool
+
+
+def test_complexity_lean_concave_and_holed_parts():
+    base = ProposeConfig(use_neighbor_slide=True, use_batch_pack=True)
+    concave = base.with_complexity_lean(concave_parts=True)
+    assert concave.use_batch_pack is False
+    assert concave.use_neighbor_slide is False
+    assert concave.group_edge_samples_per_edge <= 2
+    holed = base.with_complexity_lean(max_part_interiors=1)
+    assert holed.use_batch_pack is False
+    assert holed.use_neighbor_slide is False
+    # Sheet holes alone must not strip neighbor_slide (corridor docking).
+    holes_only = base.with_complexity_lean(n_holes=2)
+    assert holes_only.use_batch_pack is False
+    assert holes_only.use_neighbor_slide is True
+    organic = base.with_complexity_lean(sheet_vertices=18)
+    assert organic.use_batch_pack is False
+    assert organic.use_voronoi is False
+    assert organic.use_neighbor_slide is True
+
+
+def test_with_runtime_lean_caps_propose_and_selection():
+    from nest_graph.config import BuildGraphConfig
+
+    base = BuildGraphConfig()
+    untouched = base.with_runtime_lean(n_holes=0, max_part_vertices=4)
+    assert untouched.propose.candidate_pool == base.propose.candidate_pool
+    lean = base.with_runtime_lean(concave_parts=True)
+    assert lean.propose.use_batch_pack is False
+    seeded = base.with_runtime_lean(seeded=True, n_holes=0)
+    assert seeded.propose.use_batch_pack is False
+    assert seeded.sampling.initial_random <= 48
+    assert seeded.selection.dfs_passes <= 1
+    holed = base.with_runtime_lean(n_holes=2)
+    assert holed.propose.use_batch_pack is False
+    assert holed.sampling.shuffle_passes <= 1
+    simple = base.with_runtime_lean(n_holes=0, sheet_vertices=3)
+    assert simple.propose.use_batch_pack is False
+    assert simple.sampling.max_transforms_per_group == base.sampling.max_transforms_per_group
+    assert simple.selection.improve_rules_rounds == base.selection.improve_rules_rounds
+
+
+def test_annulus_border_gap_adds_inward_proposers():
+    base = ProposeConfig.proposers_for_place("border_gap")
+    assert base is not None
+    assert "raycasting" not in base
+    annulus = ProposeConfig.proposers_for_place("border_gap", annulus=True)
+    assert annulus is not None
+    assert "raycasting" in annulus
+    assert "erosion" in annulus
+    assert "board_edge" in annulus
+
+
+def test_classify_narrow_corridor_is_cluster_edge():
+    outline = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
+    # Two tall voids with a 2-unit channel between them (corridor fixture shape).
+    hole_a = ((0.5, 3.0), (9.0, 3.0), (9.0, 17.0), (0.5, 17.0), (0.5, 3.0))
+    hole_b = ((11.0, 3.0), (19.5, 3.0), (19.5, 17.0), (11.0, 17.0), (11.0, 3.0))
+    sheet = board_sheet_from_outline(outline, user_holes=(hole_a, hole_b))
+    rect = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    placed = [
+        transform_poly(rect, (10.0, 1.5, 0.0)),
+        transform_poly(rect, (10.0, 18.5, 0.0)),
+    ]
+    zone = classify_propose_zone(
+        outline,
+        unary_union(placed),
+        rect,
+        min_dist=0.05,
+        propose_cfg=ProposeConfig(),
+        selected_polys=placed,
+        user_holes=(hole_a, hole_b),
+        sheet=sheet,
+    )
+    assert zone == "cluster_edge"
+    info = classify_propose_zone_info(
+        outline,
+        unary_union(placed),
+        rect,
+        min_dist=0.05,
+        propose_cfg=ProposeConfig(),
+        selected_polys=placed,
+        user_holes=(hole_a, hole_b),
+        sheet=sheet,
+    )
+    assert info.is_corridor is True
+    channel = corridor_channel_target(sheet, 0.05)
+    assert channel is not None
+    assert info.primary_target is not None
+    assert info.primary_target.distance(channel) < 1e-6
+    free = placement_free_region(sheet, unary_union(placed), 0.05)
+    lobe = free_space_targets(free, 0.05)[0]
+    assert info.primary_target.distance(lobe) > 0.5
+
+
+def test_corridor_channel_samples_horizontal_linearity():
+    outline = Polygon([(0, 0), (16, 0), (16, 16), (0, 16)])
+    # Stacked holes → horizontal channel; centroids at y=4 and y=12 → mid y=8.
+    hole_a = ((1.0, 1.0), (15.0, 1.0), (15.0, 7.0), (1.0, 7.0), (1.0, 1.0))
+    hole_b = ((1.0, 9.0), (15.0, 9.0), (15.0, 15.0), (1.0, 15.0), (1.0, 9.0))
+    sheet = board_sheet_from_outline(outline, user_holes=(hole_a, hole_b))
+    samples = corridor_channel_samples(sheet, 0.05, n=4)
+    assert len(samples) == 4
+    ys = [float(p.y) for p in samples]
+    xs = [float(p.x) for p in samples]
+    assert all(abs(y - 8.0) < 1e-6 for y in ys)
+    assert xs == sorted(xs) or xs == sorted(xs, reverse=True)
+    assert max(xs) - min(xs) > 1.0
+
+
+def test_empty_narrow_corridor_routes_cluster_edge():
+    outline = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
+    hole_a = ((0.5, 3.0), (9.0, 3.0), (9.0, 17.0), (0.5, 17.0), (0.5, 3.0))
+    hole_b = ((11.0, 3.0), (19.5, 3.0), (19.5, 17.0), (11.0, 17.0), (11.0, 3.0))
+    sheet = board_sheet_from_outline(outline, user_holes=(hole_a, hole_b))
+    rect = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    zones: list[str] = []
+    out = proposed_transforms_for_groups(
+        sheet,
+        [(rect, 0)],
+        [],
+        [],
+        ProposeConfig(place_profiles_enabled=True),
+        min_dist=0.05,
+        user_holes=(hole_a, hole_b),
+        zones_used_out=zones,
+    )
+    assert zones == ["cluster_edge"]
+    assert 0 in out
+    assert out[0].shape[0] > 0
+
+
+def test_classify_donut_rim_annulus_flag():
+    outline = Polygon([(0, 0), (16, 0), (16, 16), (0, 16)])
+    hole = ((5.0, 5.0), (11.0, 5.0), (11.0, 11.0), (5.0, 11.0), (5.0, 5.0))
+    sheet = board_sheet_from_outline(outline, user_holes=(hole,))
+    rect = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    placed = []
+    for x in [1.0 + 1.4 * i for i in range(10)]:
+        placed.append(transform_poly(rect, (x, 1.0, 0.0)))
+        placed.append(transform_poly(rect, (x, 15.0, 0.0)))
+    for y in [2.4 + 1.4 * i for i in range(8)]:
+        placed.append(transform_poly(rect, (1.0, y, 0.0)))
+        placed.append(transform_poly(rect, (15.0, y, 0.0)))
+    info = classify_propose_zone_info(
+        outline,
+        unary_union(placed),
+        rect,
+        min_dist=0.05,
+        propose_cfg=ProposeConfig(),
+        selected_polys=placed,
+        user_holes=(hole,),
+        sheet=sheet,
+    )
+    assert info.zone == "border_gap"
+    assert info.is_annulus is True
+
+
 def test_interior_pocket_includes_group_fit():
     proposers = ProposeConfig.proposers_for_place("interior_pocket")
     assert proposers is not None
@@ -316,6 +490,16 @@ def test_border_gap_scope_upgrades_for_rim():
     )
     assert use_full_k is False
     assert nearest_k == 4
+    # Mid-pack free_ratio < 0.5 must not alone force full pack.
+    use_full_low, nearest_low = ProposeConfig.obstacle_scope_for_place(
+        "border_gap",
+        n_clusters=1,
+        free_ratio=0.4,
+        outline_coverage=0.1,
+        border_coverage_threshold=0.35,
+    )
+    assert use_full_low is False
+    assert nearest_low == 4
 
 
 def test_propose_feedback_scales_on_low_yield():

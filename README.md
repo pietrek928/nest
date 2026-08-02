@@ -51,11 +51,20 @@ uv sync --extra test
 uv pip install -e . --no-build-isolation
 ```
 
-Re-run after C++ or CMake changes:
+By default, uv only rebuilds an editable when `pyproject.toml` / `setup.*` change. This repo sets [`tool.uv.cache-keys`](pyproject.toml) so CMakeLists and `nest_graph/**/*.{h,hh,hpp,c,cc,cpp,cxx}` also invalidate the cache. After those files change, re-run:
 
 ```bash
 uv pip install -e . --no-build-isolation
+# or: uv sync --extra test
 ```
+
+For a faster incremental C++ rebuild (same CMake tree), prefer:
+
+```bash
+cmake --build build --target geometry elem_graph
+```
+
+(`build/` may be under `build/{wheel_tag}/` when using scikit-build’s `build-dir`; plain `build/` is the manual CMake layout below.)
 
 ### Alternative: pip
 
@@ -138,7 +147,7 @@ After header-only changes under `nest_graph/geometry/`, incremental rebuild:
 
 ```bash
 cmake --build build --target geometry_cpp_tests geometry
-uv pip install -e . --no-build-isolation   # refresh Python .so if needed
+uv pip install -e . --no-build-isolation   # refresh Python .so (cache-keys pick up header edits)
 ```
 
 ### First-pass parameter benchmark
@@ -221,7 +230,7 @@ flowchart LR
 ## Debugging
 
 - Geometry engine notes and matplotlib snippets: [docs/debugging_guide.md](docs/debugging_guide.md)
-- Stale `.so` after C++ edits → rebuild with `uv pip install -e .` or `cmake --build build --target geometry`
+- Stale `.so` after C++ edits → `uv pip install -e .` (cache-keys cover native sources) or `cmake --build build --target geometry elem_graph`
 
 ## License
 

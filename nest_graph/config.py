@@ -363,14 +363,35 @@ class ProposeConfig(BaseModel):
     late_border_saturation: bool = True
     """Iter 2+: run border saturation propose when outline coverage is low."""
     place_border_coverage_threshold: float = 0.35
-    """Below this parts-area/board ratio, prefer border_gap profile."""
+    """Below this outline-coverage ratio, prefer late border-only propose."""
+    late_border_void_override_ratio: float = 2.5
+    """If largest free / mean part area exceeds this, skip late border sat (0 disables)."""
+    late_border_void_release_ratio: float = 1.5
+    """After override fires, keep unlock while void ratio exceeds this (0 = no hysteresis)."""
+    late_border_hull_threshold: float = 0.4
+    """When not large_void: keep late sat while pack_hull_perim / sheet_perim is below this."""
     place_free_area_interior_threshold: float = 0.35
     """Free-region area ratio above this → interior_pocket profile."""
     place_proposer_pool_scales: dict[str, float] = Field(default_factory=dict)
     """Rolling feedback scale per proposer name (1.0 = default)."""
+    enable_gravity_compaction: bool = False
+    """Post-refine gravity slide toward min x+y sheet vertex (off during void-MIS experiment)."""
+    void_island_score_boost: float = 64.0
+    """EMS pole weight for continuous distance-to-pole DFS score boost (0 disables)."""
+    void_attractor_rule_weight: float = 16.0
+    """Lighter PointPlaceRule weight for nest_by_graph void attractors (0 disables rules)."""
+    void_greedy_nest_seed: bool = True
+    """When large_void + boost: nest seed = score-ordered greedy MIS (sees Python boost)."""
+    enable_void_large_hijack: bool = True
+    """Mode A: force void_seek + polylabel seeds when largest free / part_area > 2.5."""
 
     @classmethod
-    def proposers_for_place(cls, zone: str) -> frozenset[str] | None:
+    def proposers_for_place(
+        cls,
+        zone: str,
+        *,
+        annulus: bool = False,
+    ) -> frozenset[str] | None:
         sets: dict[PlaceZone, frozenset[ProposerName]] = {
             PlaceZone.EMPTY_BORDER: frozenset({
                 ProposerName.BOARD_EDGE,
@@ -402,6 +423,7 @@ class ProposeConfig(BaseModel):
                 ProposerName.PERIMETER_WALK,
                 ProposerName.EROSION,
                 ProposerName.CLUSTER_COPY,
+                ProposerName.RIBBON_FREE,
             }),
             PlaceZone.INTER_CLUSTER: frozenset({
                 ProposerName.RIBBON_FREE,
@@ -417,6 +439,8 @@ class ProposeConfig(BaseModel):
                 ProposerName.RIBBON_FREE,
                 ProposerName.RAYCASTING,
                 ProposerName.GUIDANCE_CAST_REFINE,
+                ProposerName.GROUP_FIT,
+                ProposerName.NEIGHBOR_SLIDE,
             }),
         }
         try:
@@ -424,7 +448,15 @@ class ProposeConfig(BaseModel):
         except ValueError:
             return None
         proposers = sets.get(place_zone)
-        return frozenset(proposers) if proposers is not None else None
+        if proposers is None:
+            return None
+        out = frozenset(proposers)
+        if annulus and place_zone == PlaceZone.BORDER_GAP:
+            out = out | frozenset({
+                ProposerName.RAYCASTING,
+                ProposerName.EROSION,
+            })
+        return out
 
     @classmethod
     def obstacle_scope_for_place(
@@ -443,9 +475,9 @@ class ProposeConfig(BaseModel):
         ):
             return True, 0
         if zone == PlaceZone.BORDER_GAP.value:
+            # free_ratio alone must not force full pack (mid-pack Swiss cheese).
             if (
                 n_clusters >= 3
-                or free_ratio < 0.5
                 or outline_coverage >= border_coverage_threshold
             ):
                 return True, 0
@@ -506,6 +538,7 @@ class ProposeConfig(BaseModel):
                 "use_contact_clearance_hybrid": True,
                 "cast_squeeze_top_k": 8,
                 "use_neighbor_slide": True,
+                "use_ribbon_seeds": True,
                 "use_full_packed_obstacle": False,
                 "obstacle_nearest_k": 3,
                 "contact_clearance_hybrid_weight": 0.1,
@@ -527,7 +560,15 @@ class ProposeConfig(BaseModel):
                 "ranking_mode": "clearance",
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": True,
-                "cast_squeeze_top_k": 6,
+                "use_group_edge_seeds": True,
+                "use_neighbor_slide": True,
+                "cast_squeeze_top_k": 4,
+                "candidate_pool": 24,
+                "max_proposals": 16,
+                "raycast_num_rays": 8,
+                "use_voronoi": False,
+                "use_point_cloud": False,
+                "use_batch_pack": False,
             },
         }
         patch = dict(profiles.get(zone, {}))
@@ -539,6 +580,62 @@ class ProposeConfig(BaseModel):
                     del patch[key]
         root.update(patch)
         return cls(**root)
+
+    def with_complexity_lean(
+        self,
+        *,
+        n_holes: int = 0,
+        max_part_vertices: int = 0,
+        max_part_interiors: int = 0,
+        sheet_vertices: int = 0,
+        concave_parts: bool = False,
+        seeded: bool = False,
+    ) -> "ProposeConfig":
+        """Cap expensive proposers for holed sheets / irregular parts / seeded packs."""
+        lean = (
+            seeded
+            or n_holes > 0
+            or max_part_vertices >= 12
+            or max_part_interiors >= 1
+            or sheet_vertices >= 16
+            or concave_parts
+        )
+        if not lean:
+            return self
+        data = self.model_dump()
+        data["use_batch_pack"] = False
+        data["candidate_pool"] = min(int(data["candidate_pool"]), 24)
+        data["max_proposals"] = min(int(data["max_proposals"]), 16)
+        data["raycast_num_rays"] = min(int(data["raycast_num_rays"]), 8)
+        data["cast_squeeze_top_k"] = min(int(data["cast_squeeze_top_k"]), 4)
+        # Neighbor-slide is costly on jagged/holed *parts*; keep it for sheet-hole
+        # corridors that rely on tube docking after cluster_edge routing.
+        if concave_parts or max_part_interiors >= 1 or max_part_vertices >= 16:
+            data["use_neighbor_slide"] = False
+        if (
+            n_holes >= 1
+            or max_part_vertices >= 12
+            or max_part_interiors >= 1
+            or concave_parts
+            or sheet_vertices >= 16
+        ):
+            data["use_voronoi"] = False
+            data["use_point_cloud"] = False
+            data["use_guidance_walk"] = False
+        strong = (
+            max_part_interiors >= 1
+            or max_part_vertices >= 16
+            or concave_parts
+        )
+        if strong or n_holes >= 3:
+            data["use_ribbon_seeds"] = False
+            data["obstacle_nearest_k"] = min(int(data["obstacle_nearest_k"]), 2)
+            data["group_edge_samples_per_edge"] = min(
+                int(data["group_edge_samples_per_edge"]), 2,
+            )
+        if n_holes >= 3 or max_part_vertices >= 16:
+            data["obstacle_nearest_k"] = min(int(data["obstacle_nearest_k"]), 1)
+        return ProposeConfig(**data)
 
     @classmethod
     def local_compact_profile(
@@ -594,6 +691,84 @@ class BuildGraphConfig(BaseModel):
         if first_pass:
             return self.propose.first_pass_clearance_epsilon_ratio
         return self.propose.placement_clearance_epsilon_ratio
+
+    def with_runtime_lean(
+        self,
+        *,
+        n_holes: int = 0,
+        max_part_vertices: int = 0,
+        max_part_interiors: int = 0,
+        sheet_vertices: int = 0,
+        concave_parts: bool = False,
+        seeded: bool = False,
+    ) -> "BuildGraphConfig":
+        """Apply propose lean (+ sampling/DFS caps for seeded/holed/simple sheets)."""
+        simple_sheet = n_holes == 0 and 0 < sheet_vertices <= 4
+        lean = (
+            seeded
+            or n_holes > 0
+            or max_part_vertices >= 12
+            or max_part_interiors >= 1
+            or sheet_vertices >= 16
+            or concave_parts
+            or simple_sheet
+        )
+        if not lean:
+            return self
+        propose = self.propose.with_complexity_lean(
+            n_holes=n_holes,
+            max_part_vertices=max_part_vertices,
+            max_part_interiors=max_part_interiors,
+            sheet_vertices=sheet_vertices,
+            concave_parts=concave_parts,
+            seeded=seeded,
+        )
+        if simple_sheet and propose.use_batch_pack:
+            # Keep proposal volume; only kill expensive multi-anchor batch pack.
+            propose = propose.model_copy(update={"use_batch_pack": False})
+        sampling_update: dict = {}
+        selection_update: dict = {}
+        if seeded or n_holes >= 1:
+            cap = min(self.sampling.max_transforms_per_group or 120, 120)
+            sampling_update = {
+                "max_transforms_per_group": cap,
+                "initial_random": min(self.sampling.initial_random, 48),
+                "random_per_iter": min(self.sampling.random_per_iter, 32),
+                "random_per_iter_when_proposed": min(
+                    self.sampling.random_per_iter_when_proposed, 16,
+                ),
+                "shuffle_passes": min(self.sampling.shuffle_passes, 1),
+            }
+            selection_update = {
+                "improve_rules_rounds": min(self.selection.improve_rules_rounds, 1),
+                "rules_kept": min(self.selection.rules_kept, 8),
+                "improve_rules_elite_count": min(
+                    self.selection.improve_rules_elite_count, 4,
+                ),
+                "dfs_passes": min(self.selection.dfs_passes, 1),
+                "dfs_max_tries": min(self.selection.dfs_max_tries, 2),
+                "dfs_finalize_repair_passes": min(
+                    self.selection.dfs_finalize_repair_passes, 2,
+                ),
+            }
+        elif simple_sheet:
+            # Demo triangle/rect: kill batch_pack only; keep transform pool depth.
+            sampling_update = {
+                "shuffle_passes": min(self.sampling.shuffle_passes, 2),
+            }
+        return self.model_copy(
+            update={
+                "propose": propose,
+                "sampling": (
+                    self.sampling.model_copy(update=sampling_update)
+                    if sampling_update else self.sampling
+                ),
+                "selection": (
+                    self.selection.model_copy(update=selection_update)
+                    if selection_update else self.selection
+                ),
+            },
+        )
 
     def first_pass_propose_config(self) -> ProposeConfig:
         p = self.propose.model_copy(deep=True)

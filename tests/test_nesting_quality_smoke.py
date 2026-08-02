@@ -17,8 +17,10 @@ from scripts.nesting_fixtures import (
     CaseSpec,
     build_nest_case,
     get_all_cases,
+    make_demo_triangle_corner_cluster,
     make_donut_parts_pack,
     make_grain_locked_strips,
+    make_loose_cluster_compact,
     make_organic_board_pack,
     make_swiss_cheese,
     resolve_cases,
@@ -165,6 +167,33 @@ def test_resolve_cases_by_family_and_tag():
     by_tag = resolve_cases(tags=["tight_pack"])
     assert by_tag
     assert all("tight_pack" in c.tags for c in by_tag)
+    mid = resolve_cases(tags=["mid_pack"])
+    assert mid
+    assert all("mid_pack" in c.tags for c in mid)
+
+
+def test_mid_pack_void_fill_smoke():
+    case = replace(make_demo_triangle_corner_cluster(), iters=1)
+    assert "void_fill" in case.tags
+    assert case.seed_placements
+    evaluator = NestingPipelineEvaluator(case, _smoke_cfg())
+    metrics = evaluator.run_full_pipeline(seed=0)
+    assert metrics.independent_ok
+    assert metrics.overlap_ok
+    assert metrics.void_ok
+    assert metrics.parts_final >= metrics.parts_seed
+    assert metrics.largest_free_over_part >= 0.0
+
+
+def test_mid_pack_compact_smoke():
+    case = replace(make_loose_cluster_compact(), iters=1)
+    assert "compact" in case.tags
+    evaluator = NestingPipelineEvaluator(case, _smoke_cfg())
+    metrics = evaluator.run_full_pipeline(seed=0)
+    assert metrics.independent_ok
+    assert metrics.overlap_ok
+    assert metrics.void_ok
+    assert metrics.clearance_p50 >= 0.0
 
 
 def test_case_spec_determinism():

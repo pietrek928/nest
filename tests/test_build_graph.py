@@ -583,3 +583,39 @@ def test_first_pass_border_pack_footprints_inside_board():
         geom = Geometry.from_shapely(poly)
         assert placement_footprint_inside_board(geom, board_geom)
         assert p_board.contains(poly) or placement_footprint_inside_board(geom, board_geom)
+
+
+def test_empty_corridor_first_pass_uses_place_profiles():
+    """Narrow multi-hole sheets must not force border_only on empty first pass."""
+    from nest_graph.board import board_sheet_from_outline
+
+    outline = Polygon([(0, 0), (20, 0), (20, 20), (0, 20)])
+    hole_a = ((0.5, 3.0), (9.0, 3.0), (9.0, 17.0), (0.5, 17.0), (0.5, 3.0))
+    hole_b = ((11.0, 3.0), (19.5, 3.0), (19.5, 17.0), (11.0, 17.0), (11.0, 3.0))
+    sheet = board_sheet_from_outline(outline, user_holes=(hole_a, hole_b))
+    rect = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
+    cfg = BuildGraphConfig()
+    cfg.rules.board_holes = (hole_a, hole_b)
+    cfg.propose.first_pass_empty_border_only = True
+    cfg.propose.place_profiles_enabled = True
+    rng = np.random.default_rng(0)
+    history = (np.zeros((0, 3)),)
+    sel = (np.zeros((0, 3)),)
+    stats: dict = {}
+    counts: dict[str, int] = {}
+    _build_transform_batch(
+        cfg,
+        sel,
+        history,
+        rng,
+        board=sheet,
+        parts=[(rect, 0)],
+        nest_state=None,
+        first_pass=True,
+        propose_stats_out=stats,
+        proposer_counts_out=counts,
+    )
+    zones = stats.get("zones_used", [])
+    assert "cluster_edge" in zones
+    assert "empty_border" not in zones
+    assert counts.get("corridor_channel", 0) > 0 or stats.get("proposal_count", 0) > 0
