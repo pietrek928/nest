@@ -212,7 +212,10 @@ def test_default_config_enables_board_edge():
     assert BuildGraphConfig().propose.board_edge_guidance_refine is True
 
 
-def test_snap_coords_cpp_matches_shapely():
+def test_snap_coords_geometry_deterministic():
+    """Geometry snap goldens (C++ snap_pose_to_ring; Shapely twin removed)."""
+    from nest_graph.geometry import snap_pose_to_ring
+
     board = _triangle_board()
     rect = _rect_part()
     cfg = BuildGraphConfig()
@@ -224,21 +227,12 @@ def test_snap_coords_cpp_matches_shapely():
         Point(0.55, 0.55),
     ]
     angles = [0.0, math.pi / 4, math.pi / 2]
+    goldens: list[tuple[float, float, float] | None] = []
 
     for contact in anchors:
         for angle in angles:
             snap_contact, inward = inward_at_contact(board, contact)
-            shapely_coords = snap_coords_along_exterior(
-                rect,
-                board,
-                snap_contact,
-                inward,
-                angle,
-                min_dist,
-                container=board,
-                propose_geom=None,
-            )
-            cpp_coords = snap_coords_along_exterior(
+            coords = snap_coords_along_exterior(
                 rect,
                 board,
                 snap_contact,
@@ -248,12 +242,52 @@ def test_snap_coords_cpp_matches_shapely():
                 container=board,
                 propose_geom=geom,
             )
-            if shapely_coords is None:
-                assert cpp_coords is None
-                continue
-            assert cpp_coords is not None
-            for i in range(3):
-                assert math.isclose(shapely_coords[i], cpp_coords[i], abs_tol=0.07)
+            goldens.append(coords)
+            # Re-run must bit-match (stable Geometry path).
+            again = snap_coords_along_exterior(
+                rect,
+                board,
+                snap_contact,
+                inward,
+                angle,
+                min_dist,
+                container=board,
+                propose_geom=geom,
+            )
+            direct = snap_pose_to_ring(
+                geom.part,
+                geom.boundary_ring_geom,
+                (float(snap_contact.x), float(snap_contact.y)),
+                (float(inward[0]), float(inward[1])),
+                float(angle),
+                float(min_dist),
+                board=geom.board_geom,
+            )
+            if coords is None:
+                assert again is None
+                assert direct is None
+            else:
+                assert again is not None
+                assert direct is not None
+                for i in range(3):
+                    assert math.isclose(coords[i], again[i], abs_tol=1e-6)
+                    assert math.isclose(coords[i], direct[i], abs_tol=1e-6)
+
+    # At least some snaps succeed on this board.
+    assert any(g is not None for g in goldens)
+
+
+def test_snap_coords_requires_propose_geom():
+    board = _triangle_board()
+    rect = _rect_part()
+    contact, inward = inward_at_contact(board, Point(0.3, 0.0))
+    try:
+        snap_coords_along_exterior(
+            rect, board, contact, inward, 0.0, 0.05, container=board,
+        )
+        assert False, "expected TypeError"
+    except TypeError:
+        pass
 
 
 def test_snap_coords_multipolygon_focal_uses_cpp():

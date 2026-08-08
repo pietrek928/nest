@@ -127,6 +127,13 @@ void bind_elem_graph_api(nb::module_ &m) {
         nb::arg("options") = FinalizeSelectionOptions{});
 
     m.def(
+        "greedy_weighted_mis",
+        &greedy_weighted_mis,
+        nb::arg("verts"),
+        nb::arg("scores"),
+        nb::arg("g"));
+
+    m.def(
         "selection_is_independent",
         &selection_is_independent,
         nb::arg("g"),

@@ -53,7 +53,7 @@ Per-proposer ablation (partial_pack, seeds 0–9) — see [`propose_ablation_res
 | **group_fit** | **0.003** | Best kiss; keep `use_group_edge_seeds` |
 | **neighbor_slide** | 0.003 | Good alone; dilutes combined pool → **default off** |
 | ribbon_free / raycasting / voronoi | ~0.007–0.008 | Cheap gap fillers; keep |
-| axis_push / perimeter / nfp / bottom_left | 0.15–0.30 | Loose alone; **defaults off** |
+| perimeter_walk | 0.15–0.30 | Loose alone; kept for border/empty |
 | guidance_propositions (alone) | ~0.14 | Needs upstream seeds; keep in combined pipeline |
 
 **Shipped default changes (2026-05-29, kiss pass):**
@@ -62,7 +62,7 @@ Per-proposer ablation (partial_pack, seeds 0–9) — see [`propose_ablation_res
 - `guidance_proposition_seed_count` **16**, `guidance_max_propositions` **8**, `placement_num_angles` **18**
 - `use_neighbor_slide` **True** (capped `top_n = pool // 4`); `guidance_enable_grid` **True**
 - `contact_trim_fraction` **0.8**, `contact_clearance_hybrid_weight` **0.1**
-- Phase-2 Shapely (`axis_push`, `bottom_left`, `nfp_vertices`) remain **off**
+- Phase-2 Shapely (`axis_push`, `bottom_left`, `nfp_vertices`) **deleted**
 
 ## Shipped defaults (`ProposeConfig`)
 
@@ -85,7 +85,7 @@ See [`nest_graph/config.py`](../nest_graph/config.py). Key fields:
 | `use_board_edge_seeds` | `True` | Nest outline + per-edge guidance cast |
 | `board_edge_guidance_refine` | `True` | Cast-refine snap seeds |
 | `board_edge_samples_per_edge` | `32` | Outline anchor density |
-| Phase-2 Shapely proposers | **off** | axis_push / bottom_left / nfp |
+| Phase-2 Shapely proposers | **deleted** | axis_push / bottom_left / nfp removed |
 
 ## Guidance cast (`guide.h`)
 

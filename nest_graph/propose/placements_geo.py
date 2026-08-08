@@ -10,7 +10,7 @@ from shapely.ops import voronoi_diagram
 from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import search_region_for_placement
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 
 def densify_points(geometry, distance):
     """Adds points along the perimeter of the shape for a better Voronoi map."""
@@ -209,8 +209,6 @@ def propose_placements_raycasting(
                 for p_angle in placement_angles:
                     coords = (float(pt.x), float(pt.y), float(p_angle))
                     if propose_geom is not None and pt_push is not None:
-                        if not propose_geom.valid_at(coords, pt_push):
-                            continue
                         propositions.append({
                             "coords": coords,
                             "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
@@ -226,19 +224,27 @@ def propose_placements_raycasting(
                             "cost": float(pt.distance(attract)),
                         })
 
-    # Sort and return top N
-    propositions.sort(key=lambda x: x['cost'])
-
-    # Use a set to filter out nearly identical propositions
-    unique_props = []
-    seen = set()
+    # Dedupe → oversample 3N → full-guidance batch filter (chunked).
+    propositions.sort(key=lambda x: x["cost"])
+    unique_props: list[tuple[float, float, float]] = []
+    unique_costs: list[float] = []
+    seen: set[tuple[float, float, float]] = set()
+    pool_cap = max(top_n * 3, top_n)
     for p in propositions:
-        key = (round(p['coords'][0], 1), round(p['coords'][1], 1), round(p['coords'][2], 0))
-        if key not in seen:
-            unique_props.append(p['coords'])
-            seen.add(key)
-        if len(unique_props) >= top_n:
+        key = (round(p["coords"][0], 4), round(p["coords"][1], 4), round(p["coords"][2], 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_props.append(p["coords"])
+        unique_costs.append(float(p["cost"]))
+        if len(unique_props) >= pool_cap:
             break
 
-    return unique_props
+    if propose_geom is not None and pt_push is not None and unique_props:
+        cost_map = {c: cost for c, cost in zip(unique_props, unique_costs, strict=True)}
+        valid = filter_candidates_batch(propose_geom, unique_props, pt_push)
+        valid.sort(key=lambda c: cost_map.get(c, 0.0))
+        return valid[:top_n]
+
+    return unique_props[:top_n]
 

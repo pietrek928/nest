@@ -53,7 +53,8 @@ def test_classify_border_gap_partial_pack():
         propose_cfg=cfg,
         selected_polys=placed,
     )
-    assert zone == "border_gap"
+    # OOS-1: exterior-touching large free → native void_seek (was border_gap).
+    assert zone == "void_seek"
 
 
 def test_classify_two_clusters_inter_cluster():
@@ -106,14 +107,14 @@ def test_classify_void_seek_real_hole():
     assert zone == "void_seek"
 
 
-def test_classify_hole_free_not_void_seek(nest_board, rect_poly):
+def test_classify_hole_free_not_void_seek_when_override_off(nest_board, rect_poly):
     placed = [
         transform_poly(rect_poly, (0.08, 0.08, 0.0)),
         transform_poly(rect_poly, (0.95, 0.06, 0.2)),
         transform_poly(rect_poly, (0.06, 0.85, 0.4)),
     ]
     obstacle = unary_union(placed)
-    cfg = ProposeConfig()
+    cfg = ProposeConfig(late_border_void_override_ratio=0.0)
     zone = classify_propose_zone(
         nest_board,
         obstacle,
@@ -142,7 +143,8 @@ def test_classify_hijack_two_corner_seeds_not_inter_cluster():
         selected_polys=placed,
     )
     assert zone != "inter_cluster"
-    assert zone in ("border_gap", "cluster_edge", "interior_pocket")
+    # OOS-1: large exterior free → void_seek (Mode A hijack now native).
+    assert zone in ("void_seek", "border_gap", "cluster_edge", "interior_pocket")
 
 
 def test_classify_hole_bypass_empty_and_corner():
@@ -175,7 +177,8 @@ def test_classify_hole_bypass_empty_and_corner():
         user_holes=(hole,),
         sheet=sheet,
     )
-    assert zone != "void_seek"
+    # OOS-1: large exterior free may classify as void_seek; empty sheet stays empty_border.
+    assert zone in ("void_seek", "border_gap", "cluster_edge")
 
 
 def test_classify_rim_primary_target_not_origin():
@@ -200,7 +203,7 @@ def test_classify_rim_primary_target_not_origin():
         propose_cfg=ProposeConfig(),
         selected_polys=placed,
     )
-    assert info.zone == "border_gap"
+    assert info.zone == "void_seek"
     assert info.primary_target is not None
     assert info.primary_target.distance(Point(0.0, 0.0)) > 1.0
     assert info.n_clusters == 1
@@ -423,7 +426,8 @@ def test_for_place_border_gap_caps_samples():
     assert cfg.board_edge_samples_per_edge <= 12
     assert cfg.group_edge_samples_per_edge <= 8
     assert cfg.board_edge_guidance_refine is False
-    assert cfg.contact_clearance_hybrid_weight <= 0.1
+    assert cfg.ranking_mode == "border"
+    assert cfg.use_contact_ranking is False
 
 
 def test_classify_interior_pack_not_border_gap():
@@ -476,7 +480,6 @@ def test_border_gap_scope_upgrades_for_rim():
     use_full, nearest_k = ProposeConfig.obstacle_scope_for_place(
         "border_gap",
         n_clusters=1,
-        free_ratio=0.74,
         outline_coverage=0.8,
         border_coverage_threshold=0.35,
     )
@@ -484,17 +487,15 @@ def test_border_gap_scope_upgrades_for_rim():
     use_full_k, nearest_k = ProposeConfig.obstacle_scope_for_place(
         "border_gap",
         n_clusters=1,
-        free_ratio=0.9,
         outline_coverage=0.1,
         border_coverage_threshold=0.35,
     )
     assert use_full_k is False
     assert nearest_k == 4
-    # Mid-pack free_ratio < 0.5 must not alone force full pack.
+    # Mid-pack without outline progress must not alone force full pack.
     use_full_low, nearest_low = ProposeConfig.obstacle_scope_for_place(
         "border_gap",
         n_clusters=1,
-        free_ratio=0.4,
         outline_coverage=0.1,
         border_coverage_threshold=0.35,
     )

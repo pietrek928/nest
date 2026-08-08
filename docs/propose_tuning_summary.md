@@ -17,7 +17,7 @@
 | `guidance_cast_refine` | refinement | needs seeds; best contact when seeded |
 | `perimeter_walk` | border seeds | fast, moderate contact |
 
-Legacy Shapely proposers (`axis_push`, `bottom_left`, `nfp_vertices`) removed from the live pipeline.
+Legacy Shapely proposers (`axis_push`, `bottom_left`, `nfp_vertices`) deleted — not quarantined.
 
 ## Preset grid (4 scenarios × 10 seeds)
 

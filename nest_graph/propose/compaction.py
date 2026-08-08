@@ -11,7 +11,11 @@ from nest_graph.utils import transform_poly
 
 
 def sheet_gravity_point(sheet: Polygon) -> Point:
-    """Prefer the exterior vertex with minimum x+y (right-angle corner on demo triangle)."""
+    """Prefer the exterior vertex with minimum x+y (right-angle corner on demo triangle).
+
+    Callers with a large free void should pass ``gravity=void_pole`` to
+    ``compact_selection`` instead of relying on this corner default.
+    """
     coords = list(sheet.exterior.coords)
     if len(coords) >= 2 and coords[0] == coords[-1]:
         coords = coords[:-1]

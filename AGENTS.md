@@ -34,3 +34,34 @@
 ## Git
 
 - Do not commit unless the user asks.
+
+## OOS Void-Fill Execution Protocol
+
+### 0. Proposer Telemetry (DO FIRST)
+
+- Keys: `round(x,y,θ, 4)` — must match `build_graph._transform_row_key`.
+- Emit order: `pocket_fit` → `cluster_copy` → … → `raycast` (`cluster_copy` before sweepers).
+- Funnel: emit → pool → nest → refine per name; `void_leak` `prop_accept e/p/n/r`.
+- Gate: no zone/ranking OOS without `refine_by_proposer` visibility.
+
+### 1. OOS-1 Native Void Seek
+
+- Exterior large free (`area/part > late_border_void_override_ratio`) → `void_seek` even if `packed_near_border`.
+- Keep corridor / narrow mouth / `first_pass_border` exceptions.
+
+### 2. OOS-4 Void-Aware Ranking
+
+- Plumb `void_pole` (`pt_push` is NOT the pole under `void_seek` by default).
+- `pole_bonus = max(0, 1-dist/sheet_diag) * (part_area/sheet.area) * void_rank_pole_weight`
+- Not flat void MIS boost (tiny debris pathology). Validate area↑ + `refine_by_proposer`↑.
+
+### 3. Do Not Touch / Last Resort
+
+- Gravity off (evacuates void). PSO off unless `props_pole≈0` after 1+4.
+- P3: re-add nest-void idxs only if `graph.collisions`-clear vs refine.
+  Telemetry: `void_leak` `pin_candidates` / `pin_added` / `pin_blocked_collision` / `pin_ms`.
+- **B1 gate:** bind `greedy_weighted_mis` / fold pin into finalize with `locked_indices`
+  only if `pin_added≥1` **and** `pin_ms>30`. Post-hoc collision-clear append does not
+  need finalize locks.
+- **B2 blocked:** no void-aware nest/refine MIS / external scores until B0/B1 exhausted;
+  rim drop >2% = fail.

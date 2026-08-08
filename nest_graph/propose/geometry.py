@@ -5,7 +5,7 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, GuidanceConfig, batch_check_validity, batch_evaluate_local_placement
+from nest_graph.geometry import Geometry, GuidanceConfig, batch_evaluate_local_placement
 from nest_graph.placement_scene import (
     PLACEMENT_EPSILON_RATIO,
     best_proposition,
@@ -70,6 +70,11 @@ class ProposeGeometry:
             pt_push=self.sheet.centroid if self._border_focus else None,
             **gkw,
         )
+        # Per-push GuidanceConfig cache (void_seek / corridor change pt_push).
+        self._push_guidance_cache: dict[
+            tuple[float, float, bool, float, float],
+            GuidanceConfig,
+        ] = {}
 
     def _propose_guidance_cfg(
         self,
@@ -78,9 +83,19 @@ class ProposeGeometry:
         border_focus: bool | None = None,
         target_angle_rad: float = 0.0,
     ):
-        gkw = guidance_kwargs_for_propose(self._propose_cfg)
         use_border = self._border_focus if border_focus is None else border_focus
-        return guidance_config_for_propose(
+        key = (
+            round(float(push.x), 6),
+            round(float(push.y), 6),
+            bool(use_border),
+            round(float(target_angle_rad), 6),
+            float(self._min_dist),
+        )
+        cached = self._push_guidance_cache.get(key)
+        if cached is not None:
+            return cached
+        gkw = guidance_kwargs_for_propose(self._propose_cfg)
+        cfg = guidance_config_for_propose(
             push,
             min_dist=self._min_dist,
             board_bounds=self._board_bounds,
@@ -89,6 +104,8 @@ class ProposeGeometry:
             target_angle_rad=target_angle_rad,
             **gkw,
         )
+        self._push_guidance_cache[key] = cfg
+        return cfg
 
     def placed_at(self, coords: Tuple[float, float, float]) -> Geometry:
         return self.part.apply_transform(coords)
@@ -161,8 +178,10 @@ class ProposeGeometry:
         self,
         coords: Tuple[float, float, float],
         pt_push: Point,
+        *,
+        guidance_cfg: GuidanceConfig | None = None,
     ) -> bool:
-        cfg = self._propose_guidance_cfg(pt_push)
+        cfg = guidance_cfg if guidance_cfg is not None else self._propose_guidance_cfg(pt_push)
         return self.scene.valid_at(
             coords, self._min_dist, cfg, epsilon_ratio=self._epsilon_ratio,
         )
@@ -190,63 +209,86 @@ def batch_valid_flags(
     pt_push: Point,
     *,
     return_guidance: bool = False,
+    guidance_cfg: GuidanceConfig | None = None,
 ) -> list[bool] | list[object | None]:
-    """Batch validity against void obstacles; optional guidance with base+void."""
+    """Batch validity matching ProposeGeometry.valid_at (base+void + guidance).
+
+    Uses ``batch_evaluate_local_placement`` for both bool and guidance modes.
+    Void-only ``batch_check_validity`` is reserved for graph-build footprint checks.
+    """
     if not transforms:
         return []
     placed_list = [propose_geom.placed_at(c) for c in transforms]
     footprint_ok = footprints_inside_board(placed_list, propose_geom.board_geom)
-    cfg = propose_geom._propose_guidance_cfg(pt_push)
+    cfg = guidance_cfg if guidance_cfg is not None else propose_geom._propose_guidance_cfg(pt_push)
     margin = 0.0
     if propose_geom._min_dist > 0.0:
         margin = propose_geom._min_dist + placement_clearance_epsilon(
             propose_geom._min_dist, ratio=propose_geom._epsilon_ratio,
         )
 
-    if not return_guidance:
-        survivors = [
-            (i, (float(c[0]), float(c[1]), float(c[2])))
-            for i, (c, ok) in enumerate(zip(transforms, footprint_ok, strict=True))
-            if ok
-        ]
-        if not survivors:
-            return [False] * len(transforms)
-        indices, survivor_transforms = zip(*survivors, strict=True)
-        flags = batch_check_validity(
-            propose_geom.part,
-            list(survivor_transforms),
-            propose_geom.scene.void_geoms,
-            cfg,
-            propose_geom._min_dist,
-            propose_geom._epsilon_ratio,
-        )
-        out = [False] * len(transforms)
-        for i, ok in zip(indices, flags, strict=True):
-            out[i] = ok
-        return out
-
     survivors = [
-        (i, c) for i, (c, ok) in enumerate(zip(transforms, footprint_ok, strict=True)) if ok
+        (i, (float(c[0]), float(c[1]), float(c[2])))
+        for i, (c, ok) in enumerate(zip(transforms, footprint_ok, strict=True))
+        if ok
     ]
-    out_guidance: list[object | None] = [None] * len(transforms)
     if not survivors:
-        return out_guidance
-    survivor_transforms = [
-        (float(c[0]), float(c[1]), float(c[2])) for _, c in survivors
-    ]
-    # Ranking needs neighbor clearance from packed base parts, not void-only.
+        if return_guidance:
+            return [None] * len(transforms)
+        return [False] * len(transforms)
+
+    indices, survivor_transforms = zip(*survivors, strict=True)
     obstacles = propose_geom.obstacle_geoms_for_batch()
     guidance_list = batch_evaluate_local_placement(
         propose_geom.part,
-        survivor_transforms,
+        list(survivor_transforms),
         obstacles,
         (float(pt_push.x), float(pt_push.y)),
         cfg,
     )
-    for (i, _c), g in zip(survivors, guidance_list, strict=True):
+
+    if not return_guidance:
+        out = [False] * len(transforms)
+        for i, g in zip(indices, guidance_list, strict=True):
+            if g.is_penetrating:
+                continue
+            if margin > 0.0 and float(g.clearance) < margin:
+                continue
+            out[i] = True
+        return out
+
+    out_guidance: list[object | None] = [None] * len(transforms)
+    for i, g in zip(indices, guidance_list, strict=True):
         if g.is_penetrating:
             continue
         if margin > 0.0 and float(g.clearance) < margin:
             continue
         out_guidance[i] = g
     return out_guidance
+
+
+def filter_candidates_batch(
+    propose_geom: ProposeGeometry,
+    transforms: Sequence[Tuple[float, float, float]],
+    pt_push: Point,
+    *,
+    guidance_cfg: GuidanceConfig | None = None,
+    max_batch: int = 512,
+) -> list[Tuple[float, float, float]]:
+    """Keep transforms that pass full-guidance validity; chunk large pools."""
+    if not transforms:
+        return []
+    kept: list[Tuple[float, float, float]] = []
+    chunk = max(int(max_batch), 1)
+    for start in range(0, len(transforms), chunk):
+        block = list(transforms[start:start + chunk])
+        flags = batch_valid_flags(
+            propose_geom, block, pt_push, guidance_cfg=guidance_cfg,
+        )
+        assert isinstance(flags, list)
+        for coords, ok in zip(block, flags, strict=True):
+            if ok:
+                kept.append(
+                    (float(coords[0]), float(coords[1]), float(coords[2])),
+                )
+    return kept

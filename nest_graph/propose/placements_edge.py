@@ -10,7 +10,7 @@ from nest_graph.config import ProposeConfig
 from nest_graph.utils import get_shape_exteriors, transform_poly
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
     outline_ring_geom,
@@ -69,12 +69,16 @@ def _board_edge_snap_seeds(
             if coords is None:
                 continue
             placed_geom = propose_geom.placed_at(coords)
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
             err = placement_contact_error(placed_geom, sheet, min_dist, None)
             _add_seed(coords, snap_contact, inward, err)
 
-    corner_coords = propose_placements_sheet_corners(
+    # Snap-then-batch: one full-guidance filter for board-edge snaps.
+    if propositions and pt_push is not None:
+        raw = [p["coords"] for p in propositions]
+        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+        propositions = [p for p in propositions if p["coords"] in valid]
+
+    corner_coords = _sheet_corner_seeds(
         shape_to_place,
         sheet,
         min_dist,
@@ -222,8 +226,6 @@ def propose_placements_group_fit(
                 placed_geom = propose_geom.placed_at(coords)
                 if not placed_geom.footprint_inside(propose_geom.board_geom):
                     continue
-                if pt_push is not None and not propose_geom.valid_at(coords, pt_push):
-                    continue
                 err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
             else:
                 placed = transform_poly(shape_to_place, coords)
@@ -240,6 +242,11 @@ def propose_placements_group_fit(
                 "anchor": snap_contact,
                 "cost": err,
             })
+
+    if propositions and propose_geom is not None and pt_push is not None:
+        raw = [p["coords"] for p in propositions]
+        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+        propositions = [p for p in propositions if p["coords"] in valid]
 
     return finalize_edge_propositions(propositions, stratify_boundary, top_n)
 
@@ -272,7 +279,7 @@ def sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dis
     return tuple(samples)
 
 
-def propose_placements_sheet_corners(
+def _sheet_corner_seeds(
     shape_to_place: Polygon,
     sheet: Polygon,
     min_dist: float,
@@ -282,11 +289,10 @@ def propose_placements_sheet_corners(
     num_angles: int = 24,
     top_n: int = 16,
 ) -> List[Tuple[float, float, float]]:
-    """Perfect corner docking using bounding box alignment to the safe zone."""
+    """Safe-corner docking seeds (shared by sheet_corners + board_edge)."""
     propositions: list[dict] = []
     angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
 
-    # 1. Generate the absolute mathematically safe corner vertices
     eroded_sheet = sheet.buffer(-min_dist)
     if eroded_sheet.is_empty:
         return []
@@ -317,28 +323,50 @@ def propose_placements_sheet_corners(
                     continue
 
                 coords = (dx, dy, float(angle))
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
-
                 propositions.append({
                     "coords": coords,
-                    "cost": border_dist, # Lower is a tighter fit
+                    "cost": border_dist,
                 })
+
+    if propositions:
+        raw = [p["coords"] for p in propositions]
+        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+        propositions = [p for p in propositions if p["coords"] in valid]
 
     propositions.sort(key=lambda x: x["cost"])
 
-    # Deduplicate
     seen: set[tuple[float, float, float]] = set()
     out: list[tuple[float, float, float]] = []
     for p in propositions:
-        key = (round(p["coords"][0], 2), round(p["coords"][1], 2), round(p["coords"][2], 1))
+        key = (round(p["coords"][0], 4), round(p["coords"][1], 4), round(p["coords"][2], 4))
         if key not in seen:
             seen.add(key)
             out.append(p["coords"])
             if len(out) >= top_n:
                 break
-
     return out
+
+
+def propose_placements_sheet_corners(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    min_dist: float,
+    *,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    num_angles: int = 24,
+    top_n: int = 16,
+) -> List[Tuple[float, float, float]]:
+    """Perfect corner docking using bounding box alignment to the safe zone."""
+    return _sheet_corner_seeds(
+        shape_to_place,
+        sheet,
+        min_dist,
+        propose_geom=propose_geom,
+        pt_push=pt_push,
+        num_angles=num_angles,
+        top_n=top_n,
+    )
 
 
 def propose_placements_sheet_edge(
@@ -379,10 +407,13 @@ def propose_placements_sheet_edge(
                 if not placed.footprint_inside(propose_geom.board_geom):
                     continue
                 coords = (dx, dy, float(angle))
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
                 err = placement_contact_error(placed, sheet, min_dist, None)
                 propositions.append({"coords": coords, "anchor": h_pt, "cost": err})
+
+    if propositions and pt_push is not None:
+        raw = [p["coords"] for p in propositions]
+        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+        propositions = [p for p in propositions if p["coords"] in valid]
 
     return finalize_edge_propositions(propositions, safe_halo, top_n)
 
@@ -416,32 +447,37 @@ def propose_placements_ribbon_free(
 
     base_centroid = free.centroid
     base_cx, base_cy = float(base_centroid.x), float(base_centroid.y)
-    propositions: list[dict] = []
+    raw: list[tuple[float, float, float]] = []
+    costs: list[float] = []
     angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
     for angle in angles:
         for pt in seeds:
             coords = (float(pt.x), float(pt.y), float(angle))
-            if propose_geom is not None and pt_push is not None:
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
-                propositions.append({
-                    "coords": coords,
-                    "cost": math.hypot(pt.x - base_cx, pt.y - base_cy),
-                })
-                continue
+            raw.append(coords)
+            costs.append(math.hypot(pt.x - base_cx, pt.y - base_cy))
 
-            rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-            placed_shape = translate(rotated_shape, pt.x, pt.y)
-            if not free.contains(placed_shape):
+    if propose_geom is not None and pt_push is not None and raw:
+        order = sorted(range(len(raw)), key=lambda i: costs[i])
+        take = min(len(order), max(top_n * 3, top_n))
+        ordered = [raw[i] for i in order[:take]]
+        cost_map = {raw[i]: costs[i] for i in order[:take]}
+        valid = filter_candidates_batch(propose_geom, ordered, pt_push)
+        valid.sort(key=lambda c: cost_map.get(c, 0.0))
+        return valid[:top_n]
+
+    propositions: list[dict] = []
+    for coords, cost in zip(raw, costs, strict=True):
+        pt = Point(coords[0], coords[1])
+        angle = coords[2]
+        rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
+        placed_shape = translate(rotated_shape, pt.x, pt.y)
+        if not free.contains(placed_shape):
+            continue
+        if not base_shape.is_empty:
+            if base_shape.intersects(placed_shape):
                 continue
-            if not base_shape.is_empty:
-                if base_shape.intersects(placed_shape):
-                    continue
-                if base_shape.distance(placed_shape) < min_dist - 1e-6:
-                    continue
-            propositions.append({
-                "coords": coords,
-                "cost": float(pt.distance(base_centroid)),
-            })
+            if base_shape.distance(placed_shape) < min_dist - 1e-6:
+                continue
+        propositions.append({"coords": coords, "cost": cost})
     propositions.sort(key=lambda x: x["cost"])
     return [p["coords"] for p in propositions[:top_n]]

@@ -371,6 +371,7 @@ def _score_placement_contact_hybrid(
     *,
     tightness_weight: float = 0.0,
     propose_cfg: ProposeConfig | None = None,
+    void_pole: Point | None = None,
 ) -> float:
     contact = _score_placement_contact(
         coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
@@ -389,6 +390,19 @@ def _score_placement_contact_hybrid(
         )
         if tightness > float("-inf"):
             score += tightness_weight * tightness
+    if void_pole is not None and propose_cfg is not None:
+        w = float(getattr(propose_cfg, "void_rank_pole_weight", 0.0) or 0.0)
+        if w > 0.0:
+            placed = propose_geom.placed_at(coords)
+            if placed is not None:
+                sheet = propose_geom.sheet
+                minx, miny, maxx, maxy = sheet.bounds
+                scale = float(math.hypot(maxx - minx, maxy - miny))
+                if scale > 1e-12:
+                    cx, cy = placed.center()
+                    dist = float(Point(float(cx), float(cy)).distance(void_pole))
+                    area_frac = float(shape_to_place.area) / max(float(sheet.area), 1e-12)
+                    score += max(0.0, 1.0 - dist / scale) * area_frac * w
     return score
 
 
@@ -406,6 +420,7 @@ def _rank_score_for_mode(
     focal_shape: Optional[BaseGeometry],
     rules=None,
     group_id: int = 0,
+    void_pole: Point | None = None,
 ) -> float:
     if rank_mode == "rule_hybrid":
         return _score_placement_rule_hybrid(
@@ -427,6 +442,7 @@ def _rank_score_for_mode(
             propose_cfg.contact_clearance_hybrid_weight,
             tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
             propose_cfg=propose_cfg,
+            void_pole=void_pole,
         )
     if rank_mode == "clearance":
         return _score_placement_clearance(
@@ -478,7 +494,7 @@ def cast_squeeze_ranked_coords(
                 group_id=group_id,
                 base_shape=base_shape or Polygon(),
             )
-        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -597,7 +613,7 @@ def _trim_candidates_stratified(
     scored_contact: list[tuple[float, Tuple[float, float, float]]] = []
     seen: set[tuple[float, float, float]] = set()
     for coords in candidates:
-        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -607,7 +623,7 @@ def _trim_candidates_stratified(
     scored_contact.sort(key=lambda x: x[0], reverse=True)
     picked = [coords for _, coords in scored_contact[:n_contact]]
     picked_keys = {
-        (round(c[0], 3), round(c[1], 3), round(c[2], 3)) for c in picked
+        (round(c[0], 4), round(c[1], 4), round(c[2], 4)) for c in picked
     }
 
     if n_clear <= 0:
@@ -615,14 +631,14 @@ def _trim_candidates_stratified(
 
     remaining = [
         c for c in candidates
-        if (round(c[0], 3), round(c[1], 3), round(c[2], 3)) not in picked_keys
+        if (round(c[0], 4), round(c[1], 4), round(c[2], 4)) not in picked_keys
     ]
     clearance_picked = _trim_candidates_by_clearance(
         remaining, propose_geom, pt_push, n_clear,
     )
     out = list(picked)
     for c in clearance_picked:
-        key = (round(c[0], 3), round(c[1], 3), round(c[2], 3))
+        key = (round(c[0], 4), round(c[1], 4), round(c[2], 4))
         if key not in picked_keys:
             out.append(c)
             picked_keys.add(key)
@@ -657,18 +673,18 @@ def select_guidance_cast_seeds(
         focal_shape,
     )
     picked_keys = {
-        (round(c[0], 3), round(c[1], 3), round(c[2], 3)) for c in contact_picked
+        (round(c[0], 4), round(c[1], 4), round(c[2], 4)) for c in contact_picked
     }
     remaining = [
         c for c in candidates
-        if (round(c[0], 3), round(c[1], 3), round(c[2], 3)) not in picked_keys
+        if (round(c[0], 4), round(c[1], 4), round(c[2], 4)) not in picked_keys
     ]
     clear_picked = _trim_candidates_by_clearance(
         remaining, propose_geom, pt_push, n_clear,
     )
     out = list(contact_picked)
     for c in clear_picked:
-        key = (round(c[0], 3), round(c[1], 3), round(c[2], 3))
+        key = (round(c[0], 4), round(c[1], 4), round(c[2], 4))
         if key not in picked_keys:
             out.append(c)
             picked_keys.add(key)
@@ -691,7 +707,7 @@ def _trim_candidates_by_contact(
     scored: list[tuple[float, Tuple[float, float, float]]] = []
     seen: set[tuple[float, float, float]] = set()
     for coords in candidates:
-        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -723,7 +739,7 @@ def _trim_candidates_by_clearance(
     scored: list[tuple[float, Tuple[float, float, float]]] = []
     seen: set[tuple[float, float, float]] = set()
     for coords in candidates:
-        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -757,13 +773,14 @@ def _rank_proposal_coords(
     focal_shape: Optional[BaseGeometry] = None,
     rules=None,
     group_id: int = 0,
+    void_pole: Point | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Rank candidates; higher score is better for clearance/hybrid, lower for legacy."""
     scored: list[tuple[float, Tuple[float, float, float]]] = []
     seen: set[tuple[float, float, float]] = set()
     mode = rank_mode if rank_mode is not None else propose_cfg.ranking_mode
     for coords in candidates:
-        key = (round(coords[0], 3), round(coords[1], 3), round(coords[2], 3))
+        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -780,6 +797,8 @@ def _rank_proposal_coords(
                 coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
                 propose_cfg.contact_clearance_hybrid_weight,
                 tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
+                propose_cfg=propose_cfg,
+                void_pole=void_pole,
             )
         elif mode == "rule_hybrid":
             score = _score_placement_rule_hybrid(

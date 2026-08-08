@@ -17,9 +17,6 @@ def test_select_guidance_cast_seeds_prefers_group_fit():
     cfg = ProposeConfig(
         candidate_pool=48,
         use_neighbor_slide=False,
-        use_axis_push=False,
-        use_bottom_left=False,
-        use_nfp_vertices=False,
         use_ribbon_seeds=False,
         use_voronoi=False,
         use_guidance_propositions=False,

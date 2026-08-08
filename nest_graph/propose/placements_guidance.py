@@ -214,7 +214,7 @@ def propose_placements_guidance_walk(
                 break
         placed = propose_geom.placed_at((x, y, theta))
         if propose_geom.valid(placed, pt_push, (x, y)):
-            key = (round(x, 3), round(y, 3), round(theta, 3))
+            key = (round(x, 4), round(y, 4), round(theta, 4))
             if key not in seen:
                 seen.add(key)
                 out.append((x, y, theta))

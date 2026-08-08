@@ -1,7 +1,6 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
-from enum import StrEnum
 from typing import Any, Literal, Optional
 
 import numpy as np
@@ -10,20 +9,15 @@ from shapely.geometry import Polygon
 
 from .board import board_sheet_from_outline, board_void_geometries, default_sheet_padding
 from .elem_graph import Circle, RuleMutationSettings, ScoreAggregation, SelectMode, SelectOptions, ScoreRulesOptions
-from .proposer_names import ProposerName
+from .proposer_names import (
+    PLACE_ZONES,
+    PROPOSER_FLAG,
+    PlaceZone,
+    ProposerName,
+    ZONE_PROPOSERS,
+    proposers_for_zone,
+)
 from .utils import normalize_poly
-
-
-class PlaceZone(StrEnum):
-    EMPTY_BORDER = "empty_border"
-    BORDER_GAP = "border_gap"
-    INTERIOR_POCKET = "interior_pocket"
-    CLUSTER_EDGE = "cluster_edge"
-    INTER_CLUSTER = "inter_cluster"
-    VOID_SEEK = "void_seek"
-
-
-PLACE_ZONES: tuple[str, ...] = tuple(z.value for z in PlaceZone)
 
 
 def _env_int(key: str, default: int) -> int:
@@ -251,7 +245,6 @@ class ProposeConfig(BaseModel):
     first_pass_max_proposals: int = 48
     first_pass_num_angles: int = 28
     first_pass_group_edge_samples_per_edge: int = 32
-    first_pass_use_axis_push: bool = False
     first_pass_sequential_augment_max: int = 12
     """Greedy gap-fill steps after saturation (sheet-snap + chain-fit)."""
     first_pass_guidance_refine_passes: int = 3
@@ -259,7 +252,6 @@ class ProposeConfig(BaseModel):
     placement_clearance_epsilon_ratio: float = 0.05
     placement_num_angles: int = 18
     use_neighbor_slide: bool = False
-    use_axis_push: bool = False
     neighbor_slide_pool_fraction: float = 0.5
     """Share of candidate_pool budget for neighbor_slide (was pool // 4)."""
     obstacle_nearest_k: int = 3
@@ -270,9 +262,6 @@ class ProposeConfig(BaseModel):
     """Post-rank cast squeeze on top-K proposals (0 = off)."""
     cast_squeeze_passes: int = 1
     """Number of cast_squeeze iterations on top-K (2 = double-pass compaction)."""
-    use_bottom_left: bool = False
-    use_nfp_vertices: bool = False
-    bottom_left_vertices_per_angle: int = 8
     raycast_num_rays: int = 12
     raycast_num_angles: int = 12
     raycast_anchor_stride: int = 2
@@ -335,6 +324,29 @@ class ProposeConfig(BaseModel):
     cluster_copy_max_patterns: int = 2
     cluster_copy_anchor_seeds: int = 6
     cluster_copy_min_members: int = 2
+    use_pocket_fit: bool = True
+    """Teleport into trapped voids / hull bays with MRR/triangle align + motif holes."""
+    use_open_void_pocket: bool = True
+    """When large_void touches sheet exterior, also emit pocket teleports into that free region."""
+    pocket_fit_max_targets: int = 8
+    pocket_fit_area_ratio: float = 0.5
+    """Minimum void.area / part.area to consider a pocket."""
+    pocket_fit_reserve_fraction: float = 0.15
+    """Fraction of max_proposals reserved for pocket_fit via reserve_coords."""
+    enable_cluster_repack: bool = True
+    """Post-DFS: unlock a void-adjacent contact cluster and re-propose into kept+void."""
+    cluster_repack_min_size: int = 3
+    cluster_repack_max_size: int = 6
+    cluster_repack_area_accept_ratio: float = 0.98
+    """Accept repack if new selection area >= ratio * old area."""
+    cluster_repack_max_attempts: int = 1
+    enable_cluster_relocate: bool = True
+    """Post-DFS: rigid ΔT translate floating (non-exterior) islands toward void pole."""
+    enable_local_se2: bool = True
+    """Post-DFS: local SE(2) polish toward void pole with slide dirs (coarse then fine)."""
+    local_se2_n_angles: int = 4
+    local_se2_max_coarse_steps: int = 12
+    local_se2_max_fine_steps: int = 24
     use_board_edge_seeds: bool = True
     board_edge_samples_per_edge: int = 24
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
@@ -369,9 +381,7 @@ class ProposeConfig(BaseModel):
     late_border_void_release_ratio: float = 1.5
     """After override fires, keep unlock while void ratio exceeds this (0 = no hysteresis)."""
     late_border_hull_threshold: float = 0.4
-    """When not large_void: keep late sat while pack_hull_perim / sheet_perim is below this."""
-    place_free_area_interior_threshold: float = 0.35
-    """Free-region area ratio above this → interior_pocket profile."""
+    """hull_rim_fill: keep late sat while pack_hull_perim / sheet_perim is below this (when not large_void)."""
     place_proposer_pool_scales: dict[str, float] = Field(default_factory=dict)
     """Rolling feedback scale per proposer name (1.0 = default)."""
     enable_gravity_compaction: bool = False
@@ -381,10 +391,32 @@ class ProposeConfig(BaseModel):
     void_attractor_rule_weight: float = 16.0
     """Lighter PointPlaceRule weight for nest_by_graph void attractors (0 disables rules)."""
     void_greedy_nest_seed: bool = True
-    """When large_void + boost: nest seed = score-ordered greedy MIS (sees Python boost)."""
+    """When large_void + any selection boost: nest seed = score-ordered greedy MIS."""
     enable_void_large_hijack: bool = True
-    """Mode A: force void_seek + polylabel seeds when largest free / part_area > 2.5."""
-
+    """Mode A: force void_seek + polylabel seeds when largest free / part_area > late_border_void_override_ratio."""
+    pocket_score_boost: float = 50.0
+    """Add to DFS/nest scores for graph nodes matching pocket/motif propose keys (0 disables)."""
+    small_part_void_score_boost: float = 40.0
+    """On large_void: boost smaller catalog groups via (1 - area/max_area) * weight (0 disables)."""
+    densify_clearance_floor_ratio: float = 1.0
+    """Densify if best clearance score < this × min_dist (quality gate; 0 = count-only)."""
+    densify_on_void_hijack: bool = True
+    """Fire densify after Mode A void_seek hijack when pocket/pool is sterile."""
+    enable_void_yield_densify_accept: bool = True
+    """Under void hijack: accept densify when in-void transform count rises (not raw pool size)."""
+    unified_void_reserve: bool = True
+    """Share reserve budget across poles ⊕ pocket ⊕ motif cluster_copy."""
+    poles_reserve_only_on_hijack: bool = True
+    """On void hijack, poles go to reserve only (not corridor_channel pool)."""
+    motif_use_topo_anchors: bool = True
+    """Repack motif stamp tries snapshot/topology poles before free_pocket."""
+    void_seek_contact_hybrid: bool = True
+    """void_seek for_place uses contact_hybrid ranking (ablation: False → clearance)."""
+    void_rank_pole_weight: float = 8.0
+    """Propose-time pole bonus under void_seek: (1-dist/diag)*(part_area/sheet.area)*weight (0 disables)."""
+    enable_void_nest_pin: bool = True
+    """After refine: re-add nest-void idxs missing from refine if graph.collisions-clear (P3)."""
+    # OOS-3: keep use_point_cloud/use_guidance_walk False unless props_pole≈0 after OOS-1+4.
     @classmethod
     def proposers_for_place(
         cls,
@@ -392,71 +424,26 @@ class ProposeConfig(BaseModel):
         *,
         annulus: bool = False,
     ) -> frozenset[str] | None:
-        sets: dict[PlaceZone, frozenset[ProposerName]] = {
-            PlaceZone.EMPTY_BORDER: frozenset({
-                ProposerName.BOARD_EDGE,
-                ProposerName.SHEET_CORNERS,
-                ProposerName.PERIMETER_WALK,
-            }),
-            PlaceZone.BORDER_GAP: frozenset({
-                ProposerName.BOARD_EDGE,
-                ProposerName.SHEET_CORNERS,
-                ProposerName.PERIMETER_WALK,
-                ProposerName.GROUP_FIT,
-                ProposerName.NEIGHBOR_SLIDE,
-                ProposerName.RIBBON_FREE,
-                ProposerName.GUIDANCE_CAST_REFINE,
-            }),
-            PlaceZone.INTERIOR_POCKET: frozenset({
-                ProposerName.EROSION,
-                ProposerName.VORONOI,
-                ProposerName.RIBBON_FREE,
-                ProposerName.GUIDANCE_CAST_REFINE,
-                ProposerName.RAYCASTING,
-                ProposerName.CLUSTER_COPY,
-                ProposerName.GROUP_FIT,
-            }),
-            PlaceZone.CLUSTER_EDGE: frozenset({
-                ProposerName.GROUP_FIT,
-                ProposerName.NEIGHBOR_SLIDE,
-                ProposerName.GUIDANCE_CAST_REFINE,
-                ProposerName.PERIMETER_WALK,
-                ProposerName.EROSION,
-                ProposerName.CLUSTER_COPY,
-                ProposerName.RIBBON_FREE,
-            }),
-            PlaceZone.INTER_CLUSTER: frozenset({
-                ProposerName.RIBBON_FREE,
-                ProposerName.RAYCASTING,
-                ProposerName.VORONOI,
-                ProposerName.EROSION,
-                ProposerName.CLUSTER_COPY,
-                ProposerName.GUIDANCE_CAST_REFINE,
-            }),
-            PlaceZone.VOID_SEEK: frozenset({
-                ProposerName.EROSION,
-                ProposerName.VORONOI,
-                ProposerName.RIBBON_FREE,
-                ProposerName.RAYCASTING,
-                ProposerName.GUIDANCE_CAST_REFINE,
-                ProposerName.GROUP_FIT,
-                ProposerName.NEIGHBOR_SLIDE,
-            }),
-        }
-        try:
-            place_zone = PlaceZone(zone)
-        except ValueError:
-            return None
-        proposers = sets.get(place_zone)
-        if proposers is None:
-            return None
-        out = frozenset(proposers)
-        if annulus and place_zone == PlaceZone.BORDER_GAP:
-            out = out | frozenset({
-                ProposerName.RAYCASTING,
-                ProposerName.EROSION,
-            })
-        return out
+        return proposers_for_zone(zone, annulus=annulus)
+
+    @classmethod
+    def assert_zone_proposer_flags(cls, cfg: "ProposeConfig | None" = None) -> None:
+        """Every ZONE_PROPOSERS entry with a PROPOSER_FLAG must be enabled on for_place."""
+        # Call for_place without a False-locked base so profile patches apply.
+        _ = cfg  # reserved for future seed configs
+        for zone, proposers in ZONE_PROPOSERS.items():
+            placed = cls.for_place(zone.value)
+            for name in proposers:
+                flag = PROPOSER_FLAG.get(name)
+                if flag is None:
+                    continue
+                if not bool(getattr(placed, flag, False)):
+                    raise AssertionError(
+                        f"zone={zone.value} proposer={name.value} requires {flag}=True"
+                    )
+            if zone == PlaceZone.VOID_SEEK:
+                assert ProposerName.VORONOI not in proposers
+                assert placed.use_voronoi is False
 
     @classmethod
     def obstacle_scope_for_place(
@@ -464,7 +451,6 @@ class ProposeConfig(BaseModel):
         zone: str,
         *,
         n_clusters: int = 1,
-        free_ratio: float = 1.0,
         outline_coverage: float = 0.0,
         border_coverage_threshold: float = 0.35,
     ) -> tuple[bool, int]:
@@ -475,7 +461,6 @@ class ProposeConfig(BaseModel):
         ):
             return True, 0
         if zone == PlaceZone.BORDER_GAP.value:
-            # free_ratio alone must not force full pack (mid-pack Swiss cheese).
             if (
                 n_clusters >= 3
                 or outline_coverage >= border_coverage_threshold
@@ -512,7 +497,6 @@ class ProposeConfig(BaseModel):
                 "use_board_edge_seeds": True,
                 "use_neighbor_slide": True,
                 "board_edge_guidance_refine": False,
-                "contact_clearance_hybrid_weight": 0.1,
                 "board_edge_samples_per_edge": 12,
                 "group_edge_samples_per_edge": 8,
                 "placement_num_angles": 8,
@@ -527,9 +511,9 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 6,
                 "use_board_edge_seeds": False,
                 "use_group_edge_seeds": True,
-                "use_cluster_copy": True,
             },
             PlaceZone.CLUSTER_EDGE.value: {
+                "ranking_mode": "contact_hybrid",
                 "use_guidance_propositions": True,
                 "guidance_use_tight_packing": True,
                 "guidance_use_corner_alignment": True,
@@ -543,7 +527,6 @@ class ProposeConfig(BaseModel):
                 "obstacle_nearest_k": 3,
                 "contact_clearance_hybrid_weight": 0.1,
                 "contact_tightness_hybrid_weight": 0.25,
-                "use_cluster_copy": True,
             },
             PlaceZone.INTER_CLUSTER.value: {
                 "ranking_mode": "clearance",
@@ -554,11 +537,11 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 4,
                 "use_ribbon_seeds": True,
                 "use_voronoi": True,
-                "use_cluster_copy": True,
             },
             PlaceZone.VOID_SEEK.value: {
-                "ranking_mode": "clearance",
-                "use_contact_ranking": False,
+                "ranking_mode": "contact_hybrid",
+                "use_contact_ranking": True,
+                "use_contact_clearance_hybrid": True,
                 "use_full_packed_obstacle": True,
                 "use_group_edge_seeds": True,
                 "use_neighbor_slide": True,
@@ -572,6 +555,13 @@ class ProposeConfig(BaseModel):
             },
         }
         patch = dict(profiles.get(zone, {}))
+        if (
+            zone == PlaceZone.VOID_SEEK.value
+            and not bool(root.get("void_seek_contact_hybrid", True))
+        ):
+            patch["ranking_mode"] = "clearance"
+            patch["use_contact_ranking"] = False
+            patch["use_contact_clearance_hybrid"] = False
         patch.update(overrides)
         # Never re-enable a flag the caller already turned off (seeded/bench caps).
         if base is not None:
@@ -778,7 +768,6 @@ class BuildGraphConfig(BaseModel):
         p.placement_clearance_epsilon_ratio = p.first_pass_clearance_epsilon_ratio
         p.group_edge_samples_per_edge = p.first_pass_group_edge_samples_per_edge
         p.ranking_mode = "border"
-        p.use_axis_push = p.first_pass_use_axis_push
         return p
 
     @classmethod

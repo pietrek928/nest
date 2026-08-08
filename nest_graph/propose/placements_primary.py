@@ -1,3 +1,5 @@
+"""Perimeter walk, neighbor slide, and erosion proposers."""
+
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -6,23 +8,18 @@ from shapely.affinity import rotate
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polylabel
 
-from nest_graph.utils import get_shape_exteriors, transform_poly
+from nest_graph.utils import get_shape_exteriors
 
-from nest_graph.propose.context import placement_free_region, search_region_for_placement
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.context import search_region_for_placement
+from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 from nest_graph.propose.ranking import find_polygon_distances_bipartite
-from nest_graph.propose.placement_axis import CARDINAL_DIRECTIONS, axis_push_from_seed
 from nest_graph.propose.placement_common import (
-    bottom_left_sort_key,
-    nfp_valid_region,
     obstacle_parts,
     placement_safe_zone,
     resolve_placement_angles,
 )
 from nest_graph.propose.placement_outline import slide_toward_obstacle
 from nest_graph.propose.placement_perimeter import perimeter_ring_vertices
-
-_BOTTOM_LEFT_VERTICES_PER_ANGLE = 8
 
 
 def _finalize_placement_propositions(
@@ -34,7 +31,7 @@ def _finalize_placement_propositions(
     out: list[tuple[float, float, float]] = []
     for p in propositions:
         c = p["coords"]
-        key = (round(c[0], 2), round(c[1], 2), round(c[2], 1))
+        key = (round(c[0], 4), round(c[1], 4), round(c[2], 4))
         if key in seen:
             continue
         seen.add(key)
@@ -44,27 +41,25 @@ def _finalize_placement_propositions(
     return out
 
 
-def _free_region_seed_point(
-    sheet: Polygon,
-    base_shape: BaseGeometry,
-    min_dist: float,
+def _score_and_keep_batch(
+    raw: list[tuple[float, float, float]],
+    costs: list[float],
+    propose_geom: ProposeGeometry,
     pt_push: Point,
-) -> Optional[Point]:
-    free = placement_free_region(sheet, base_shape, min_dist)
-    if free.is_empty:
-        return None
-    if isinstance(free, MultiPolygon):
-        polys = [g for g in free.geoms if isinstance(g, Polygon) and not g.is_empty]
-        if not polys:
-            return None
-        poly = max(polys, key=lambda p: p.area)
-        return polylabel(poly, tolerance=1.0)
-    if isinstance(free, Polygon):
-        if free.contains(pt_push):
-            return pt_push
-        return free.representative_point()
-    rep = free.representative_point()
-    return rep if not rep.is_empty else None
+    top_n: int,
+) -> List[Tuple[float, float, float]]:
+    """Snap/emit-raw then one full-guidance batch filter; keep best top_n."""
+    if not raw:
+        return []
+    # Oversample pool before filter for early-exit style proposers.
+    order = sorted(range(len(raw)), key=lambda i: costs[i])
+    take = min(len(order), max(top_n * 3, top_n))
+    ordered = [raw[i] for i in order[:take]]
+    kept_costs = {raw[i]: costs[i] for i in order[:take]}
+    valid = filter_candidates_batch(propose_geom, ordered, pt_push)
+    valid.sort(key=lambda c: kept_costs.get(c, 0.0))
+    return valid[:top_n]
+
 
 def propose_placements_perimeter_walk(
     base_shape: BaseGeometry,
@@ -90,7 +85,8 @@ def propose_placements_perimeter_walk(
     if region.is_empty:
         return []
 
-    propositions: list[dict] = []
+    raw: list[tuple[float, float, float]] = []
+    costs: list[float] = []
     angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
@@ -105,17 +101,18 @@ def propose_placements_perimeter_walk(
                 dx = px - rc.x
                 dy = py - rc.y
                 coords = (dx, dy, float(angle))
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
                 placed_geom = propose_geom.placed_at(coords)
                 if propose_geom.base_geoms:
-                    dists = find_polygon_distances_bipartite([placed_geom], propose_geom.base_geoms)
+                    dists = find_polygon_distances_bipartite(
+                        [placed_geom], propose_geom.base_geoms,
+                    )
                     score = min(d.distance for d in dists) if dists else 10.0
                 else:
                     score = placed_geom.standoff_distance(propose_geom.boundary_ring_geom)
-                propositions.append({"coords": coords, "cost": score})
+                raw.append(coords)
+                costs.append(float(score))
 
-    return _finalize_placement_propositions(propositions, top_n)
+    return _score_and_keep_batch(raw, costs, propose_geom, pt_push, top_n)
 
 
 def propose_placements_neighbor_slide(
@@ -138,7 +135,8 @@ def propose_placements_neighbor_slide(
     if not obstacles:
         return []
 
-    propositions: list[dict] = []
+    raw: list[tuple[float, float, float]] = []
+    costs: list[float] = []
     angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
@@ -153,170 +151,18 @@ def propose_placements_neighbor_slide(
             )
             if coords is None:
                 continue
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
             placed_geom = propose_geom.placed_at(coords)
             if propose_geom.base_geoms:
-                dists = find_polygon_distances_bipartite([placed_geom], propose_geom.base_geoms)
+                dists = find_polygon_distances_bipartite(
+                    [placed_geom], propose_geom.base_geoms,
+                )
                 score = min(d.distance for d in dists) if dists else 10.0
             else:
                 score = 10.0
-            propositions.append({"coords": coords, "cost": score})
+            raw.append(coords)
+            costs.append(float(score))
 
-    return _finalize_placement_propositions(propositions, top_n)
-
-
-def propose_placements_nfp_vertices(
-    base_shape: BaseGeometry,
-    shape_to_place: Polygon,
-    sheet: Polygon,
-    min_dist: float,
-    *,
-    propose_geom: ProposeGeometry,
-    pt_push: Point,
-    num_angles: int,
-    top_n: int,
-) -> List[Tuple[float, float, float]]:
-    """Place on vertices of sheet_eroded minus union of buffered obstacles (NFP-lite)."""
-    if base_shape is None:
-        base_shape = Polygon()
-
-    propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
-
-    for angle in angles:
-        rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-        rc = rotated.centroid
-        valid = nfp_valid_region(sheet, base_shape, rotated, min_dist)
-        if valid.is_empty:
-            continue
-
-        for ring in get_shape_exteriors(valid):
-            for px, py in perimeter_ring_vertices(ring):
-                dx = px - rc.x
-                dy = py - rc.y
-                coords = (dx, dy, float(angle))
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
-                placed = transform_poly(shape_to_place, coords)
-                if not base_shape.is_empty:
-                    score = float(base_shape.distance(placed))
-                else:
-                    score = float(placed.distance(sheet.exterior))
-                propositions.append({"coords": coords, "cost": score})
-
-    return _finalize_placement_propositions(propositions, top_n)
-
-
-def propose_placements_axis_push(
-    base_shape: BaseGeometry,
-    shape_to_place: Polygon,
-    sheet: Polygon,
-    min_dist: float,
-    *,
-    propose_geom: ProposeGeometry,
-    pt_push: Point,
-    num_angles: int,
-    top_n: int,
-) -> List[Tuple[float, float, float]]:
-    """Push along ±x/±y from a free-region seed until obstacle or sheet contact."""
-    if base_shape is None or base_shape.is_empty:
-        return []
-
-    seed_pt = _free_region_seed_point(sheet, base_shape, min_dist, pt_push)
-    if seed_pt is None:
-        return []
-
-    obstacle_geom = base_shape.buffer(min_dist)
-    propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
-
-    for angle in angles:
-        rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-        rc = rotated.centroid
-        seed_dx = seed_pt.x - rc.x
-        seed_dy = seed_pt.y - rc.y
-
-        for direction in CARDINAL_DIRECTIONS:
-            pushed = axis_push_from_seed(
-                seed_dx,
-                seed_dy,
-                direction,
-                obstacle_geom,
-                min_dist,
-                propose_geom=propose_geom,
-                angle=float(angle),
-            )
-            if pushed is None:
-                continue
-            dx, dy = pushed
-            coords = (dx, dy, float(angle))
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
-            placed = transform_poly(shape_to_place, coords)
-            score = float(base_shape.distance(placed))
-            propositions.append({"coords": coords, "cost": score})
-
-    return _finalize_placement_propositions(propositions, top_n)
-
-
-def propose_placements_bottom_left(
-    base_shape: BaseGeometry,
-    shape_to_place: Polygon,
-    sheet: Polygon,
-    min_dist: float,
-    *,
-    propose_geom: ProposeGeometry,
-    pt_push: Point,
-    use_free_region: bool,
-    border_focus: bool,
-    num_angles: int,
-    top_n: int,
-    vertices_per_angle: int = _BOTTOM_LEFT_VERTICES_PER_ANGLE,
-) -> List[Tuple[float, float, float]]:
-    """Anchor on lowest-left vertices of the placement safe-zone boundary."""
-    if base_shape is None:
-        base_shape = Polygon()
-    region = search_region_for_placement(
-        base_shape, sheet, sheet, min_dist,
-        use_free_region=use_free_region, border_focus=border_focus,
-    )
-    if region.is_empty:
-        return []
-
-    propositions: list[dict] = []
-    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
-
-    for angle in angles:
-        rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-        rc = rotated.centroid
-        safe_zone = placement_safe_zone(region, base_shape, rotated, min_dist)
-        if safe_zone.is_empty:
-            continue
-
-        vertices: list[tuple[float, float]] = []
-        for ring in get_shape_exteriors(safe_zone):
-            vertices.extend(perimeter_ring_vertices(ring))
-        if not vertices:
-            continue
-
-        vertices.sort(key=lambda v: bottom_left_sort_key(v[0], v[1]))
-        for px, py in vertices[:vertices_per_angle]:
-            dx = px - rc.x
-            dy = py - rc.y
-            coords = (dx, dy, float(angle))
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
-            placed = transform_poly(shape_to_place, coords)
-            bl_key = bottom_left_sort_key(px, py)
-            if not base_shape.is_empty:
-                tie = float(base_shape.distance(placed))
-            else:
-                tie = float(placed.distance(sheet.exterior))
-            cost = bl_key[0] * 1e6 + bl_key[1] + tie * 1e-3
-            propositions.append({"coords": coords, "cost": cost})
-
-    return _finalize_placement_propositions(propositions, top_n)
+    return _score_and_keep_batch(raw, costs, propose_geom, pt_push, top_n)
 
 
 def propose_placements_erosion(
@@ -349,7 +195,8 @@ def propose_placements_erosion(
         if focal_shape is not None and not focal_shape.is_empty
         else region.centroid
     )
-    propositions: list[dict] = []
+    raw: list[tuple[float, float, float]] = []
+    costs: list[float] = []
     angles = resolve_placement_angles(placement_angles, num_angles)
 
     for angle in angles:
@@ -368,13 +215,7 @@ def propose_placements_erosion(
 
         for pt in candidate_points:
             coords = (float(pt.x), float(pt.y), float(angle))
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
-            propositions.append({
-                "coords": coords,
-                "cost": float(pt.distance(attract)),
-            })
+            raw.append(coords)
+            costs.append(float(pt.distance(attract)))
 
-    propositions.sort(key=lambda x: x["cost"])
-    return [p["coords"] for p in propositions[:top_n]]
-
+    return _score_and_keep_batch(raw, costs, propose_geom, pt_push, top_n)

@@ -45,11 +45,8 @@ from nest_graph.propose.placements_edge import (
     sample_placement_points_ribbon,
 )
 from nest_graph.propose.placements_primary import (
-    propose_placements_axis_push,
-    propose_placements_bottom_left,
     propose_placements_erosion,
     propose_placements_neighbor_slide,
-    propose_placements_nfp_vertices,
     propose_placements_perimeter_walk,
 )
 from nest_graph.propose.placements_pso import (
@@ -79,16 +76,13 @@ __all__ = [
     "obstacle_shape_for_propose",
     "placement_free_region",
     "propose_coords_with_strategy",
-    "propose_placements_axis_push",
     "propose_placements_board_edge",
-    "propose_placements_bottom_left",
     "propose_placements_erosion",
     "propose_placements_group_fit",
     "propose_placements_guidance_cast",
     "propose_placements_guidance_propositions",
     "propose_placements_guidance_walk",
     "propose_placements_neighbor_slide",
-    "propose_placements_nfp_vertices",
     "propose_placements_perimeter_walk",
     "propose_placements_point_cloud",
     "propose_placements_raycasting",

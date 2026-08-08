@@ -122,5 +122,11 @@ std::vector<Tvertex> finalize_selection(
     const FinalizeSelectionOptions &options = FinalizeSelectionOptions{},
     FinalizeSelectionStats *stats = nullptr);
 
+// Greedy score-ordered independent set over ``verts`` (collision-graph).
+std::vector<int> greedy_weighted_mis(
+    const std::vector<Tvertex> &verts,
+    const std::vector<Tscore> &scores,
+    const ElemGraph &g);
+
 bool selection_is_independent(
     const ElemGraph &g, const std::vector<Tvertex> &selected_nodes);

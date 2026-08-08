@@ -23,9 +23,6 @@ PROPOSE_BENCHMARK_PRESETS = {
     "shipped": shipped_propose_config(),
     "shipped_no_phase2": shipped_propose_config(
         use_neighbor_slide=False,
-        use_axis_push=False,
-        use_bottom_left=False,
-        use_nfp_vertices=False,
     ),
     "shipped_no_guidance_cast": shipped_propose_config(
         use_guidance_propositions=False,
@@ -44,9 +41,6 @@ PROPOSE_BENCHMARK_PRESETS = {
         use_group_edge_seeds=False,
         use_guidance_propositions=False,
         use_neighbor_slide=False,
-        use_axis_push=False,
-        use_bottom_left=False,
-        use_nfp_vertices=False,
     ),
     "kiss_heavy": shipped_propose_config(
         use_neighbor_slide=True,

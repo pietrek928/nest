@@ -12,4 +12,5 @@ void bind_geometry(nb::module_ &m) {
     bind_cast_api(m);
     bind_guidance_api(m);
     bind_batch_api(m);
+    bind_snap_api(m);
 }

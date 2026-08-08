@@ -3,6 +3,7 @@
 *.cpp
 *.so
 *.egg-info
+*.prof
 build
 
 # Python

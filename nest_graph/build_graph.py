@@ -2,6 +2,7 @@
 
 import cv2 as cv
 import math
+import time
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
@@ -68,8 +69,14 @@ from .propose.compaction import (
     compact_selection,
     selection_pairwise_independent,
 )
+from .propose.cluster_repack import (
+    cluster_repack_selection,
+    cluster_relocate_selection,
+)
+from .propose.local_se2 import local_se2_selection
 from .propose.context import (
     analyze_free_space,
+    build_free_space_snapshot,
     outline_coverage_ratio,
     part_is_concave,
     propose_push_point,
@@ -77,7 +84,6 @@ from .propose.context import (
     should_use_border_focus,
 )
 from .propose.feedback import ProposeFeedbackState
-from .propose.pipeline import propose_coords_with_strategy
 from .propose.ranking import score_placement_tightness
 from .propose.geometry import ProposeGeometry
 from .track_perf import show_performance
@@ -194,7 +200,12 @@ def _late_border_saturation_info(
     threshold = float(cfg.propose.place_border_coverage_threshold)
 
     mean_part = float(np.mean([float(p.area) for p in placed]))
-    free_info = analyze_free_space(sheet, placed, mean_part, min_dist)
+    void_thr = float(cfg.propose.late_border_void_override_ratio)
+    if void_thr <= 0.0:
+        void_thr = 2.5
+    free_info = analyze_free_space(
+        sheet, placed, mean_part, min_dist, void_ratio_threshold=void_thr,
+    )
     free_kind = str(free_info.kind)
     void_ratio = float(free_info.max_void_ratio)
     override_ratio = float(cfg.propose.late_border_void_override_ratio)
@@ -232,7 +243,7 @@ def _late_border_saturation_info(
             free_kind=free_kind,
         )
     if sat_override:
-        # Exp1 / hysteresis: unlock full propose despite low outline cov.
+        # Exp1 / hysteresis: unlock full propose despite low outline_kiss_cov.
         return LateBorderSatInfo(
             active=False,
             outline_cov=outline_cov,
@@ -240,7 +251,7 @@ def _late_border_saturation_info(
             rim_progress=rim_progress,
             free_kind=free_kind,
         )
-    # Exp3: without large_void, keep sat only while pack hull is still "open".
+    # Without large_void, keep sat only while pack hull_rim_fill is still open.
     hull_thr = float(cfg.propose.late_border_hull_threshold)
     if hull_thr > 0.0 and rim_progress >= hull_thr:
         return LateBorderSatInfo(
@@ -1153,7 +1164,13 @@ def _border_saturation_transform_batch(
         min_dist=min_dist,
         border_only_propose=True,
         use_full_packed_obstacle=cfg.propose.use_full_packed_obstacle,
+        packed_group_ids=group_id,
+        packed_transforms=transform,
+        user_holes=cfg.rules.board_holes,
         seeded=bool(nest_state.seed_count > 0),
+        pocket_keys_out={},
+        densify_stats_out={},
+        zones_used_out=[],
     )
     out: list[np.ndarray] = []
     for gid in range(len(phase1_by_group)):
@@ -1650,32 +1667,47 @@ def _first_pass_interior_fill(
     propose_cfg = cfg.first_pass_propose_config().model_copy(deep=True)
     propose_cfg.ranking_mode = "contact_hybrid"
     propose_cfg.use_contact_ranking = True
+    propose_cfg.place_profiles_enabled = True
 
     polys = list(pack_polys)
     gids = list(pack_gids)
     trs = list(pack_tr)
     geoms = list(placed_geoms)
+    catalog = [(part_by_gid[gid], gid) for gid in part_by_gid]
 
     for _ in range(interior_max):
+        densify_stats: dict = {}
+        pocket_keys: dict = {}
+        by_group = proposed_transforms_for_groups(
+            board,
+            catalog,
+            polys,
+            list(range(len(polys))),
+            propose_cfg,
+            min_dist=min_dist,
+            use_full_packed_obstacle=True,
+            packed_group_ids=gids,
+            packed_transforms=trs,
+            user_holes=cfg.rules.board_holes,
+            pocket_keys_out=pocket_keys,
+            densify_stats_out=densify_stats,
+            seeded=False,
+        )
         pack_union = unary_union(polys) if polys else Polygon()
+        push = propose_push_point(
+            board,
+            pack_union,
+            smart_push=propose_cfg.smart_push_target,
+            min_dist=min_dist,
+            use_border_focus=False,
+        )
         candidates: list[tuple[float, int, np.ndarray, Polygon, Geometry]] = []
         for gid, part_poly in part_by_gid.items():
-            push = propose_push_point(
-                board,
-                pack_union,
-                smart_push=propose_cfg.smart_push_target,
-                min_dist=min_dist,
-                use_border_focus=False,
-            )
-            for c in propose_coords_with_strategy(
-                pack_union,
-                part_poly,
-                board,
-                propose_cfg,
-                min_dist=min_dist,
-                pt_push=push,
-            ):
-                coords = np.asarray(c, dtype=np.float64)
+            arr = by_group.get(gid)
+            if arr is None or arr.shape[0] == 0:
+                continue
+            for row in arr:
+                coords = np.asarray(row, dtype=np.float64).reshape(3)
                 shapely_placed = transform_poly(part_poly, coords)
                 geom = bases[gid].apply_transform(coords)
                 scene = placement_scene_for_part(
@@ -2017,6 +2049,114 @@ def _boost_void_island_scores(
     return n
 
 
+def _boost_keyed_proposal_scores(
+    group_id: Sequence[int],
+    transforms: Sequence,
+    scores: list[float],
+    keys_by_group: dict[int, set[tuple[float, float, float]]] | None,
+    *,
+    weight: float,
+) -> int:
+    """Add ``weight`` to scores whose (group, transform key) is in ``keys_by_group``."""
+    if weight <= 0.0 or not scores or not keys_by_group:
+        return 0
+    n = 0
+    for i, sc in enumerate(scores):
+        if i >= len(group_id) or i >= len(transforms):
+            break
+        gid = int(group_id[i])
+        keys = keys_by_group.get(gid)
+        if not keys:
+            continue
+        key = _transform_row_key(np.asarray(transforms[i], dtype=np.float64))
+        if key not in keys:
+            continue
+        scores[i] = float(sc) + float(weight)
+        n += 1
+    return n
+
+
+def _boost_small_part_scores(
+    group_id: Sequence[int],
+    scores: list[float],
+    part_areas: Sequence[float],
+    *,
+    weight: float,
+) -> int:
+    """Boost smaller catalog groups: weight * (1 - area/max_area) on large_void."""
+    if weight <= 0.0 or not scores or not part_areas:
+        return 0
+    areas = [float(a) for a in part_areas]
+    max_a = max(areas) if areas else 0.0
+    if max_a <= 1e-12:
+        return 0
+    n = 0
+    for i, sc in enumerate(scores):
+        if i >= len(group_id):
+            break
+        gid = int(group_id[i])
+        if gid < 0 or gid >= len(areas):
+            continue
+        factor = max(0.0, 1.0 - areas[gid] / max_a)
+        if factor <= 0.0:
+            continue
+        scores[i] = float(sc) + float(weight) * factor
+        n += 1
+    return n
+
+
+def apply_void_selection_boosts(
+    *,
+    polys: list,
+    group_id: Sequence[int],
+    transform: Sequence,
+    scores: list[float],
+    free_info,
+    free_poly,
+    part_areas: Sequence[float],
+    propose_stats: dict | None,
+    cfg: "BuildGraphConfig",
+    sheet_diag: float,
+    void_r: float,
+) -> dict[str, int]:
+    """Apply void-island, pocket-key, and small-part score boosts (demo + evaluator)."""
+    hits = {
+        "void_island": 0,
+        "pocket_keys": 0,
+        "small_part": 0,
+    }
+    pole_w = float(cfg.propose.void_island_score_boost)
+    pocket_w = float(getattr(cfg.propose, "pocket_score_boost", 0.0) or 0.0)
+    small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
+    if free_info.kind == "large_void" and pole_w > 0.0:
+        hits["void_island"] = _boost_void_island_scores(
+            polys,
+            scores,
+            free_poly,
+            weight=pole_w,
+            pole=free_info.target_pt,
+            pole_radius=void_r,
+            sheet_diag=sheet_diag,
+        )
+    if pocket_w > 0.0 and propose_stats is not None:
+        keys = propose_stats.get("pocket_keys") or {}
+        hits["pocket_keys"] = _boost_keyed_proposal_scores(
+            group_id,
+            transform,
+            scores,
+            keys,
+            weight=pocket_w,
+        )
+    if free_info.kind == "large_void" and small_w > 0.0:
+        hits["small_part"] = _boost_small_part_scores(
+            group_id,
+            scores,
+            part_areas,
+            weight=small_w,
+        )
+    return hits
+
+
 def _make_void_attractor_rule_set(
     pole: Point,
     *,
@@ -2085,6 +2225,107 @@ def _count_selected_in_free(
     return sum(
         1 for i in selected if _centroid_in_free(polys[i], free_poly)
     )
+
+
+def _proposer_key_owner(
+    proposer_keys: dict[str, set[tuple[float, float, float]]] | None,
+) -> dict[tuple[float, float, float], str]:
+    """Map transform key → first-writer proposer name."""
+    owner: dict[tuple[float, float, float], str] = {}
+    if not proposer_keys:
+        return owner
+    for name, keys in proposer_keys.items():
+        for key in keys:
+            if key not in owner:
+                owner[key] = name
+    return owner
+
+
+def _count_selected_by_proposer(
+    transforms: Sequence,
+    selected: Sequence[int],
+    proposer_keys: dict[str, set[tuple[float, float, float]]] | None,
+) -> dict[str, int]:
+    owner = _proposer_key_owner(proposer_keys)
+    counts: dict[str, int] = {}
+    for i in selected:
+        if i < 0 or i >= len(transforms):
+            continue
+        key = _transform_row_key(np.asarray(transforms[i], dtype=np.float64))
+        name = owner.get(key)
+        if name is None:
+            continue
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _format_prop_accept(
+    emitted: dict[str, int],
+    pool: dict[str, int],
+    nest: dict[str, int],
+    refine: dict[str, int],
+    *,
+    limit: int = 8,
+) -> str:
+    names = sorted(
+        set(emitted) | set(pool) | set(nest) | set(refine),
+        key=lambda n: (-int(emitted.get(n, 0)), n),
+    )
+    parts = []
+    for name in names[:limit]:
+        parts.append(
+            f"{name}:e{int(emitted.get(name, 0))}/p{int(pool.get(name, 0))}/"
+            f"n{int(nest.get(name, 0))}/r{int(refine.get(name, 0))}"
+        )
+    return " ".join(parts)
+
+
+def _pin_nest_void_independent(
+    graph: ElemGraph,
+    selected_nest: Sequence[int],
+    selected_refine: Sequence[int],
+    polys: list,
+    free_poly: BaseGeometry | None,
+    scores: list[float] | None = None,
+    *,
+    stats_out: dict | None = None,
+) -> list[int]:
+    """P3: re-add nest-void nodes missing from refine if collision-clear.
+
+    Uses ``graph.collisions`` (not Shapely pose-clear). Optional ``stats_out``
+    records pin_candidates / pin_added / pin_blocked_collision / pin_ms.
+    """
+    t0 = time.perf_counter()
+    refine = list(selected_refine)
+    refine_set = set(refine)
+    candidates = [
+        i for i in selected_nest
+        if i not in refine_set and _centroid_in_free(polys[i], free_poly)
+    ]
+    pin_added = 0
+    pin_blocked = 0
+    if not candidates:
+        if stats_out is not None:
+            stats_out["pin_candidates"] = 0
+            stats_out["pin_added"] = 0
+            stats_out["pin_blocked_collision"] = 0
+            stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
+        return refine
+    if scores is not None and len(scores) == len(graph.group_id):
+        candidates.sort(key=lambda v: scores[v], reverse=True)
+    for v in candidates:
+        if any(u in refine_set for u in graph.collisions[v]):
+            pin_blocked += 1
+            continue
+        refine.append(v)
+        refine_set.add(v)
+        pin_added += 1
+    if stats_out is not None:
+        stats_out["pin_candidates"] = len(candidates)
+        stats_out["pin_added"] = pin_added
+        stats_out["pin_blocked_collision"] = pin_blocked
+        stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
+    return refine
 
 
 def _count_graph_in_free(polys: list, free_poly: BaseGeometry | None) -> int:
@@ -2206,6 +2447,8 @@ def _build_transform_batch(
             or (border_saturation and cfg.propose.first_pass_border_pack)
         )
         zones_used: list[str] = []
+        pocket_keys_raw: dict[int, set[tuple[float, float, float]]] = {}
+        densify_stats: dict = {}
         propose_by_group = proposed_transforms_for_groups(
             board,
             parts,
@@ -2230,21 +2473,51 @@ def _build_transform_batch(
             group_allowed_angles=group_allowed_angles,
             user_holes=cfg.rules.board_holes,
             seeded=seeded,
+            pocket_keys_out=pocket_keys_raw,
+            densify_stats_out=densify_stats,
         )
+        # Project angles before keying so MIS boost matches graph transforms.
+        proposal_keys: dict[int, set[tuple[float, float, float]]] = {}
+        pocket_keys: dict[int, set[tuple[float, float, float]]] = {}
+        for gid, arr in propose_by_group.items():
+            projected = arr
+            if group_allowed_angles and gid < len(group_allowed_angles):
+                allowed = group_allowed_angles[gid]
+                if allowed is not None:
+                    projected = _project_angles_to_allowed(arr, allowed)
+            proposal_keys[gid] = {_transform_row_key(r) for r in projected}
+            raw = pocket_keys_raw.get(gid) or set()
+            if raw and group_allowed_angles and gid < len(group_allowed_angles):
+                allowed = group_allowed_angles[gid]
+                if allowed is not None and len(raw) > 0:
+                    raw_arr = np.asarray(list(raw), dtype=np.float64)
+                    proj = _project_angles_to_allowed(raw_arr, allowed)
+                    pocket_keys[gid] = {_transform_row_key(r) for r in proj}
+                else:
+                    pocket_keys[gid] = set(raw)
+            else:
+                pocket_keys[gid] = set(raw)
         if propose_stats_out is not None:
             propose_stats_out["proposal_count"] = sum(
                 arr.shape[0] for arr in propose_by_group.values()
             )
             propose_stats_out["zones_used"] = zones_used
-            propose_stats_out["proposal_keys"] = {
-                gid: {_transform_row_key(r) for r in arr}
-                for gid, arr in propose_by_group.items()
-            }
+            propose_stats_out["proposal_keys"] = proposal_keys
+            propose_stats_out["pocket_keys"] = pocket_keys
+            propose_stats_out["densify_stats"] = dict(densify_stats)
             propose_stats_out["proposed_by_group"] = {
                 gid: np.asarray(arr, dtype=np.float64)
                 for gid, arr in propose_by_group.items()
             }
             propose_stats_out["border_only"] = bool(border_only)
+            propose_stats_out["proposer_keys"] = densify_stats.get("proposer_keys") or {}
+            propose_stats_out["emitted_by_proposer"] = densify_stats.get(
+                "emitted_by_proposer"
+            ) or {}
+            propose_stats_out["pool_by_proposer"] = densify_stats.get(
+                "pool_by_proposer"
+            ) or {}
+            propose_stats_out["pocket_by_tag"] = densify_stats.get("pocket_by_tag") or {}
         if empty_sheet and cfg.propose.use_board_edge_seeds:
             for part_poly, group_id in parts:
                 border_pin_by_group[group_id] = border_edge_transforms_for_group(
@@ -2732,6 +3005,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         graphs = graphs[-gc.graphs_window:]
         first_pass = nest_state is None
         seed_rules = active_rule_set(_make_seed_rule_sets(cfg))
+        free_info = None
         if first_pass and cfg.propose.first_pass_border_pack:
             scores = score_elems(graph, seed_rules)
             sheet, _ = board_context_from_geometry(p_outline, user_holes=user_holes)
@@ -2803,8 +3077,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 else []
             )
             mean_part = float(np.mean(part_areas)) if part_areas else 1.0
+            void_thr = float(cfg.propose.late_border_void_override_ratio)
+            if void_thr <= 0.0:
+                void_thr = 2.5
             free_info = analyze_free_space(
                 sheet, packed_for_free, mean_part, min_dist,
+                void_ratio_threshold=void_thr,
             )
             free_poly = free_info.target_poly
             nest_rules = rule_sets
@@ -2815,45 +3093,49 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
             attr_w = float(cfg.propose.void_attractor_rule_weight)
             pole_w = float(cfg.propose.void_island_score_boost)
+            pocket_w = float(cfg.propose.pocket_score_boost)
+            small_w = float(cfg.propose.small_part_void_score_boost)
             void_r = _void_attractor_radius(
                 min_dist, sheet_diag, cfg.rules.place_rule_radius,
             )
             if (
                 free_info.kind == "large_void"
                 and free_info.target_pt is not None
-                and (pole_w > 0.0 or attr_w > 0.0)
+                and attr_w > 0.0
             ):
-                if attr_w > 0.0:
-                    attractor = _make_void_attractor_rule_set(
-                        free_info.target_pt,
-                        ngroups=cfg.rules.ngroups,
-                        radius=void_r,
-                        weight=attr_w,
-                    )
-                    nest_rules = _merge_void_attractor_into_rule_sets(
-                        rule_sets,
-                        attractor,
-                        nest_rule_sets_used=sel.nest_rule_sets_used,
-                        max_rules_per_set=cfg.rules.max_rules_per_set,
-                    )
-                    refine_rules = active_rule_set(nest_rules)
-                    scores = list(score_elems(graph, refine_rules))
-                if pole_w > 0.0:
-                    _boost_void_island_scores(
-                        polys,
-                        scores,
-                        free_poly,
-                        weight=pole_w,
-                        pole=free_info.target_pt,
-                        pole_radius=void_r,
-                        sheet_diag=sheet_diag,
-                    )
+                attractor = _make_void_attractor_rule_set(
+                    free_info.target_pt,
+                    ngroups=cfg.rules.ngroups,
+                    radius=void_r,
+                    weight=attr_w,
+                )
+                nest_rules = _merge_void_attractor_into_rule_sets(
+                    rule_sets,
+                    attractor,
+                    nest_rule_sets_used=sel.nest_rule_sets_used,
+                    max_rules_per_set=cfg.rules.max_rules_per_set,
+                )
+                refine_rules = active_rule_set(nest_rules)
+                scores = list(score_elems(graph, refine_rules))
+            boost_hits = apply_void_selection_boosts(
+                polys=polys,
+                group_id=group_id,
+                transform=transform,
+                scores=scores,
+                free_info=free_info,
+                free_poly=free_poly,
+                part_areas=part_areas,
+                propose_stats=propose_stats,
+                cfg=cfg,
+                sheet_diag=sheet_diag,
+                void_r=void_r,
+            )
 
             use_greedy_nest = (
                 bool(cfg.propose.void_greedy_nest_seed)
                 and free_info.kind == "large_void"
-                and pole_w > 0.0
                 and scores
+                and (pole_w > 0.0 or pocket_w > 0.0 or small_w > 0.0)
             )
             if use_greedy_nest:
                 selected_nest = _nest_seed_from_boosted_scores(graph, scores)
@@ -2863,18 +3145,47 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
             old_len = len(selected_nest)
             n_void_nest = _count_selected_in_free(polys, selected_nest, free_poly)
-            if first_pass and should_use_border_focus(Polygon(), cfg.propose):
+            # Nest uses void-boosted scores. Keep a copy for refine so first-pass
+            # border-kiss boost cannot tilt DFS against void islands (P0+P1).
+            refine_scores = list(scores)
+            if (
+                first_pass
+                and should_use_border_focus(Polygon(), cfg.propose)
+                and free_info.kind != "large_void"
+            ):
                 _boost_border_scores(
-                    polys, scores, p_sheet, min_dist,
+                    polys, refine_scores, p_sheet, min_dist,
                     weight=cfg.propose.border_selection_score_boost,
                 )
             _, selected_polys, _ = apply_dfs_refinement(
                 graph,
                 refine_rules,
                 list(selected_nest),
-                scores,
+                refine_scores,
                 selection=sel,
             )
+            pin_stats: dict = {}
+            if (
+                bool(getattr(cfg.propose, "enable_void_nest_pin", True))
+                and free_poly is not None
+                and not free_poly.is_empty
+            ):
+                selected_polys = _pin_nest_void_independent(
+                    graph,
+                    selected_nest,
+                    selected_polys,
+                    polys,
+                    free_poly,
+                    refine_scores,
+                    stats_out=pin_stats,
+                )
+            else:
+                pin_stats = {
+                    "pin_candidates": 0,
+                    "pin_added": 0,
+                    "pin_blocked_collision": 0,
+                    "pin_ms": 0.0,
+                }
             n_void_refine = _count_selected_in_free(
                 polys, selected_polys, free_poly,
             )
@@ -2894,15 +3205,50 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sat_override = int(bool(propose_stats.get("sat_override", False)))
             rim_progress = float(propose_stats.get("rim_progress", 0.0))
             zone_snip = ",".join(str(z) for z in zones[:4])
+            pf_em = int(proposer_counts.get("_pocket_fit_emitted", 0) or proposer_counts.get("pocket_fit", 0))
+            pf_att = int(proposer_counts.get("_pocket_fit_attempted", 0))
+            pf_sel = int(proposer_counts.get("_pocket_fit_selected", 0))
+            pf_surv = int(proposer_counts.get("_pocket_fit_survival_pct", -1))
+            densify = propose_stats.get("densify_stats") or {}
+            densify_f = int(densify.get("fired", proposer_counts.get("_densify_fired", 0)))
+            densify_a = int(densify.get("accepted", proposer_counts.get("_densify_accepted", 0)))
+            densify_reason = densify.get("densify_reason")
+            pocket_skip = densify.get("pocket_skip") or propose_stats.get("pocket_skip") or []
+            if isinstance(pocket_skip, str):
+                pocket_skip = [pocket_skip]
+            pocket_key_hits = int(boost_hits.get("pocket_keys", 0))
+            small_hits = int(boost_hits.get("small_part", 0))
+            island_hits = int(boost_hits.get("void_island", 0))
+            nest_refine_delta = int(n_void_nest) - int(n_void_refine)
+            skip_snip = ",".join(str(s) for s in list(pocket_skip)[:4])
+            proposer_keys = propose_stats.get("proposer_keys") or densify.get("proposer_keys") or {}
+            emitted_bp = dict(propose_stats.get("emitted_by_proposer") or densify.get("emitted_by_proposer") or {})
+            pool_bp = dict(propose_stats.get("pool_by_proposer") or densify.get("pool_by_proposer") or {})
+            nest_bp = _count_selected_by_proposer(transform, selected_nest, proposer_keys)
+            refine_bp = _count_selected_by_proposer(transform, selected_polys, proposer_keys)
+            prop_accept = _format_prop_accept(emitted_bp, pool_bp, nest_bp, refine_bp)
+            pocket_by_tag = dict(propose_stats.get("pocket_by_tag") or densify.get("pocket_by_tag") or {})
             void_leak = (
                 f"void_leak free={free_info.kind} ratio={free_info.max_void_ratio:.1f} "
                 f"props={n_void_props} props_pole={n_props_pole} hijack={hijack} "
                 f"graph={n_void_graph} "
-                f"nest={n_void_nest} refine={n_void_refine} "
+                f"nest={n_void_nest} refine={n_void_refine} delta={nest_refine_delta} "
                 f"border_only={bool(propose_stats.get('border_only', False))} "
                 f"outline_cov={outline_cov:.3f} sat_override={sat_override} "
-                f"rim={rim_progress:.3f} zones=[{zone_snip}]"
+                f"rim={rim_progress:.3f} zones=[{zone_snip}] "
+                f"pocket={pf_em}/{pf_att} sel={pf_sel} valid={pf_surv}% "
+                f"key_boost={pocket_key_hits} island_boost={island_hits} "
+                f"small_boost={small_hits} "
+                f"pin={pin_stats.get('pin_added', 0)}/"
+                f"{pin_stats.get('pin_candidates', 0)}"
+                f"(block={pin_stats.get('pin_blocked_collision', 0)},"
+                f"{pin_stats.get('pin_ms', 0.0):.1f}ms) "
+                f"densify={densify_a}/{densify_f}"
+                f"{f' reason={densify_reason}' if densify_reason else ''}"
+                f"{f' pocket_skip=[{skip_snip}]' if skip_snip else ''}"
+                f"{f' prop_accept {prop_accept}' if prop_accept else ''}"
             )
+            # Append post-DFS relocate stats after they run (updated below).
             propose_stats["void_leak"] = {
                 "free_kind": free_info.kind,
                 "max_void_ratio": float(free_info.max_void_ratio),
@@ -2912,23 +3258,46 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "graph": n_void_graph,
                 "nest": n_void_nest,
                 "refine": n_void_refine,
+                "nest_refine_delta": nest_refine_delta,
                 "border_only": bool(propose_stats.get("border_only", False)),
                 "outline_cov": outline_cov,
                 "sat_override": bool(sat_override),
                 "rim_progress": rim_progress,
                 "zones_used": list(zones),
+                "pocket_fit_emitted": pf_em,
+                "pocket_fit_attempts": pf_att,
+                "pocket_fit_selected": pf_sel,
+                "pin_candidates": int(pin_stats.get("pin_candidates", 0)),
+                "pin_added": int(pin_stats.get("pin_added", 0)),
+                "pin_blocked_collision": int(pin_stats.get("pin_blocked_collision", 0)),
+                "pin_ms": float(pin_stats.get("pin_ms", 0.0)),
+                "pocket_fit_survival_pct": pf_surv,
+                "pocket_key_boost_hits": pocket_key_hits,
+                "void_island_boost_hits": island_hits,
+                "small_part_boost_hits": small_hits,
+                "densify_fired": densify_f,
+                "densify_accepted": densify_a,
+                "densify_reason": densify_reason,
+                "pocket_skip": list(pocket_skip),
+                "emitted_by_proposer": emitted_bp,
+                "pool_by_proposer": pool_bp,
+                "nest_by_proposer": nest_bp,
+                "refine_by_proposer": refine_bp,
+                "pocket_by_tag": pocket_by_tag,
+                "prop_accept": prop_accept,
             }
             print(void_leak)
         assert selection_is_independent(graph, selected_polys)
         min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
+        sheet_compact, _ = board_context_from_geometry(p_outline, user_holes=user_holes)
+        part_by_group = {0: p1, 1: p2}
+        seed_n = nest_state.seed_count if nest_state is not None else 0
+        fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
+        relocate_accepted = False
         if (
             cfg.propose.enable_gravity_compaction
             and len(selected_polys) >= 2
         ):
-            sheet_compact, _ = board_context_from_geometry(p_outline, user_holes=user_holes)
-            part_by_group = {0: p1, 1: p2}
-            seed_n = nest_state.seed_count if nest_state is not None else 0
-            fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
             polys, transform = compact_selection(
                 sheet_compact,
                 list(polys),
@@ -2938,8 +3307,128 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 part_by_group,
                 min_dist,
                 fixed_obstacles=fixed_obs,
+                gravity=(
+                    free_info.target_pt
+                    if (
+                        free_info is not None
+                        and free_info.kind == "large_void"
+                        and free_info.target_pt is not None
+                    )
+                    else None
+                ),
             )
             assert selection_pairwise_independent(polys, selected_polys)
+        # Post-DFS pack relocate when mid-pack free is still a large void.
+        sel_geoms = [
+            polys[i] for i in selected_polys
+            if polys[i] is not None and not polys[i].is_empty
+        ]
+        mean_part_post = float(np.mean(part_areas)) if part_areas else 1.0
+        void_thr_post = float(cfg.propose.late_border_void_override_ratio)
+        if void_thr_post <= 0.0:
+            void_thr_post = 2.5
+        free_snap_post = build_free_space_snapshot(
+            sheet_compact,
+            sel_geoms,
+            mean_part_post,
+            min_dist,
+            void_ratio_threshold=void_thr_post,
+        )
+        free_post = free_snap_post.analysis
+        void_leak_stats = propose_stats.get("void_leak") if propose_stats else None
+        # S5: when void_leak exists, require refine>0 so peel is not wasted on strip.
+        allow_repack = True
+        if isinstance(void_leak_stats, dict):
+            allow_repack = int(void_leak_stats.get("refine", 0)) > 0
+        if free_post.kind == "large_void" and free_post.target_pt is not None:
+            push_pt = free_post.target_pt
+            if allow_repack:
+                polys, transform, selected_polys, repack_stats = cluster_repack_selection(
+                    sheet_compact,
+                    list(polys),
+                    list(transform),
+                    group_id,
+                    selected_polys,
+                    part_by_group,
+                    min_dist,
+                    cfg.propose,
+                    pole=free_post.target_pt,
+                    void_poly=free_post.target_poly,
+                    fixed_obstacles=fixed_obs,
+                    pt_push=push_pt,
+                    free_space=free_snap_post,
+                )
+            else:
+                repack_stats = {
+                    "attempted": 0,
+                    "accepted": 0,
+                    "motif_accepted": 0,
+                    "skipped_refine_zero": 1,
+                }
+            # Refresh void pole after an accepted motif stamp (selection moved).
+            reloc_pole = free_post.target_pt
+            if int(repack_stats.get("accepted", 0)) > 0:
+                sel_geoms = [
+                    polys[i] for i in selected_polys
+                    if polys[i] is not None and not polys[i].is_empty
+                ]
+                free_snap_post = build_free_space_snapshot(
+                    sheet_compact,
+                    sel_geoms,
+                    mean_part_post,
+                    min_dist,
+                    void_ratio_threshold=void_thr_post,
+                )
+                if free_snap_post.analysis.target_pt is not None:
+                    reloc_pole = free_snap_post.analysis.target_pt
+            polys, transform, reloc_stats = cluster_relocate_selection(
+                sheet_compact,
+                list(polys),
+                list(transform),
+                group_id,
+                selected_polys,
+                part_by_group,
+                min_dist,
+                cfg.propose,
+                pole=reloc_pole,
+                fixed_obstacles=fixed_obs,
+            )
+            polys, transform, se2_stats = local_se2_selection(
+                sheet_compact,
+                list(polys),
+                list(transform),
+                group_id,
+                selected_polys,
+                part_by_group,
+                min_dist,
+                cfg.propose,
+                pole=reloc_pole,
+                fixed_obstacles=fixed_obs,
+            )
+            relocate_accepted = bool(
+                int(repack_stats.get("accepted", 0))
+                or int(reloc_stats.get("accepted", 0))
+                or int(se2_stats.get("moved", 0))
+            )
+            assert selection_pairwise_independent(polys, selected_polys)
+            propose_stats["repack"] = repack_stats
+            propose_stats["relocate"] = reloc_stats
+            propose_stats["local_se2"] = se2_stats
+            void_leak_prev = propose_stats.get("void_leak")
+            if isinstance(void_leak_prev, dict):
+                void_leak_prev["repack"] = repack_stats
+                void_leak_prev["relocate"] = reloc_stats
+                void_leak_prev["local_se2"] = se2_stats
+            print(
+                f"repack={repack_stats.get('accepted', 0)}/"
+                f"{repack_stats.get('attempted', 0)} "
+                f"motif={repack_stats.get('motif_accepted', 0)} "
+                f"reloc={reloc_stats.get('accepted', 0)}/"
+                f"{reloc_stats.get('attempted', 0)} "
+                f"se2={se2_stats.get('moved', 0)}/"
+                f"{se2_stats.get('attempted', 0)} "
+                f"tan={se2_stats.get('tangent_moves', 0)}"
+            )
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
         )
@@ -2971,17 +3460,24 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             gi = group_id[i]
             selected_t[gi].append(transform[i])
         selected_t = tuple(np.array(t) for t in selected_t)
+        if relocate_accepted:
+            # Drop stale window frames before appending post-move poses.
+            selection_window.clear()
         _append_selection_window(selection_window, selected_t, gc.graphs_window)
-        if len(history[0]) and len(selected_t[0]):
-            history = (
-                trim_history(history[0], selected_t[0], sc.history_max),
-                history[1],
-            )
-        if len(history[1]) and len(selected_t[1]):
-            history = (
-                history[0],
-                trim_history(history[1], selected_t[1], sc.history_max),
-            )
+        if relocate_accepted:
+            # Replace history so trim_history cannot re-inject pre-relocate poses.
+            history = selected_t
+        else:
+            if len(history[0]) and len(selected_t[0]):
+                history = (
+                    trim_history(history[0], selected_t[0], sc.history_max),
+                    history[1],
+                )
+            if len(history[1]) and len(selected_t[1]):
+                history = (
+                    history[0],
+                    trim_history(history[1], selected_t[1], sc.history_max),
+                )
         nest_state = NestState(
             polys=polys,
             group_id=group_id,

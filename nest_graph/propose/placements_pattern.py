@@ -76,12 +76,13 @@ def extract_cluster_patterns(
     return patterns
 
 
-def _free_pocket_anchors(
+def free_pocket_anchors(
     sheet: Polygon,
     obstacle: BaseGeometry,
     min_dist: float,
     max_anchors: int,
 ) -> list[tuple[float, float, float]]:
+    """Polylabel anchors in free pockets of sheet\\obstacle (0 and π)."""
     free = placement_free_region(sheet, obstacle, min_dist)
     if free.is_empty:
         return []
@@ -105,6 +106,10 @@ def _free_pocket_anchors(
         # Also try a 180° flip of the motif at the same pocket.
         out.append((float(pt.x), float(pt.y), float(__import__("math").pi)))
     return out[: max_anchors * 2]
+
+
+# Back-compat private alias.
+_free_pocket_anchors = free_pocket_anchors
 
 
 def _mirror_anchors(
@@ -134,6 +139,7 @@ def propose_placements_cluster_copy(
     pt_push: Point,
     propose_cfg: ProposeConfig,
     top_n: int = 16,
+    free_space=None,
 ) -> List[Tuple[float, float, float]]:
     """Emit absolute transforms for group_id by placing pattern members at new anchors."""
     if not patterns or sheet.is_empty:
@@ -147,6 +153,27 @@ def propose_placements_cluster_copy(
             sheet, base_shape, min_dist, propose_cfg.cluster_copy_anchor_seeds,
         )
     )
+    # Prefer snapshot topology poles; fall back to a one-shot scan.
+    if free_space is not None and getattr(free_space, "topology_poles", None):
+        anchors.extend(list(free_space.topology_poles))
+    else:
+        packed_for_topo = []
+        if hasattr(base_shape, "geoms"):
+            packed_for_topo = [
+                g for g in base_shape.geoms if g is not None and not g.is_empty
+            ]
+        elif base_shape is not None and not base_shape.is_empty:
+            packed_for_topo = [base_shape]
+        if packed_for_topo:
+            from nest_graph.propose.void_topology import topology_pocket_poles
+            anchors.extend(
+                topology_pocket_poles(
+                    sheet,
+                    packed_for_topo,
+                    min_dist=min_dist,
+                    max_anchors=propose_cfg.cluster_copy_anchor_seeds,
+                )
+            )
     for pat in patterns:
         anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
 

@@ -18,6 +18,35 @@ def test_gravity_compaction_disabled_by_default():
     assert ProposeConfig().void_island_score_boost == 64.0
     assert ProposeConfig().void_attractor_rule_weight == 16.0
     assert ProposeConfig().enable_void_large_hijack is True
+    assert ProposeConfig().pocket_score_boost == 50.0
+    assert ProposeConfig().small_part_void_score_boost == 40.0
+    assert ProposeConfig().use_open_void_pocket is True
+    assert ProposeConfig().enable_cluster_repack is True
+    assert ProposeConfig().enable_local_se2 is True
+
+
+def test_boost_keyed_and_small_part_scores():
+    from nest_graph.build_graph import (
+        _boost_keyed_proposal_scores,
+        _boost_small_part_scores,
+    )
+
+    scores = [1.0, 2.0, 3.0]
+    n = _boost_keyed_proposal_scores(
+        [0, 1, 0],
+        [(1.0, 2.0, 0.0), (3.0, 4.0, 0.0), (1.0, 2.0, 0.1)],
+        scores,
+        {0: {(1.0, 2.0, 0.0)}},
+        weight=50.0,
+    )
+    assert n == 1
+    assert scores[0] == 51.0
+    assert scores[1] == 2.0
+    scores2 = [0.0, 0.0]
+    n2 = _boost_small_part_scores([0, 1], scores2, [10.0, 2.0], weight=40.0)
+    assert n2 == 1
+    assert scores2[1] > scores2[0]
+    assert scores2[0] == 0.0
 
 
 def test_boost_void_island_scores_only_inside_free():

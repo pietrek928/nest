@@ -28,9 +28,67 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
             "void_attractor_rule_weight": 0.0,
             "enable_gravity_compaction": False,
         })
+    elif propose_name == "void_boost_high":
+        cfg.propose = cfg.propose.model_copy(update={
+            "void_island_score_boost": 128.0,
+            "pocket_score_boost": 100.0,
+            "void_attractor_rule_weight": 48.0,
+        })
+    elif propose_name == "no_void_yield_densify":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_void_yield_densify_accept": False,
+        })
     elif propose_name == "no_greedy_nest":
         cfg.propose = cfg.propose.model_copy(update={
             "void_greedy_nest_seed": False,
+        })
+    elif propose_name == "no_pocket_fit":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_pocket_fit": False,
+        })
+    elif propose_name == "no_small_prefer":
+        cfg.propose = cfg.propose.model_copy(update={
+            "small_part_void_score_boost": 0.0,
+        })
+    elif propose_name == "no_pocket_mis_boost":
+        cfg.propose = cfg.propose.model_copy(update={
+            "pocket_score_boost": 0.0,
+        })
+    elif propose_name == "no_cluster_repack":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_cluster_repack": False,
+        })
+    elif propose_name == "no_cluster_copy":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_cluster_copy": False,
+        })
+    elif propose_name == "no_open_void_pocket":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_open_void_pocket": False,
+        })
+    elif propose_name == "no_local_se2":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_local_se2": False,
+        })
+    elif propose_name == "no_cluster_relocate":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_cluster_relocate": False,
+        })
+    elif propose_name == "no_densify_hijack":
+        cfg.propose = cfg.propose.model_copy(update={
+            "densify_on_void_hijack": False,
+        })
+    elif propose_name == "no_unified_reserve":
+        cfg.propose = cfg.propose.model_copy(update={
+            "unified_void_reserve": False,
+        })
+    elif propose_name == "no_void_contact_hybrid":
+        cfg.propose = cfg.propose.model_copy(update={
+            "void_seek_contact_hybrid": False,
+        })
+    elif propose_name == "no_motif_topo_anchors":
+        cfg.propose = cfg.propose.model_copy(update={
+            "motif_use_topo_anchors": False,
         })
     elif propose_name == "no_override":
         cfg.propose = cfg.propose.model_copy(update={
@@ -44,12 +102,24 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
             "void_attractor_rule_weight": 0.0,
             "enable_gravity_compaction": False,
         })
+    elif propose_name == "no_void_rank":
+        cfg.propose = cfg.propose.model_copy(update={
+            "void_rank_pole_weight": 0.0,
+        })
+    elif propose_name == "gravity_void_pole":
+        # Diagnose-only: gravity remains off in shipped; this preset enables it.
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_gravity_compaction": True,
+        })
+    elif propose_name == "void_pso":
+        # OOS-3 gated: only enable when props_pole≈0 after OOS-1+4; off by default.
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_point_cloud": True,
+            "use_guidance_walk": True,
+        })
     elif propose_name == "no_propose":
         cfg.propose = ProposeConfig(
             use_neighbor_slide=False,
-            use_axis_push=False,
-            use_bottom_left=False,
-            use_nfp_vertices=False,
             use_voronoi=False,
             use_point_cloud=False,
             use_guidance_walk=False,
@@ -93,9 +163,26 @@ def main() -> None:
             "local_compact",
             "no_propose",
             "no_void_boost",
+            "void_boost_high",
+            "no_void_yield_densify",
             "no_void_hijack",
             "no_override",
             "no_greedy_nest",
+            "no_pocket_fit",
+            "no_small_prefer",
+            "no_pocket_mis_boost",
+            "no_cluster_repack",
+            "no_cluster_copy",
+            "no_open_void_pocket",
+            "no_local_se2",
+            "no_cluster_relocate",
+            "no_densify_hijack",
+            "no_unified_reserve",
+            "no_void_contact_hybrid",
+            "no_motif_topo_anchors",
+            "no_void_rank",
+            "gravity_void_pole",
+            "void_pso",
         ],
     )
     parser.add_argument("--dfs-modes", nargs="*", default=["merged_loose_tight"])

@@ -51,6 +51,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_geometry_api.cc
     tests/test_guide.cc
     tests/test_gap_fixes.cc
+    tests/test_snap_pose.cc
   )
   target_link_libraries(geometry_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
   target_include_directories(geometry_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")

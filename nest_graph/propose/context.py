@@ -27,7 +27,8 @@ def placement_free_region(
     return free
 
 
-def _polygon_components(geom: BaseGeometry) -> list[Polygon]:
+def iter_polygons(geom: BaseGeometry) -> list[Polygon]:
+    """Flatten Polygon / MultiPolygon / GeometryCollection into polygon parts."""
     if geom is None or geom.is_empty:
         return []
     if isinstance(geom, Polygon):
@@ -37,9 +38,13 @@ def _polygon_components(geom: BaseGeometry) -> list[Polygon]:
     if hasattr(geom, "geoms"):
         out: list[Polygon] = []
         for g in geom.geoms:
-            out.extend(_polygon_components(g))
+            out.extend(iter_polygons(g))
         return out
     return []
+
+
+def _polygon_components(geom: BaseGeometry) -> list[Polygon]:
+    return iter_polygons(geom)
 
 
 def free_space_targets(
@@ -68,6 +73,20 @@ class FreeSpaceAnalysis:
     target_pt: Point | None = None
 
 
+@dataclass(frozen=True)
+class FreeSpaceSnapshot:
+    """Cached free-space geometry for one packed layout (analyze + pockets)."""
+
+    analysis: FreeSpaceAnalysis
+    trapped_voids: tuple[Polygon, ...] = ()
+    hull_bays: tuple[Polygon, ...] = ()
+    topology_poles: tuple[tuple[float, float, float], ...] = ()
+
+    @property
+    def max_void_area(self) -> float:
+        return float(self.analysis.largest_area)
+
+
 def analyze_free_space(
     sheet: Polygon,
     packed: Sequence[BaseGeometry],
@@ -76,7 +95,11 @@ def analyze_free_space(
     *,
     void_ratio_threshold: float = 2.5,
 ) -> FreeSpaceAnalysis:
-    """Classify free space as one large void vs Swiss-cheese slivers."""
+    """Classify free space as one large void vs Swiss-cheese slivers.
+
+    ``void_ratio_threshold`` should match ``ProposeConfig.late_border_void_override_ratio``
+    so Mode A / late-sat / MIS agree on what counts as large_void.
+    """
     placed = [p for p in packed if p is not None and not p.is_empty]
     if sheet is None or sheet.is_empty:
         return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
@@ -118,6 +141,49 @@ def analyze_free_space(
         largest_area=float(largest.area),
         target_poly=largest,
         target_pt=largest.representative_point(),
+    )
+
+
+def build_free_space_snapshot(
+    sheet: Polygon,
+    packed: Sequence[BaseGeometry],
+    part_area: float,
+    min_dist: float,
+    *,
+    void_ratio_threshold: float = 2.5,
+    max_topology_anchors: int = 6,
+) -> FreeSpaceSnapshot:
+    """Build analyze + trapped voids + hull bays + topology poles once per pack."""
+    from nest_graph.propose.void_topology import (
+        hull_bay_polygons,
+        topology_pocket_poles,
+        trapped_void_polygons,
+    )
+
+    analysis = analyze_free_space(
+        sheet,
+        packed,
+        part_area,
+        min_dist,
+        void_ratio_threshold=void_ratio_threshold,
+    )
+    voids = tuple(trapped_void_polygons(sheet, packed))
+    bays = tuple(hull_bay_polygons(packed, min_dist=min_dist, sheet=sheet))
+    poles = tuple(
+        topology_pocket_poles(
+            sheet,
+            packed,
+            min_dist=min_dist,
+            max_anchors=max_topology_anchors,
+            voids=voids,
+            bays=bays,
+        )
+    )
+    return FreeSpaceSnapshot(
+        analysis=analysis,
+        trapped_voids=voids,
+        hull_bays=bays,
+        topology_poles=poles,
     )
 
 
@@ -782,9 +848,30 @@ def classify_propose_zone_info(
                     outline_coverage=coverage,
                     primary_target=primary_target,
                 )
+            annulus = _free_is_annulus(
+                primary_free,
+                sheet,
+                holes,
+                min_dist=min_dist,
+                part_min=part_min,
+                part_max=part_max,
+            )
+            # Annulus rim docking only when the pack already owns the exterior.
+            if annulus and packed_near_border:
+                return PlaceZoneInfo(
+                    zone="border_gap",
+                    free_ratio=free_ratio,
+                    n_clusters=len(sig_clusters),
+                    outline_coverage=coverage,
+                    primary_target=primary_target,
+                    is_annulus=True,
+                )
             # Defer void_seek while parts are already on the exterior (rim / corridor
-            # ends): prefer border_gap / cluster_edge docking first.
-            if not packed_near_border:
+            # ends): prefer border_gap / cluster_edge docking first — unless the
+            # free component is large enough that OOS-1 overrides rim deferral.
+            void_ratio = float(primary_free.area) / part_area
+            override = float(propose_cfg.late_border_void_override_ratio)
+            if (not packed_near_border) or (override > 0.0 and void_ratio > override):
                 return PlaceZoneInfo(
                     zone="void_seek",
                     free_ratio=free_ratio,
@@ -864,7 +951,6 @@ def classify_propose_zone_info(
             zone = "cluster_edge"
             annulus = False
         else:
-            zone = "border_gap"
             annulus = _free_is_annulus(
                 primary_free,
                 sheet,
@@ -873,6 +959,23 @@ def classify_propose_zone_info(
                 part_min=part_min,
                 part_max=part_max,
             )
+            # OOS-1: exterior-touching large free → native void_seek (even mid-rim).
+            # Keep annulus rim on border_gap so inward shooters stay enabled.
+            void_ratio = float(primary_free.area) / part_area
+            override = float(propose_cfg.late_border_void_override_ratio)
+            if (
+                not annulus
+                and override > 0.0
+                and void_ratio > override
+            ):
+                return PlaceZoneInfo(
+                    zone="void_seek",
+                    free_ratio=free_ratio,
+                    n_clusters=len(sig_clusters),
+                    outline_coverage=coverage,
+                    primary_target=primary_target,
+                )
+            zone = "border_gap"
         return PlaceZoneInfo(
             zone=zone,
             free_ratio=free_ratio,

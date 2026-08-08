@@ -107,28 +107,6 @@ def _rotated_max_dim(rotated: Polygon) -> float:
     return max(bounds[2] - bounds[0], bounds[3] - bounds[1]) / 2
 
 
-def bottom_left_sort_key(px: float, py: float) -> tuple[float, float]:
-    return (py, px)
-
-
-def nfp_valid_region(
-    sheet: Polygon,
-    base_shape: BaseGeometry,
-    rotated: Polygon,
-    min_dist: float,
-) -> BaseGeometry:
-    """SVGnest-style valid region: eroded sheet minus union of buffered obstacles."""
-    total_buf = _rotated_max_dim(rotated) + min_dist
-    eroded_sheet = sheet.buffer(-total_buf)
-    if eroded_sheet.is_empty:
-        return eroded_sheet
-    parts = obstacle_parts(base_shape)
-    if parts:
-        obstacle_union = unary_union([p.buffer(total_buf) for p in parts])
-        eroded_sheet = eroded_sheet.difference(obstacle_union)
-    return eroded_sheet
-
-
 def placement_safe_zone(
     region: BaseGeometry,
     base_shape: BaseGeometry,

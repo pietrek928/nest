@@ -27,8 +27,10 @@ class ProposeFeedbackState:
                 self.zone_graph_yields[zone] = self.zone_graph_yields[zone][-8:]
         yield_signal = proposal_yield if proposal_yield is not None else graph_yield
         if yield_signal < 0.5 and proposer_counts:
-            total = sum(proposer_counts.values()) or 1
-            for name, count in proposer_counts.items():
+            # Ignore telemetry meta keys (prefixed with _).
+            usable = {k: v for k, v in proposer_counts.items() if not str(k).startswith("_")}
+            total = sum(usable.values()) or 1
+            for name, count in usable.items():
                 share = count / total
                 scale = self.proposer_pool_scales.get(name, 1.0)
                 if share > 0.3 and yield_signal < 0.4:
