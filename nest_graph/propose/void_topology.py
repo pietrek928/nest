@@ -3,11 +3,89 @@
 import math
 from typing import Sequence
 
-from shapely import Polygon
+from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polylabel, unary_union
 
 from nest_graph.propose.context import cluster_packed_indices, iter_polygons
+
+
+def _largest_polygon_component(geom: BaseGeometry | None) -> Polygon | None:
+    if geom is None or geom.is_empty:
+        return None
+    best: Polygon | None = None
+    best_area = 0.0
+    for poly in iter_polygons(geom):
+        a = float(poly.area)
+        if a > best_area:
+            best = poly
+            best_area = a
+    return best
+
+
+def iterative_multi_poles(
+    void_poly: Polygon,
+    *,
+    min_dist: float = 1.0,
+    max_poles: int = 4,
+    radius_scale: float = 0.8,
+    min_area_ratio: float = 0.05,
+) -> list[tuple[float, float]]:
+    """Spine of poles via iterative polylabel − inscribed-circle masks.
+
+    Walks a cheap medial-axis surrogate without Voronoi/CDT. Always keeps the
+    largest remaining component after each subtraction.
+    """
+    if void_poly is None or void_poly.is_empty or max_poles <= 0:
+        return []
+    base_area = float(void_poly.area)
+    if base_area <= 0.0:
+        return []
+    min_area = max(base_area * float(min_area_ratio), float(min_dist) ** 2)
+    tol = max(float(min_dist), 0.5)
+    poly = void_poly
+    poles: list[tuple[float, float]] = []
+    for _ in range(int(max_poles)):
+        if poly is None or poly.is_empty or float(poly.area) < min_area:
+            break
+        try:
+            pt = polylabel(poly, tolerance=tol)
+        except Exception:
+            pt = poly.representative_point()
+        if pt is None or pt.is_empty:
+            break
+        x, y = float(pt.x), float(pt.y)
+        poles.append((x, y))
+        try:
+            r = float(Point(x, y).distance(poly.exterior))
+        except Exception:
+            r = float(min_dist)
+        if r <= 1e-9:
+            break
+        mask = Point(x, y).buffer(max(r * float(radius_scale), tol * 0.5))
+        try:
+            remaining = poly.difference(mask)
+        except Exception:
+            break
+        poly = _largest_polygon_component(remaining)
+    return poles
+
+
+def multi_pole_seed_coords(
+    void_poly: Polygon,
+    *,
+    min_dist: float = 1.0,
+    max_poles: int = 4,
+    angles: Sequence[float] | None = None,
+) -> list[tuple[float, float, float]]:
+    """SE(2) seeds at iterative multi-poles (default θ=0 and π)."""
+    poles = iterative_multi_poles(void_poly, min_dist=min_dist, max_poles=max_poles)
+    thetas = list(angles) if angles is not None else [0.0, float(math.pi)]
+    out: list[tuple[float, float, float]] = []
+    for x, y in poles:
+        for th in thetas:
+            out.append((x, y, float(th)))
+    return out
 
 
 def touches_sheet_exterior(poly: Polygon, sheet: Polygon, eps: float = 1e-6) -> bool:
@@ -99,12 +177,21 @@ def topology_pocket_poles(
     polys.sort(key=lambda p: float(p.area), reverse=True)
     out: list[tuple[float, float, float]] = []
     for poly in polys[:max_anchors]:
-        try:
-            pt = polylabel(poly, tolerance=max(float(min_dist), 0.5))
-        except Exception:
-            pt = poly.representative_point()
-        if pt is None or pt.is_empty:
-            continue
-        out.append((float(pt.x), float(pt.y), 0.0))
-        out.append((float(pt.x), float(pt.y), float(math.pi)))
+        # Prefer multi-pole spine on large remnants; single polylabel otherwise.
+        if float(poly.area) >= max(float(min_dist) ** 2 * 16.0, 1.0):
+            seeds = multi_pole_seed_coords(
+                poly, min_dist=min_dist, max_poles=min(3, max_anchors),
+            )
+            out.extend(seeds)
+        else:
+            try:
+                pt = polylabel(poly, tolerance=max(float(min_dist), 0.5))
+            except Exception:
+                pt = poly.representative_point()
+            if pt is None or pt.is_empty:
+                continue
+            out.append((float(pt.x), float(pt.y), 0.0))
+            out.append((float(pt.x), float(pt.y), float(math.pi)))
+        if len(out) >= max_anchors * 2:
+            break
     return out[: max_anchors * 2]

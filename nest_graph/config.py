@@ -416,6 +416,30 @@ class ProposeConfig(BaseModel):
     """Propose-time pole bonus under void_seek: (1-dist/diag)*(part_area/sheet.area)*weight (0 disables)."""
     enable_void_nest_pin: bool = True
     """After refine: re-add nest-void idxs missing from refine if graph.collisions-clear (P3)."""
+    # Lean Void Cascade / diversity (defaults off until E2E gate; lean_void_combo enables).
+    propose_cascade_short_circuit: bool = True
+    """Hard skip explorers after snipers/builders fill reserve (void_seek / interior_pocket)."""
+    cascade_sniper_stop_n: int = 4
+    """Min fast-valid pocket/motif seeds to short-circuit explorers."""
+    cascade_kiss_stop_threshold: float = 0.0
+    """If >0 and pool full with mean kiss score above threshold, skip explorers."""
+    cascade_explorer_budget_scale: float = 0.35
+    """Non-void packed zones: shrink explorer max_items by this factor when cascade on."""
+    use_pose_nms: bool = False
+    """SE(2) spatial-hash NMS on ranked pool (reserve-safe merge after)."""
+    pose_nms_eps: float = 1.0
+    pose_nms_theta_tol: float = 0.15
+    use_conflict_degree_rank: bool = False
+    """Pre-MIS AABB conflict-degree score penalty (STRtree)."""
+    conflict_degree_lambda: float = 0.05
+    conflict_degree_max_overlap: int = 5
+    use_multi_pole_void: bool = True
+    """Iterative polylabel spine for large remnants (topology + explorers)."""
+    multi_pole_max_poles: int = 4
+    use_ema_proposer_scales: bool = False
+    """Update place_proposer_pool_scales from refine survival (α=0.15, floor 0.05)."""
+    ema_proposer_alpha: float = 0.15
+    ema_proposer_floor: float = 0.05
     # OOS-3: keep use_point_cloud/use_guidance_walk False unless props_pole≈0 after OOS-1+4.
     @classmethod
     def proposers_for_place(
@@ -443,7 +467,9 @@ class ProposeConfig(BaseModel):
                     )
             if zone == PlaceZone.VOID_SEEK:
                 assert ProposerName.VORONOI not in proposers
+                assert ProposerName.NEIGHBOR_SLIDE not in proposers
                 assert placed.use_voronoi is False
+                assert placed.use_neighbor_slide is False
 
     @classmethod
     def obstacle_scope_for_place(
@@ -544,7 +570,7 @@ class ProposeConfig(BaseModel):
                 "use_contact_clearance_hybrid": True,
                 "use_full_packed_obstacle": True,
                 "use_group_edge_seeds": True,
-                "use_neighbor_slide": True,
+                "use_neighbor_slide": False,
                 "cast_squeeze_top_k": 4,
                 "candidate_pool": 24,
                 "max_proposals": 16,

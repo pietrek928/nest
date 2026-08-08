@@ -221,19 +221,10 @@ def finalize_edge_propositions(
     boundary: BaseGeometry,
     top_n: int,
 ) -> list[tuple[float, float, float]]:
+    from nest_graph.propose.ranking import finalize_propositions
+
     if isinstance(boundary, Polygon):
         selected = select_stratified_by_segment(boundary, propositions, top_n)
     else:
         selected = sorted(propositions, key=lambda row: row["cost"])
-    seen: set[tuple[float, float, float]] = set()
-    out: list[tuple[float, float, float]] = []
-    for prop in selected:
-        coords = prop["coords"]
-        key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 1))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(coords)
-        if len(out) >= top_n:
-            break
-    return out
+    return finalize_propositions(selected, top_n, coord_ndigits=2)

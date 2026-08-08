@@ -53,6 +53,16 @@ from nest_graph.propose.placements_pso import (
     evaluate_ray_placement,
     propose_placements_point_cloud,
 )
+from nest_graph.propose.placements_pocket import propose_placements_pocket_fit
+from nest_graph.propose.placements_pattern import (
+    extract_cluster_patterns,
+    propose_placements_cluster_copy,
+)
+from nest_graph.propose.void_topology import (
+    iterative_multi_poles,
+    topology_pocket_poles,
+)
+from nest_graph.propose.pose_diversity import apply_pose_nms
 from nest_graph.propose.ranking import (
     calculate_complex_score,
     finalize_propositions,
@@ -90,6 +100,12 @@ __all__ = [
     "propose_placements_sheet_corners",
     "propose_placements_sheet_edge",
     "propose_placements_voronoi",
+    "propose_placements_pocket_fit",
+    "propose_placements_cluster_copy",
+    "extract_cluster_patterns",
+    "iterative_multi_poles",
+    "topology_pocket_poles",
+    "apply_pose_nms",
     "propose_push_point",
     "proposed_transforms_for_groups",
     "propositions_to_ndarray",

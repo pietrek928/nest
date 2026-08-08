@@ -12,7 +12,10 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.ranking import find_polygon_distances_bipartite
+from nest_graph.propose.ranking import (
+    find_polygon_distances_bipartite,
+    finalize_propositions,
+)
 from nest_graph.propose.placement_common import (
     obstacle_parts,
     placement_safe_zone,
@@ -26,19 +29,7 @@ def _finalize_placement_propositions(
     propositions: list[dict],
     top_n: int,
 ) -> List[Tuple[float, float, float]]:
-    propositions.sort(key=lambda x: x["cost"])
-    seen: set[tuple[float, float, float]] = set()
-    out: list[tuple[float, float, float]] = []
-    for p in propositions:
-        c = p["coords"]
-        key = (round(c[0], 4), round(c[1], 4), round(c[2], 4))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-        if len(out) >= top_n:
-            break
-    return out
+    return finalize_propositions(propositions, top_n, coord_ndigits=4)
 
 
 def _score_and_keep_batch(

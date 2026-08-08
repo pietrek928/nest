@@ -1,58 +1,47 @@
-# Propose benchmark tuning summary (2026-06-26)
+# Propose tuning summary (2026-08-08)
 
-## Harness fixes
+## Lean Void Cascade
 
-- Zone profiles use `guidance_cast_refine` (not legacy `guidance_propositions`).
-- Benchmark metrics include `proposal_yield` and `proposal_nodes`.
-- E2E pipeline preset `cast_first_quality` added to `benchmark_nest_pipeline.py`.
+Shipped `propose_cascade_short_circuit=True`: on `void_seek` / `interior_pocket`, after
+`pocket_fit` + `cluster_copy` produce enough fast-valid reserved seeds, skip builders/explorers
+(or after builders fill the pool, skip explorers). Legacy emit order preserved when cascade is off.
 
-## Ablation highlights (7 scenarios × 10 seeds)
+`void_seek` zone no longer enables `neighbor_slide` / `voronoi` (explorer spam on open voids).
 
-| Proposer | Best for | Notes |
-|----------|----------|-------|
-| `group_fit` | packed_border, interior_after_border | contact_min ≈ 0.003, slow (~8–11s) |
-| `neighbor_slide` | partial_pack alone | kiss_frac up to 0.79; off globally |
-| `board_edge` | empty/border | slow (2–3.6s); cap samples |
-| `erosion` / `ribbon_free` / `raycasting` | cheap fillers | <0.2s, moderate contact |
-| `guidance_cast_refine` | refinement | needs seeds; best contact when seeded |
-| `perimeter_walk` | border seeds | fast, moderate contact |
+## Diversity / ranking flags (gated)
 
-Legacy Shapely proposers (`axis_push`, `bottom_left`, `nfp_vertices`) deleted — not quarantined.
+| Flag | Default | Notes |
+|------|---------|-------|
+| `use_pose_nms` | False | Hash SE(2) NMS; isolated bench dropped `final_count` 16→13 — retune `pose_nms_eps` before shipping |
+| `use_conflict_degree_rank` | False | STRtree AABB penalty; enable only if E2E `parts_final` rises |
+| `use_multi_pole_void` | True | Iterative polylabel spine for large remnants |
+| `use_ema_proposer_scales` | False | Refine-survival EMA (α=0.15, floor 0.05) via `build_graph` feedback |
 
-## Preset grid (4 scenarios × 10 seeds)
+## E2E smoke (donut_void seed 0)
 
-All presets hit **proposal_yield = 1.0** on tested scenarios.
+| Propose | Parts | Area | Time |
+|---------|-------|------|------|
+| shipped (pre-cascade default) | 42 | 0.258 | 101s |
+| lean_void_combo (cascade+multi_pole) | 42 | 0.253 | 108s |
+| **cascade_only** | **47** | **0.283** | 113s |
 
-| Preset | two_clusters time_s | partial_pack time_s | Notes |
-|--------|---------------------|---------------------|-------|
-| **shipped** (updated defaults) | 20.4 | 3.3 | Fastest on border/partial |
-| cast_first_quality | 11.2 | 3.7 | Faster two_clusters |
-| local_compact | 9.5 | 3.3 | Balanced |
-| kiss_heavy | 10.6 | 4.1 | Slower |
+Cascade alone raised part count ~12% on this void fixture; rim/kiss not worse beyond noise.
+NMS kept off in shipped combo until eps retuned.
 
-**Recommendation:** Shipped defaults with cast-first stack (`guidance_cast_refine_top_k=12`, grid off, pool 64). Use `place_routed` for zone-specific proposers.
+## Harness
 
-## Shipped default changes
+```bash
+PYTHONPATH=. python scripts/benchmark_propose.py --ablate --out docs/propose_benchmark_results.txt
+PYTHONPATH=. python scripts/benchmark_pipeline.py --force --cases donut_void --seeds 0 \
+  --propose shipped lean_void_combo cascade_only nms_only conflict_degree_rank
+```
 
-- `candidate_pool=64`, `board_edge_samples_per_edge=48`
-- `guidance_enable_grid=False`, `guidance_cast_refine_top_k=12`, `cast_rank_boost=0.35`
-- `use_neighbor_slide=False` globally; enabled in `border_gap` / `cluster_edge` zones only
+`void_leak` now includes `cascade=…`, `nms=kept/dropped`, and `prop_accept name:e/p/n/r`.
 
-## Code improvements
+## Flatten
 
-- **StaticCollisionScene** (C++): caches obstacle sweep index for `batch_check_validity`.
-- **batch_evaluate_local_placement** (C++): batched ranking guidance.
-- **Adaptive angle grid** + **spatial seed clustering** before cast-refine.
-- **ProposeContext** + **pre_filter_candidates** unified validity/collision pass.
-- Per-proposer `max_items` caps before merge.
-
-## E2E gate (2026-06-26, seeds 0–4, iters 3)
-
-| propose | parts_final | border_err_min | time_s |
-|---------|-------------|----------------|--------|
-| **place_routed** | **55.4** | 0.0001 | 389 |
-| local_compact | 55.2 | 0.0000 | 407 |
-| shipped | 54.4 | 0.0001 | 675 |
-| cast_first_quality | 54.0 | 0.0001 | 592 |
-
-**Gate passed:** `place_routed` wins on parts count and is fastest among top-tier presets. Shipped defaults are validated; zone routing (`place_profiles_enabled=True`) remains the production path for max density.
+- Shared `ranking.finalize_propositions` used by primary + edge finalize
+- Multi-pole API in `void_topology`; `free_pocket_anchors` delegates for large pockets
+- Pool NMS/conflict hook in `propose_coords_from_candidates` (reserve-safe merge after)
+- `apply_proposer_pool_scales` generalizes beyond neighbor_slide
+- `ProposeFeedbackState` can EMA from refine survival when `use_ema_proposer_scales`

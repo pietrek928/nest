@@ -82,7 +82,9 @@ def free_pocket_anchors(
     min_dist: float,
     max_anchors: int,
 ) -> list[tuple[float, float, float]]:
-    """Polylabel anchors in free pockets of sheet\\obstacle (0 and π)."""
+    """Polylabel / multi-pole anchors in free pockets of sheet\\obstacle."""
+    from nest_graph.propose.void_topology import multi_pole_seed_coords
+
     free = placement_free_region(sheet, obstacle, min_dist)
     if free.is_empty:
         return []
@@ -96,15 +98,23 @@ def free_pocket_anchors(
     polys.sort(key=lambda p: p.area, reverse=True)
     out: list[tuple[float, float, float]] = []
     for poly in polys[:max_anchors]:
-        try:
-            pt = polylabel(poly, tolerance=max(min_dist, 0.5))
-        except Exception:
-            pt = poly.representative_point()
-        if pt is None or pt.is_empty:
-            continue
-        out.append((float(pt.x), float(pt.y), 0.0))
-        # Also try a 180° flip of the motif at the same pocket.
-        out.append((float(pt.x), float(pt.y), float(__import__("math").pi)))
+        if float(poly.area) >= max(float(min_dist) ** 2 * 16.0, 1.0):
+            out.extend(
+                multi_pole_seed_coords(
+                    poly, min_dist=min_dist, max_poles=min(3, max_anchors),
+                )
+            )
+        else:
+            try:
+                pt = polylabel(poly, tolerance=max(min_dist, 0.5))
+            except Exception:
+                pt = poly.representative_point()
+            if pt is None or pt.is_empty:
+                continue
+            out.append((float(pt.x), float(pt.y), 0.0))
+            out.append((float(pt.x), float(pt.y), float(__import__("math").pi)))
+        if len(out) >= max_anchors * 2:
+            break
     return out[: max_anchors * 2]
 
 

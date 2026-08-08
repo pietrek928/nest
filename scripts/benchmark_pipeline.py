@@ -117,6 +117,34 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
             "use_point_cloud": True,
             "use_guidance_walk": True,
         })
+    elif propose_name == "lean_void_combo":
+        cfg.propose = cfg.propose.model_copy(update={
+            "propose_cascade_short_circuit": True,
+            "use_pose_nms": False,
+            "use_multi_pole_void": True,
+            "use_conflict_degree_rank": False,
+            "use_ema_proposer_scales": False,
+        })
+    elif propose_name == "cascade_only":
+        cfg.propose = cfg.propose.model_copy(update={
+            "propose_cascade_short_circuit": True,
+        })
+    elif propose_name == "nms_only":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_pose_nms": True,
+        })
+    elif propose_name == "conflict_degree_rank":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_conflict_degree_rank": True,
+        })
+    elif propose_name == "multi_pole_void":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_multi_pole_void": True,
+        })
+    elif propose_name == "ema_scales":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_ema_proposer_scales": True,
+        })
     elif propose_name == "no_propose":
         cfg.propose = ProposeConfig(
             use_neighbor_slide=False,
@@ -183,6 +211,12 @@ def main() -> None:
             "no_void_rank",
             "gravity_void_pole",
             "void_pso",
+            "lean_void_combo",
+            "cascade_only",
+            "nms_only",
+            "conflict_degree_rank",
+            "multi_pole_void",
+            "ema_scales",
         ],
     )
     parser.add_argument("--dfs-modes", nargs="*", default=["merged_loose_tight"])

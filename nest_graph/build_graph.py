@@ -2518,6 +2518,17 @@ def _build_transform_batch(
                 "pool_by_proposer"
             ) or {}
             propose_stats_out["pocket_by_tag"] = densify_stats.get("pocket_by_tag") or {}
+            propose_stats_out["cascade_stopped_after"] = densify_stats.get(
+                "cascade_stopped_after", "none"
+            )
+            propose_stats_out["cascade_skipped_proposers"] = list(
+                densify_stats.get("cascade_skipped_proposers") or []
+            )
+            propose_stats_out["nms_kept"] = int(densify_stats.get("nms_kept", 0))
+            propose_stats_out["nms_dropped"] = int(densify_stats.get("nms_dropped", 0))
+            propose_stats_out["conflict_penalty_applied"] = int(
+                densify_stats.get("conflict_penalty_applied", 0)
+            )
         if empty_sheet and cfg.propose.use_board_edge_seeds:
             for part_poly, group_id in parts:
                 border_pin_by_group[group_id] = border_edge_transforms_for_group(
@@ -2985,22 +2996,26 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             in proposal_keys.get(gid, set())
         )
         propose_stats["proposal_nodes"] = proposal_nodes
+        # Defer EMA/pool-scale updates until after refine attribution (below).
+        _pending_feedback = None
         if prop_n > 0 and (proposer_counts or cfg.propose.place_profiles_enabled):
             graph_yield = min(1.0, len(polys) / prop_n)
             proposal_yield = min(1.0, proposal_nodes / prop_n)
-            propose_feedback.record_iteration(
-                proposer_counts=proposer_counts,
-                graph_yield=graph_yield,
-                proposal_yield=proposal_yield,
-            )
-            if propose_feedback.proposer_pool_scales:
-                cfg = cfg.model_copy(update={
-                    "propose": cfg.propose.model_copy(update={
-                        "place_proposer_pool_scales": dict(
-                            propose_feedback.proposer_pool_scales,
-                        ),
-                    }),
-                })
+            _pending_feedback = (graph_yield, proposal_yield)
+            if not bool(cfg.propose.use_ema_proposer_scales):
+                propose_feedback.record_iteration(
+                    proposer_counts=proposer_counts,
+                    graph_yield=graph_yield,
+                    proposal_yield=proposal_yield,
+                )
+                if propose_feedback.proposer_pool_scales:
+                    cfg = cfg.model_copy(update={
+                        "propose": cfg.propose.model_copy(update={
+                            "place_proposer_pool_scales": dict(
+                                propose_feedback.proposer_pool_scales,
+                            ),
+                        }),
+                    })
         graphs.append(graph)
         graphs = graphs[-gc.graphs_window:]
         first_pass = nest_state is None
@@ -3246,6 +3261,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"densify={densify_a}/{densify_f}"
                 f"{f' reason={densify_reason}' if densify_reason else ''}"
                 f"{f' pocket_skip=[{skip_snip}]' if skip_snip else ''}"
+                f" cascade={densify.get('cascade_stopped_after', 'none')}"
+                f" nms={int(densify.get('nms_kept', 0))}/{int(densify.get('nms_dropped', 0))}"
                 f"{f' prop_accept {prop_accept}' if prop_accept else ''}"
             )
             # Append post-DFS relocate stats after they run (updated below).
@@ -3285,8 +3302,56 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "refine_by_proposer": refine_bp,
                 "pocket_by_tag": pocket_by_tag,
                 "prop_accept": prop_accept,
+                "cascade_stopped_after": densify.get("cascade_stopped_after", "none"),
+                "cascade_skipped_proposers": list(
+                    densify.get("cascade_skipped_proposers") or []
+                ),
+                "nms_kept": int(densify.get("nms_kept", 0)),
+                "nms_dropped": int(densify.get("nms_dropped", 0)),
+                "conflict_penalty_applied": int(
+                    densify.get("conflict_penalty_applied", 0)
+                ),
+                "multi_pole_count": int(densify.get("multi_pole_count", 0) or 0),
             }
             print(void_leak)
+        # EMA pool scales from refine survival (next iter).
+        if (
+            _pending_feedback is not None
+            and bool(cfg.propose.use_ema_proposer_scales)
+        ):
+            gy, py = _pending_feedback
+            densify = propose_stats.get("densify_stats") or {}
+            emitted_bp = dict(
+                propose_stats.get("emitted_by_proposer")
+                or densify.get("emitted_by_proposer")
+                or {}
+            )
+            proposer_keys = (
+                propose_stats.get("proposer_keys")
+                or densify.get("proposer_keys")
+                or {}
+            )
+            refine_bp = _count_selected_by_proposer(
+                transform, selected_polys, proposer_keys,
+            )
+            propose_feedback.record_iteration(
+                proposer_counts=proposer_counts,
+                graph_yield=gy,
+                proposal_yield=py,
+                refine_by_proposer=refine_bp,
+                emitted_by_proposer=emitted_bp,
+                use_ema=True,
+                ema_alpha=float(cfg.propose.ema_proposer_alpha),
+                ema_floor=float(cfg.propose.ema_proposer_floor),
+            )
+            if propose_feedback.proposer_pool_scales:
+                cfg = cfg.model_copy(update={
+                    "propose": cfg.propose.model_copy(update={
+                        "place_proposer_pool_scales": dict(
+                            propose_feedback.proposer_pool_scales,
+                        ),
+                    }),
+                })
         assert selection_is_independent(graph, selected_polys)
         min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
         sheet_compact, _ = board_context_from_geometry(p_outline, user_holes=user_holes)
@@ -3342,6 +3407,26 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             allow_repack = int(void_leak_stats.get("refine", 0)) > 0
         if free_post.kind == "large_void" and free_post.target_pt is not None:
             push_pt = free_post.target_pt
+            reloc_poles: list = [free_post.target_pt]
+            if (
+                bool(cfg.propose.use_multi_pole_void)
+                and free_post.target_poly is not None
+                and not free_post.target_poly.is_empty
+            ):
+                from nest_graph.propose.void_topology import iterative_multi_poles
+                from shapely import Point as ShapelyPoint
+
+                xy_poles = iterative_multi_poles(
+                    free_post.target_poly,
+                    min_dist=min_dist,
+                    max_poles=int(cfg.propose.multi_pole_max_poles),
+                )
+                if xy_poles:
+                    reloc_poles = [ShapelyPoint(x, y) for x, y in xy_poles]
+                    push_pt = reloc_poles[0]
+            void_leak_prev = propose_stats.get("void_leak")
+            if isinstance(void_leak_prev, dict):
+                void_leak_prev["multi_pole_count"] = len(reloc_poles)
             if allow_repack:
                 polys, transform, selected_polys, repack_stats = cluster_repack_selection(
                     sheet_compact,
@@ -3352,7 +3437,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     part_by_group,
                     min_dist,
                     cfg.propose,
-                    pole=free_post.target_pt,
+                    pole=push_pt,
                     void_poly=free_post.target_poly,
                     fixed_obstacles=fixed_obs,
                     pt_push=push_pt,
@@ -3366,7 +3451,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     "skipped_refine_zero": 1,
                 }
             # Refresh void pole after an accepted motif stamp (selection moved).
-            reloc_pole = free_post.target_pt
+            reloc_pole = push_pt
             if int(repack_stats.get("accepted", 0)) > 0:
                 sel_geoms = [
                     polys[i] for i in selected_polys
@@ -3381,6 +3466,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
                 if free_snap_post.analysis.target_pt is not None:
                     reloc_pole = free_snap_post.analysis.target_pt
+                elif len(reloc_poles) > 1:
+                    reloc_pole = reloc_poles[min(1, len(reloc_poles) - 1)]
+            elif len(reloc_poles) > 1:
+                # Alternate spine poles when repack skipped.
+                reloc_pole = reloc_poles[min(1, len(reloc_poles) - 1)]
             polys, transform, reloc_stats = cluster_relocate_selection(
                 sheet_compact,
                 list(polys),

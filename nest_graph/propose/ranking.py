@@ -140,18 +140,23 @@ def calculate_complex_score(base, placed, base_hull_area, centroid, pt_push, w_d
     return (w_dist * dist_to_center) + (w_dir * direction_score) + (w_hull * hull_growth)
 
 
-def finalize_propositions(propositions, top_n):
+def finalize_propositions(propositions, top_n, *, coord_ndigits: int = 2):
     """
-    Sorts, deduplicates, and returns the top N propositions.
+    Sorts by cost, deduplicates, and returns the top N proposition coords.
     """
     propositions.sort(key=lambda x: x['cost'])
 
     unique_props = []
     seen = set()
     for p in propositions:
-        key = (round(p['coords'][0], 2), round(p['coords'][1], 2), round(p['coords'][2], 2))
+        c = p['coords']
+        key = (
+            round(c[0], coord_ndigits),
+            round(c[1], coord_ndigits),
+            round(c[2], coord_ndigits),
+        )
         if key not in seen:
-            unique_props.append(p['coords'])
+            unique_props.append(c)
             seen.add(key)
         if len(unique_props) >= top_n:
             break

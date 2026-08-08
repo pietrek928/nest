@@ -1032,6 +1032,29 @@ def apply_proposer_pool_scales(
         1.0,
         max(0.05, propose_cfg.neighbor_slide_pool_fraction * ns),
     )
+    # Generalize: scale candidate_pool / max_proposals by mean of active scales,
+    # and per-emitter sample budgets where named.
+    scales = [float(v) for k, v in pool_scales.items() if not str(k).startswith("_")]
+    if scales:
+        mean_s = sum(scales) / len(scales)
+        mean_s = min(2.0, max(0.05, mean_s))
+        data["candidate_pool"] = max(8, int(round(propose_cfg.candidate_pool * mean_s)))
+        data["max_proposals"] = max(4, int(round(propose_cfg.max_proposals * mean_s)))
+    gf = float(pool_scales.get("group_fit", 1.0))
+    if gf != 1.0:
+        data["group_edge_samples_per_edge"] = max(
+            2, int(round(propose_cfg.group_edge_samples_per_edge * min(2.0, max(0.05, gf)))),
+        )
+    rc = float(pool_scales.get("raycasting", 1.0))
+    if rc != 1.0:
+        data["raycast_num_rays"] = max(
+            4, int(round(propose_cfg.raycast_num_rays * min(2.0, max(0.05, rc)))),
+        )
+    pf = float(pool_scales.get("pocket_fit", 1.0))
+    if pf != 1.0:
+        data["pocket_fit_max_targets"] = max(
+            1, int(round(propose_cfg.pocket_fit_max_targets * min(2.0, max(0.05, pf)))),
+        )
     return ProposeConfig(**data)
 
 

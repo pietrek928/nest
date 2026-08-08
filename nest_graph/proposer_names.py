@@ -106,14 +106,13 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.POCKET_FIT,
     }),
-    # No VORONOI — for_place disables use_voronoi; keep set truthful.
+    # No VORONOI / NEIGHBOR_SLIDE — large open void drift spam; explorers = erosion+raycast.
     PlaceZone.VOID_SEEK: frozenset({
         ProposerName.EROSION,
         ProposerName.RIBBON_FREE,
         ProposerName.RAYCASTING,
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.GROUP_FIT,
-        ProposerName.NEIGHBOR_SLIDE,
         ProposerName.CLUSTER_COPY,
         ProposerName.POCKET_FIT,
     }),

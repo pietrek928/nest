@@ -27,7 +27,8 @@ def test_void_seek_no_voronoi_contact_hybrid():
     cfg = ProposeConfig.for_place("void_seek")
     assert cfg.use_voronoi is False
     assert cfg.ranking_mode == "contact_hybrid"
-    assert cfg.use_neighbor_slide is True
+    assert cfg.use_neighbor_slide is False
+    assert "neighbor_slide" not in proposers
     cleared = ProposeConfig.for_place(
         "void_seek",
         base=ProposeConfig(void_seek_contact_hybrid=False),
