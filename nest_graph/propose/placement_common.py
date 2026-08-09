@@ -1,13 +1,16 @@
 import math
 
 import numpy as np
-from shapely import MultiPolygon, Polygon
+from shapely import MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 
 _MAX_OBSTACLE_PARTS = 32
+# Prefer bbox safe-zone when it retains enough area for sampling; else Minkowski.
+_SAFE_ZONE_BBOX_AREA_FRAC = 1e-3
+_SAFE_ZONE_BBOX_AREA_FLOOR = 1e-6
 
 
 def obstacle_parts(
@@ -107,7 +110,38 @@ def _rotated_max_dim(rotated: Polygon) -> float:
     return max(bounds[2] - bounds[0], bounds[3] - bounds[1]) / 2
 
 
-def placement_safe_zone(
+def _expanded_aabb(geom: BaseGeometry, radius: float) -> Polygon:
+    minx, miny, maxx, maxy = geom.bounds
+    return box(minx - radius, miny - radius, maxx + radius, maxy + radius)
+
+
+def placement_safe_zone_bbox(
+    region: BaseGeometry,
+    base_shape: BaseGeometry,
+    rotated: Polygon,
+    min_dist: float,
+) -> BaseGeometry:
+    """Cheap AABB erosion: shrink region bounds, subtract expanded obstacle AABBs."""
+    total_buf = _rotated_max_dim(rotated) + min_dist
+    minx, miny, maxx, maxy = region.bounds
+    if (maxx - minx) <= 2.0 * total_buf or (maxy - miny) <= 2.0 * total_buf:
+        return Polygon()
+    zone: BaseGeometry = box(
+        minx + total_buf, miny + total_buf, maxx - total_buf, maxy - total_buf,
+    )
+    if base_shape is None or base_shape.is_empty:
+        return zone
+    parts = obstacle_parts(base_shape, max_parts=None)
+    if not parts:
+        return zone.difference(_expanded_aabb(base_shape, total_buf))
+    for part in parts:
+        zone = zone.difference(_expanded_aabb(part, total_buf))
+        if zone.is_empty:
+            return zone
+    return zone
+
+
+def _placement_safe_zone_minkowski(
     region: BaseGeometry,
     base_shape: BaseGeometry,
     rotated: Polygon,
@@ -128,6 +162,23 @@ def placement_safe_zone(
     return safe_zone
 
 
+def placement_safe_zone(
+    region: BaseGeometry,
+    base_shape: BaseGeometry,
+    rotated: Polygon,
+    min_dist: float,
+) -> BaseGeometry:
+    """Search domain for placement seeds: bbox A/B first, Minkowski fallback."""
+    bbox_zone = placement_safe_zone_bbox(region, base_shape, rotated, min_dist)
+    min_area = max(
+        _SAFE_ZONE_BBOX_AREA_FLOOR,
+        float(rotated.area) * _SAFE_ZONE_BBOX_AREA_FRAC,
+    )
+    if not bbox_zone.is_empty and float(bbox_zone.area) >= min_area:
+        return bbox_zone
+    return _placement_safe_zone_minkowski(region, base_shape, rotated, min_dist)
+
+
 def clear_of_geoms(candidate: Geometry, others: list[Geometry], min_dist: float) -> bool:
     if not others:
         return True
@@ -140,16 +191,15 @@ def clear_of_geoms(candidate: Geometry, others: list[Geometry], min_dist: float)
     return True
 
 
-def clear_of_polys(poly, others: list, min_dist: float) -> bool:
-    if isinstance(poly, Geometry):
-        other_geoms = [
-            o if isinstance(o, Geometry) else Geometry.from_shapely(o)
-            for o in others
-        ]
-        return clear_of_geoms(poly, other_geoms, min_dist)
-    for other in others:
-        if poly.intersects(other):
-            return False
-        if poly.distance(other) < min_dist - 1e-9:
-            return False
-    return True
+def pose_clear_geoms(
+    candidate: Geometry,
+    board: Geometry,
+    obstacles: list[Geometry],
+    min_dist: float,
+) -> bool:
+    """Board footprint + clearance vs obstacle Geometry list (no Shapely union)."""
+    if candidate is None:
+        return False
+    if not candidate.footprint_inside(board) and not candidate.fully_inside(board):
+        return False
+    return clear_of_geoms(candidate, obstacles, min_dist)

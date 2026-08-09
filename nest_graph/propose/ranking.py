@@ -186,21 +186,13 @@ def _score_placement_coords(
     boundary: BaseGeometry,
     pt_push: Point,
     min_dist: float,
-    propose_geom: Optional[ProposeGeometry] = None,
+    propose_geom: ProposeGeometry,
 ) -> float:
-    if propose_geom is not None:
-        if not propose_geom.valid_at(coords, pt_push):
-            return float("inf")
-        placed = transform_poly(shape_to_place, coords)  # hull metrics still need Shapely
-    else:
-        placed = transform_poly(shape_to_place, coords)
-        if not boundary.contains(placed):
-            return float("inf")
-        if not base_shape.is_empty:
-            if base_shape.intersects(placed):
-                return float("inf")
-            if base_shape.distance(placed) < min_dist - 1e-6:
-                return float("inf")
+    if not propose_geom.valid_at(coords, pt_push):
+        return float("inf")
+    # Shapely transform_poly + convex_hull is intentional for hull scoring only;
+    # placement validity must go through ProposeGeometry.valid_at (above).
+    placed = transform_poly(shape_to_place, coords)
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0.0
     return calculate_complex_score(
         base_shape,
@@ -225,6 +217,7 @@ def _score_placement_legacy(
 ) -> float:
     if not propose_geom.valid_at(coords, pt_push):
         return float("inf")
+    # Hull scoring only: Shapely transform_poly + convex_hull; validity via valid_at.
     placed = transform_poly(shape_to_place, coords)
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0.0
     return calculate_complex_score(

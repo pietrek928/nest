@@ -11,13 +11,16 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
+from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.propose.compaction import _pose_clear, selection_pairwise_independent
 from nest_graph.propose.context import (
     _cluster_merge_gap,
+    cluster_contact_components,
     cluster_packed_indices,
     void_pole_seed_coords,
 )
 from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placements_pattern import (
     ClusterPattern,
     free_pocket_anchors,
@@ -27,9 +30,33 @@ from nest_graph.propose.ranking import score_placement_tightness
 from nest_graph.utils import compose_transforms, relative_transform, transform_poly
 
 
-def board_sentinel_geom(sheet: Polygon, min_dist: float) -> BaseGeometry:
-    """Positive tube around sheet exterior for board-peer contact merge."""
-    return sheet.exterior.buffer(float(min_dist) + 1e-3)
+def _as_geometry(g) -> Geometry | None:
+    if g is None:
+        return None
+    if isinstance(g, Geometry):
+        return g
+    if hasattr(g, "is_empty") and g.is_empty:
+        return None
+    return Geometry.from_shapely(g)
+
+
+def _obstacle_geoms(shape) -> list[Geometry]:
+    """Explode a Shapely union / part into Geometry obstacles (no clearance union)."""
+    if shape is None:
+        return []
+    if isinstance(shape, Geometry):
+        return [shape]
+    if hasattr(shape, "is_empty") and shape.is_empty:
+        return []
+    if hasattr(shape, "geoms"):
+        out: list[Geometry] = []
+        for g in shape.geoms:
+            og = _as_geometry(g)
+            if og is not None:
+                out.append(og)
+        return out
+    og = _as_geometry(shape)
+    return [og] if og is not None else []
 
 
 def cluster_indices_with_board(
@@ -37,27 +64,25 @@ def cluster_indices_with_board(
     min_dist: float,
     sheet: Polygon,
 ) -> list[tuple[list[int], bool]]:
-    """Contact clusters among parts + board sentinel; return (idxs, board_adj)."""
+    """Contact clusters among parts + board ring; return (idxs, board_adj)."""
     placed_idx = [i for i, p in enumerate(polys) if p is not None and not p.is_empty]
     if not placed_idx:
         return []
-    gap = _cluster_merge_gap([polys[i] for i in placed_idx], min_dist, sheet)
-    sentinel = board_sentinel_geom(sheet, min_dist)
-    buffered = {i: polys[i].buffer(gap) for i in placed_idx}
-    buffered[-1] = sentinel.buffer(gap) if not sentinel.is_empty else sentinel
-    merged = unary_union(list(buffered.values()))
-    if merged is None or merged.is_empty:
-        return []
-    from shapely import MultiPolygon
-    blobs = list(merged.geoms) if isinstance(merged, MultiPolygon) else [merged]
-    out: list[tuple[list[int], bool]] = []
-    for blob in blobs:
-        members = [i for i, b in buffered.items() if i >= 0 and b.intersects(blob)]
-        if not members:
-            continue
-        board_adj = buffered[-1].intersects(blob)
-        out.append((members, bool(board_adj)))
-    return out
+    parts = [polys[i] for i in placed_idx]
+    gap = _cluster_merge_gap(parts, min_dist, sheet)
+    geoms = [
+        p if isinstance(p, Geometry) else Geometry.from_shapely(p)
+        for p in parts
+    ]
+    board_ring = outline_ring_geom(sheet)
+    comps = cluster_contact_components(
+        geoms,
+        gap,
+        board_ring=board_ring,
+        # exterior.buffer(min_dist) + mutual buffer(gap) ≡ standoff ≤ min_dist+2*gap
+        board_gap=float(min_dist) + 2.0 * gap,
+    )
+    return [([placed_idx[j] for j in members], board_adj) for members, board_adj in comps]
 
 
 def _part_void_adj(
@@ -81,16 +106,27 @@ def _contact_neighbors(
     polys: Sequence[BaseGeometry],
     gap: float,
 ) -> dict[int, list[int]]:
-    buf = {i: polys[i].buffer(gap) for i in component}
-    adj: dict[int, list[int]] = {i: [] for i in component}
     ids = list(component)
-    for a in range(len(ids)):
-        ia = ids[a]
-        for b in range(a + 1, len(ids)):
-            ib = ids[b]
-            if buf[ia].intersects(buf[ib]):
-                adj[ia].append(ib)
-                adj[ib].append(ia)
+    adj: dict[int, list[int]] = {i: [] for i in ids}
+    if len(ids) < 2:
+        return adj
+    geoms = [
+        polys[i] if isinstance(polys[i], Geometry) else Geometry.from_shapely(polys[i])
+        for i in ids
+    ]
+    # Match buffer(gap)↔buffer(gap) ≡ dist ≤ 2*gap.
+    contact = 2.0 * float(gap)
+    results = find_polygon_distances_bipartite(
+        geoms, geoms, aura=max(contact, 0.5) * 2.0,
+    )
+    for r in results:
+        a, b = int(r.polyA_idx), int(r.polyB_idx)
+        if a >= b:
+            continue
+        if r.intersect or (r.distance_sq ** 0.5) <= contact + 1e-9:
+            ia, ib = ids[a], ids[b]
+            adj[ia].append(ib)
+            adj[ib].append(ia)
     return adj
 
 
@@ -346,8 +382,10 @@ def stamp_motif_at_anchor(
     mapping = assign_peeled_to_pattern(pat, peeled_indices, group_ids)
     if mapping is None:
         return None
+    board_g = Geometry.from_shapely(sheet)
+    obs = _obstacle_geoms(fixed)
+    part_geoms: dict[int, Geometry] = {}
     placed: list[tuple[int, np.ndarray, BaseGeometry]] = []
-    running_fixed = fixed
     for idx, t_rel in mapping:
         gid = int(group_ids[idx])
         part = part_by_group.get(gid)
@@ -355,15 +393,16 @@ def stamp_motif_at_anchor(
             return None
         t_abs = compose_transforms(t_anchor, t_rel)
         cand_tr = np.asarray(t_abs, dtype=np.float64).reshape(3)
-        cand = transform_poly(part, cand_tr)
-        if not _pose_clear(cand, sheet, running_fixed, min_dist):
-            return None
-        placed.append((idx, cand_tr, cand))
-        running_fixed = (
-            unary_union([running_fixed, cand])
-            if running_fixed is not None and not running_fixed.is_empty
-            else cand
+        if gid not in part_geoms:
+            part_geoms[gid] = Geometry.from_shapely(part)
+        cand_g = part_geoms[gid].apply_transform(
+            float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
         )
+        if not _pose_clear(cand_g, board_g, obs, min_dist):
+            return None
+        cand = transform_poly(part, cand_tr)
+        placed.append((idx, cand_tr, cand))
+        obs.append(cand_g)
     return placed
 
 
@@ -605,6 +644,13 @@ def cluster_repack_selection(
     working_tr: dict[int, np.ndarray] = {}
     working_poly: dict[int, BaseGeometry] = {}
     placed_idxs: list[int] = []
+    board_g = Geometry.from_shapely(sheet)
+    obs: list[Geometry] = []
+    for p in locked + working_kept_geoms:
+        og = _as_geometry(p)
+        if og is not None:
+            obs.append(og)
+    part_geoms: dict[int, Geometry] = {}
     for vi in victim_order:
         gid = int(group_ids[vi])
         part = part_by_group.get(gid)
@@ -634,24 +680,25 @@ def cluster_repack_selection(
             )
         except Exception:
             coords = []
-        fixed_union = (
-            unary_union(locked + working_kept_geoms)
-            if (locked or working_kept_geoms)
-            else Polygon()
-        )
-        clear: list[tuple[tuple[float, float, float], BaseGeometry, np.ndarray]] = []
+        if gid not in part_geoms:
+            part_geoms[gid] = Geometry.from_shapely(part)
+        part_g = part_geoms[gid]
+        clear: list[tuple[tuple[float, float, float], BaseGeometry, np.ndarray, Geometry]] = []
         for c in coords:
             cand_tr = np.asarray(c, dtype=np.float64).reshape(3)
-            cand = transform_poly(part, cand_tr)
-            if not _pose_clear(cand, sheet, fixed_union, min_dist):
+            cand_g = part_g.apply_transform(
+                float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
+            )
+            if not _pose_clear(cand_g, board_g, obs, min_dist):
                 continue
-            clear.append((c, cand, cand_tr))
+            cand = transform_poly(part, cand_tr)
+            clear.append((c, cand, cand_tr, cand_g))
         if not clear:
             continue
         geom = ProposeGeometry(
             sheet, working_base, part, min_dist, propose_cfg=zone_cfg,
         )
-        best_c, best_poly, best_tr = max(
+        best_c, best_poly, best_tr, best_g = max(
             clear,
             key=lambda item: score_placement_tightness(
                 item[0], geom, push, min_dist,
@@ -660,6 +707,7 @@ def cluster_repack_selection(
         working_tr[vi] = best_tr
         working_poly[vi] = best_poly
         working_kept_geoms.append(best_poly)
+        obs.append(best_g)
         working_base = (
             unary_union([working_base, best_poly])
             if not working_base.is_empty
@@ -692,11 +740,19 @@ def _component_board_adj(
     sheet: Polygon,
     min_dist: float,
 ) -> bool:
-    sentinel = board_sentinel_geom(sheet, min_dist)
-    gap = _cluster_merge_gap([polys[i] for i in global_idxs], min_dist, sheet)
-    sbuf = sentinel.buffer(gap)
-    for i in global_idxs:
-        if polys[i].buffer(gap).intersects(sbuf):
+    if sheet is None or sheet.is_empty:
+        return False
+    ring = outline_ring_geom(sheet)
+    if ring is None:
+        return False
+    members = [polys[i] for i in global_idxs if polys[i] is not None and not polys[i].is_empty]
+    if not members:
+        return False
+    gap = _cluster_merge_gap(members, min_dist, sheet)
+    thresh = float(min_dist) + 2.0 * gap + 1e-9
+    for poly in members:
+        g = _as_geometry(poly)
+        if g is not None and float(g.standoff_distance(ring)) <= thresh:
             return True
     return False
 
@@ -738,6 +794,8 @@ def cluster_relocate_selection(
         if g is not None and not g.is_empty
     ]
     step = max(0.5 * float(min_dist), 1e-4)
+    board_g = Geometry.from_shapely(sheet)
+    part_geoms: dict[int, Geometry] = {}
 
     for local in local_groups:
         if len(local) < 2:
@@ -763,7 +821,11 @@ def cluster_relocate_selection(
             and out_polys[j] is not None
             and not out_polys[j].is_empty
         ]
-        fixed = unary_union(locked + others) if (locked or others) else Polygon()
+        obs: list[Geometry] = []
+        for p in locked + others:
+            og = _as_geometry(p)
+            if og is not None:
+                obs.append(og)
 
         best_delta = (0.0, 0.0)
         for s in range(1, max_steps + 1):
@@ -777,8 +839,12 @@ def cluster_relocate_selection(
                     break
                 tr = out_tr[gi]
                 cand_tr = np.array([tr[0] + ox, tr[1] + oy, tr[2]], dtype=np.float64)
-                cand = transform_poly(part, cand_tr)
-                if not _pose_clear(cand, sheet, fixed, min_dist):
+                if gid not in part_geoms:
+                    part_geoms[gid] = Geometry.from_shapely(part)
+                cand_g = part_geoms[gid].apply_transform(
+                    float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
+                )
+                if not _pose_clear(cand_g, board_g, obs, min_dist):
                     ok = False
                     break
             if not ok:

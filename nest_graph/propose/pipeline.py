@@ -63,7 +63,7 @@ from nest_graph.propose.placements_primary import (
     propose_placements_neighbor_slide,
     propose_placements_perimeter_walk,
 )
-from nest_graph.propose.placement_common import cluster_seed_coords
+from nest_graph.propose.placement_common import cluster_seed_coords, pose_clear_geoms
 from nest_graph.propose.query_context import ProposeContext
 from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
@@ -1597,40 +1597,49 @@ def _batch_top_seed_coords(
     return [tuple(float(x) for x in row) for row in arr[:take]]
 
 
+def _as_batch_geometry(g) -> Geometry | None:
+    if g is None:
+        return None
+    if isinstance(g, Geometry):
+        return g
+    if hasattr(g, "is_empty") and g.is_empty:
+        return None
+    return Geometry.from_shapely(g)
+
+
+def _batch_obstacle_geoms(placed: Sequence[BaseGeometry]) -> list[Geometry]:
+    out: list[Geometry] = []
+    for p in placed:
+        g = _as_batch_geometry(p)
+        if g is not None:
+            out.append(g)
+    return out
+
+
 def _batch_pair_valid(
-    sheet: Polygon,
-    poly_a: Polygon,
+    board_g: Geometry,
+    part_a: Geometry,
     coords_a: tuple[float, float, float],
-    poly_b: Polygon,
+    part_b: Geometry,
     coords_b: tuple[float, float, float],
-    base_obstacle: BaseGeometry,
+    obstacle_geoms: list[Geometry],
     min_dist: float,
 ) -> bool:
-    placed_a = transform_poly(poly_a, coords_a)
-    placed_b = transform_poly(poly_b, coords_b)
-    if not sheet.contains(placed_a) or not sheet.contains(placed_b):
+    placed_a = part_a.apply_transform(coords_a)
+    placed_b = part_b.apply_transform(coords_b)
+    if not pose_clear_geoms(placed_a, board_g, obstacle_geoms, min_dist):
         return False
-    eps = max(1e-6, min_dist * 1e-4)
-    if not base_obstacle.is_empty:
-        if base_obstacle.intersects(placed_a) or base_obstacle.intersects(placed_b):
-            return False
-        if base_obstacle.distance(placed_a) < min_dist - eps:
-            return False
-        if base_obstacle.distance(placed_b) < min_dist - eps:
-            return False
-    if placed_a.intersects(placed_b):
-        return False
-    if placed_a.distance(placed_b) < min_dist - eps:
-        return False
-    return True
+    return pose_clear_geoms(
+        placed_b, board_g, [*obstacle_geoms, placed_a], min_dist,
+    )
 
 
 def _batch_pair_contact_score(
-    placed_a: BaseGeometry,
-    placed_b: BaseGeometry,
+    placed_a: Geometry,
+    placed_b: Geometry,
     sheet: Polygon,
     min_dist: float,
-    focal: BaseGeometry | None,
+    focal: BaseGeometry | Geometry | None,
 ) -> float:
     err_a = placement_contact_error(placed_a, sheet, min_dist, focal)
     err_b = placement_contact_error(placed_b, sheet, min_dist, placed_a)
@@ -1649,6 +1658,8 @@ def _batch_pack_pair_order(
     *,
     min_dist: float,
     placed: Sequence[BaseGeometry],
+    obstacle_geoms: list[Geometry] | None = None,
+    board_g: Geometry | None = None,
 ) -> list[tuple[tuple[float, float, float], tuple[float, float, float], float]]:
     anchor_poly = parts_by_group[anchor_gid]
     follow_poly = parts_by_group[follow_gid]
@@ -1669,18 +1680,24 @@ def _batch_pack_pair_order(
         },
     )
     sheet, _voids = board_context_from_geometry(board)
+    if board_g is None:
+        board_g = Geometry.from_shapely(sheet)
+    obs = (
+        list(obstacle_geoms)
+        if obstacle_geoms is not None
+        else _batch_obstacle_geoms(placed)
+    )
+    anchor_part = Geometry.from_shapely(anchor_poly)
+    follow_part = Geometry.from_shapely(follow_poly)
     pairs: list[tuple[tuple[float, float, float], tuple[float, float, float], float]] = []
 
     for coords_a in anchor_seeds:
-        placed_a = transform_poly(anchor_poly, coords_a)
-        if not sheet.contains(placed_a):
+        placed_a_g = anchor_part.apply_transform(coords_a)
+        if not pose_clear_geoms(placed_a_g, board_g, obs, min_dist):
             continue
-        if not base_obstacle.is_empty:
-            if base_obstacle.intersects(placed_a):
-                continue
-            if base_obstacle.distance(placed_a) < min_dist - 1e-6:
-                continue
 
+        # Shapely mirror only for follow proposers / free-space topology.
+        placed_a = transform_poly(anchor_poly, coords_a)
         extended = (
             unary_union([base_obstacle, placed_a])
             if not base_obstacle.is_empty
@@ -1711,20 +1728,16 @@ def _batch_pack_pair_order(
         if not follow_coords:
             continue
 
-        focal_anchor = (
-            unary_union([focal, placed_a])
-            if focal is not None and not focal.is_empty
-            else placed_a
-        )
+        focal_g = _as_batch_geometry(focal) if focal is not None else None
         for coords_b in follow_coords[: propose_cfg.batch_pack_follow_proposals]:
             if not _batch_pair_valid(
-                sheet, anchor_poly, coords_a, follow_poly, coords_b,
-                base_obstacle, min_dist,
+                board_g, anchor_part, coords_a, follow_part, coords_b,
+                obs, min_dist,
             ):
                 continue
-            placed_b = transform_poly(follow_poly, coords_b)
+            placed_b_g = follow_part.apply_transform(coords_b)
             score = _batch_pair_contact_score(
-                placed_a, placed_b, sheet, min_dist, focal_anchor,
+                placed_a_g, placed_b_g, sheet, min_dist, focal_g,
             )
             pairs.append((coords_a, coords_b, score))
 
@@ -1750,7 +1763,11 @@ def augment_batch_pack_proposals(
     if len(group_ids) < 2:
         return {}
 
+    # Shapely union only for follow ProposeGeometry / free-space; clearance uses Geometry list.
     base_obstacle = unary_union(placed) if placed else Polygon()
+    obstacle_geoms = _batch_obstacle_geoms(placed)
+    sheet, _ = board_context_from_geometry(board)
+    board_g = Geometry.from_shapely(sheet)
     all_pairs: list[
         tuple[tuple[float, float, float], tuple[float, float, float], float, int, int]
     ] = []
@@ -1781,6 +1798,8 @@ def augment_batch_pack_proposals(
             propose_cfg,
             min_dist=min_dist,
             placed=placed,
+            obstacle_geoms=obstacle_geoms,
+            board_g=board_g,
         ):
             all_pairs.append((coords_a, coords_b, score, anchor_gid, follow_gid))
 
@@ -1935,11 +1954,15 @@ def proposed_transforms_for_groups(
     seeded: bool = False,
     pocket_keys_out: dict[int, set[tuple[float, float, float]]] | None = None,
     densify_stats_out: dict | None = None,
+    full_packed_geoms: Sequence[Geometry] | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
     Propose uses the nearest packed cluster as obstacles only.
     ``make_polygon_graph`` still filters against the full selection.
+
+    Pass ``full_packed_geoms`` aligned with ``selected_indices`` (e.g. from
+    ``NestState.native_geoms``) to skip per-call ``from_shapely`` of the pack.
     """
     sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
     placed = [selected_polys[i] for i in selected_indices]
@@ -1961,7 +1984,13 @@ def proposed_transforms_for_groups(
         concave_parts=concave_parts,
         seeded=seeded,
     )
-    full_packed_geoms = [Geometry.from_shapely(p) for p in placed]
+    if full_packed_geoms is not None and len(full_packed_geoms) == len(placed):
+        full_packed_geoms = list(full_packed_geoms)
+    else:
+        full_packed_geoms = [
+            p if isinstance(p, Geometry) else Geometry.from_shapely(p)
+            for p in placed
+        ]
     cluster_patterns = []
     packed_gids_aligned: list[int] | None = None
     packed_trs_aligned: list | None = None
@@ -2024,6 +2053,7 @@ def proposed_transforms_for_groups(
             mean_area,
             min_dist,
             void_ratio_threshold=void_thr,
+            pack_geoms=full_packed_geoms,
         )
     for part_idx, (part_poly, group_id) in enumerate(parts):
         zone: str | None = None

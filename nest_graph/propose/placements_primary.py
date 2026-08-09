@@ -6,7 +6,6 @@ import numpy as np
 from shapely import MultiPolygon, Point, Polygon
 from shapely.affinity import rotate
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polylabel
 
 from nest_graph.utils import get_shape_exteriors
 
@@ -16,6 +15,7 @@ from nest_graph.propose.ranking import (
     find_polygon_distances_bipartite,
     finalize_propositions,
 )
+from nest_graph.propose.void_topology import polylabel
 from nest_graph.propose.placement_common import (
     obstacle_parts,
     placement_safe_zone,

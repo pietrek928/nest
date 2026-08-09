@@ -1,15 +1,18 @@
 #include <limits>
 #include <optional>
+#include <string>
 #include <tuple>
 #include <vector>
 
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
+#include "common/polish_se2.h"
 #include "common/snap_pose.h"
 #include "geometry_factory.h"
 #include "types.h"
@@ -64,6 +67,69 @@ void bind_cast_api(nb::module_ &m) {
 }
 
 void bind_snap_api(nb::module_ &m) {
+    m.def(
+        "polish_se2_part",
+        [](const GeometryHolder &part,
+           nb::handle pose,
+           const std::vector<GeometryHolder> &obstacles,
+           nb::object board,
+           const std::vector<std::tuple<double, double>> &dirs,
+           int n_angles,
+           double max_t,
+           double min_dist,
+           const std::string &mode,
+           nb::object pole) -> std::optional<std::tuple<double, double, double>> {
+            double px = 0.0;
+            double py = 0.0;
+            double pth = 0.0;
+            if (!read_transform(pose, px, py, pth)) {
+                throw nb::value_error("polish_se2_part: pose needs (x, y, theta)");
+            }
+            const SolidGeometry2d *board_ptr = nullptr;
+            if (!board.is_none()) {
+                board_ptr = &nb::cast<const GeometryHolder &>(board).solid;
+            }
+            std::vector<Vec2d> dir_vecs;
+            dir_vecs.reserve(dirs.size());
+            for (const auto &[dx, dy] : dirs) {
+                dir_vecs.push_back(Vec2d({dx, dy}));
+            }
+            const Vec2d *pole_ptr = nullptr;
+            Vec2d pole_v;
+            if (!pole.is_none()) {
+                double ox = 0.0;
+                double oy = 0.0;
+                if (!read_xy(pole, ox, oy)) {
+                    throw nb::value_error("polish_se2_part: pole needs (x, y)");
+                }
+                pole_v = Vec2d({ox, oy});
+                pole_ptr = &pole_v;
+            }
+            return polish_se2_part(
+                part.solid,
+                static_cast<Vec2d::Scalar>(px),
+                static_cast<Vec2d::Scalar>(py),
+                static_cast<Vec2d::Scalar>(pth),
+                solids_from_holders(obstacles),
+                board_ptr,
+                dir_vecs,
+                n_angles,
+                static_cast<Vec2d::Scalar>(max_t),
+                static_cast<Vec2d::Scalar>(min_dist),
+                mode,
+                pole_ptr);
+        },
+        nb::arg("part"),
+        nb::arg("pose"),
+        nb::arg("obstacles"),
+        nb::arg("board") = nb::none(),
+        nb::arg("dirs"),
+        nb::arg("n_angles") = 4,
+        nb::arg("max_t"),
+        nb::arg("min_dist") = 0.0,
+        nb::arg("mode") = "pole",
+        nb::arg("pole") = nb::none());
+
     m.def(
         "snap_pose_to_ring",
         [](const GeometryHolder &part,

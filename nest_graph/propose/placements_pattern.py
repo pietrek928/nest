@@ -6,11 +6,12 @@ from typing import List, Optional, Sequence, Tuple
 from shapely import MultiPolygon, Polygon
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polylabel, unary_union
+from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.context import cluster_packed_indices, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.void_topology import polylabel
 from nest_graph.utils import compose_transforms, relative_transform, transform_poly
 
 

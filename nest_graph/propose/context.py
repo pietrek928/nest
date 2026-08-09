@@ -5,11 +5,11 @@ from typing import Optional, Sequence
 
 from shapely import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polylabel, unary_union
+from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry, sheet_hole_polygons
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry
+from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.propose.placement_outline import outline_standoff_distance
 
 
@@ -52,11 +52,13 @@ def free_space_targets(
     min_dist: float,
 ) -> list[Point]:
     """One polylabel (or representative) point per free polygon component."""
+    from nest_graph.propose.void_topology import polylabel as void_polylabel
+
     tol = max(float(min_dist), 1e-3)
     targets: list[Point] = []
     for poly in sorted(_polygon_components(free), key=lambda p: -p.area):
         try:
-            targets.append(Point(polylabel(poly, tolerance=tol)))
+            targets.append(Point(void_polylabel(poly, tolerance=tol)))
         except Exception:
             targets.append(poly.representative_point())
     return targets
@@ -94,12 +96,16 @@ def analyze_free_space(
     min_dist: float,
     *,
     void_ratio_threshold: float = 2.5,
+    free: BaseGeometry | None = None,
 ) -> FreeSpaceAnalysis:
     """Classify free space as one large void vs Swiss-cheese slivers.
 
     ``void_ratio_threshold`` should match ``ProposeConfig.late_border_void_override_ratio``
     so Mode A / late-sat / MIS agree on what counts as large_void.
+    Pass ``free`` when the caller already computed ``sheet.difference(union(packed))``.
     """
+    from nest_graph.propose.void_topology import polylabel as void_polylabel
+
     placed = [p for p in packed if p is not None and not p.is_empty]
     if sheet is None or sheet.is_empty:
         return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
@@ -107,7 +113,7 @@ def analyze_free_space(
         area = float(sheet.area)
         ratio = area / max(float(part_area), 1e-12)
         try:
-            pt = Point(polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
+            pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
         except Exception:
             pt = sheet.representative_point()
         return FreeSpaceAnalysis(
@@ -117,7 +123,8 @@ def analyze_free_space(
             target_poly=sheet if isinstance(sheet, Polygon) else None,
             target_pt=pt,
         )
-    free = sheet.difference(unary_union(placed))
+    if free is None:
+        free = sheet.difference(unary_union(placed))
     components = _polygon_components(free)
     if not components:
         return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
@@ -125,7 +132,7 @@ def analyze_free_space(
     ratio = float(largest.area) / max(float(part_area), 1e-12)
     if ratio > void_ratio_threshold:
         try:
-            pt = Point(polylabel(largest, tolerance=max(float(min_dist), 1e-3)))
+            pt = Point(void_polylabel(largest, tolerance=max(float(min_dist), 1e-3)))
         except Exception:
             pt = largest.representative_point()
         return FreeSpaceAnalysis(
@@ -152,22 +159,44 @@ def build_free_space_snapshot(
     *,
     void_ratio_threshold: float = 2.5,
     max_topology_anchors: int = 6,
+    pack_geoms: Sequence[Geometry] | None = None,
 ) -> FreeSpaceSnapshot:
-    """Build analyze + trapped voids + hull bays + topology poles once per pack."""
+    """Build analyze + trapped voids + hull bays + topology poles once per pack.
+
+    Pass ``pack_geoms`` (e.g. from ``NestState.native_geoms``) to union via
+    ``geoms_to_shapely_union`` instead of ``unary_union`` on Shapely packed.
+    """
+    from nest_graph.geometry_util import geoms_to_shapely_union
     from nest_graph.propose.void_topology import (
         hull_bay_polygons,
         topology_pocket_poles,
         trapped_void_polygons,
     )
 
+    placed = [p for p in packed if p is not None and not p.is_empty]
+    free = None
+    if sheet is not None and not sheet.is_empty:
+        try:
+            if pack_geoms is not None:
+                geoms = [
+                    g for g in pack_geoms
+                    if g is not None and not getattr(g, "is_empty", False)
+                ]
+                if geoms:
+                    free = sheet.difference(geoms_to_shapely_union(list(geoms)))
+            elif placed:
+                free = sheet.difference(unary_union(placed))
+        except Exception:
+            free = None
     analysis = analyze_free_space(
         sheet,
         packed,
         part_area,
         min_dist,
         void_ratio_threshold=void_ratio_threshold,
+        free=free,
     )
-    voids = tuple(trapped_void_polygons(sheet, packed))
+    voids = tuple(trapped_void_polygons(sheet, packed, free=free))
     bays = tuple(hull_bay_polygons(packed, min_dist=min_dist, sheet=sheet))
     poles = tuple(
         topology_pocket_poles(
@@ -420,6 +449,70 @@ def cluster_packed_solid_groups(
     return groups
 
 
+def cluster_contact_components(
+    geoms: Sequence[Geometry],
+    gap: float,
+    *,
+    board_ring: Geometry | None = None,
+    board_gap: float | None = None,
+) -> list[tuple[list[int], bool]]:
+    """Connected components where ``dist(i,j) <= 2*gap``; optional board adjacency.
+
+    ``2*gap`` matches the old ``buffer(gap).intersects(buffer(gap))`` merge.
+    Returns ``(member_indices, board_adj)``. Uses Geometry distances (no buffer).
+    ``board_gap`` is a raw distance threshold to ``board_ring`` (defaults to
+    ``2*gap``). Pass ``min_dist + 2*gap`` to match exterior.buffer(min_dist)
+    sentinel plus mutual gap buffers.
+    """
+    n = len(geoms)
+    if n == 0:
+        return []
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    gap = float(gap)
+    contact = 2.0 * gap
+    if n >= 2:
+        results = find_polygon_distances_bipartite(
+            list(geoms), list(geoms), aura=max(contact, 0.5) * 2.0,
+        )
+        for r in results:
+            i, j = int(r.polyA_idx), int(r.polyB_idx)
+            if i >= j:
+                continue
+            if r.intersect or (r.distance_sq ** 0.5) <= contact + 1e-9:
+                union(i, j)
+    board_touch = [False] * n
+    if board_ring is not None:
+        bgap = float(board_gap) if board_gap is not None else contact
+        br = find_polygon_distances_bipartite(
+            list(geoms), [board_ring], aura=max(bgap, 0.5) * 2.0,
+        )
+        for r in br:
+            i = int(r.polyA_idx)
+            if 0 <= i < n and (
+                r.intersect or (r.distance_sq ** 0.5) <= bgap + 1e-9
+            ):
+                board_touch[i] = True
+    groups: dict[int, list[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out: list[tuple[list[int], bool]] = []
+    for members in groups.values():
+        out.append((sorted(members), any(board_touch[i] for i in members)))
+    return out
+
+
 def cluster_packed_indices(
     polys: Sequence[BaseGeometry],
     min_dist: float,
@@ -433,22 +526,14 @@ def cluster_packed_indices(
     if len(placed_idx) == 1:
         return [placed_idx]
 
-    gap = _cluster_merge_gap([polys[i] for i in placed_idx], min_dist, sheet)
-    buffered = {i: polys[i].buffer(gap) for i in placed_idx}
-    merged = unary_union(list(buffered.values()))
-    if merged.is_empty:
-        return []
-
-    if isinstance(merged, MultiPolygon):
-        blobs: list[BaseGeometry] = list(merged.geoms)
-    else:
-        blobs = [merged]
-    groups: list[list[int]] = []
-    for blob in blobs:
-        members = [i for i, b in buffered.items() if b.intersects(blob)]
-        if members:
-            groups.append(members)
-    return groups
+    parts = [polys[i] for i in placed_idx]
+    gap = _cluster_merge_gap(parts, min_dist, sheet)
+    geoms = [
+        p if isinstance(p, Geometry) else Geometry.from_shapely(p)
+        for p in parts
+    ]
+    comps = cluster_contact_components(geoms, gap)
+    return [[placed_idx[j] for j in members] for members, _ in comps]
 
 
 def significant_cluster_groups(
@@ -705,22 +790,95 @@ def effective_ranking_mode(
     return base_mode
 
 
+def _exterior_sample_points(
+    sheet: Polygon,
+    n_samples: int,
+) -> list[tuple[float, float]]:
+    """Arc-length samples along sheet exterior (open ring, no duplicate close)."""
+    coords = list(sheet.exterior.coords)
+    if len(coords) < 2:
+        return []
+    seg_lens: list[float] = []
+    total = 0.0
+    for i in range(len(coords) - 1):
+        dx = coords[i + 1][0] - coords[i][0]
+        dy = coords[i + 1][1] - coords[i][1]
+        L = (dx * dx + dy * dy) ** 0.5
+        seg_lens.append(L)
+        total += L
+    if total <= 1e-12:
+        return []
+    n = max(int(n_samples), 8)
+    out: list[tuple[float, float]] = []
+    for k in range(n):
+        target = (k + 0.5) / n * total
+        acc = 0.0
+        x = float(coords[0][0])
+        y = float(coords[0][1])
+        for i, L in enumerate(seg_lens):
+            if acc + L >= target or i == len(seg_lens) - 1:
+                t = 0.0 if L < 1e-12 else (target - acc) / L
+                t = min(max(t, 0.0), 1.0)
+                x0, y0 = coords[i]
+                x1, y1 = coords[i + 1]
+                x = float(x0 + t * (x1 - x0))
+                y = float(y0 + t * (y1 - y0))
+                break
+            acc += L
+        out.append((x, y))
+    return out
+
+
 def outline_coverage_ratio(
     placed: Sequence[BaseGeometry],
     sheet: Polygon,
     min_dist: float,
+    *,
+    n_samples: int = 96,
+    pack_geoms: Sequence[Geometry] | None = None,
 ) -> float:
-    if sheet.is_empty or not placed:
+    """Fraction of exterior samples within ``tol`` of the pack (Geometry distance).
+
+    Pass ``pack_geoms`` (e.g. from ``NestState.native_geoms``) to skip
+    ``from_shapely`` when native Geometry for the pack is already available.
+    """
+    if sheet.is_empty or (not placed and not pack_geoms):
         return 0.0
     perimeter = float(sheet.exterior.length)
     if perimeter <= 0.0:
         return 0.0
     tol = max(min_dist * 2.0, 1e-4)
-    merged = unary_union(placed)
-    if merged.is_empty:
+    if pack_geoms is None:
+        pack_geoms = [
+            p if isinstance(p, Geometry) else Geometry.from_shapely(p)
+            for p in placed
+            if p is not None and not getattr(p, "is_empty", False)
+        ]
+    else:
+        pack_geoms = [
+            g for g in pack_geoms
+            if g is not None and not getattr(g, "is_empty", False)
+        ]
+    if not pack_geoms:
         return 0.0
-    covered_len = merged.buffer(tol).intersection(sheet.exterior).length
-    return float(covered_len / perimeter)
+    samples = _exterior_sample_points(sheet, n_samples)
+    if not samples:
+        return 0.0
+    # One probe ring at origin; translate per sample (no per-sample from_ring).
+    e = 1e-6
+    probe0 = Geometry.from_ring([(0.0, 0.0), (e, 0.0), (0.0, e)])
+    covered = 0
+    for x, y in samples:
+        dmin = float("inf")
+        probe = probe0.translate(float(x), float(y))
+        for g in pack_geoms:
+            if g.contains_point(x, y):
+                dmin = 0.0
+                break
+            dmin = min(dmin, float(g.distance(probe)))
+        if dmin <= tol + 1e-12:
+            covered += 1
+    return float(covered / len(samples))
 
 
 def _hole_mouth_void_seek(
@@ -1064,11 +1222,12 @@ def placement_contact_error(
     min_dist: float,
     focal_shape: Optional[BaseGeometry] = None,
 ) -> float:
-    """Distance from ideal standoff (0 = flush against border or group)."""
-    if isinstance(placed, Geometry):
-        border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)
-    else:
-        border_err = abs(float(placed.distance(sheet.exterior)) - min_dist)
+    """Distance from ideal standoff (0 = flush against border or group).
+
+    When ``placed`` (and optionally ``focal_shape``) are Geometry, uses native
+    standoff / ``Geometry.distance`` rather than Shapely outline distance.
+    """
+    border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)
 
     if focal_shape is not None:
         is_empty = False

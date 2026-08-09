@@ -1,4 +1,4 @@
-"""Post-DFS local SE(2) polish toward a void pole (coarse then fine)."""
+"""Post-DFS local SE(2) polish toward a void pole (native cast_slide)."""
 
 import math
 from typing import Sequence
@@ -6,11 +6,12 @@ from typing import Sequence
 import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import nearest_points, unary_union
 
 from nest_graph.config import ProposeConfig
-from nest_graph.propose.compaction import _pose_clear, selection_pairwise_independent
+from nest_graph.geometry import Geometry, polish_se2_part
+from nest_graph.propose.compaction import selection_pairwise_independent
 from nest_graph.propose.context import _cluster_merge_gap
+from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
 from nest_graph.utils import transform_poly
 
@@ -38,6 +39,7 @@ def exterior_tangent_dirs(
     if sheet is None or sheet.is_empty or poly is None or poly.is_empty:
         return None
     try:
+        from shapely.ops import nearest_points
         contact, _ = nearest_points(sheet.exterior, poly)
     except Exception:
         return None
@@ -49,15 +51,35 @@ def exterior_tangent_dirs(
     return [(-ny, nx), (ny, -nx)]
 
 
+def _as_geometry(g) -> Geometry | None:
+    if g is None:
+        return None
+    if isinstance(g, Geometry):
+        return g
+    if hasattr(g, "is_empty") and g.is_empty:
+        return None
+    return Geometry.from_shapely(g)
+
+
 def _is_board_adj(
     poly: BaseGeometry,
     sheet: Polygon,
     min_dist: float,
 ) -> bool:
-    sentinel = sheet.exterior.buffer(float(min_dist) + 1e-3)
+    """Board-adjacent if standoff ≤ min_dist + 2*gap (old sentinel+buffer merge)."""
+    if poly is None or (hasattr(poly, "is_empty") and poly.is_empty):
+        return False
+    if sheet is None or sheet.is_empty:
+        return False
+    ring = outline_ring_geom(sheet)
+    if ring is None:
+        return False
     gap = _cluster_merge_gap([poly], min_dist, sheet)
+    g = _as_geometry(poly)
+    if g is None:
+        return False
     try:
-        return poly.buffer(gap).intersects(sentinel.buffer(gap))
+        return float(g.standoff_distance(ring)) <= float(min_dist) + 2.0 * gap + 1e-9
     except Exception:
         return False
 
@@ -76,12 +98,19 @@ def local_se2_selection(
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     board_adj_indices: Sequence[int] | None = None,
 ) -> tuple[list[BaseGeometry], list, dict]:
-    """Slide/rotate selected parts; board_adj uses ±exterior tangent only.
+    """Slide/rotate selected parts via native polish_se2_part.
 
-    Coarse steps use ``>= 4×min_dist``; fine uses ``0.25×min_dist`` (compaction).
-    Floating parts attract toward ``pole`` with ±45/±90 slides.
+    Board_adj uses ±exterior tangent only. Floating parts attract toward
+    ``pole`` with ±45/±90 slides.
     """
-    stats = {"attempted": 0, "accepted": 0, "moved": 0, "tangent_moves": 0}
+    stats = {
+        "attempted": 0,
+        "accepted": 0,
+        "moved": 0,
+        "tangent_moves": 0,
+        "se2_native_hits": 0,
+        "se2_native_accepted": 0,
+    }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
     sel = [int(i) for i in selected_indices]
@@ -102,14 +131,14 @@ def local_se2_selection(
         if g is not None and not g.is_empty
     ]
     n_angles = max(1, int(propose_cfg.local_se2_n_angles))
-    angle_deltas = [(2.0 * math.pi * k) / n_angles for k in range(n_angles)]
 
     coarse_step = max(4.0 * float(min_dist), 1e-4)
     fine_step = max(0.25 * float(min_dist), 1e-4)
-    phases = (
-        (coarse_step, max(1, int(propose_cfg.local_se2_max_coarse_steps))),
-        (fine_step, max(1, int(propose_cfg.local_se2_max_fine_steps))),
-    )
+    max_coarse = max(1, int(propose_cfg.local_se2_max_coarse_steps))
+    max_fine = max(1, int(propose_cfg.local_se2_max_fine_steps))
+    board_g = Geometry.from_shapely(sheet)
+    minx, miny, maxx, maxy = sheet.bounds
+    sheet_diag = math.hypot(maxx - minx, maxy - miny)
 
     board_set = set(int(i) for i in (board_adj_indices or ()))
     if not board_set:
@@ -128,6 +157,7 @@ def local_se2_selection(
         return 0.0
 
     order = sorted(sel, key=_order_key, reverse=True)
+    part_geoms: dict[int, Geometry] = {}
 
     for idx in order:
         poly = out_polys[idx]
@@ -145,7 +175,6 @@ def local_se2_selection(
             dirs = exterior_tangent_dirs(sheet, poly)
             if not dirs:
                 continue
-            # Accept any clear slide along wall (progress = distance moved).
             dist0 = 0.0
             use_pole_metric = False
         else:
@@ -163,65 +192,54 @@ def local_se2_selection(
             for j in sel
             if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
         ]
-        fixed = unary_union(locked + others) if (locked or others) else Polygon()
+        obs_geoms = [
+            g for g in (_as_geometry(p) for p in (list(locked) + others)) if g is not None
+        ]
+        if gid not in part_geoms:
+            part_geoms[gid] = Geometry.from_shapely(part)
+        part_g = part_geoms[gid]
 
-        best_poly = poly
-        best_tr = tr.copy()
-        best_dist = dist0
-        best_slide = 0.0
-        improved = False
-
-        for step, max_steps in phases:
-            for du, dv in dirs:
-                for s in range(1, max_steps + 1):
-                    ox, oy = du * step * s, dv * step * s
-                    any_clear = False
-                    for dtheta in angle_deltas:
-                        cand_tr = np.array(
-                            [
-                                tr[0] + ox,
-                                tr[1] + oy,
-                                (float(tr[2]) + dtheta) % (2.0 * math.pi),
-                            ],
-                            dtype=np.float64,
-                        )
-                        cand = transform_poly(part, cand_tr)
-                        if not _pose_clear(cand, sheet, fixed, min_dist):
-                            continue
-                        any_clear = True
-                        prev_p, prev_t = out_polys[idx], out_tr[idx]
-                        out_polys[idx] = cand
-                        out_tr[idx] = cand_tr
-                        ok = selection_pairwise_independent(out_polys, sel)
-                        out_polys[idx] = prev_p
-                        out_tr[idx] = prev_t
-                        if not ok:
-                            continue
-                        if use_pole_metric:
-                            d = float(cand.centroid.distance(pole))
-                            if d + 1e-9 >= best_dist:
-                                continue
-                            best_poly = cand
-                            best_tr = cand_tr
-                            best_dist = d
-                            improved = True
-                        else:
-                            slide = math.hypot(ox, oy)
-                            if slide + 1e-9 <= best_slide:
-                                continue
-                            best_poly = cand
-                            best_tr = cand_tr
-                            best_slide = slide
-                            improved = True
-                    if not any_clear:
-                        break
-
-        if improved:
-            out_polys[idx] = best_poly
-            out_tr[idx] = best_tr
-            stats["accepted"] += 1
-            stats["moved"] += 1
-            if is_rim:
-                stats["tangent_moves"] += 1
+        stats["se2_native_hits"] += 1
+        max_t = max(
+            sheet_diag,
+            dist0 if use_pole_metric else 0.0,
+            coarse_step * max_coarse + fine_step * max_fine,
+        )
+        polished = polish_se2_part(
+            part_g,
+            (float(tr[0]), float(tr[1]), float(tr[2])),
+            obs_geoms,
+            board_g,
+            dirs,
+            n_angles=n_angles,
+            max_t=float(max_t),
+            min_dist=float(min_dist),
+            mode="pole" if use_pole_metric else "slide",
+            pole=(float(pole.x), float(pole.y)) if use_pole_metric else None,
+        )
+        if polished is None:
+            continue
+        bx, by, bth = polished
+        cand_tr = np.array([bx, by, bth], dtype=np.float64)
+        if (
+            abs(cand_tr[0] - tr[0]) < 1e-12
+            and abs(cand_tr[1] - tr[1]) < 1e-12
+            and abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi) < 1e-12
+        ):
+            continue
+        cand = transform_poly(part, cand_tr)
+        prev_p, prev_t = out_polys[idx], out_tr[idx]
+        out_polys[idx] = cand
+        out_tr[idx] = cand_tr
+        ok = selection_pairwise_independent(out_polys, sel)
+        if not ok:
+            out_polys[idx] = prev_p
+            out_tr[idx] = prev_t
+            continue
+        stats["accepted"] += 1
+        stats["moved"] += 1
+        stats["se2_native_accepted"] += 1
+        if is_rim:
+            stats["tangent_moves"] += 1
 
     return out_polys, out_tr, stats

@@ -3,7 +3,6 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from shapely import LineString, LinearRing, MultiLineString, MultiPoint, Point, Polygon
-from shapely.affinity import rotate, translate
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import voronoi_diagram
 
@@ -43,8 +42,8 @@ def propose_placements_voronoi(
     max_sites: int = 64,
     focal_shape: Optional[BaseGeometry] = None,
     border_focus: bool = False,
-    propose_geom: Optional[ProposeGeometry] = None,
-    pt_push: Optional[Point] = None,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements using Voronoi vertices as candidate centers.
@@ -91,27 +90,11 @@ def propose_placements_voronoi(
     for pt in candidate_points:
         for angle in angles:
             coords = (float(pt.x), float(pt.y), float(angle))
-            if propose_geom is not None and pt_push is not None:
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
-                propositions.append({
-                    "coords": coords,
-                    "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
-                })
+            if not propose_geom.valid_at(coords, pt_push):
                 continue
-
-            orig_centroid = shape_to_place.centroid
-            centered_shape = translate(shape_to_place, -orig_centroid.x, -orig_centroid.y)
-            rotated_shape = rotate(centered_shape, angle, origin=(0, 0), use_radians=True)
-            placed_shape = translate(rotated_shape, pt.x, pt.y)
-
-            safe = fit_shape.buffer(-min_dist)
-            if safe.is_empty or not safe.contains(placed_shape):
-                continue
-
             propositions.append({
                 "coords": coords,
-                "cost": float(pt.distance(attract)),
+                "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
             })
 
     propositions.sort(key=lambda x: x["cost"])
@@ -131,8 +114,8 @@ def propose_placements_raycasting(
     anchor_stride: int = 2,
     focal_shape: Optional[BaseGeometry] = None,
     border_focus: bool = False,
-    propose_geom: Optional[ProposeGeometry] = None,
-    pt_push: Optional[Point] = None,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements by casting rays from boundary vertices into the interior.
@@ -160,15 +143,15 @@ def propose_placements_raycasting(
 
     attract_x, attract_y = float(attract.x), float(attract.y)
 
-    safe_base = region.buffer(-min_dist)
-    if safe_base.is_empty:
+    # Ray segment clipping on uneroded region; batch valid_at enforces clearance.
+    if region.is_empty:
         return []
 
     # 1. Identify Anchor Points (vertices of the base and holes)
     anchors = []
     for line in get_shape_exteriors(anchor_source):
         anchors.extend([Point(pt) for pt in line.coords])
-        
+
     # Limit anchors to avoid explosion on complex shapes
     max_anchors = 200
     if len(anchors) > max_anchors:
@@ -190,8 +173,8 @@ def propose_placements_raycasting(
             end_y = anchor.y + ray_len * np.sin(r_angle)
             ray = LineString([anchor, (end_x, end_y)])
 
-            # Find parts of the ray that are inside the 'safe' base
-            valid_segments = ray.intersection(safe_base)
+            # Find parts of the ray that are inside the search region
+            valid_segments = ray.intersection(region)
             if valid_segments.is_empty:
                 continue
 
@@ -208,21 +191,10 @@ def propose_placements_raycasting(
             for pt in coords_to_test:
                 for p_angle in placement_angles:
                     coords = (float(pt.x), float(pt.y), float(p_angle))
-                    if propose_geom is not None and pt_push is not None:
-                        propositions.append({
-                            "coords": coords,
-                            "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
-                        })
-                        continue
-
-                    rotated_shape = rotate(shape_to_place, p_angle, origin=(0, 0), use_radians=True)
-                    placed_shape = translate(rotated_shape, pt.x, pt.y)
-
-                    if safe_base.contains(placed_shape):
-                        propositions.append({
-                            "coords": coords,
-                            "cost": float(pt.distance(attract)),
-                        })
+                    propositions.append({
+                        "coords": coords,
+                        "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
+                    })
 
     # Dedupe → oversample 3N → full-guidance batch filter (chunked).
     propositions.sort(key=lambda x: x["cost"])
@@ -240,11 +212,9 @@ def propose_placements_raycasting(
         if len(unique_props) >= pool_cap:
             break
 
-    if propose_geom is not None and pt_push is not None and unique_props:
-        cost_map = {c: cost for c, cost in zip(unique_props, unique_costs, strict=True)}
-        valid = filter_candidates_batch(propose_geom, unique_props, pt_push)
-        valid.sort(key=lambda c: cost_map.get(c, 0.0))
-        return valid[:top_n]
-
-    return unique_props[:top_n]
-
+    if not unique_props:
+        return []
+    cost_map = {c: cost for c, cost in zip(unique_props, unique_costs, strict=True)}
+    valid = filter_candidates_batch(propose_geom, unique_props, pt_push)
+    valid.sort(key=lambda c: cost_map.get(c, 0.0))
+    return valid[:top_n]

@@ -509,7 +509,6 @@ def test_border_placement_ok_rejects_hypotenuse_overhang(nest_board, rect_poly):
     part = Geometry.from_shapely(rect_poly)
     t = (0.37802249442265207, 0.6972761008108197, 0.0)
     placed = part.apply_transform(t)
-    poly = transform_poly(rect_poly, t)
     pad = default_sheet_padding(nest_board)
     guidance_cfg = guidance_config_for_graph(
         min_dist,
@@ -520,7 +519,6 @@ def test_border_placement_ok_rejects_hypotenuse_overhang(nest_board, rect_poly):
     assert not placement_ok_for_outline(
         scene,
         placed,
-        poly,
         nest_board,
         [],
         min_dist,

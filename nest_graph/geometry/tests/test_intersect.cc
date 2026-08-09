@@ -252,6 +252,19 @@ TEST_CASE("find_polygon_intersections simple hit and miss", "[poly_intersect][sw
     REQUIRE(tracer.stat_sweep_pairs > 0);
 }
 
+TEST_CASE("find_polygon_intersections edge kiss is not packing collision", "[poly_intersect][sweep][kiss]") {
+    auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
+    // Raw GJK still sees a touch; packing filter requires EPA depth > 1e-9.
+    REQUIRE(find_polygon_intersections<Vec2>({a, b}).empty());
+}
+
+TEST_CASE("find_polygon_intersections vertex kiss is not packing collision", "[poly_intersect][sweep][kiss]") {
+    auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto b = polygon_from_quad({{2, 2}, {4, 2}, {4, 4}, {2, 4}});
+    REQUIRE(find_polygon_intersections<Vec2>({a, b}).empty());
+}
+
 TEST_CASE("find_polygon_intersections three polygons subset pairs", "[poly_intersect][sweep]") {
     DebugTracer tracer;
     tracer.reset();
@@ -420,4 +433,25 @@ TEST_CASE("Physics Telemetry: Circle Prune Scaling (O(N^2) Prevention)", "[telem
     REQUIRE(tracer.stat_sweep_pairs == 0);
 
     maybe_print_physics_telemetry(tracer);
+}
+
+TEST_CASE("find_polygon_intersections decomposed edge kiss is not packing collision", "[poly_intersect][sweep][kiss]") {
+    auto a = polygon_from_ring({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto b = polygon_from_ring({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
+    REQUIRE(find_polygon_intersections<Vec2>({a, b}).empty());
+}
+
+TEST_CASE("find_polygon_intersections decompose_complex edge kiss", "[poly_intersect][sweep][kiss]") {
+    std::vector<std::vector<Vec2>> oa{{
+        Vec2{{0.0, 0.0}}, Vec2{{2.0, 0.0}}, Vec2{{2.0, 2.0}}, Vec2{{0.0, 2.0}}, Vec2{{0.0, 0.0}},
+    }};
+    std::vector<std::vector<Vec2>> ob{{
+        Vec2{{2.0, 0.0}}, Vec2{{4.0, 0.0}}, Vec2{{4.0, 2.0}}, Vec2{{2.0, 2.0}}, Vec2{{2.0, 0.0}},
+    }};
+    auto a = decompose_complex_polygon<Vec2>(oa, {});
+    auto b = decompose_complex_polygon<Vec2>(ob, {});
+    REQUIRE(find_polygon_intersections<Vec2>({a, b}).empty());
+    auto overlap = polygon_from_ring({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    auto base = polygon_from_ring({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    REQUIRE_FALSE(find_polygon_intersections<Vec2>({base, overlap}).empty());
 }

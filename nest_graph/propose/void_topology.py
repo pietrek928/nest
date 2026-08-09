@@ -5,9 +5,31 @@ from typing import Sequence
 
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polylabel, unary_union
+from shapely.ops import unary_union
 
 from nest_graph.propose.context import cluster_packed_indices, iter_polygons
+
+try:
+    from nest_graph.geometry import polylabel_rings as _cpp_polylabel_rings
+except Exception:  # pragma: no cover - extension optional at import time
+    _cpp_polylabel_rings = None
+
+
+def polylabel(poly: Polygon, tolerance: float = 1.0) -> Point:
+    """Pole of inaccessibility; prefer C++ Mapbox polylabel, else Shapely."""
+    tol = float(tolerance)
+    if _cpp_polylabel_rings is not None and poly is not None and not poly.is_empty:
+        try:
+            rings = [list(poly.exterior.coords)]
+            for interior in poly.interiors:
+                rings.append(list(interior.coords))
+            x, y, _r = _cpp_polylabel_rings(rings, tol)
+            return Point(float(x), float(y))
+        except Exception:
+            pass
+    from shapely.ops import polylabel as shapely_polylabel
+
+    return shapely_polylabel(poly, tolerance=tol)
 
 
 def _largest_polygon_component(geom: BaseGeometry | None) -> Polygon | None:
@@ -107,6 +129,8 @@ def touches_sheet_exterior(poly: Polygon, sheet: Polygon, eps: float = 1e-6) -> 
 def trapped_void_polygons(
     sheet: Polygon,
     packed: Sequence[BaseGeometry],
+    *,
+    free: BaseGeometry | None = None,
 ) -> list[Polygon]:
     """Free components of unbuffered sheet\\packed that do not touch sheet exterior."""
     placed = [p for p in packed if p is not None and not p.is_empty]
@@ -115,8 +139,11 @@ def trapped_void_polygons(
     if not placed:
         return []
     try:
-        free = sheet.difference(unary_union(placed))
+        if free is None:
+            free = sheet.difference(unary_union(placed))
     except Exception:
+        return []
+    if free is None or free.is_empty:
         return []
     out: list[Polygon] = []
     for poly in iter_polygons(free):

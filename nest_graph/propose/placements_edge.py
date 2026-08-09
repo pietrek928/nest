@@ -3,14 +3,15 @@ from typing import List, Optional, Tuple
 import math
 import numpy as np
 from shapely import Point, Polygon
-from shapely.affinity import rotate, translate
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.utils import get_shape_exteriors, transform_poly
+from nest_graph.geometry import Geometry
+from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
+from nest_graph.propose.placement_common import pose_clear_geoms
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
     outline_ring_geom,
@@ -171,7 +172,7 @@ def propose_placements_board_edge(
             break
     merged.sort(
         key=lambda c: placement_contact_error(
-            transform_poly(shape_to_place, c), sheet, min_dist, None,
+            propose_geom.placed_at(c), sheet, min_dist, None,
         ),
     )
     return merged[:top_n]
@@ -187,22 +188,24 @@ def propose_placements_group_fit(
     num_angles: int = 12,
     top_n: int = 16,
     samples_per_edge: int = 12,
-    propose_geom: Optional[ProposeGeometry] = None,
-    pt_push: Optional[Point] = None,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
 ) -> List[Tuple[float, float, float]]:
     """Snap the part along the nearest packed-group exterior at standoff min_dist."""
     if focal_shape is None or focal_shape.is_empty:
         return []
-    
-    from nest_graph.geometry import Geometry
-    focal_geom = Geometry.from_shapely(focal_shape) if not isinstance(focal_shape, Geometry) else focal_shape
-    
+
+    focal_geom = (
+        focal_shape
+        if isinstance(focal_shape, Geometry)
+        else Geometry.from_shapely(focal_shape)
+    )
+
     propositions: list[dict] = []
     anchor_pts = exterior_anchor_points(focal_shape, samples_per_edge)
     stratify_boundary = focal_shape if isinstance(focal_shape, Polygon) else sheet
-    focal_ring_geom = (
-        outline_ring_geom(focal_shape) if propose_geom is not None else None
-    )
+    focal_ring_geom = outline_ring_geom(focal_shape)
+    base_obs = propose_geom.obstacle_geoms_for_batch()
 
     for contact in anchor_pts:
         snap_contact, inward = inward_at_contact(focal_shape, contact)
@@ -222,28 +225,19 @@ def propose_placements_group_fit(
             )
             if coords is None:
                 continue
-            if propose_geom is not None:
-                placed_geom = propose_geom.placed_at(coords)
-                if not placed_geom.footprint_inside(propose_geom.board_geom):
-                    continue
-                err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
-            else:
-                placed = transform_poly(shape_to_place, coords)
-                if not sheet.contains(placed):
-                    continue
-                if not base_shape.is_empty:
-                    if base_shape.intersects(placed):
-                        continue
-                    if base_shape.distance(placed) < min_dist - 1e-6:
-                        continue
-                err = placement_contact_error(placed, sheet, min_dist, focal_geom)
+            placed_geom = propose_geom.placed_at(coords)
+            if not pose_clear_geoms(
+                placed_geom, propose_geom.board_geom, base_obs, min_dist,
+            ):
+                continue
+            err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
             propositions.append({
                 "coords": coords,
                 "anchor": snap_contact,
                 "cost": err,
             })
 
-    if propositions and propose_geom is not None and pt_push is not None:
+    if propositions:
         raw = [p["coords"] for p in propositions]
         valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
         propositions = [p for p in propositions if p["coords"] in valid]
@@ -293,12 +287,11 @@ def _sheet_corner_seeds(
     propositions: list[dict] = []
     angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
 
-    eroded_sheet = sheet.buffer(-min_dist)
-    if eroded_sheet.is_empty:
+    if sheet.is_empty:
         return []
 
     safe_corners = []
-    for ring in get_shape_exteriors(eroded_sheet):
+    for ring in get_shape_exteriors(sheet):
         safe_corners.extend(list(ring.coords)[:-1])
 
     ring_geom = propose_geom.boundary_ring_geom
@@ -357,7 +350,7 @@ def propose_placements_sheet_corners(
     num_angles: int = 24,
     top_n: int = 16,
 ) -> List[Tuple[float, float, float]]:
-    """Perfect corner docking using bounding box alignment to the safe zone."""
+    """Perfect corner docking using bounding box alignment to the sheet ring."""
     return _sheet_corner_seeds(
         shape_to_place,
         sheet,
@@ -381,17 +374,16 @@ def propose_placements_sheet_edge(
     samples_per_edge: int = 16,
     base_shape: Optional[BaseGeometry] = None,
 ) -> List[Tuple[float, float, float]]:
-    """Slide the part along the exact perimeter of the safe zone."""
+    """Slide the part along the exact perimeter of the sheet ring."""
     propositions: list[dict] = []
 
-    safe_halo = sheet.buffer(-min_dist)
-    if safe_halo.is_empty:
+    if sheet.is_empty:
         return []
 
-    halo_pts = exterior_anchor_points(safe_halo, samples_per_edge)
+    halo_pts = exterior_anchor_points(sheet, samples_per_edge)
 
     for h_pt in halo_pts:
-        for angle in angles_for_edge_contact(safe_halo, h_pt, num_angles):
+        for angle in angles_for_edge_contact(sheet, h_pt, num_angles):
             rotated = propose_geom.part.rotate(float(angle))
             minx, miny, maxx, maxy = rotated.bounds()
             dx_center = (maxx + minx) / 2.0
@@ -415,7 +407,7 @@ def propose_placements_sheet_edge(
         valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
         propositions = [p for p in propositions if p["coords"] in valid]
 
-    return finalize_edge_propositions(propositions, safe_halo, top_n)
+    return finalize_edge_propositions(propositions, sheet, top_n)
 
 
 def propose_placements_ribbon_free(
@@ -426,8 +418,8 @@ def propose_placements_ribbon_free(
     *,
     num_angles: int = 8,
     top_n: int = 8,
-    propose_geom: Optional[ProposeGeometry] = None,
-    pt_push: Optional[Point] = None,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
 ) -> List[Tuple[float, float, float]]:
     """Seed placements along the gap ribbon inside the free region."""
     free = placement_free_region(sheet, base_shape, min_dist)
@@ -456,28 +448,12 @@ def propose_placements_ribbon_free(
             raw.append(coords)
             costs.append(math.hypot(pt.x - base_cx, pt.y - base_cy))
 
-    if propose_geom is not None and pt_push is not None and raw:
-        order = sorted(range(len(raw)), key=lambda i: costs[i])
-        take = min(len(order), max(top_n * 3, top_n))
-        ordered = [raw[i] for i in order[:take]]
-        cost_map = {raw[i]: costs[i] for i in order[:take]}
-        valid = filter_candidates_batch(propose_geom, ordered, pt_push)
-        valid.sort(key=lambda c: cost_map.get(c, 0.0))
-        return valid[:top_n]
-
-    propositions: list[dict] = []
-    for coords, cost in zip(raw, costs, strict=True):
-        pt = Point(coords[0], coords[1])
-        angle = coords[2]
-        rotated_shape = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
-        placed_shape = translate(rotated_shape, pt.x, pt.y)
-        if not free.contains(placed_shape):
-            continue
-        if not base_shape.is_empty:
-            if base_shape.intersects(placed_shape):
-                continue
-            if base_shape.distance(placed_shape) < min_dist - 1e-6:
-                continue
-        propositions.append({"coords": coords, "cost": cost})
-    propositions.sort(key=lambda x: x["cost"])
-    return [p["coords"] for p in propositions[:top_n]]
+    if not raw:
+        return []
+    order = sorted(range(len(raw)), key=lambda i: costs[i])
+    take = min(len(order), max(top_n * 3, top_n))
+    ordered = [raw[i] for i in order[:take]]
+    cost_map = {raw[i]: costs[i] for i in order[:take]}
+    valid = filter_candidates_batch(propose_geom, ordered, pt_push)
+    valid.sort(key=lambda c: cost_map.get(c, 0.0))
+    return valid[:top_n]

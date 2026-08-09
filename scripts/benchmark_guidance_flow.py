@@ -306,7 +306,12 @@ def run_pipeline(flow: str, seed: int, n_iters: int = 3) -> PipelineRow:
             selected_t[gi].append(transform[i])
         selected_t = tuple(np.array(t) for t in selected_t)
         _append_selection_window(selection_window, selected_t, gc.graphs_window)
-        nest_state = NestState(polys, group_id, transform, list(selected_polys))
+        nest_state = NestState(
+            polys=polys,
+            group_id=group_id,
+            transform=transform,
+            selected_indices=list(selected_polys),
+        )
 
     border_errs = [
         abs(float(polys[i].distance(sheet.exterior)) - min_dist)

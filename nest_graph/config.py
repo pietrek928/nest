@@ -343,7 +343,7 @@ class ProposeConfig(BaseModel):
     enable_cluster_relocate: bool = True
     """Post-DFS: rigid ΔT translate floating (non-exterior) islands toward void pole."""
     enable_local_se2: bool = True
-    """Post-DFS: local SE(2) polish toward void pole with slide dirs (coarse then fine)."""
+    """Post-DFS: local SE(2) polish toward void pole via native polish_se2_part."""
     local_se2_n_angles: int = 4
     local_se2_max_coarse_steps: int = 12
     local_se2_max_fine_steps: int = 24

@@ -6,9 +6,9 @@ import numpy as np
 from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
+from nest_graph.geometry import Geometry
 from nest_graph.propose.cluster_repack import (
     bfs_peel_victim,
-    board_sentinel_geom,
     cluster_indices_with_board,
     cluster_repack_selection,
     pattern_fits_peeled,
@@ -19,6 +19,7 @@ from nest_graph.propose.compaction import selection_pairwise_independent
 from nest_graph.propose.context import FreeSpaceSnapshot, analyze_free_space
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.local_se2 import exterior_tangent_dirs, local_se2_selection
+from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placements_pattern import ClusterPattern, free_pocket_anchors
 from nest_graph.propose.placements_pocket import (
     TAG_OPEN_VOID,
@@ -95,8 +96,13 @@ def test_board_sentinel_merges_rim_parts():
         if adj:
             rim_members.update(g)
     assert 0 in rim_members and 1 in rim_members
-    sentinel = board_sentinel_geom(sheet, min_dist)
-    assert not sentinel.is_empty
+    ring = outline_ring_geom(sheet)
+    assert ring is not None
+    for i in (0, 1):
+        g = Geometry.from_shapely(polys[i])
+        assert float(g.standoff_distance(ring)) <= min_dist + 1e-3
+    interior = Geometry.from_shapely(polys[2])
+    assert float(interior.standoff_distance(ring)) > min_dist
 
 
 def test_bfs_peel_from_mega_cluster():

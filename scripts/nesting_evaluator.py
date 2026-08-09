@@ -1034,7 +1034,14 @@ class NestingPipelineEvaluator:
             area_coverage = part_area / usable_area
 
         out_cov = outline_coverage_ratio(
-            placed_shapes, self.sheet, min_dist=min_dist,
+            placed_shapes,
+            self.sheet,
+            min_dist=min_dist,
+            pack_geoms=(
+                nest_state.native_geoms
+                if nest_state is not None and next_polys
+                else None
+            ),
         )
 
         mean_part_area = float(np.mean([p[0].area for p in self.parts])) if self.parts else 1.0

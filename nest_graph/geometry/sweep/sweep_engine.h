@@ -11,6 +11,8 @@
 #include "common/geometry_common.h"
 #include "solid/containment.h"
 #include "convex/intersect.h"
+#include "convex/penetration.h"
+#include "convex/distance.h"
 #include "sweep/sweep.h"
 #include "common/tracer.h"
 
@@ -116,8 +118,14 @@ inline bool resolve_sweep_pair_id(
 // -------------------------------------------------------------------------
 // Intersect narrow-phase delegation
 // -------------------------------------------------------------------------
+enum class PartIntersectKind {
+    None,   // disjoint boundaries (may still be nested → containment pass)
+    Kiss,   // GJK touch / zero-depth contact — not a packing collision
+    Overlap // EPA penetration deeper than packing epsilon
+};
+
 template <class VecType, class Tracer = DefaultTracer>
-inline bool check_part_vs_part_intersect(
+inline PartIntersectKind check_part_vs_part_intersect_kind(
     const SolidGeometry<VecType>& polyA, int a_idx,
     const SolidGeometry<VecType>& polyB, int b_idx,
     Tracer* tracer = nullptr
@@ -131,7 +139,7 @@ inline bool check_part_vs_part_intersect(
         if constexpr (!std::is_same_v<Tracer, NullTracer>) {
             if (tracer) tracer->count_circle_prune();
         }
-        return false;
+        return PartIntersectKind::None;
     }
 
     const VecType* ptsA = polyA.get_part_points(a_idx);
@@ -143,30 +151,95 @@ inline bool check_part_vs_part_intersect(
         if (tracer) tracer->count_gjk_eval();
     }
 
-    // Delegate to the narrow-phase router (which internally sorts by size to optimize
-    // gradient caching, and dispatches to the correct O(N) or O(1) GJK implementation)
-    // NOTE: Requires narrow_phase_intersect to be in scope or explicitly defined.
-    // If not in scope, you can inline the (nA <= nB) swap logic here.
-    bool hit = false;
-
     const VecType* p1 = (nA <= nB) ? ptsA : ptsB;
     const int s1 = (nA <= nB) ? nA : nB;
     const VecType* p2 = (nA <= nB) ? ptsB : ptsA;
     const int s2 = (nA <= nB) ? nB : nA;
 
+    IntersectResult ir;
     if (s1 + s2 > 24) {
-        hit = convex_linestrings_intersect_gjk_gradient<VecType>(p1, s1, p2, s2).intersect;
+        ir = convex_linestrings_intersect_gjk_gradient<VecType>(p1, s1, p2, s2);
     } else {
-        hit = convex_linestrings_intersect_gjk<VecType>(p1, s1, p2, s2).intersect;
+        ir = convex_linestrings_intersect_gjk<VecType>(p1, s1, p2, s2);
     }
 
-    if (hit) {
+    if (!ir.intersect) {
+        return PartIntersectKind::None;
+    }
+
+    // GJK treats boundary kiss as a hit; packing collision requires real depth.
+    // Warm-start EPA from GJK witness indices (same point order as GJK).
+    using Scalar = typename VecType::Scalar;
+    const Scalar pen_eps_sq = nest_packing_penetration_eps_sq<Scalar>();
+    auto pen = (s1 + s2 > 24)
+        ? convex_linestrings_penetration_gradient<VecType>(
+            p1, s1, p2, s2, ir.it1, ir.it2)
+        : convex_linestrings_penetration<VecType>(
+            p1, s1, p2, s2, ir.it1, ir.it2);
+    if (pen.intersect && pen.penetration_sq < pen_eps_sq) {
+        // Candidate numeric kiss. Shared-edge midpoints can sit on the boundary;
+        // nudge toward the *solid* centroid (not the line-part mean — edge-only
+        // decomp segments have centroid on the shared edge, which false-positives).
+        auto edge_mid_inside = [](
+            const VecType* pts, int n,
+            const SolidGeometry<VecType>& owner,
+            const SolidGeometry<VecType>& other
+        ) -> bool {
+            if (n < 2) {
+                return false;
+            }
+            const VecType& cen = owner.bounding_circle.c;
+            constexpr Scalar nudge = static_cast<Scalar>(1e-6);
+            for (int i = 0; i < n - 1; ++i) {
+                const VecType mid({
+                    (pts[i][0] + pts[i + 1][0]) * static_cast<Scalar>(0.5),
+                    (pts[i][1] + pts[i + 1][1]) * static_cast<Scalar>(0.5)});
+                VecType toward({cen[0] - mid[0], cen[1] - mid[1]});
+                const Scalar tlen = static_cast<Scalar>(
+                    std::sqrt(static_cast<double>(
+                        toward[0] * toward[0] + toward[1] * toward[1])));
+                if (tlen <= nudge) {
+                    continue;
+                }
+                const VecType probe({
+                    mid[0] + toward[0] * (nudge / tlen),
+                    mid[1] + toward[1] * (nudge / tlen)});
+                if (is_point_inside_solid_space(probe, other)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (edge_mid_inside(ptsA, nA, polyA, polyB)
+            || edge_mid_inside(ptsB, nB, polyB, polyA)) {
+            if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+                if (tracer) tracer->record_penetration();
+            }
+            return PartIntersectKind::Overlap;
+        }
+        return PartIntersectKind::Kiss;
+    }
+    if (pen.intersect) {
         if constexpr (!std::is_same_v<Tracer, NullTracer>) {
             if (tracer) tracer->record_penetration();
         }
+        return PartIntersectKind::Overlap;
     }
 
-    return hit;
+    // GJK hit but EPA found no measurable penetration: boundary contact / numeric
+    // kiss (common for edge-decomp segments that only share a vertex). Not a
+    // packing collision — real overlaps yield EPA depth above the epsilon.
+    return PartIntersectKind::Kiss;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+inline bool check_part_vs_part_intersect(
+    const SolidGeometry<VecType>& polyA, int a_idx,
+    const SolidGeometry<VecType>& polyB, int b_idx,
+    Tracer* tracer = nullptr
+) {
+    return check_part_vs_part_intersect_kind<VecType, Tracer>(
+        polyA, a_idx, polyB, b_idx, tracer) == PartIntersectKind::Overlap;
 }
 
 // -------------------------------------------------------------------------
@@ -232,11 +305,17 @@ inline IntersectSweepResult<VecType> execute_intersect_sweep(
     // 3. EVALUATE: Process sequentially with early-exit logic
     std::pair<int, int> current_pair = {-1, -1};
     bool current_pair_hit = false;
+    bool current_pair_kissed = false;
+    std::vector<std::pair<int, int>> kissed_pairs;
 
     for (const auto& cand : candidates) {
         if (cand.pair_id != current_pair) {
+            if (current_pair.first >= 0 && current_pair_kissed) {
+                kissed_pairs.push_back(current_pair);
+            }
             current_pair = cand.pair_id;
             current_pair_hit = false;
+            current_pair_kissed = false;
         }
 
         // If this polygon pair already collided on a previous part, skip the rest!
@@ -244,21 +323,43 @@ inline IntersectSweepResult<VecType> execute_intersect_sweep(
 
         TracerScope<Tracer> scope(tracer, cand.pair_id.first, cand.pair_id.second);
 
-        if (check_part_vs_part_intersect<VecType, Tracer>(*cand.polyA, cand.partA_idx, *cand.polyB, cand.partB_idx, tracer)) {
+        const PartIntersectKind kind = check_part_vs_part_intersect_kind<VecType, Tracer>(
+            *cand.polyA, cand.partA_idx, *cand.polyB, cand.partB_idx, tracer);
+        if (kind == PartIntersectKind::Overlap) {
             result.confirmed_collisions.push_back(cand.pair_id);
             current_pair_hit = true;
+        } else if (kind == PartIntersectKind::Kiss) {
+            // Boundary contact: not a packing collision, and not a containment
+            // candidate (promote uses boundary-inclusive point-in-solid).
+            current_pair_kissed = true;
         } else {
+            // None: boundary-disjoint parts; may still be nested → containment pass.
             result.potential_containments.push_back(cand.pair_id);
         }
     }
+    if (current_pair.first >= 0 && current_pair_kissed) {
+        kissed_pairs.push_back(current_pair);
+    }
 
     // Deduplicate containments and remove any that were confirmed as collisions
+    // or already boundary-kissed (kiss ≠ nested).
     std::sort(result.potential_containments.begin(), result.potential_containments.end());
-    result.potential_containments.erase(std::unique(result.potential_containments.begin(), result.potential_containments.end()), result.potential_containments.end());
+    result.potential_containments.erase(
+        std::unique(result.potential_containments.begin(), result.potential_containments.end()),
+        result.potential_containments.end());
 
-    auto new_end = std::remove_if(result.potential_containments.begin(), result.potential_containments.end(),
-        [&result](const std::pair<int, int>& p) {
-            return std::binary_search(result.confirmed_collisions.begin(), result.confirmed_collisions.end(), p);
+    std::sort(kissed_pairs.begin(), kissed_pairs.end());
+    kissed_pairs.erase(std::unique(kissed_pairs.begin(), kissed_pairs.end()), kissed_pairs.end());
+
+    auto new_end = std::remove_if(
+        result.potential_containments.begin(),
+        result.potential_containments.end(),
+        [&result, &kissed_pairs](const std::pair<int, int>& p) {
+            return std::binary_search(
+                       result.confirmed_collisions.begin(),
+                       result.confirmed_collisions.end(),
+                       p)
+                || std::binary_search(kissed_pairs.begin(), kissed_pairs.end(), p);
         });
     result.potential_containments.erase(new_end, result.potential_containments.end());
 
@@ -375,7 +476,8 @@ inline ComplexDistanceResult<VecType> evaluate_distance_candidate(
     int warm2 = 0;
     if (circles_may_overlap) {
         auto pen_res = narrow_phase_penetration(ptsA, nA, ptsB, nB, 24, tracer);
-        if (pen_res.intersect) {
+        const Scalar pen_eps_sq = nest_packing_penetration_eps_sq<Scalar>();
+        if (pen_res.intersect && pen_res.penetration_sq >= pen_eps_sq) {
             current_eval.intersect = true;
             current_eval.distance_sq = 0;
             current_eval.penetration_sq = pen_res.penetration_sq;
@@ -395,7 +497,8 @@ inline ComplexDistanceResult<VecType> evaluate_distance_candidate(
 
     const Scalar touch_eps_sq = nest_touch_eps_sq<Scalar>();
     if (dist_res.intersect || dist_res.distance_sq <= touch_eps_sq) {
-        current_eval.intersect = true;
+        // Near-zero separation / GJK touch: contact without packing depth.
+        current_eval.intersect = false;
         current_eval.distance_sq = 0;
     } else {
         current_eval.distance_sq = dist_res.distance_sq;

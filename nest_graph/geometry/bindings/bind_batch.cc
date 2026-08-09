@@ -2,6 +2,7 @@
 #include <cmath>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
@@ -14,7 +15,81 @@ namespace nb = nanobind;
 #include "python_converters.h"
 #include "types.h"
 
+struct StaticCollisionSceneHolder {
+    StaticCollisionScene<Vec2d> scene;
+};
+
 void bind_batch_api(nb::module_ &m) {
+    nb::class_<StaticCollisionSceneHolder>(m, "StaticCollisionScene")
+        .def_static(
+            "build",
+            [](const std::vector<GeometryHolder> &obstacles, double aura) {
+                StaticCollisionSceneHolder holder;
+                holder.scene.build(
+                    solids_from_holders(obstacles),
+                    static_cast<Vec2d::Scalar>(aura));
+                return holder;
+            },
+            nb::arg("obstacles"),
+            nb::arg("aura") = 0.5)
+        .def(
+            "is_valid_placement",
+            [](const StaticCollisionSceneHolder &self,
+               const GeometryHolder &part,
+               nb::object min_dist,
+               double epsilon_ratio,
+               nb::object margin_sq) {
+                Vec2d::Scalar ms{};
+                if (!margin_sq.is_none()) {
+                    ms = static_cast<Vec2d::Scalar>(nb::cast<double>(margin_sq));
+                } else if (!min_dist.is_none()) {
+                    const double md = nb::cast<double>(min_dist);
+                    const double margin =
+                        md + std::max(1e-6, md * epsilon_ratio);
+                    ms = static_cast<Vec2d::Scalar>(margin * margin);
+                } else {
+                    throw nb::value_error(
+                        "is_valid_placement: provide min_dist or margin_sq");
+                }
+                return self.scene.is_valid_placement(part.solid, ms);
+            },
+            nb::arg("part"),
+            nb::arg("min_dist") = nb::none(),
+            nb::arg("epsilon_ratio") = 0.05,
+            nb::arg("margin_sq") = nb::none())
+        .def(
+            "query_any_violation",
+            [](const StaticCollisionSceneHolder &self,
+               const GeometryHolder &part,
+               nb::object min_dist,
+               double epsilon_ratio,
+               nb::object margin_sq) {
+                Vec2d::Scalar ms{};
+                Vec2d::Scalar distance_margin{};
+                if (!margin_sq.is_none()) {
+                    ms = static_cast<Vec2d::Scalar>(nb::cast<double>(margin_sq));
+                    distance_margin = ms > static_cast<Vec2d::Scalar>(0)
+                        ? static_cast<Vec2d::Scalar>(
+                              std::sqrt(static_cast<double>(ms)))
+                        : static_cast<Vec2d::Scalar>(0);
+                } else if (!min_dist.is_none()) {
+                    const double md = nb::cast<double>(min_dist);
+                    const double margin =
+                        md + std::max(1e-6, md * epsilon_ratio);
+                    ms = static_cast<Vec2d::Scalar>(margin * margin);
+                    distance_margin = static_cast<Vec2d::Scalar>(margin);
+                } else {
+                    throw nb::value_error(
+                        "query_any_violation: provide min_dist or margin_sq");
+                }
+                return self.scene.query_any_violation(
+                    part.solid, ms, distance_margin);
+            },
+            nb::arg("part"),
+            nb::arg("min_dist") = nb::none(),
+            nb::arg("epsilon_ratio") = 0.05,
+            nb::arg("margin_sq") = nb::none());
+
     m.def(
         "batch_check_validity",
         [](const GeometryHolder &part,

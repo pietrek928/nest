@@ -7,6 +7,7 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
+#include "common/polylabel.h"
 #include "geometry_factory.h"
 #include "intersect/polygon_intersect.h"
 #include "python_converters.h"
@@ -15,6 +16,58 @@ namespace nb = nanobind;
 #include "solid/decompose.h"
 #include "solid/point_in_solid.h"
 #include "types.h"
+
+std::vector<std::vector<Vec2d>> rings_from_geometry(const GeometryHolder &g) {
+    std::vector<std::vector<Vec2d>> outers;
+    std::vector<std::vector<Vec2d>> holes;
+    for (const auto &ring : g.solid.boundary_rings) {
+        if (ring.points.size() < 2) {
+            continue;
+        }
+        if (ring.is_subtractive) {
+            holes.push_back(ring.points);
+        } else {
+            outers.push_back(ring.points);
+        }
+    }
+    if (outers.empty()) {
+        return {};
+    }
+    // Prefer the largest outer when Geometry holds multiple shells.
+    std::size_t best = 0;
+    double best_area = -1.0;
+    for (std::size_t i = 0; i < outers.size(); ++i) {
+        double area = 0.0;
+        const auto &ring = outers[i];
+        for (std::size_t k = 0, j = ring.size() - 1; k < ring.size(); j = k++) {
+            area += static_cast<double>(ring[j][0] * ring[k][1] - ring[k][0] * ring[j][1]);
+        }
+        area = std::abs(area) * 0.5;
+        if (area > best_area) {
+            best_area = area;
+            best = i;
+        }
+    }
+    std::vector<std::vector<Vec2d>> rings;
+    rings.reserve(1 + holes.size());
+    rings.push_back(std::move(outers[best]));
+    for (auto &hole : holes) {
+        rings.push_back(std::move(hole));
+    }
+    return rings;
+}
+
+std::vector<std::vector<Vec2d>> rings_from_python(nb::handle rings_handle) {
+    std::vector<std::vector<Vec2d>> rings;
+    for (nb::handle ring : nb::iter(rings_handle)) {
+        std::vector<Vec2d> pts;
+        points_from_iterable(ring, pts);
+        if (pts.size() >= 2) {
+            rings.push_back(std::move(pts));
+        }
+    }
+    return rings;
+}
 
 void bind_geometry_class(nb::module_ &m) {
     nb::class_<GeometryHolder>(m, "Geometry")
@@ -204,6 +257,19 @@ void bind_geometry_class(nb::module_ &m) {
                 return out;
             })
         .def(
+            "boundary_rings",
+            [](const GeometryHolder &g) {
+                nb::list out;
+                for (const auto &ring : g.solid.boundary_rings) {
+                    nb::list coords;
+                    for (const auto &p : ring.points) {
+                        coords.append(nb::make_tuple(p[0], p[1]));
+                    }
+                    out.append(nb::make_tuple(coords, ring.is_subtractive));
+                }
+                return out;
+            })
+        .def(
             "contains_point",
             [](const GeometryHolder &g, double x, double y) {
                 return is_point_inside_solid_space(Vec2d({x, y}), g.solid);
@@ -313,4 +379,32 @@ void bind_geometry_class(nb::module_ &m) {
         .def("__repr__", [](const GeometryHolder &) {
             return "<nest_graph.geometry.Geometry>";
         });
+
+    m.def(
+        "polylabel",
+        [](const GeometryHolder &g, double precision) {
+            const auto rings = rings_from_geometry(g);
+            if (rings.empty()) {
+                throw nb::value_error("polylabel: Geometry has no usable rings");
+            }
+            const auto [x, y, r] = polylabel(rings, precision);
+            return nb::make_tuple(x, y, r);
+        },
+        nb::arg("geometry"),
+        nb::arg("precision") = 1.0,
+        "Mapbox polylabel pole of inaccessibility (x, y, distance).");
+
+    m.def(
+        "polylabel_rings",
+        [](nb::handle rings_handle, double precision) {
+            const auto rings = rings_from_python(rings_handle);
+            if (rings.empty()) {
+                throw nb::value_error("polylabel_rings: need at least one ring");
+            }
+            const auto [x, y, r] = polylabel(rings, precision);
+            return nb::make_tuple(x, y, r);
+        },
+        nb::arg("rings"),
+        nb::arg("precision") = 1.0,
+        "Mapbox polylabel on [outer, *holes] rings → (x, y, distance).");
 }

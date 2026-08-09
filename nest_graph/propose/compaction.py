@@ -5,8 +5,9 @@ from typing import Sequence
 import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import unary_union
 
+from nest_graph.geometry import Geometry
+from nest_graph.propose.placement_common import pose_clear_geoms
 from nest_graph.utils import transform_poly
 
 
@@ -24,21 +25,39 @@ def sheet_gravity_point(sheet: Polygon) -> Point:
     return Point(min(coords, key=lambda xy: float(xy[0]) + float(xy[1])))
 
 
+def _as_geometry(g) -> Geometry | None:
+    if g is None:
+        return None
+    if isinstance(g, Geometry):
+        return g
+    if hasattr(g, "is_empty") and g.is_empty:
+        return None
+    return Geometry.from_shapely(g)
+
+
 def _pose_clear(
-    candidate: BaseGeometry,
-    sheet: Polygon,
-    fixed: BaseGeometry,
+    candidate,
+    board,
+    obstacles,
     min_dist: float,
 ) -> bool:
-    if candidate is None or candidate.is_empty:
+    """Board + clearance via ``pose_clear_geoms`` (Geometry or Shapely inputs)."""
+    cand_g = _as_geometry(candidate)
+    board_g = _as_geometry(board)
+    if cand_g is None or board_g is None:
         return False
-    if not sheet.contains(candidate) and not sheet.buffer(1e-9).contains(candidate):
-        return False
-    if fixed is None or fixed.is_empty:
-        return True
-    if candidate.intersects(fixed) and candidate.intersection(fixed).area > 1e-12:
-        return False
-    return float(candidate.distance(fixed)) + 1e-12 >= float(min_dist)
+    if isinstance(obstacles, Geometry):
+        obs = [obstacles]
+    elif isinstance(obstacles, (list, tuple)):
+        obs = []
+        for o in obstacles:
+            og = _as_geometry(o)
+            if og is not None:
+                obs.append(og)
+    else:
+        og = _as_geometry(obstacles)
+        obs = [og] if og is not None else []
+    return pose_clear_geoms(cand_g, board_g, obs, min_dist)
 
 
 def compact_selection(
@@ -68,6 +87,7 @@ def compact_selection(
 
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
+    board_g = Geometry.from_shapely(sheet)
 
     order = sorted(
         selected_indices,
@@ -77,7 +97,10 @@ def compact_selection(
         g for g in (fixed_obstacles or ())
         if g is not None and not g.is_empty
     ]
-    fixed_parts: list[BaseGeometry] = list(locked)
+    fixed_geoms: list[Geometry] = [
+        g for g in (_as_geometry(p) for p in locked) if g is not None
+    ]
+    part_geoms: dict[int, Geometry] = {}
 
     for idx in order:
         poly = out_polys[idx]
@@ -86,14 +109,22 @@ def compact_selection(
         part = part_by_group.get(gid)
         if part is None or poly is None or poly.is_empty:
             if poly is not None and not poly.is_empty:
-                fixed_parts.append(poly)
+                pg = _as_geometry(poly)
+                if pg is not None:
+                    fixed_geoms.append(pg)
             continue
+
+        if gid not in part_geoms:
+            part_geoms[gid] = Geometry.from_shapely(part)
+        part_g = part_geoms[gid]
 
         cx, cy = float(poly.centroid.x), float(poly.centroid.y)
         dx, dy = gx - cx, gy - cy
         dist = float(np.hypot(dx, dy))
         if dist < 1e-9:
-            fixed_parts.append(poly)
+            pg = _as_geometry(poly)
+            if pg is not None:
+                fixed_geoms.append(pg)
             continue
         ux, uy = dx / dist, dy / dist
 
@@ -102,19 +133,24 @@ def compact_selection(
             for j in selected_indices
             if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
         ]
-        fixed = unary_union(fixed_parts + others) if (fixed_parts or others) else Polygon()
+        other_geoms = [
+            g for g in (_as_geometry(p) for p in others) if g is not None
+        ]
+        obs_geoms = fixed_geoms + other_geoms
         best_poly = poly
         best_tr = tr.copy()
+        best_g = _as_geometry(poly)
         # Grow along gravity until blocked; keep last clear pose.
         for s in range(1, max_steps + 1):
             ox = ux * step * s
             oy = uy * step * s
             cand_tr = np.array([tr[0] + ox, tr[1] + oy, tr[2]], dtype=np.float64)
-            cand = transform_poly(part, cand_tr)
-            if not _pose_clear(cand, sheet, fixed, min_dist):
+            cand_g = part_g.apply_transform(float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]))
+            if not _pose_clear(cand_g, board_g, obs_geoms, min_dist):
                 break
-            best_poly = cand
+            best_poly = transform_poly(part, cand_tr)
             best_tr = cand_tr
+            best_g = cand_g
 
         prev_poly, prev_tr = out_polys[idx], out_tr[idx]
         out_polys[idx] = best_poly
@@ -126,7 +162,9 @@ def compact_selection(
             out_polys[idx] = prev_poly
             out_tr[idx] = prev_tr
             best_poly = prev_poly
-        fixed_parts.append(best_poly)
+            best_g = _as_geometry(prev_poly)
+        if best_g is not None:
+            fixed_geoms.append(best_g)
 
     return out_polys, out_tr
 
@@ -140,22 +178,29 @@ def selection_pairwise_independent(
 ) -> bool:
     """Cheap independence check on the selected subset only.
 
-    Matches ``make_polygon_graph`` by default (hard intersections only). Pass
-    ``require_clearance=True`` to also enforce pairwise ``min_dist``.
+    Matches ``make_polygon_graph`` / C++ packing intersects: hard overlap only
+    (EPA penetration depth > 1e-9). Zero-depth edge kisses are independent.
+    Pass ``require_clearance=True`` to also enforce pairwise ``min_dist``.
+    Uses Geometry intersects/distance (no Shapely intersects hotspot).
     """
     idxs = list(selected_indices)
-    for a in range(len(idxs)):
-        ia = idxs[a]
+    geoms: list[Geometry | None] = []
+    for ia in idxs:
         pa = polys[ia]
-        if pa is None or pa.is_empty:
+        if pa is None or (hasattr(pa, "is_empty") and pa.is_empty):
+            geoms.append(None)
+        else:
+            geoms.append(_as_geometry(pa))
+    for a in range(len(geoms)):
+        ga = geoms[a]
+        if ga is None:
             continue
-        for b in range(a + 1, len(idxs)):
-            ib = idxs[b]
-            pb = polys[ib]
-            if pb is None or pb.is_empty:
+        for b in range(a + 1, len(geoms)):
+            gb = geoms[b]
+            if gb is None:
                 continue
-            if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
+            if ga.intersects(gb):
                 return False
-            if require_clearance and float(pa.distance(pb)) + 1e-12 < float(min_dist):
+            if require_clearance and float(ga.distance(gb)) < float(min_dist):
                 return False
     return True

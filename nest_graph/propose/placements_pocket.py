@@ -6,7 +6,7 @@ from typing import List, Sequence, Tuple
 from shapely import Polygon
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polylabel, triangulate, unary_union
+from shapely.ops import triangulate, unary_union
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.context import (
@@ -18,6 +18,7 @@ from nest_graph.propose.context import (
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_pattern import ClusterPattern
 from nest_graph.propose.void_topology import (
+    polylabel,
     hull_bay_polygons,
     topology_pocket_poles,
     touches_sheet_exterior,

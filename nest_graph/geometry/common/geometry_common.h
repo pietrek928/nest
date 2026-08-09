@@ -17,6 +17,14 @@ inline constexpr Scalar nest_touch_eps_sq() {
     return static_cast<Scalar>(1e-10);
 }
 
+// Hard packing collision: EPA penetration deeper than this.
+// Use ~EPA numeric scale (1e-6 depth ⇒ 1e-12 sq): tighter than feature size,
+// loose enough that zero-depth kisses (noise ~1e-14..1e-16 sq) are not collisions.
+template <class Scalar = double>
+inline constexpr Scalar nest_packing_penetration_eps_sq() {
+    return static_cast<Scalar>(1e-12);
+}
+
 inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
 }

@@ -285,9 +285,9 @@ TEST_CASE("stress distance TC7 kissing edge contact zero penetration", "[poly_di
     auto results = find_polygon_distances<Vec2, DebugTracer>({a, b}, aura, static_cast<double>(0), &tracer);
     const auto* r = find_distance_result(results, 0, 1);
     REQUIRE(r != nullptr);
-    REQUIRE(r->intersect);
-    REQUIRE(r->penetration_sq == Catch::Approx(0.0).margin(1e-9));
-    REQUIRE(r->mtv.qlen() < 1e-8);
+    // Zero-depth kiss is contact, not a packing collision.
+    REQUIRE_FALSE(r->intersect);
+    REQUIRE(r->distance_sq == Catch::Approx(0.0).margin(1e-9));
 
     REQUIRE(tracer.stat_sweep_pairs >= 1);
     REQUIRE(tracer.stat_gjk_evals >= 1);

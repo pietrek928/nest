@@ -2,9 +2,18 @@
 
 import numpy as np
 import pytest
-from shapely.geometry import Polygon, box
+from shapely.geometry import Polygon
 
-from nest_graph.utils import normalize_poly
+from tests.fixtures.shapes import (
+    donut,
+    l_shape,
+    l_shape_raw as l_shape_raw_factory,
+    nest_board_large as nest_board_large_factory,
+    nest_triangle_board,
+    notch_square as notch_square_factory,
+    rect_poly as rect_poly_factory,
+    tri_poly as tri_poly_factory,
+)
 
 # Shapely intersects True, Geometry.intersects False before boundary-ring fix.
 REGRESSION_INTERSECT_TRANSFORMS = [
@@ -32,37 +41,37 @@ def pytest_generate_tests(metafunc):
 
 @pytest.fixture
 def nest_board() -> Polygon:
-    return Polygon([(0, 0), (1.2, 0), (0, 1.1)])
+    return nest_triangle_board()
 
 
 @pytest.fixture
 def nest_board_large() -> Polygon:
-    return Polygon([(0, 0), (30, 0), (30, 30), (0, 30)])
+    return nest_board_large_factory()
 
 
 @pytest.fixture
 def rect_poly():
-    return normalize_poly(Polygon([(0, 0), (0.1, 0), (0.1, 0.1), (0, 0.1)]))
+    return rect_poly_factory()
 
 
 @pytest.fixture
 def tri_poly():
-    return normalize_poly(Polygon([(0, 0), (0.15, 0), (0, 0.07)]))
+    return tri_poly_factory()
 
 
 @pytest.fixture
 def l_shape_poly():
-    return normalize_poly(Polygon([(0, 0), (4, 0), (4, 2), (2, 2), (2, 4), (0, 4)]))
+    return l_shape()
 
 
 @pytest.fixture
 def l_shape_raw() -> Polygon:
-    return Polygon([(0, 0), (4, 0), (4, 2), (2, 2), (2, 4), (0, 4)])
+    return l_shape_raw_factory()
 
 
 @pytest.fixture
 def notch_square() -> Polygon:
-    return Polygon([(2.5, 2.5), (3.5, 2.5), (3.5, 3.5), (2.5, 3.5)])
+    return notch_square_factory()
 
 
 @pytest.fixture
@@ -86,9 +95,7 @@ def small_transforms():
 
 @pytest.fixture
 def nest_board_donut() -> Polygon:
-    outer = box(0, 0, 10, 10)
-    hole = box(3, 3, 7, 7)
-    return outer.difference(hole)
+    return donut()
 
 
 from nest_graph.config import (
