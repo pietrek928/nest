@@ -97,20 +97,9 @@ def pocket_target(
     """Return (poi, align_angle, tag) for a void/bay polygon."""
     if void_poly is None or void_poly.is_empty:
         return None
-    eroded = void_poly.buffer(-float(min_dist))
-    if eroded is None or eroded.is_empty:
-        if not relax_erosion:
-            return None
-        # Open void / narrow clip: still pick a POI on the uneroded poly.
-        try:
-            poi = polylabel(void_poly, tolerance=max(float(min_dist), 0.1))
-        except Exception:
-            poi = void_poly.representative_point()
-        if poi is None or poi.is_empty:
-            return None
-        if mrr_aspect_ratio(void_poly) < _SQUARE_ASPECT:
-            return poi, 0.0, TAG_POCKET_MRR
-        return poi, float(mrr_major_axis_angle(void_poly)), TAG_POCKET_MRR
+    # Raw void seeds; clearance via batch valid_at (SEARCH HALOS — no buffer erosion).
+    eroded = void_poly
+    _ = relax_erosion  # API retained; erosion no longer applied
     mrr = void_poly.minimum_rotated_rectangle
     mrr_area = float(mrr.area) if mrr is not None and not mrr.is_empty else 0.0
     use_tri = mrr_area > 1e-12 and float(void_poly.area) < _L_SHAPE_MRR_AREA * mrr_area

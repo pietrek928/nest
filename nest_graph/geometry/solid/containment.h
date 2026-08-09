@@ -17,10 +17,29 @@
 template <class VecType>
 inline bool narrow_phase_contain(
     const VecType* inner_pts, int inner_n,
+    const SolidGeometry<VecType>& owner,
     const SolidGeometry<VecType>& outer
 ) {
-    if (inner_n <= 0) return false;
-    return is_point_inside_solid_space(inner_pts[0], outer);
+    if (inner_n <= 0) {
+        return false;
+    }
+    using Scalar = typename VecType::Scalar;
+    // Strict-interior witness: nudge endpoint toward owner solid center so
+    // shared-boundary kisses do not promote as containment.
+    const VecType& cen = owner.bounding_circle.c;
+    const VecType& pt = inner_pts[0];
+    VecType toward({cen[0] - pt[0], cen[1] - pt[1]});
+    constexpr Scalar nudge = static_cast<Scalar>(1e-6);
+    const Scalar tlen = static_cast<Scalar>(
+        std::sqrt(static_cast<double>(
+            toward[0] * toward[0] + toward[1] * toward[1])));
+    VecType probe = pt;
+    if (tlen > nudge) {
+        probe = VecType({
+            pt[0] + toward[0] * (nudge / tlen),
+            pt[1] + toward[1] * (nudge / tlen)});
+    }
+    return is_point_inside_solid_space(probe, outer);
 }
 
 template <class VecType>
@@ -32,12 +51,22 @@ inline bool check_mutual_containment(
 
     for (size_t p_idx = 0; p_idx < polyA.line_parts.size(); ++p_idx) {
         if (polyA.line_parts[p_idx].is_subtractive) continue;
-        if (narrow_phase_contain(polyA.get_part_points(p_idx), polyA.get_part_size(p_idx), polyB)) return true;
+        if (narrow_phase_contain(
+                polyA.get_part_points(static_cast<int>(p_idx)),
+                polyA.get_part_size(static_cast<int>(p_idx)),
+                polyA, polyB)) {
+            return true;
+        }
     }
 
     for (size_t p_idx = 0; p_idx < polyB.line_parts.size(); ++p_idx) {
         if (polyB.line_parts[p_idx].is_subtractive) continue;
-        if (narrow_phase_contain(polyB.get_part_points(p_idx), polyB.get_part_size(p_idx), polyA)) return true;
+        if (narrow_phase_contain(
+                polyB.get_part_points(static_cast<int>(p_idx)),
+                polyB.get_part_size(static_cast<int>(p_idx)),
+                polyB, polyA)) {
+            return true;
+        }
     }
 
     return false;
@@ -88,38 +117,8 @@ inline void promote_containment_pairs_bipartite(
 }
 
 // =========================================================================
-// PART 2: STANDALONE CONTAINMENT & BATCH CACHING
+// PART 2: STANDALONE CONTAINMENT
 // =========================================================================
-
-// CACHED ROUTER: Preserves GJK indices across calls while still dynamically
-// swapping arrays to favor gradient climbers.
-template <class VecType>
-inline bool cached_narrow_phase_intersect(
-    const VecType* inner_pts, int inner_n,
-    const VecType* outer_pts, int outer_n,
-    int& outer_cache
-) {
-    const bool swapped = (inner_n > outer_n);
-    const VecType* p1 = swapped ? outer_pts : inner_pts;
-    const int s1 = swapped ? outer_n : inner_n;
-    const VecType* p2 = swapped ? inner_pts : outer_pts;
-    const int s2 = swapped ? outer_n : inner_n;
-
-    // The inner shape changes every loop, so its cache starts at 0.
-    // The outer shape is persistent, so we thread its cache index.
-    int it1 = swapped ? outer_cache : 0;
-    int it2 = swapped ? 0 : outer_cache;
-
-    if (s1 + s2 > 24) {
-        auto res = convex_linestrings_intersect_gjk_gradient<VecType>(p1, s1, p2, s2, it1, it2);
-        outer_cache = swapped ? res.it1 : res.it2;
-        return res.intersect;
-    } else {
-        auto res = convex_linestrings_intersect_gjk<VecType>(p1, s1, p2, s2, it1, it2);
-        outer_cache = swapped ? res.it1 : res.it2;
-        return res.intersect;
-    }
-}
 
 template <class VecType>
 inline bool boundaries_intersect(

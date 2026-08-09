@@ -7,8 +7,8 @@ import time
 
 import numpy as np
 
+from nest_graph.propose.ranking import pack_tightness_cost
 from nest_graph.build_graph import (
-    _border_tightness_cost,
     _build_transform_batch,
     _first_pass_border_ring_selection,
     _first_pass_layered_selection,
@@ -75,7 +75,7 @@ def _run_pre_refine(cfg: BuildGraphConfig) -> dict:
     pack_polys = [polys2[i] for i in selected]
     pack_gids = [gid2[i] for i in selected]
     pack_tr = [np.asarray(tr2[i], dtype=np.float64) for i in selected]
-    pre_cost = _border_tightness_cost(pack_polys, p_board, min_dist)
+    pre_cost = pack_tightness_cost(pack_polys, p_board, min_dist)
     elapsed = time.perf_counter() - t0
     return {
         "pool": len(polys),
@@ -114,7 +114,7 @@ def _apply_refine(
         pack_gids=gids,
         pack_tr=trs,
     )
-    cost = _border_tightness_cost(refined_polys, pre["board"], pre["min_dist"])
+    cost = pack_tightness_cost(refined_polys, pre["board"], pre["min_dist"])
     return {
         "refine_passes": refine_passes,
         "count": len(refined_polys),

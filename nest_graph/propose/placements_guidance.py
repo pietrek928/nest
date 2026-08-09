@@ -16,14 +16,12 @@ from nest_graph.placement_scene import (
 )
 
 from nest_graph.propose.geometry import ProposeGeometry
-def sample_placement_points_ribbon(
-    focal: BaseGeometry,
-    part_poly: Polygon,
-    min_dist: float,
-    num_samples: int,
-) -> list[tuple[float, float, float]]:
-    from nest_graph.propose.placements_edge import sample_placement_points_ribbon as _sample
-    return _sample(focal, part_poly, min_dist, num_samples)
+from nest_graph.propose.placements_edge import (
+    _board_edge_snap_seeds,
+    propose_placements_board_edge as propose_placements_board_edge_snaps,
+    sample_placement_points_ribbon,
+)
+from nest_graph.propose.context import placement_contact_error
 
 
 class GuidanceMoveType(StrEnum):
@@ -373,6 +371,87 @@ def propose_placements_board_edge_guidance_cast(
                 seen.add(key)
                 out.append(candidate)
     return out
+
+
+def propose_placements_board_edge(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    base_shape: BaseGeometry,
+    *,
+    min_dist: float,
+    propose_cfg: ProposeConfig,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    num_angles: int | None = None,
+    samples_per_edge: int | None = None,
+    top_n: int = 16,
+    guidance_refine: bool | None = None,
+) -> List[Tuple[float, float, float]]:
+    """Board-edge dock: snap seeds + optional guidance cast (cycle-free orchestration)."""
+    refine = (
+        guidance_refine
+        if guidance_refine is not None
+        else propose_cfg.board_edge_guidance_refine
+    )
+    if not refine:
+        return propose_placements_board_edge_snaps(
+            shape_to_place,
+            sheet,
+            base_shape,
+            min_dist=min_dist,
+            propose_cfg=propose_cfg,
+            propose_geom=propose_geom,
+            pt_push=pt_push,
+            num_angles=num_angles,
+            samples_per_edge=samples_per_edge,
+            top_n=top_n,
+            guidance_refine=False,
+        )
+
+    n_angles = num_angles if num_angles is not None else propose_cfg.placement_num_angles
+    samples = (
+        samples_per_edge
+        if samples_per_edge is not None
+        else propose_cfg.board_edge_samples_per_edge
+    )
+    seed_anchors = _board_edge_snap_seeds(
+        shape_to_place,
+        sheet,
+        base_shape,
+        min_dist=min_dist,
+        propose_geom=propose_geom,
+        pt_push=pt_push,
+        num_angles=n_angles,
+        samples_per_edge=samples,
+        top_n=top_n * 2,
+    )
+    if not seed_anchors:
+        return []
+    snap_coords = [coords for coords, _anchor, _inward in seed_anchors]
+    refined = propose_placements_board_edge_guidance_cast(
+        seed_anchors,
+        pt_push,
+        propose_geom,
+        propose_cfg,
+        min_dist=min_dist,
+        top_n=top_n,
+    )
+    merged: list[tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+    for coords in refined + snap_coords:
+        key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 1))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(coords)
+        if len(merged) >= top_n:
+            break
+    merged.sort(
+        key=lambda c: placement_contact_error(
+            propose_geom.placed_at(c), sheet, min_dist, None,
+        ),
+    )
+    return merged[:top_n]
 
 
 def propose_placements_guidance_propositions(

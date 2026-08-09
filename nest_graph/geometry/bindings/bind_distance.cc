@@ -81,9 +81,9 @@ void bind_distance_types(nb::module_ &m) {
 void bind_distance_api(nb::module_ &m) {
     m.def(
         "find_polygon_distances",
-        [](const std::vector<GeometryHolder> &polygons, double aura, double distance_margin) {
+        [](std::vector<GeometryHolder> polygons, double aura, double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(polygons),
+                solids_from_holders(std::move(polygons)),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },
@@ -93,12 +93,12 @@ void bind_distance_api(nb::module_ &m) {
 
     m.def(
         "find_polygon_distances_active",
-        [](const std::vector<GeometryHolder> &polygons,
+        [](std::vector<GeometryHolder> polygons,
            const std::vector<int> &active_indices,
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(polygons),
+                solids_from_holders(std::move(polygons)),
                 active_indices,
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
@@ -110,13 +110,13 @@ void bind_distance_api(nb::module_ &m) {
 
     m.def(
         "find_polygon_distances_bipartite",
-        [](const std::vector<GeometryHolder> &set_a,
-           const std::vector<GeometryHolder> &set_b,
+        [](std::vector<GeometryHolder> set_a,
+           std::vector<GeometryHolder> set_b,
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(set_a),
-                solids_from_holders(set_b),
+                solids_from_holders(std::move(set_a)),
+                solids_from_holders(std::move(set_b)),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },

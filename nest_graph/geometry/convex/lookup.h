@@ -58,8 +58,12 @@ inline int get_extreme_index_polygon_gradient(const VecType* poly, int n, const 
 // -------------------------------------------------------------------------
 template <class VecType>
 inline int get_extreme_index_linestring(const VecType* ls, int n, const VecType& dir, int cache_idx) {
-    if (n > 2 && ls[0] == ls[n - 1]) {
-        return get_extreme_index_polygon(ls, n - 1, dir, cache_idx);
+    if (n > 2) {
+        const auto d = ls[0] - ls[n - 1];
+        using Scalar = typename VecType::Scalar;
+        if (d.dp(d) < static_cast<Scalar>(1e-12)) {
+            return get_extreme_index_polygon(ls, n - 1, dir, cache_idx);
+        }
     }
 
     int curr = (cache_idx >= 0 && cache_idx < n) ? cache_idx : 0;

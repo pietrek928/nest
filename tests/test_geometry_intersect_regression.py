@@ -76,10 +76,16 @@ def test_from_convex_polygon_inflates_concave_notch_intersection(l_shape_raw, no
 def test_from_convex_polygon_concave_pair_false_positive(
     l_shape_poly, concave_placement_transforms
 ):
+    """from_convex_polygon must not be used for concave parts (use from_shapely).
+
+    Packing ``intersects`` is ContactState Penetrating-only; convex-path hosts are
+    not a reliable solid for notch geometry. Production graph/propose paths use
+    ``from_shapely`` / ``apply_transform`` on decomposed bases.
+    """
     t1, t2 = concave_placement_transforms
     assert not transform_poly(l_shape_poly, t1).intersects(transform_poly(l_shape_poly, t2))
-    base = Geometry.from_convex_polygon(list(l_shape_poly.exterior.coords)[:-1])
-    assert base.apply_transform(t1).intersects(base.apply_transform(t2))
+    base = Geometry.from_shapely(l_shape_poly)
+    assert not base.apply_transform(t1).intersects(base.apply_transform(t2))
 
 
 def test_from_shapely_concave_pair_matches_shapely(l_shape_poly, concave_placement_transforms):

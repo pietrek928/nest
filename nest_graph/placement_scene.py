@@ -19,19 +19,14 @@ def placement_outside_outer(placed: Geometry, sheet: Polygon) -> bool:
     return pb[0] < minx or pb[2] > maxx or pb[1] < miny or pb[3] > maxy
 
 
-def placement_footprint_inside_board(placed: Geometry, board_geom: Geometry) -> bool:
-    """All additive vertices of placed inside board solid."""
-    return placed.footprint_inside(board_geom)
-
-
 def footprints_inside_board(
     placed: Sequence[Geometry],
     board_geom: Geometry,
 ) -> list[bool]:
-    """Batch footprint containment vs the same board solid."""
+    """Batch containment vs the same board solid (prefer ``fully_inside``)."""
     if not placed:
         return []
-    return list(board_geom.footprint_inside_batch(list(placed)))
+    return [p.fully_inside(board_geom) for p in placed]
 
 
 from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
@@ -185,7 +180,15 @@ def guidance_config_for_propose(
     diversity_dist_ratio: float = 4.0,
     border_focus: bool = False,
     target_angle_rad: float = 0.0,
+    propose_cfg: ProposeConfig | None = None,
 ) -> GuidanceConfig:
+    if propose_cfg is not None:
+        max_propositions = propose_cfg.guidance_max_propositions
+        use_tight_packing = propose_cfg.guidance_use_tight_packing
+        use_corner_alignment = propose_cfg.guidance_use_corner_alignment
+        enable_grid_exploration = propose_cfg.guidance_enable_grid
+        diversity_dist_ratio = propose_cfg.guidance_diversity_dist_ratio
+        epsilon_ratio = propose_cfg.placement_clearance_epsilon_ratio
     cfg = guidance_config_for_scene(
         min_dist,
         pt_push=pt_push,
@@ -202,6 +205,7 @@ def guidance_config_for_propose(
     cfg.target_angle_rad = target_angle_rad
     if search_radius is not None:
         cfg.search_radius = search_radius
+    _ = recovery  # reserved for callers; scene factory uses pt_push
     return cfg
 
 
@@ -346,7 +350,7 @@ class PlacementScene:
         epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
         skip_footprint: bool = False,
     ) -> bool:
-        if not skip_footprint and not placement_footprint_inside_board(placed, self.board_geom):
+        if not skip_footprint and not placed.fully_inside(self.board_geom):
             return False
         g = self.guidance(placed, xy, config)
         if g.is_penetrating:
@@ -460,7 +464,7 @@ def placement_ok_for_outline(
     from nest_graph.propose.placement_common import clear_of_geoms
     from nest_graph.propose.placement_outline import outline_kiss_ok
 
-    if not placement_footprint_inside_board(placed, scene.board_geom):
+    if not placed.fully_inside(scene.board_geom):
         return False
     if require_outline_kiss and not outline_kiss_ok(
         placed, outline, min_dist, scale=kiss_tolerance_scale,

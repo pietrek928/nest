@@ -10,9 +10,10 @@ from shapely.geometry.base import BaseGeometry
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry, polish_se2_part
 from nest_graph.propose.compaction import selection_pairwise_independent
-from nest_graph.propose.context import _cluster_merge_gap
+from nest_graph.propose.placement_common import as_geometry, is_board_adj
 from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
+from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.utils import transform_poly
 
 
@@ -47,52 +48,18 @@ def exterior_tangent_dirs(
     if info is None:
         return None
     _, (nx, ny) = info
-    # Rotate inward normal 90° → tangents along exterior.
     return [(-ny, nx), (ny, -nx)]
 
 
-def _as_geometry(g) -> Geometry | None:
-    if g is None:
-        return None
-    if isinstance(g, Geometry):
-        return g
-    if hasattr(g, "is_empty") and g.is_empty:
-        return None
-    return Geometry.from_shapely(g)
-
-
-def _is_board_adj(
-    poly: BaseGeometry,
-    sheet: Polygon,
-    min_dist: float,
-) -> bool:
-    """Board-adjacent if standoff ≤ min_dist + 2*gap (old sentinel+buffer merge)."""
-    if poly is None or (hasattr(poly, "is_empty") and poly.is_empty):
-        return False
-    if sheet is None or sheet.is_empty:
-        return False
-    ring = outline_ring_geom(sheet)
-    if ring is None:
-        return False
-    gap = _cluster_merge_gap([poly], min_dist, sheet)
-    g = _as_geometry(poly)
-    if g is None:
-        return False
-    try:
-        return float(g.standoff_distance(ring)) <= float(min_dist) + 2.0 * gap + 1e-9
-    except Exception:
-        return False
-
-
 def local_se2_selection(
-    sheet: Polygon,
-    polys: list[BaseGeometry],
-    transforms: list,
-    group_ids: Sequence[int],
-    selected_indices: Sequence[int],
-    part_by_group: dict[int, Polygon],
-    min_dist: float,
-    propose_cfg: ProposeConfig,
+    sheet: Polygon | SelectionEditCtx,
+    polys: list[BaseGeometry] | None = None,
+    transforms: list | None = None,
+    group_ids: Sequence[int] | None = None,
+    selected_indices: Sequence[int] | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    min_dist: float | None = None,
+    propose_cfg: ProposeConfig | None = None,
     *,
     pole: Point | None = None,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
@@ -100,9 +67,30 @@ def local_se2_selection(
 ) -> tuple[list[BaseGeometry], list, dict]:
     """Slide/rotate selected parts via native polish_se2_part.
 
+    Prefer ``SelectionEditCtx`` as the first argument; legacy kwargs remain.
     Board_adj uses ±exterior tangent only. Floating parts attract toward
     ``pole`` with ±45/±90 slides.
     """
+    if isinstance(sheet, SelectionEditCtx):
+        ctx = sheet
+        sheet = ctx.sheet
+        polys = ctx.polys
+        transforms = ctx.transforms
+        group_ids = ctx.group_ids
+        selected_indices = ctx.selected_indices
+        part_by_group = ctx.part_by_group
+        min_dist = ctx.min_dist
+        propose_cfg = ctx.propose_cfg
+        pole = ctx.pole if pole is None else pole
+        fixed_obstacles = (
+            ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
+        )
+        board_adj_indices = (
+            ctx.board_adj_indices if board_adj_indices is None else board_adj_indices
+        )
+    assert polys is not None and transforms is not None
+    assert group_ids is not None and selected_indices is not None
+    assert part_by_group is not None and min_dist is not None and propose_cfg is not None
     stats = {
         "attempted": 0,
         "accepted": 0,
@@ -133,9 +121,7 @@ def local_se2_selection(
     n_angles = max(1, int(propose_cfg.local_se2_n_angles))
 
     coarse_step = max(4.0 * float(min_dist), 1e-4)
-    fine_step = max(0.25 * float(min_dist), 1e-4)
-    max_coarse = max(1, int(propose_cfg.local_se2_max_coarse_steps))
-    max_fine = max(1, int(propose_cfg.local_se2_max_fine_steps))
+    max_coarse = max(1, int(getattr(propose_cfg, "local_se2_max_coarse_steps", 8)))
     board_g = Geometry.from_shapely(sheet)
     minx, miny, maxx, maxy = sheet.bounds
     sheet_diag = math.hypot(maxx - minx, maxy - miny)
@@ -146,7 +132,7 @@ def local_se2_selection(
             i for i in sel
             if out_polys[i] is not None
             and not out_polys[i].is_empty
-            and _is_board_adj(out_polys[i], sheet, min_dist)
+            and is_board_adj(out_polys[i], sheet, min_dist)
         }
 
     def _order_key(i: int) -> float:
@@ -193,7 +179,7 @@ def local_se2_selection(
             if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
         ]
         obs_geoms = [
-            g for g in (_as_geometry(p) for p in (list(locked) + others)) if g is not None
+            g for g in (as_geometry(p) for p in (list(locked) + others)) if g is not None
         ]
         if gid not in part_geoms:
             part_geoms[gid] = Geometry.from_shapely(part)
@@ -203,7 +189,7 @@ def local_se2_selection(
         max_t = max(
             sheet_diag,
             dist0 if use_pole_metric else 0.0,
-            coarse_step * max_coarse + fine_step * max_fine,
+            coarse_step * max_coarse,
         )
         polished = polish_se2_part(
             part_g,

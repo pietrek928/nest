@@ -12,12 +12,11 @@ from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.placement_scene import (
     best_proposition,
     placement_clearance_epsilon,
-    placement_footprint_inside_board,
 )
 from nest_graph.utils import get_shape_polygons_coords, transform_poly
 
 from nest_graph.propose.context import placement_contact_error, should_use_border_focus
-from nest_graph.propose.placement_outline import outline_standoff_distance
+from nest_graph.propose.placement_outline import outline_ring_geom, outline_standoff_distance
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
 from nest_graph.propose.placements_guidance import (
     candidate_from_proposition,
@@ -71,17 +70,21 @@ def _score_placement_rule_hybrid(
     focal_shape: Optional[BaseGeometry],
     rules,
     group_id: int,
+    void_pole: Point | None = None,
 ) -> float:
+    # Private geom scorers only — do not re-enter _rank_score_for_mode (R15).
     geom_mode = _rule_hybrid_geometry_mode(propose_cfg, base_shape)
     if geom_mode == "border":
         score = _score_placement_border(
-            coords, shape_to_place, propose_geom, pt_push, min_dist,
+            coords, shape_to_place, propose_geom, pt_push, min_dist, propose_cfg,
         )
     else:
         score = _score_placement_contact_hybrid(
             coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
             propose_cfg.contact_clearance_hybrid_weight,
             tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
+            propose_cfg=propose_cfg,
+            void_pole=void_pole,
         )
     if score == float("-inf") or rules is None or rules.size() == 0:
         return score
@@ -108,6 +111,77 @@ def _neighbor_excess_gap_for_placed(
     return max(0.0, nearest - min_dist)
 
 
+def calculate_excess_and_kiss(
+    geom: Geometry,
+    *,
+    obstacles: list[Geometry],
+    outline: BaseGeometry | None,
+    min_dist: float,
+    ring_geom: Geometry | None = None,
+) -> tuple[float, float]:
+    """Single tightness math: (excess_neighbor_gap, outline_kiss_err).
+
+    Both single-placed and pack-total wrappers must call this SoT.
+    """
+    excess = _neighbor_excess_gap_for_placed(geom, obstacles, min_dist) if obstacles else 0.0
+    if ring_geom is not None:
+        kiss = abs(geom.standoff_distance(ring_geom) - min_dist)
+    elif outline is not None:
+        kiss = abs(outline_standoff_distance(geom, outline) - min_dist)
+    else:
+        kiss = 0.0
+    return excess, kiss
+
+
+def pack_neighbor_excess_gap(geoms: list[Geometry], min_dist: float) -> float:
+    """Sum of per-part excess gaps vs nearest neighbor in a pack."""
+    if len(geoms) < 2:
+        return 0.0
+    from nest_graph.geometry import find_polygon_distances
+
+    results = find_polygon_distances(geoms, aura=0.5)
+    nearest = [float("inf")] * len(geoms)
+    for r in results:
+        d = 0.0 if r.intersect else math.sqrt(r.distance_sq)
+        if 0 <= r.polyA_idx < len(nearest):
+            nearest[r.polyA_idx] = min(nearest[r.polyA_idx], d)
+        if 0 <= r.polyB_idx < len(nearest):
+            nearest[r.polyB_idx] = min(nearest[r.polyB_idx], d)
+    return sum(
+        max(0.0, nd - min_dist)
+        for nd in nearest
+        if nd < float("inf")
+    )
+
+
+def pack_tightness_cost(
+    geoms: Sequence[Geometry] | Sequence[BaseGeometry],
+    outline: BaseGeometry,
+    min_dist: float,
+) -> float:
+    """Lower is tighter for a full pack (2*excess + kiss). Uses shared kiss math.
+
+    Accepts native ``Geometry`` (preferred, no conversion) or Shapely polys.
+    """
+    if not geoms:
+        return 0.0
+    if any(not isinstance(g, Geometry) for g in geoms):
+        from nest_graph.propose.placement_common import as_geometry
+
+        geoms = [g for g in (as_geometry(p) for p in geoms) if g is not None]
+        if not geoms:
+            return 0.0
+    ring = outline_ring_geom(outline) if outline is not None else None
+    kiss = 0.0
+    for g in geoms:
+        _excess, k = calculate_excess_and_kiss(
+            g, obstacles=[], outline=outline, min_dist=min_dist, ring_geom=ring,
+        )
+        kiss += k
+    excess_gap = pack_neighbor_excess_gap(geoms, min_dist)
+    return 2.0 * excess_gap + 1.0 * kiss
+
+
 def score_placement_tightness(
     coords: Tuple[float, float, float],
     propose_geom: ProposeGeometry,
@@ -118,11 +192,11 @@ def score_placement_tightness(
     placed_geom = propose_geom.placed_at(coords)
     if not propose_geom.valid_at(coords, pt_push):
         return float("-inf")
-    kiss_err = abs(
-        outline_standoff_distance(placed_geom, propose_geom.sheet) - min_dist,
-    )
-    excess = _neighbor_excess_gap_for_placed(
-        placed_geom, propose_geom.base_geoms, min_dist,
+    excess, kiss_err = calculate_excess_and_kiss(
+        placed_geom,
+        obstacles=list(propose_geom.base_geoms),
+        outline=propose_geom.sheet,
+        min_dist=min_dist,
     )
     return -(2.0 * excess + 1.0 * kiss_err)
 
@@ -256,7 +330,7 @@ def _placement_feedback(
         cached = feedback_cache[coords]
         return cached
     placed_geom = propose_geom.placed_at(coords)
-    if not placement_footprint_inside_board(placed_geom, propose_geom.board_geom):
+    if not placed_geom.fully_inside(propose_geom.board_geom):
         return None
     g = propose_geom.placement_guidance(placed_geom, (coords[0], coords[1]), pt_push)
     if g.is_penetrating:
@@ -420,41 +494,45 @@ def _rank_score_for_mode(
     group_id: int = 0,
     void_pole: Point | None = None,
 ) -> float:
-    if rank_mode == "rule_hybrid":
-        return _score_placement_rule_hybrid(
+    """Dispatch table for ranking modes (SoT — do not OR with guidance valid_at)."""
+    scorers = {
+        "rule_hybrid": lambda: _score_placement_rule_hybrid(
             coords, shape_to_place, base_shape, propose_geom, propose_cfg,
-            pt_push, min_dist, focal_shape, rules, group_id,
-        )
-    if rank_mode == "border":
-        return _score_placement_border(
+            pt_push, min_dist, focal_shape, rules, group_id, void_pole=void_pole,
+        ),
+        "border": lambda: _score_placement_border(
             coords, shape_to_place, propose_geom, pt_push, min_dist, propose_cfg,
-        )
-    if rank_mode == "contact":
-        return _score_placement_contact(
+        ),
+        "contact": lambda: _score_placement_contact(
             coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
             propose_cfg,
-        )
-    if rank_mode == "contact_hybrid":
-        return _score_placement_contact_hybrid(
+        ),
+        "contact_hybrid": lambda: _score_placement_contact_hybrid(
             coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
             propose_cfg.contact_clearance_hybrid_weight,
             tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
             propose_cfg=propose_cfg,
             void_pole=void_pole,
-        )
-    if rank_mode == "clearance":
-        return _score_placement_clearance(
+        ),
+        "clearance": lambda: _score_placement_clearance(
             coords, propose_geom, pt_push, propose_cfg, min_dist,
-        )
-    if rank_mode == "hybrid":
-        return _score_placement_hybrid(
+        ),
+        "hybrid": lambda: _score_placement_hybrid(
             coords, base_shape, shape_to_place, boundary, pt_push, min_dist,
             propose_geom, propose_cfg,
-        )
+        ),
+    }
+    scorer = scorers.get(rank_mode)
+    if scorer is not None:
+        return scorer()
     legacy = _score_placement_legacy(
         coords, base_shape, shape_to_place, boundary, pt_push, min_dist, propose_geom,
     )
     return -legacy if legacy != float("inf") else float("-inf")
+
+
+# Public alias for plan / call sites.
+score_for_mode = _rank_score_for_mode
 
 
 def cast_squeeze_ranked_coords(
@@ -782,40 +860,21 @@ def _rank_proposal_coords(
         if key in seen:
             continue
         seen.add(key)
-        if mode == "border":
-            score = _score_placement_border(
-                coords, shape_to_place, propose_geom, pt_push, min_dist,
-            )
-        elif mode == "contact":
-            score = _score_placement_contact(
-                coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
-            )
-        elif mode == "contact_hybrid":
-            score = _score_placement_contact_hybrid(
-                coords, shape_to_place, propose_geom, pt_push, min_dist, focal_shape,
-                propose_cfg.contact_clearance_hybrid_weight,
-                tightness_weight=propose_cfg.contact_tightness_hybrid_weight,
-                propose_cfg=propose_cfg,
-                void_pole=void_pole,
-            )
-        elif mode == "rule_hybrid":
-            score = _score_placement_rule_hybrid(
-                coords, shape_to_place, base_shape, propose_geom, propose_cfg,
-                pt_push, min_dist, focal_shape, rules, group_id,
-            )
-        elif mode == "clearance":
-            score = _score_placement_clearance(
-                coords, propose_geom, pt_push, propose_cfg, min_dist,
-            )
-        elif mode == "hybrid":
-            score = _score_placement_hybrid(
-                coords, base_shape, shape_to_place, boundary, pt_push, min_dist,
-                propose_geom, propose_cfg,
-            )
-        else:
-            score = -_score_placement_legacy(
-                coords, base_shape, shape_to_place, boundary, pt_push, min_dist, propose_geom,
-            )
+        score = _rank_score_for_mode(
+            coords,
+            rank_mode=mode if mode is not None else "legacy",
+            base_shape=base_shape,
+            shape_to_place=shape_to_place,
+            boundary=boundary,
+            propose_geom=propose_geom,
+            propose_cfg=propose_cfg,
+            pt_push=pt_push,
+            min_dist=min_dist,
+            focal_shape=focal_shape,
+            rules=rules,
+            group_id=group_id,
+            void_pole=void_pole,
+        )
         if score > float("-inf") and score < float("inf"):
             scored.append((score, coords))
         elif mode == "legacy" and score > float("-inf"):

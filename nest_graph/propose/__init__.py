@@ -21,6 +21,7 @@ from nest_graph.proposer_names import (
 from nest_graph.propose.pipeline import (
     base_shape_from_selection,
     border_edge_transforms_for_group,
+    collect_propose_batch_for_nest,
     collect_propose_candidates,
     propose_coords_with_strategy,
     proposed_transforms_for_groups,
@@ -32,12 +33,12 @@ from nest_graph.propose.placements_geo import (
     propose_placements_voronoi,
 )
 from nest_graph.propose.placements_guidance import (
+    propose_placements_board_edge,
     propose_placements_guidance_cast,
     propose_placements_guidance_propositions,
     propose_placements_guidance_walk,
 )
 from nest_graph.propose.placements_edge import (
-    propose_placements_board_edge,
     propose_placements_group_fit,
     propose_placements_ribbon_free,
     propose_placements_sheet_corners,
@@ -58,6 +59,10 @@ from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
     propose_placements_cluster_copy,
 )
+from nest_graph.propose.placements_selection_expand import (
+    propose_placements_history_expand,
+    propose_placements_selection_expand,
+)
 from nest_graph.propose.void_topology import (
     iterative_multi_poles,
     topology_pocket_poles,
@@ -67,16 +72,45 @@ from nest_graph.propose.ranking import (
     calculate_complex_score,
     finalize_propositions,
 )
+from nest_graph.propose.post_pack import run_post_pack_passes
+from nest_graph.propose.selection_edit import SelectionEditCtx
+from nest_graph.propose.types import (
+    PackedProposeExtras,
+    ProposeContext,
+    make_propose_context,
+)
+from nest_graph.propose.first_pass_border import (
+    first_pass_border_coords,
+    guidance_border_refine,
+    sequential_border_augment,
+)
+from nest_graph.propose.void_selection import (
+    apply_void_selection_boosts,
+    format_prop_accept,
+    pin_nest_void_independent,
+)
 
 __all__ = [
     "ALL_PROPOSER_NAMES",
     "ProposerName",
     "ProposeGeometry",
+    "ProposeContext",
+    "PackedProposeExtras",
+    "SelectionEditCtx",
+    "make_propose_context",
+    "run_post_pack_passes",
+    "apply_void_selection_boosts",
     "border_focal_for_propose",
+    "first_pass_border_coords",
+    "format_prop_accept",
+    "guidance_border_refine",
+    "pin_nest_void_independent",
+    "sequential_border_augment",
     "border_solid_focal",
     "calculate_complex_score",
     "cluster_packed_solid_groups",
     "collect_propose_candidates",
+    "collect_propose_batch_for_nest",
     "densify_points",
     "effective_ranking_mode",
     "evaluate_ray_placement",
@@ -102,6 +136,8 @@ __all__ = [
     "propose_placements_voronoi",
     "propose_placements_pocket_fit",
     "propose_placements_cluster_copy",
+    "propose_placements_selection_expand",
+    "propose_placements_history_expand",
     "extract_cluster_patterns",
     "iterative_multi_poles",
     "topology_pocket_poles",

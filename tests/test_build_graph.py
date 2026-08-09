@@ -11,7 +11,6 @@ from nest_graph.build_graph import (
     _append_selection_window,
     _base_geometries,
     _border_pack_graph,
-    _border_tightness_cost,
     _build_transform_batch,
     _first_pass_border_ring_selection,
     _first_pass_layered_selection,
@@ -32,13 +31,13 @@ from nest_graph.build_graph import (
     select_polygons_from_edges,
 )
 from nest_graph.board import board_context_from_geometry
+from nest_graph.propose.ranking import pack_tightness_cost
 from nest_graph.config import BuildGraphConfig, SamplingConfig, SelectionConfig
 from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph
 from nest_graph.geometry import find_polygon_intersections_bipartite
 from nest_graph.placement_scene import (
     board_placement_valid,
     guidance_config_for_graph,
-    placement_footprint_inside_board,
     placement_ok_for_outline,
     placement_scene_for_part,
 )
@@ -474,7 +473,7 @@ def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly,
     pack_tr = [t1, t2, t3]
     sheet, _ = board_context_from_geometry(nest_board)
     board_geom = Geometry.from_shapely(sheet)
-    before = _border_tightness_cost(pack_polys, nest_board, min_dist)
+    before = pack_tightness_cost(pack_polys, nest_board, min_dist)
     refined_polys, refined_gids, refined_tr = _guidance_border_refine(
         cfg,
         nest_board,
@@ -484,10 +483,10 @@ def test_guidance_border_refine_keeps_collision_free_ring(nest_board, rect_poly,
         pack_gids=pack_gids,
         pack_tr=pack_tr,
     )
-    after = _border_tightness_cost(refined_polys, nest_board, min_dist)
+    after = pack_tightness_cost(refined_polys, nest_board, min_dist)
     assert after <= before + 1e-6
     for poly in refined_polys:
-        assert placement_footprint_inside_board(Geometry.from_shapely(poly), board_geom)
+        assert Geometry.from_shapely(poly).fully_inside(board_geom)
     graph, polys, gids, trans, selected = _border_pack_graph(
         refined_polys, refined_gids, refined_tr, board_geom=board_geom,
     )
@@ -579,8 +578,8 @@ def test_first_pass_border_pack_footprints_inside_board():
     for idx in selected:
         poly = polys2[idx]
         geom = Geometry.from_shapely(poly)
-        assert placement_footprint_inside_board(geom, board_geom)
-        assert p_board.contains(poly) or placement_footprint_inside_board(geom, board_geom)
+        assert geom.fully_inside(board_geom)
+        assert p_board.contains(poly) or geom.fully_inside(board_geom)
 
 
 def test_empty_corridor_first_pass_uses_place_profiles():

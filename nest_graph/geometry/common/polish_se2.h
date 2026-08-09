@@ -11,8 +11,7 @@
 #include "distance/static_collision_scene.h"
 #include "solid/containment.h"
 
-// Thin SE(2) polish: cast_slide along dirs (backoff min_dist), board footprint,
-// StaticCollisionScene clearance; score by pole distance or slide length.
+// Thin SE(2) polish: one cast_slide for TOI/normal, tangent project, Scene authority.
 template <class VecType>
 inline std::optional<std::tuple<
     typename VecType::Scalar,
@@ -35,6 +34,7 @@ polish_se2_part(
     using Scalar = typename VecType::Scalar;
     constexpr Scalar kEps = static_cast<Scalar>(1e-9);
     constexpr Scalar kImproveEps = static_cast<Scalar>(1e-9);
+    constexpr Scalar kSceneBackoff = static_cast<Scalar>(1e-6);
 
     if (n_angles < 1) {
         n_angles = 1;
@@ -55,7 +55,7 @@ polish_se2_part(
     const Scalar distance_margin = clearance;
 
     auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
-        if (board != nullptr && !solid_footprint_inside(placed, *board)) {
+        if (board != nullptr && !is_solid_fully_contained(placed, *board)) {
             return false;
         }
         if (obstacles.empty()) {
@@ -66,11 +66,10 @@ polish_se2_part(
 
     SolidGeometry<VecType> start =
         part.rotate(pose_theta).translate(VecType({pose_x, pose_y}));
-    if (!pose_ok(start)) {
-        // Still allow searching for a clear nearby pose from this seed.
-    }
+    (void)start;
 
-    const VecType start_c = solid_centroid(start);
+    const VecType start_c = solid_centroid(
+        part.rotate(pose_theta).translate(VecType({pose_x, pose_y})));
     Scalar best_pole_dist = std::numeric_limits<Scalar>::infinity();
     if (pole_mode) {
         const Scalar dx0 = start_c[0] - (*pole)[0];
@@ -87,6 +86,128 @@ polish_se2_part(
     const Scalar two_pi =
         static_cast<Scalar>(2) * static_cast<Scalar>(std::acos(static_cast<Scalar>(-1)));
 
+    auto try_accept = [&](
+        Scalar x, Scalar y, Scalar theta, Scalar travel_score
+    ) -> bool {
+        SolidGeometry<VecType> placed =
+            part.rotate(theta).translate(VecType({x, y}));
+        if (!pose_ok(placed)) {
+            return false;
+        }
+        if (pole_mode) {
+            const VecType pc = solid_centroid(placed);
+            const Scalar dx = pc[0] - (*pole)[0];
+            const Scalar dy = pc[1] - (*pole)[1];
+            const Scalar d = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(dx * dx + dy * dy)));
+            if (d + kImproveEps >= best_pole_dist) {
+                return false;
+            }
+            best_pole_dist = d;
+        } else {
+            if (travel_score + kImproveEps <= best_slide) {
+                return false;
+            }
+            best_slide = travel_score;
+        }
+        best_x = x;
+        best_y = y;
+        best_theta = theta;
+        have_best = true;
+        return true;
+    };
+
+    // Place at TOI-backoff along slide_dir; Scene is authority with one backoff retry.
+    auto try_slide_from_cast = [&](
+        const SolidGeometry<VecType> &seeded,
+        Scalar theta,
+        const VecType &slide_dir,
+        const auto &cast
+    ) {
+        Scalar travel = max_t;
+        if (cast.intersects_path) {
+            travel = std::max(static_cast<Scalar>(0), cast.t_entry - clearance);
+        }
+
+        auto place_at = [&](Scalar t, const VecType &dir) -> bool {
+            const Scalar x = pose_x + dir[0] * t;
+            const Scalar y = pose_y + dir[1] * t;
+            SolidGeometry<VecType> placed =
+                part.rotate(theta).translate(VecType({x, y}));
+            if (pose_ok(placed)) {
+                return try_accept(x, y, theta, t);
+            }
+            // Scene reject: back off along inverse slide direction once.
+            const Scalar bx = x - dir[0] * kSceneBackoff;
+            const Scalar by = y - dir[1] * kSceneBackoff;
+            SolidGeometry<VecType> backed =
+                part.rotate(theta).translate(VecType({bx, by}));
+            if (!pose_ok(backed)) {
+                return false;
+            }
+            return try_accept(bx, by, theta, t);
+        };
+
+        if (travel > kEps) {
+            // Shrink travel until board/Scene accepts (Scene is authority).
+            Scalar t = travel;
+            for (int iter = 0; iter < 12 && t > kEps; ++iter) {
+                if (place_at(t, slide_dir)) {
+                    return;
+                }
+                t *= static_cast<Scalar>(0.5);
+            }
+            return;
+        }
+
+        // Primary ray jammed at contact: ±tangent from scene normal.
+        if (obstacles.empty()) {
+            return;
+        }
+        const auto hits = scene.query_placed(seeded, clearance);
+        Scalar best_d = std::numeric_limits<Scalar>::infinity();
+        VecType normal{};
+        bool have_n = false;
+        for (const auto &h : hits) {
+            if (h.intersect) {
+                if (h.mtv.len_sq() > kEps) {
+                    normal = h.mtv;
+                    have_n = true;
+                    break;
+                }
+                continue;
+            }
+            if (h.distance_sq < best_d && h.closest_normal.len_sq() > kEps) {
+                best_d = h.distance_sq;
+                normal = h.closest_normal;
+                have_n = true;
+            }
+        }
+        if (!have_n) {
+            return;
+        }
+        const Scalar nn = static_cast<Scalar>(
+            std::sqrt(static_cast<double>(
+                normal[0] * normal[0] + normal[1] * normal[1])));
+        if (nn <= kEps) {
+            return;
+        }
+        const VecType nu({normal[0] / nn, normal[1] / nn});
+        const VecType t1({-nu[1], nu[0]});
+        const VecType t2({nu[1], -nu[0]});
+        for (const VecType &td : {t1, t2}) {
+            const auto tcast = cast_slide(seeded, obstacles, td, max_t);
+            Scalar tt = max_t;
+            if (tcast.intersects_path) {
+                tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
+            }
+            if (tt <= kEps) {
+                continue;
+            }
+            place_at(tt, td);
+        }
+    };
+
     for (const VecType &raw_dir : dirs) {
         const Scalar dn = static_cast<Scalar>(
             std::sqrt(static_cast<double>(
@@ -100,111 +221,17 @@ polish_se2_part(
             const Scalar dtheta =
                 two_pi * static_cast<Scalar>(k) / static_cast<Scalar>(n_angles);
             const Scalar theta = pose_theta + dtheta;
-            SolidGeometry<VecType> rotated = part.rotate(theta);
             SolidGeometry<VecType> seeded =
-                rotated.translate(VecType({pose_x, pose_y}));
-
-            auto try_slide_dir = [&](const VecType &slide_dir) {
-                const auto cast = cast_slide(
-                    seeded, obstacles, slide_dir, max_t);
-                Scalar travel = max_t;
-                if (cast.intersects_path) {
-                    travel = std::max(
-                        static_cast<Scalar>(0),
-                        cast.t_entry - clearance);
-                }
-                if (travel <= kEps) {
-                    return;
-                }
-                const int n_grid = 8;
-                for (int gi = n_grid; gi >= 1; --gi) {
-                    const Scalar t =
-                        travel * static_cast<Scalar>(gi) / static_cast<Scalar>(n_grid);
-                    SolidGeometry<VecType> placed = rotated.translate(
-                        VecType({
-                            pose_x + slide_dir[0] * t,
-                            pose_y + slide_dir[1] * t}));
-                    if (!pose_ok(placed)) {
-                        continue;
-                    }
-                    if (pole_mode) {
-                        const VecType pc = solid_centroid(placed);
-                        const Scalar dx = pc[0] - (*pole)[0];
-                        const Scalar dy = pc[1] - (*pole)[1];
-                        const Scalar d = static_cast<Scalar>(
-                            std::sqrt(static_cast<double>(dx * dx + dy * dy)));
-                        if (d + kImproveEps >= best_pole_dist) {
-                            continue;
-                        }
-                        best_pole_dist = d;
-                        best_x = pose_x + slide_dir[0] * t;
-                        best_y = pose_y + slide_dir[1] * t;
-                        best_theta = theta;
-                        have_best = true;
-                    } else {
-                        if (t + kImproveEps <= best_slide) {
-                            continue;
-                        }
-                        best_slide = t;
-                        best_x = pose_x + slide_dir[0] * t;
-                        best_y = pose_y + slide_dir[1] * t;
-                        best_theta = theta;
-                        have_best = true;
-                    }
-                    break;
-                }
-            };
+                part.rotate(theta).translate(VecType({pose_x, pose_y}));
 
             const auto cast = cast_slide(seeded, obstacles, dir, max_t);
-            Scalar travel = max_t;
-            if (cast.intersects_path) {
-                travel = std::max(
-                    static_cast<Scalar>(0),
-                    cast.t_entry - clearance);
-            }
-            if (travel > kEps) {
-                try_slide_dir(dir);
-            } else if (!obstacles.empty()) {
-                // Primary ray blocked at contact: slide along ±tangent from
-                // nearest obstacle normal (guide Slide Escape pattern).
-                const auto hits = scene.query_placed(seeded, clearance);
-                Scalar best_d = std::numeric_limits<Scalar>::infinity();
-                VecType n{};
-                bool have_n = false;
-                for (const auto &h : hits) {
-                    if (h.intersect) {
-                        if (h.mtv.len_sq() > kEps) {
-                            n = h.mtv;
-                            have_n = true;
-                            break;
-                        }
-                        continue;
-                    }
-                    if (h.distance_sq < best_d && h.closest_normal.len_sq() > kEps) {
-                        best_d = h.distance_sq;
-                        n = h.closest_normal;
-                        have_n = true;
-                    }
-                }
-                if (have_n) {
-                    const Scalar nn = static_cast<Scalar>(
-                        std::sqrt(static_cast<double>(n[0] * n[0] + n[1] * n[1])));
-                    if (nn > kEps) {
-                        const VecType nu({n[0] / nn, n[1] / nn});
-                        const VecType t1({-nu[1], nu[0]});
-                        const VecType t2({nu[1], -nu[0]});
-                        try_slide_dir(t1);
-                        try_slide_dir(t2);
-                    }
-                }
-            }
+            try_slide_from_cast(seeded, theta, dir, cast);
         }
     }
 
     if (!have_best) {
         return std::nullopt;
     }
-    // Normalize angle into [0, 2π).
     Scalar out_theta = best_theta;
     if (std::isfinite(static_cast<double>(out_theta))) {
         double th = std::fmod(

@@ -5,12 +5,96 @@ from shapely import MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
+from nest_graph.geometry import Geometry, StaticCollisionScene, find_polygon_distances_bipartite
+from nest_graph.propose.placement_outline import outline_ring_geom
 
 _MAX_OBSTACLE_PARTS = 32
 # Prefer bbox safe-zone when it retains enough area for sampling; else Minkowski.
 _SAFE_ZONE_BBOX_AREA_FRAC = 1e-3
 _SAFE_ZONE_BBOX_AREA_FLOOR = 1e-6
+
+
+def as_geometry(g) -> Geometry | None:
+    """Coerce Shapely / Geometry / None → Geometry | None."""
+    if g is None:
+        return None
+    if isinstance(g, Geometry):
+        return g
+    if hasattr(g, "is_empty") and g.is_empty:
+        return None
+    return Geometry.from_shapely(g)
+
+
+def is_board_adj(
+    poly,
+    sheet: Polygon,
+    min_dist: float,
+    *,
+    gap: float | None = None,
+) -> bool:
+    """Board-adjacent if standoff ≤ min_dist + 2*gap (edge-to-edge)."""
+    if poly is None or (hasattr(poly, "is_empty") and poly.is_empty):
+        return False
+    if sheet is None or sheet.is_empty:
+        return False
+    ring = outline_ring_geom(sheet)
+    if ring is None:
+        return False
+    from nest_graph.propose.context import _cluster_merge_gap
+
+    g_gap = float(gap) if gap is not None else float(
+        _cluster_merge_gap([poly], min_dist, sheet)
+    )
+    geom = as_geometry(poly)
+    if geom is None:
+        return False
+    try:
+        return float(geom.standoff_distance(ring)) <= float(min_dist) + 2.0 * g_gap + 1e-9
+    except Exception:
+        return False
+
+
+def is_pose_clear(
+    candidate,
+    board,
+    obstacles,
+    min_dist: float,
+) -> bool:
+    """Clearance SoT: board fully_inside + StaticCollisionScene margin."""
+    cand_g = as_geometry(candidate)
+    board_g = as_geometry(board)
+    if cand_g is None or board_g is None:
+        return False
+    if not cand_g.fully_inside(board_g):
+        return False
+    obs: list[Geometry] = []
+    if isinstance(obstacles, Geometry):
+        obs = [obstacles]
+    elif obstacles:
+        for o in obstacles:
+            og = as_geometry(o)
+            if og is not None:
+                obs.append(og)
+    if not obs:
+        return True
+    md = float(min_dist)
+    if md <= 0.0:
+        # Zero margin: packing intersect only.
+        return clear_of_geoms(cand_g, obs, 0.0)
+    scene = StaticCollisionScene.build(obs, aura=0.5)
+    return bool(scene.is_valid_placement(cand_g, min_dist=md))
+
+
+def clear_of_geoms(candidate: Geometry, others: list[Geometry], min_dist: float) -> bool:
+    if not others:
+        return True
+    results = find_polygon_distances_bipartite([candidate], others, aura=0.5)
+    for r in results:
+        if r.intersect:
+            return False
+        if math.sqrt(r.distance_sq) < min_dist - 1e-9:
+            return False
+    return True
 
 
 def obstacle_parts(
@@ -177,29 +261,3 @@ def placement_safe_zone(
     if not bbox_zone.is_empty and float(bbox_zone.area) >= min_area:
         return bbox_zone
     return _placement_safe_zone_minkowski(region, base_shape, rotated, min_dist)
-
-
-def clear_of_geoms(candidate: Geometry, others: list[Geometry], min_dist: float) -> bool:
-    if not others:
-        return True
-    results = find_polygon_distances_bipartite([candidate], others, aura=0.5)
-    for r in results:
-        if r.intersect:
-            return False
-        if math.sqrt(r.distance_sq) < min_dist - 1e-9:
-            return False
-    return True
-
-
-def pose_clear_geoms(
-    candidate: Geometry,
-    board: Geometry,
-    obstacles: list[Geometry],
-    min_dist: float,
-) -> bool:
-    """Board footprint + clearance vs obstacle Geometry list (no Shapely union)."""
-    if candidate is None:
-        return False
-    if not candidate.footprint_inside(board) and not candidate.fully_inside(board):
-        return False
-    return clear_of_geoms(candidate, obstacles, min_dist)

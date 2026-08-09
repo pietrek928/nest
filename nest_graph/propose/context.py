@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from math import hypot, pi
 from statistics import median
-from typing import Optional, Sequence
+from typing import NamedTuple, Optional, Sequence
 
 from shapely import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -534,6 +534,43 @@ def cluster_packed_indices(
     ]
     comps = cluster_contact_components(geoms, gap)
     return [[placed_idx[j] for j in members] for members, _ in comps]
+
+
+def cluster_contact_neighbors(
+    component: Sequence[int],
+    polys: Sequence[BaseGeometry],
+    gap: float,
+) -> dict[int, list[int]]:
+    """Adjacency at dist ≤ 2*gap (same policy as cluster_contact_components)."""
+    from nest_graph.propose.placement_common import as_geometry
+
+    ids = list(component)
+    adj: dict[int, list[int]] = {i: [] for i in ids}
+    if len(ids) < 2:
+        return adj
+    geoms_ids: list[int] = []
+    geoms: list[Geometry] = []
+    for i in ids:
+        g = as_geometry(polys[i])
+        if g is None:
+            continue
+        geoms_ids.append(i)
+        geoms.append(g)
+    if len(geoms) < 2:
+        return adj
+    contact = 2.0 * float(gap)
+    results = find_polygon_distances_bipartite(
+        geoms, geoms, aura=max(contact, 0.5) * 2.0,
+    )
+    for r in results:
+        a, b = int(r.polyA_idx), int(r.polyB_idx)
+        if a >= b:
+            continue
+        if r.intersect or (r.distance_sq ** 0.5) <= contact + 1e-9:
+            ia, ib = geoms_ids[a], geoms_ids[b]
+            adj[ia].append(ib)
+            adj[ib].append(ia)
+    return adj
 
 
 def significant_cluster_groups(
@@ -1245,3 +1282,137 @@ def placement_contact_error(
                 group_err = abs(float(focal_shape.distance(placed)) - min_dist)
             return border_err + group_err
     return border_err
+
+
+class LateBorderSatInfo(NamedTuple):
+    active: bool
+    outline_cov: float
+    sat_override: bool
+    rim_progress: float
+    free_kind: str
+
+
+def late_border_saturation_info(
+    cfg,
+    nest_state,
+    board: BaseGeometry,
+    *,
+    had_void_override: bool = False,
+) -> LateBorderSatInfo:
+    """Whether late border-only propose should run for this pack.
+
+    ``cfg`` is a ``BuildGraphConfig`` and ``nest_state`` a ``NestState``; both
+    are duck-typed so this stays on the propose side of the import graph.
+
+    Exp1: skip sat when free space is a large contiguous void.
+    Exp3: when not large_void, also require pack-hull rim progress below threshold.
+    """
+    empty = LateBorderSatInfo(
+        active=False, outline_cov=0.0, sat_override=False,
+        rim_progress=0.0, free_kind="",
+    )
+    if nest_state is None or not cfg.propose.late_border_saturation:
+        return empty
+    placed = [
+        nest_state.polys[i]
+        for i in nest_state.selected_indices
+        if nest_state.polys[i] is not None and not nest_state.polys[i].is_empty
+    ]
+    if not placed:
+        return empty
+    sheet, _ = board_context_from_geometry(board)
+    min_dist = cfg.board_min_dist()
+    native = nest_state.native_geoms
+    pack_geoms = [
+        native[i]
+        for i in nest_state.selected_indices
+        if 0 <= i < len(native)
+        and nest_state.polys[i] is not None
+        and not nest_state.polys[i].is_empty
+    ]
+    outline_cov = float(
+        outline_coverage_ratio(placed, sheet, min_dist, pack_geoms=pack_geoms)
+    )
+    threshold = float(cfg.propose.place_border_coverage_threshold)
+
+    mean_part = sum(float(p.area) for p in placed) / float(len(placed))
+    void_thr = float(cfg.propose.late_border_void_override_ratio)
+    if void_thr <= 0.0:
+        void_thr = 2.5
+    free_info = analyze_free_space(
+        sheet, placed, mean_part, min_dist, void_ratio_threshold=void_thr,
+    )
+    free_kind = str(free_info.kind)
+    void_ratio = float(free_info.max_void_ratio)
+    override_ratio = float(cfg.propose.late_border_void_override_ratio)
+    release_ratio = float(cfg.propose.late_border_void_release_ratio)
+    entry_override = (
+        override_ratio > 0.0
+        and free_info.kind == "large_void"
+        and void_ratio > override_ratio
+    )
+    # Hysteresis: once unlocked this pack, hold while void still meaningful.
+    hold_override = (
+        had_void_override
+        and release_ratio > 0.0
+        and outline_cov < threshold
+        and void_ratio > release_ratio
+    )
+    sat_override = entry_override or hold_override
+
+    sheet_perim = float(sheet.exterior.length) if not sheet.is_empty else 0.0
+    rim_progress = 0.0
+    if sheet_perim > 1e-12:
+        hull = unary_union(placed).convex_hull
+        if hull is not None and not hull.is_empty and hasattr(hull, "exterior"):
+            rim_progress = min(
+                max(float(hull.exterior.length) / sheet_perim, 0.0), 1.0,
+            )
+
+    if outline_cov >= threshold:
+        # Rim metric already satisfied — no late border-only.
+        return LateBorderSatInfo(
+            active=False,
+            outline_cov=outline_cov,
+            sat_override=False,
+            rim_progress=rim_progress,
+            free_kind=free_kind,
+        )
+    if sat_override:
+        # Exp1 / hysteresis: unlock full propose despite low outline_kiss_cov.
+        return LateBorderSatInfo(
+            active=False,
+            outline_cov=outline_cov,
+            sat_override=True,
+            rim_progress=rim_progress,
+            free_kind=free_kind,
+        )
+    # Without large_void, keep sat only while pack hull_rim_fill is still open.
+    hull_thr = float(cfg.propose.late_border_hull_threshold)
+    if hull_thr > 0.0 and rim_progress >= hull_thr:
+        return LateBorderSatInfo(
+            active=False,
+            outline_cov=outline_cov,
+            sat_override=False,
+            rim_progress=rim_progress,
+            free_kind=free_kind,
+        )
+    return LateBorderSatInfo(
+        active=True,
+        outline_cov=outline_cov,
+        sat_override=False,
+        rim_progress=rim_progress,
+        free_kind=free_kind,
+    )
+
+
+def late_border_saturation_active(
+    cfg,
+    nest_state,
+    board: BaseGeometry,
+    *,
+    had_void_override: bool = False,
+) -> bool:
+    return late_border_saturation_info(
+        cfg, nest_state, board, had_void_override=had_void_override,
+    ).active

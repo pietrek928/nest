@@ -11,11 +11,14 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
-from nest_graph.propose.compaction import _pose_clear, selection_pairwise_independent
+from nest_graph.geometry import Geometry
+from nest_graph.propose.compaction import selection_pairwise_independent
+from nest_graph.propose.placement_common import as_geometry as _as_geometry, is_pose_clear
+from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.context import (
     _cluster_merge_gap,
     cluster_contact_components,
+    cluster_contact_neighbors,
     cluster_packed_indices,
     void_pole_seed_coords,
 )
@@ -28,16 +31,6 @@ from nest_graph.propose.placements_pattern import (
 from nest_graph.propose.pipeline import propose_coords_with_strategy
 from nest_graph.propose.ranking import score_placement_tightness
 from nest_graph.utils import compose_transforms, relative_transform, transform_poly
-
-
-def _as_geometry(g) -> Geometry | None:
-    if g is None:
-        return None
-    if isinstance(g, Geometry):
-        return g
-    if hasattr(g, "is_empty") and g.is_empty:
-        return None
-    return Geometry.from_shapely(g)
 
 
 def _obstacle_geoms(shape) -> list[Geometry]:
@@ -101,35 +94,6 @@ def _part_void_adj(
         return False
 
 
-def _contact_neighbors(
-    component: Sequence[int],
-    polys: Sequence[BaseGeometry],
-    gap: float,
-) -> dict[int, list[int]]:
-    ids = list(component)
-    adj: dict[int, list[int]] = {i: [] for i in ids}
-    if len(ids) < 2:
-        return adj
-    geoms = [
-        polys[i] if isinstance(polys[i], Geometry) else Geometry.from_shapely(polys[i])
-        for i in ids
-    ]
-    # Match buffer(gap)↔buffer(gap) ≡ dist ≤ 2*gap.
-    contact = 2.0 * float(gap)
-    results = find_polygon_distances_bipartite(
-        geoms, geoms, aura=max(contact, 0.5) * 2.0,
-    )
-    for r in results:
-        a, b = int(r.polyA_idx), int(r.polyB_idx)
-        if a >= b:
-            continue
-        if r.intersect or (r.distance_sq ** 0.5) <= contact + 1e-9:
-            ia, ib = ids[a], ids[b]
-            adj[ia].append(ib)
-            adj[ib].append(ia)
-    return adj
-
-
 def bfs_peel_victim(
     selected_indices: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -183,7 +147,7 @@ def bfs_peel_victim(
         if pole is not None and not pole.is_empty:
             seeds.sort(key=lambda i: float(polys[i].centroid.distance(pole)))
         seed = seeds[0]
-        adj = _contact_neighbors(global_comp, polys, gap)
+        adj = cluster_contact_neighbors(global_comp, polys, gap)
         # Priority BFS: expand by contact, prefer closer to pole.
         peel = _priority_bfs_peel(seed, adj, polys, pole, max_size)
         if len(peel) < min_size:
@@ -333,7 +297,7 @@ def extract_capped_subpatterns(
     for idxs in groups:
         if len(idxs) < 2:
             continue
-        adj = _contact_neighbors(idxs, placed, gap)
+        adj = cluster_contact_neighbors(idxs, placed, gap)
         # Seed = largest member; peel up to max_members.
         seed = max(idxs, key=lambda i: float(placed[i].area))
         peel = _priority_bfs_peel(seed, adj, placed, None, max_members)
@@ -398,7 +362,7 @@ def stamp_motif_at_anchor(
         cand_g = part_geoms[gid].apply_transform(
             float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
         )
-        if not _pose_clear(cand_g, board_g, obs, min_dist):
+        if not is_pose_clear(cand_g, board_g, obs, min_dist):
             return None
         cand = transform_poly(part, cand_tr)
         placed.append((idx, cand_tr, cand))
@@ -503,14 +467,14 @@ def _motif_stamp_attempt(
 
 
 def cluster_repack_selection(
-    sheet: Polygon,
-    polys: list[BaseGeometry],
-    transforms: list,
-    group_ids: Sequence[int],
-    selected_indices: Sequence[int],
-    part_by_group: dict[int, Polygon],
-    min_dist: float,
-    propose_cfg: ProposeConfig,
+    sheet: Polygon | SelectionEditCtx,
+    polys: list[BaseGeometry] | None = None,
+    transforms: list | None = None,
+    group_ids: Sequence[int] | None = None,
+    selected_indices: Sequence[int] | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    min_dist: float | None = None,
+    propose_cfg: ProposeConfig | None = None,
     *,
     pole: Point | None = None,
     void_poly: Polygon | None = None,
@@ -519,6 +483,23 @@ def cluster_repack_selection(
     free_space=None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
+    if isinstance(sheet, SelectionEditCtx):
+        ctx = sheet
+        sheet = ctx.sheet
+        polys = ctx.polys
+        transforms = ctx.transforms
+        group_ids = ctx.group_ids
+        selected_indices = ctx.selected_indices
+        part_by_group = ctx.part_by_group
+        min_dist = ctx.min_dist
+        propose_cfg = ctx.propose_cfg if propose_cfg is None else propose_cfg
+        pole = ctx.pole if pole is None else pole
+        fixed_obstacles = (
+            ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
+        )
+    assert polys is not None and transforms is not None
+    assert group_ids is not None and selected_indices is not None
+    assert part_by_group is not None and min_dist is not None and propose_cfg is not None
     stats: dict = {
         "attempted": 0,
         "accepted": 0,
@@ -689,7 +670,7 @@ def cluster_repack_selection(
             cand_g = part_g.apply_transform(
                 float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
             )
-            if not _pose_clear(cand_g, board_g, obs, min_dist):
+            if not is_pose_clear(cand_g, board_g, obs, min_dist):
                 continue
             cand = transform_poly(part, cand_tr)
             clear.append((c, cand, cand_tr, cand_g))
@@ -740,19 +721,11 @@ def _component_board_adj(
     sheet: Polygon,
     min_dist: float,
 ) -> bool:
-    if sheet is None or sheet.is_empty:
-        return False
-    ring = outline_ring_geom(sheet)
-    if ring is None:
-        return False
-    members = [polys[i] for i in global_idxs if polys[i] is not None and not polys[i].is_empty]
-    if not members:
-        return False
-    gap = _cluster_merge_gap(members, min_dist, sheet)
-    thresh = float(min_dist) + 2.0 * gap + 1e-9
-    for poly in members:
-        g = _as_geometry(poly)
-        if g is not None and float(g.standoff_distance(ring)) <= thresh:
+    from nest_graph.propose.placement_common import is_board_adj
+
+    for i in global_idxs:
+        poly = polys[i]
+        if poly is not None and not poly.is_empty and is_board_adj(poly, sheet, min_dist):
             return True
     return False
 
@@ -844,7 +817,7 @@ def cluster_relocate_selection(
                 cand_g = part_geoms[gid].apply_transform(
                     float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
                 )
-                if not _pose_clear(cand_g, board_g, obs, min_dist):
+                if not is_pose_clear(cand_g, board_g, obs, min_dist):
                     ok = False
                     break
             if not ok:

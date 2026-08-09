@@ -14,7 +14,6 @@ from nest_graph.placement_scene import (
     guidance_config_for_scene,
     guidance_kwargs_for_propose,
     placement_clearance_epsilon,
-    placement_footprint_inside_board,
     footprints_inside_board,
     proposition_translation,
 )
@@ -33,6 +32,7 @@ class ProposeGeometry:
         epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
         propose_cfg: ProposeConfig | None = None,
         full_packed_geoms: list[Geometry] | None = None,
+        border_focus: bool | None = None,
     ):
         from nest_graph.propose.context import should_use_border_focus
 
@@ -43,6 +43,7 @@ class ProposeGeometry:
         self.scene = build_placement_scene(boundary, part, base_geoms)
         self.sheet = self.scene.sheet
         self.part = part
+        self.part_poly = part_poly
         self.board_geom = self.scene.board_geom
         self.full_packed_geoms = list(full_packed_geoms or [])
         ring_coords = list(self.sheet.exterior.coords)
@@ -56,10 +57,13 @@ class ProposeGeometry:
         self._epsilon_ratio = epsilon_ratio
         self._propose_cfg = propose_cfg
         self._board_bounds = self.sheet.bounds
-        self._border_focus = (
-            propose_cfg is not None
-            and should_use_border_focus(base_shape, propose_cfg)
-        )
+        if border_focus is not None:
+            self._border_focus = bool(border_focus)
+        else:
+            self._border_focus = (
+                propose_cfg is not None
+                and should_use_border_focus(base_shape, propose_cfg)
+            )
         gkw = guidance_kwargs_for_propose(propose_cfg)
         self._guidance_cfg = guidance_config_for_scene(
             min_dist,
@@ -133,7 +137,7 @@ class ProposeGeometry:
         return self.scene.guidance(placed, xy, cfg)
 
     def footprint_clear_of_voids(self, placed: Geometry) -> bool:
-        if not placement_footprint_inside_board(placed, self.scene.board_geom):
+        if not placed.fully_inside(self.scene.board_geom):
             return False
         cx, cy = placed.center()
         g = self.scene.guidance(placed, (cx, cy), self._guidance_cfg)

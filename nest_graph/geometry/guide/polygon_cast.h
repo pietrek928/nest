@@ -233,3 +233,126 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
     std::sort(results.begin(), results.end());
     return results;
 }
+
+// Cast active vs obstacles without packing into a combined owned vector.
+template <class VecType, class Tracer = DefaultTracer>
+ComplexCastResult<VecType> find_closest_polygon_cast_vs_obstacles(
+    const SolidGeometry<VecType>& active_poly,
+    const std::vector<SolidGeometry<VecType>>& obstacles,
+    const VecType& slide_vector,
+    typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+
+    ComplexCastResult<VecType> closest_hit;
+    closest_hit.intersects_path = false;
+    closest_hit.t_entry = max_t_limit;
+
+    const auto& active_bounds = active_poly.get_bounding_circle();
+
+    for (size_t i = 0; i < obstacles.size(); ++i) {
+        const auto& obstacle = obstacles[i];
+
+        if (!moving_circle_intersects_static_circle(
+                active_bounds, slide_vector, obstacle.get_bounding_circle(),
+                closest_hit.t_entry)) {
+            continue;
+        }
+
+        for (size_t pA = 0; pA < active_poly.line_parts.size(); ++pA) {
+            if (active_poly.line_parts[pA].is_subtractive) continue;
+            for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                if (obstacle.line_parts[pB].is_subtractive) continue;
+
+                if (!moving_circle_intersects_static_circle(
+                        active_poly.line_parts[pA].bounding_circle, slide_vector,
+                        obstacle.line_parts[pB].bounding_circle, closest_hit.t_entry)) {
+                    continue;
+                }
+
+                auto res = narrow_phase_cast<VecType, Tracer>(
+                    active_poly.get_part_points(pA), active_poly.get_part_size(pA),
+                    obstacle.get_part_points(pB), obstacle.get_part_size(pB),
+                    slide_vector, 24, tracer
+                );
+
+                if (res.intersects_path && res.t_exit >= static_cast<Scalar>(0)) {
+                    Scalar entry = std::max(static_cast<Scalar>(0), res.t_entry);
+                    if (entry < closest_hit.t_entry) {
+                        closest_hit.intersects_path = true;
+                        closest_hit.t_entry = entry;
+                        closest_hit.t_exit = res.t_exit;
+                        closest_hit.polyA_idx = 0;
+                        closest_hit.partA_idx = static_cast<int>(pA);
+                        closest_hit.polyB_idx = static_cast<int>(i + 1);
+                        closest_hit.partB_idx = static_cast<int>(pB);
+                    }
+                }
+            }
+        }
+    }
+
+    return closest_hit;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+std::vector<ComplexCastResult<VecType>> find_all_polygon_casts_vs_obstacles(
+    const SolidGeometry<VecType>& active_poly,
+    const std::vector<SolidGeometry<VecType>>& obstacles,
+    const VecType& slide_vector,
+    typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
+    Tracer* tracer = nullptr
+) {
+    using Scalar = typename VecType::Scalar;
+    std::vector<ComplexCastResult<VecType>> results;
+
+    const auto& active_bounds = active_poly.get_bounding_circle();
+
+    for (size_t i = 0; i < obstacles.size(); ++i) {
+        const auto& obstacle = obstacles[i];
+
+        if (!moving_circle_intersects_static_circle(
+                active_bounds, slide_vector, obstacle.get_bounding_circle(),
+                max_t_limit)) {
+            continue;
+        }
+
+        for (size_t pA = 0; pA < active_poly.line_parts.size(); ++pA) {
+            if (active_poly.line_parts[pA].is_subtractive) continue;
+            for (size_t pB = 0; pB < obstacle.line_parts.size(); ++pB) {
+                if (obstacle.line_parts[pB].is_subtractive) continue;
+
+                if (!moving_circle_intersects_static_circle(
+                        active_poly.line_parts[pA].bounding_circle, slide_vector,
+                        obstacle.line_parts[pB].bounding_circle, max_t_limit)) {
+                    continue;
+                }
+
+                auto res = narrow_phase_cast<VecType, Tracer>(
+                    active_poly.get_part_points(pA), active_poly.get_part_size(pA),
+                    obstacle.get_part_points(pB), obstacle.get_part_size(pB),
+                    slide_vector, 24, tracer
+                );
+
+                if (res.intersects_path && res.t_exit >= static_cast<Scalar>(0)) {
+                    Scalar entry = std::max(static_cast<Scalar>(0), res.t_entry);
+                    if (entry <= max_t_limit) {
+                        ComplexCastResult<VecType> hit{};
+                        hit.polyA_idx = 0;
+                        hit.partA_idx = static_cast<int>(pA);
+                        hit.polyB_idx = static_cast<int>(i + 1);
+                        hit.partB_idx = static_cast<int>(pB);
+                        hit.intersects_path = true;
+                        hit.t_entry = entry;
+                        hit.t_exit = res.t_exit;
+                        results.push_back(hit);
+                    }
+                }
+            }
+        }
+    }
+
+    std::sort(results.begin(), results.end());
+    return results;
+}

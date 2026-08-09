@@ -221,6 +221,7 @@ def finalize_edge_propositions(
     boundary: BaseGeometry,
     top_n: int,
 ) -> list[tuple[float, float, float]]:
+    """Stratify by segment when possible, then shared ``finalize_propositions``."""
     from nest_graph.propose.ranking import finalize_propositions
 
     if isinstance(boundary, Polygon):
@@ -228,3 +229,8 @@ def finalize_edge_propositions(
     else:
         selected = sorted(propositions, key=lambda row: row["cost"])
     return finalize_propositions(selected, top_n, coord_ndigits=2)
+
+
+# Back-compat: same SoT as finalize_propositions after optional stratify.
+finalize_propositions_edge = finalize_edge_propositions
+

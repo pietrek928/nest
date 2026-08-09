@@ -212,16 +212,33 @@ void bind_geometry_class(nb::module_ &m) {
                 double x = 0.0;
                 double y = 0.0;
                 double angle = 0.0;
+                auto apply_se2 = [](const SolidGeometry2d &solid, double x, double y,
+                                    double angle) {
+                    // Single-clone SE2: rotate then translate in place on the copy.
+                    SolidGeometry2d out = solid.rotate(static_cast<Vec2d::Scalar>(angle));
+                    const Vec2d offset({x, y});
+                    for (auto &p : out.line_points) {
+                        p = p + offset;
+                    }
+                    for (auto &ring : out.boundary_rings) {
+                        for (auto &p : ring.points) {
+                            p = p + offset;
+                        }
+                    }
+                    for (auto &part : out.line_parts) {
+                        part.bounding_circle.c = part.bounding_circle.c + offset;
+                    }
+                    out.bounding_circle.c = out.bounding_circle.c + offset;
+                    return GeometryHolder(std::move(out));
+                };
                 if (args.size() == 1 && read_transform(args[0], x, y, angle)) {
-                    return GeometryHolder(
-                        g.solid.rotate(angle).translate(Vec2d({x, y})));
+                    return apply_se2(g.solid, x, y, angle);
                 }
                 if (args.size() == 3) {
                     x = nb::cast<double>(args[0]);
                     y = nb::cast<double>(args[1]);
                     angle = nb::cast<double>(args[2]);
-                    return GeometryHolder(
-                        g.solid.rotate(angle).translate(Vec2d({x, y})));
+                    return apply_se2(g.solid, x, y, angle);
                 }
                 throw nb::type_error(
                     "apply_transform: expected (x, y, angle) or a length-3 sequence");
@@ -307,17 +324,18 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "intersects",
             [](const GeometryHolder &a, const GeometryHolder &b) {
-                return !find_polygon_intersections<Vec2d>({a.solid, b.solid}).empty();
+                return solids_packing_collide(a.solid, b.solid);
             },
             nb::arg("other"))
         .def(
             "intersects_any",
             [](const GeometryHolder &a, const std::vector<GeometryHolder> &others) {
-                if (others.empty()) {
-                    return false;
+                for (const auto &o : others) {
+                    if (solids_packing_collide(a.solid, o.solid)) {
+                        return true;
+                    }
                 }
-                auto solids = solids_from_holders(others);
-                return !find_polygon_intersections<Vec2d>({a.solid}, solids).empty();
+                return false;
             },
             nb::arg("others"))
         .def(
@@ -355,13 +373,13 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "cast_slide",
             [](const GeometryHolder &active,
-               const std::vector<GeometryHolder> &obstacles,
+               std::vector<GeometryHolder> obstacles,
                nb::handle slide,
                double max_t) {
                 const Vec2d slide_vec = slide_vector_from_handle(slide);
                 return cast_slide(
                     active.solid,
-                    solids_from_holders(obstacles),
+                    solids_from_holders(std::move(obstacles)),
                     slide_vec,
                     static_cast<Vec2d::Scalar>(max_t));
             },

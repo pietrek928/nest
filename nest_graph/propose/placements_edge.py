@@ -11,7 +11,7 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.placement_common import pose_clear_geoms
+from nest_graph.propose.placement_common import is_pose_clear
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
     outline_ring_geom,
@@ -129,6 +129,8 @@ def propose_placements_board_edge(
         if guidance_refine is not None
         else propose_cfg.board_edge_guidance_refine
     )
+    # Snap path ignores refine (hybrid is placements_guidance.propose_placements_board_edge).
+    _ = refine
 
     seed_anchors = _board_edge_snap_seeds(
         shape_to_place,
@@ -145,37 +147,9 @@ def propose_placements_board_edge(
         return []
 
     snap_coords = [coords for coords, _anchor, _inward in seed_anchors]
-    if not refine:
-        return snap_coords[:top_n]
-
-    from nest_graph.propose.placements_guidance import (
-        propose_placements_board_edge_guidance_cast,
-    )
-
-    refined = propose_placements_board_edge_guidance_cast(
-        seed_anchors,
-        pt_push,
-        propose_geom,
-        propose_cfg,
-        min_dist=min_dist,
-        top_n=top_n,
-    )
-    merged: list[tuple[float, float, float]] = []
-    seen: set[tuple[float, float, float]] = set()
-    for coords in refined + snap_coords:
-        key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 1))
-        if key in seen:
-            continue
-        seen.add(key)
-        merged.append(coords)
-        if len(merged) >= top_n:
-            break
-    merged.sort(
-        key=lambda c: placement_contact_error(
-            propose_geom.placed_at(c), sheet, min_dist, None,
-        ),
-    )
-    return merged[:top_n]
+    # Snap-only SoT. Hybrid refine is placements_guidance.propose_placements_board_edge
+    # so this module never imports guidance (no cycle).
+    return snap_coords[:top_n]
 
 
 def propose_placements_group_fit(
@@ -226,7 +200,7 @@ def propose_placements_group_fit(
             if coords is None:
                 continue
             placed_geom = propose_geom.placed_at(coords)
-            if not pose_clear_geoms(
+            if not is_pose_clear(
                 placed_geom, propose_geom.board_geom, base_obs, min_dist,
             ):
                 continue

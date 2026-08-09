@@ -11,19 +11,46 @@
 #endif
 using DefaultTracer = NEST_GRAPH_DEFAULT_TRACER;
 
-// Shared touch threshold for solid-distance and outline-standoff near-contact.
+// --- Epsilon taxonomy (do not force these to the same number) ---
+// Geometric: GJK/EPA loop termination lives in convex/*.h (~1e-8 / ~1e-6).
+// Application touch: standoff / near-contact (board_adj, distance touch).
 template <class Scalar = double>
 inline constexpr Scalar nest_touch_eps_sq() {
-    return static_cast<Scalar>(1e-10);
+    return static_cast<Scalar>(1e-10);  // ~1e-5 linear
 }
 
-// Hard packing collision: EPA penetration deeper than this.
-// Use ~EPA numeric scale (1e-6 depth ⇒ 1e-12 sq): tighter than feature size,
-// loose enough that zero-depth kisses (noise ~1e-14..1e-16 sq) are not collisions.
+// Application packing: kiss → illegal overlap when EPA depth^2 exceeds this.
+// ~1e-6 depth ⇒ 1e-12 sq. Do not retune without E2E re-baseline.
 template <class Scalar = double>
 inline constexpr Scalar nest_packing_penetration_eps_sq() {
     return static_cast<Scalar>(1e-12);
 }
+
+// Alias for docs / AGENTS naming.
+template <class Scalar = double>
+inline constexpr Scalar nest_penetration_eps_sq() {
+    return nest_packing_penetration_eps_sq<Scalar>();
+}
+
+// Packing contact manifold (narrow phase). Cast TOI "kiss" is separate.
+enum class ContactState {
+    Disjoint,
+    Touch,        // GJK hit / depth <= packing eps — not a packing collision
+    Penetrating,  // depth > packing eps — packing / graph collision
+    Contained     // reserved for explicit nest classification
+};
+
+template <class Scalar = double>
+struct ContactResult {
+    ContactState state = ContactState::Disjoint;
+    Scalar depth = static_cast<Scalar>(0);  // 0 if Disjoint or Touch
+    Scalar penetration_sq = static_cast<Scalar>(0);
+    int warm_index_A = 0;
+    int warm_index_B = 0;
+};
+
+// MTV stored separately when needed by distance callers (VecType not in common.h).
+
 
 inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);

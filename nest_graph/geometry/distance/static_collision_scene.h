@@ -17,10 +17,10 @@ struct StaticCollisionScene {
     Scalar aura_multiplier = static_cast<Scalar>(0.5);
 
     void build(
-        const std::vector<SolidGeometry<VecType>>& obs,
+        std::vector<SolidGeometry<VecType>> obs,
         Scalar aura = static_cast<Scalar>(0.5)
     ) {
-        obstacles = obs;
+        obstacles = std::move(obs);
         aura_multiplier = aura;
         obstacle_elements.clear();
         if (obstacles.empty()) {

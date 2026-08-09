@@ -36,6 +36,8 @@ class ProposerName(StrEnum):
     BATCH_PACK = "batch_pack"
     CLUSTER_COPY = "cluster_copy"
     POCKET_FIT = "pocket_fit"
+    SELECTION_EXPAND = "selection_expand"
+    HISTORY_EXPAND = "history_expand"
 
 
 ALL_PROPOSER_NAMES: tuple[str, ...] = tuple(p.value for p in ProposerName)
@@ -58,6 +60,8 @@ PROPOSER_FLAG: dict[ProposerName, str | None] = {
     ProposerName.BATCH_PACK: "use_batch_pack",
     ProposerName.CLUSTER_COPY: "use_cluster_copy",
     ProposerName.POCKET_FIT: "use_pocket_fit",
+    ProposerName.SELECTION_EXPAND: None,
+    ProposerName.HISTORY_EXPAND: None,
 }
 
 ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {

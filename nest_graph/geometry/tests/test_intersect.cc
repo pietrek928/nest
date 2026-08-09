@@ -6,7 +6,9 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "geometry/common/geometry_common.h"
 #include "geometry/intersect/polygon_intersect.h"
+#include "geometry/sweep/sweep_engine.h"
 #include "tests/geometry_test_helpers.h"
 #include <vec.h>
 
@@ -155,12 +157,12 @@ TEST_CASE("narrow_phase_contain witness uses first vertex only", "[poly_intersec
     auto outer = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto inner_ok = polygon_from_quad({{1.5, 1.5}, {2.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
     REQUIRE(narrow_phase_contain<Vec2>(
-        inner_ok.get_part_points(0), inner_ok.get_part_size(0), outer));
+        inner_ok.get_part_points(0), inner_ok.get_part_size(0), inner_ok, outer));
 
     // Escaped vertex at (5.5, 1.5) but witness at (1.5, 1.5) is still inside.
     auto inner_escaped = polygon_from_quad({{1.5, 1.5}, {5.5, 1.5}, {2.5, 2.5}, {1.5, 2.5}});
     REQUIRE(narrow_phase_contain<Vec2>(
-        inner_escaped.get_part_points(0), inner_escaped.get_part_size(0), outer));
+        inner_escaped.get_part_points(0), inner_escaped.get_part_size(0), inner_escaped, outer));
 }
 
 TEST_CASE("narrow_phase_contain witness false when rings are separated", "[poly_intersect][router]") {
@@ -173,7 +175,7 @@ TEST_CASE("narrow_phase_contain witness false when rings are separated", "[poly_
     const int out_n = outer.get_part_size(0);
 
     REQUIRE_FALSE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
-    REQUIRE_FALSE(narrow_phase_contain<Vec2>(in_pts, in_n, outer));
+    REQUIRE_FALSE(narrow_phase_contain<Vec2>(in_pts, in_n, inner_far, outer));
 }
 
 TEST_CASE("narrow_phase_contain nesting may still GJK-intersect", "[poly_intersect][router]") {
@@ -184,7 +186,7 @@ TEST_CASE("narrow_phase_contain nesting may still GJK-intersect", "[poly_interse
     const Vec2* out_pts = outer.get_part_points(0);
     const int out_n = outer.get_part_size(0);
 
-    REQUIRE(narrow_phase_contain<Vec2>(in_pts, in_n, outer));
+    REQUIRE(narrow_phase_contain<Vec2>(in_pts, in_n, inner_ok, outer));
     REQUIRE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
 }
 
@@ -203,8 +205,8 @@ TEST_CASE("narrow_phase_contain gradient threshold parity for witness", "[poly_i
     const Vec2* in26 = dense_inside26.get_part_points(0);
     const int n26 = dense_inside26.get_part_size(0);
 
-    bool witness23 = narrow_phase_contain<Vec2>(in23, n23, outer);
-    bool witness26 = narrow_phase_contain<Vec2>(in26, n26, outer);
+    bool witness23 = narrow_phase_contain<Vec2>(in23, n23, dense_inside23, outer);
+    bool witness26 = narrow_phase_contain<Vec2>(in26, n26, dense_inside26, outer);
     REQUIRE(witness23 == witness26);
     REQUIRE(witness23);
 
@@ -255,7 +257,7 @@ TEST_CASE("find_polygon_intersections simple hit and miss", "[poly_intersect][sw
 TEST_CASE("find_polygon_intersections edge kiss is not packing collision", "[poly_intersect][sweep][kiss]") {
     auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
-    // Raw GJK still sees a touch; packing filter requires EPA depth > 1e-9.
+    // Touch (EPA depth 0 / below packing eps) is not Penetrating.
     REQUIRE(find_polygon_intersections<Vec2>({a, b}).empty());
 }
 
@@ -454,4 +456,33 @@ TEST_CASE("find_polygon_intersections decompose_complex edge kiss", "[poly_inter
     auto overlap = polygon_from_ring({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
     auto base = polygon_from_ring({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     REQUIRE_FALSE(find_polygon_intersections<Vec2>({base, overlap}).empty());
+}
+
+TEST_CASE("find_polygon_intersections nested square is packing collision", "[poly_intersect][sweep][contain]") {
+    // Outer 10x10, inner 2x2 fully nested — no boundary GJK hit, containment promote.
+    std::vector<std::vector<Vec2>> outer_ring{{
+        Vec2{{0.0, 0.0}}, Vec2{{10.0, 0.0}}, Vec2{{10.0, 10.0}}, Vec2{{0.0, 10.0}}, Vec2{{0.0, 0.0}},
+    }};
+    std::vector<std::vector<Vec2>> inner_ring{{
+        Vec2{{3.0, 3.0}}, Vec2{{5.0, 3.0}}, Vec2{{5.0, 5.0}}, Vec2{{3.0, 5.0}}, Vec2{{3.0, 3.0}},
+    }};
+    auto outer = decompose_complex_polygon<Vec2>(outer_ring, {});
+    auto inner = decompose_complex_polygon<Vec2>(inner_ring, {});
+    REQUIRE_FALSE(find_polygon_intersections<Vec2>({outer, inner}).empty());
+}
+
+TEST_CASE("evaluate_narrow_phase ContactState kiss vs penetrate", "[poly_intersect][router][contact]") {
+    auto a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto b_touch = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
+    auto b_pen = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    auto touch = evaluate_narrow_phase_parts<Vec2>(a, 0, b_touch, 0);
+    REQUIRE(touch.state == ContactState::Touch);
+    auto pen = evaluate_narrow_phase_parts<Vec2>(a, 0, b_pen, 0);
+    REQUIRE(pen.state == ContactState::Penetrating);
+    // Decomposed squares: kiss still Touch; shallow overlap still Penetrating.
+    auto da = polygon_from_ring({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto db_touch = polygon_from_ring({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
+    auto db_pen = polygon_from_ring({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    REQUIRE(find_polygon_intersections<Vec2>({da, db_touch}).empty());
+    REQUIRE_FALSE(find_polygon_intersections<Vec2>({da, db_pen}).empty());
 }

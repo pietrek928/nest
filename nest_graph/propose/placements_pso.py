@@ -10,6 +10,9 @@ from nest_graph.utils import transform_poly
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placements_edge import sample_placement_points_ribbon
 from nest_graph.propose.ranking import calculate_complex_score, finalize_propositions
+from nest_graph.config import ProposeConfig
+from nest_graph.propose.types import ProposeContext, PackedProposeExtras
+
 
 def propose_placements_point_cloud(
     base_shape, shape_to_place, boundary, pt_push,
@@ -20,7 +23,25 @@ def propose_placements_point_cloud(
     mutation_sigma=np.array([2.0, 2.0, 0.5, 0.5]),
     *,
     propose_geom: ProposeGeometry,
+    propose_cfg: ProposeConfig | None = None,
+    ctx: ProposeContext | None = None,
+    extras: PackedProposeExtras | None = None,
 ):
+    _ = extras
+    if ctx is not None:
+        base_shape = ctx.base_shape
+        shape_to_place = ctx.shape_to_place
+        boundary = ctx.sheet
+        pt_push = ctx.pt_push
+        min_dist = ctx.min_dist
+        propose_geom = ctx.propose_geom
+        propose_cfg = ctx.propose_cfg if propose_cfg is None else propose_cfg
+    if propose_cfg is not None:
+        num_particles = propose_cfg.point_cloud_particles
+        max_iterations = propose_cfg.point_cloud_iterations
+        nudge_iters = propose_cfg.point_cloud_nudge_iters
+        ray_dirs = propose_cfg.point_cloud_ray_dirs
+        cull_ratio = propose_cfg.point_cloud_cull_ratio
     bound_centroid = boundary.centroid
     base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0
     ribbon_pts = sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist)

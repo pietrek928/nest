@@ -23,10 +23,10 @@ void bind_batch_api(nb::module_ &m) {
     nb::class_<StaticCollisionSceneHolder>(m, "StaticCollisionScene")
         .def_static(
             "build",
-            [](const std::vector<GeometryHolder> &obstacles, double aura) {
+            [](std::vector<GeometryHolder> obstacles, double aura) {
                 StaticCollisionSceneHolder holder;
                 holder.scene.build(
-                    solids_from_holders(obstacles),
+                    solids_from_holders(std::move(obstacles)),
                     static_cast<Vec2d::Scalar>(aura));
                 return holder;
             },
@@ -94,7 +94,7 @@ void bind_batch_api(nb::module_ &m) {
         "batch_check_validity",
         [](const GeometryHolder &part,
            const std::vector<std::tuple<double, double, double>> &transforms,
-           const std::vector<GeometryHolder> &obstacles,
+           std::vector<GeometryHolder> obstacles,
            const GuidanceConfig2d &config,
            double min_dist,
            double epsilon_ratio) {
@@ -103,11 +103,11 @@ void bind_batch_api(nb::module_ &m) {
                 1e-6, min_dist * epsilon_ratio
             );
             const double margin_sq = margin * margin;
-            const std::vector<SolidGeometry2d> obs_solids =
-                solids_from_holders(obstacles);
             StaticCollisionScene<Vec2d> scene;
             // search_radius is a distance margin / cast horizon, NOT an aura multiplier.
-            scene.build(obs_solids, static_cast<Vec2d::Scalar>(0.5));
+            scene.build(
+                solids_from_holders(std::move(obstacles)),
+                static_cast<Vec2d::Scalar>(0.5));
 
             std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
             auto angle_key = [](double angle) -> long long {
@@ -117,7 +117,7 @@ void bind_batch_api(nb::module_ &m) {
             std::vector<bool> out;
             out.reserve(transforms.size());
             for (const auto &[x, y, angle] : transforms) {
-                if (obs_solids.empty()) {
+                if (scene.obstacles.empty()) {
                     out.push_back(true);
                     continue;
                 }
@@ -146,25 +146,19 @@ void bind_batch_api(nb::module_ &m) {
         "batch_evaluate_local_placement",
         [](const GeometryHolder &part,
            const std::vector<std::tuple<double, double, double>> &transforms,
-           const std::vector<GeometryHolder> &obstacles,
+           std::vector<GeometryHolder> obstacles,
            nb::handle current_position,
            const GuidanceConfig2d &config) {
             (void)current_position;
-            const std::vector<SolidGeometry2d> obs_solids =
-                solids_from_holders(obstacles);
+            std::vector<SolidGeometry2d> polys =
+                solids_from_holders(std::move(obstacles));
+            polys.insert(polys.begin(), SolidGeometry2d{});
 
             std::vector<PlacementGuidance2d> out;
             out.reserve(transforms.size());
             for (const auto &[x, y, angle] : transforms) {
-                SolidGeometry2d placed = part.solid;
-                placed = placed.rotate(static_cast<Vec2d::Scalar>(angle))
-                                 .translate(Vec2d({x, y}));
-                std::vector<SolidGeometry2d> polys;
-                polys.reserve(1 + obs_solids.size());
-                polys.push_back(std::move(placed));
-                for (const auto &obs : obs_solids) {
-                    polys.push_back(obs);
-                }
+                polys[0] = part.solid.rotate(static_cast<Vec2d::Scalar>(angle))
+                               .translate(Vec2d({x, y}));
                 out.push_back(evaluate_local_placement<Vec2d>(
                     0, polys, Vec2d({x, y}), config));
             }

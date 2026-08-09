@@ -7,11 +7,13 @@
 #include <vector>
 
 #include "common/geometry_common.h"
+#include "common/tracer.h"
 #include "distance/polygon_distance.h"
 #include "guide/polygon_cast.h"
 #include "solid/decompose.h"
 #include "solid/containment.h"
 #include "solid/solid_geometry.h"
+#include "sweep/sweep_engine.h"
 
 template <class VecType>
 inline VecType solid_centroid(const SolidGeometry<VecType> &solid) {
@@ -202,6 +204,7 @@ inline PairDistanceResult<VecType> min_distance_pair(
     typename VecType::Scalar aura = static_cast<typename VecType::Scalar>(0.5)
 ) {
     using Scalar = typename VecType::Scalar;
+    (void)aura;
     PairDistanceResult<VecType> out{};
     out.core.polyA_idx = 0;
     out.core.polyB_idx = 1;
@@ -212,29 +215,58 @@ inline PairDistanceResult<VecType> min_distance_pair(
     out.closest_a = a.get_bounding_circle().center();
     out.closest_b = b.get_bounding_circle().center();
 
-    const auto results = find_polygon_distances<VecType>(
-        std::vector<SolidGeometry<VecType>>{a},
-        std::vector<SolidGeometry<VecType>>{b},
-        aura);
+    for (size_t i = 0; i < a.line_parts.size(); ++i) {
+        if (a.line_parts[i].is_subtractive) {
+            continue;
+        }
+        const auto &ca = a.line_parts[i].bounding_circle;
+        for (size_t j = 0; j < b.line_parts.size(); ++j) {
+            if (b.line_parts[j].is_subtractive) {
+                continue;
+            }
+            const auto &cb = b.line_parts[j].bounding_circle;
+            const VecType d = ca.center() - cb.center();
+            const Scalar center_dist_sq = d.dp(d);
+            const Scalar r_sum =
+                std::sqrt(static_cast<double>(ca.square_radius())) +
+                std::sqrt(static_cast<double>(cb.square_radius()));
 
-    for (const auto &r : results) {
-        if (r.intersect) {
-            out.core = r;
-            out.core.polyA_idx = 0;
-            out.core.polyB_idx = 1;
-            auto pts = closest_points_between_parts(a, r.partA_idx, b, r.partB_idx);
-            out.closest_a = pts.first;
-            out.closest_b = pts.second;
-            return out;
+            DistanceCandidate<VecType> cand{};
+            cand.pair_id = {0, 1};
+            cand.partA_idx = static_cast<int>(i);
+            cand.partB_idx = static_cast<int>(j);
+            cand.polyA = &a;
+            cand.polyB = &b;
+            cand.center_dist_sq = center_dist_sq;
+            cand.r_sum = static_cast<Scalar>(r_sum);
+
+            auto eval = evaluate_distance_candidate<VecType>(cand);
+            if (eval.intersect) {
+                out.core = eval;
+                out.core.polyA_idx = 0;
+                out.core.polyB_idx = 1;
+                auto pts = closest_points_between_parts(
+                    a, eval.partA_idx, b, eval.partB_idx);
+                out.closest_a = pts.first;
+                out.closest_b = pts.second;
+                return out;
+            }
+            if (eval.distance_sq < out.core.distance_sq) {
+                out.core = eval;
+                out.core.polyA_idx = 0;
+                out.core.polyB_idx = 1;
+                auto pts = closest_points_between_parts(
+                    a, eval.partA_idx, b, eval.partB_idx);
+                out.closest_a = pts.first;
+                out.closest_b = pts.second;
+            }
         }
-        if (r.distance_sq < out.core.distance_sq) {
-            out.core = r;
-            out.core.polyA_idx = 0;
-            out.core.polyB_idx = 1;
-            auto pts = closest_points_between_parts(a, r.partA_idx, b, r.partB_idx);
-            out.closest_a = pts.first;
-            out.closest_b = pts.second;
-        }
+    }
+
+    if (!out.core.intersect && check_mutual_containment(a, b)) {
+        out.core.intersect = true;
+        out.core.distance_sq = static_cast<Scalar>(0);
+        out.core.penetration_sq = std::numeric_limits<Scalar>::max();
     }
     return out;
 }
@@ -246,13 +278,9 @@ inline ComplexCastResult<VecType> cast_slide(
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
-    std::vector<SolidGeometry<VecType>> polys;
-    polys.reserve(1 + obstacles.size());
-    polys.push_back(active);
-    for (const auto &o : obstacles) {
-        polys.push_back(o);
-    }
-    return find_closest_polygon_cast<VecType>(0, polys, slide, max_t);
+    // No active+obstacles repack: cast vs obstacle list by const ref.
+    return find_closest_polygon_cast_vs_obstacles<VecType>(
+        active, obstacles, slide, max_t);
 }
 
 template <class VecType>
@@ -262,11 +290,30 @@ inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
-    std::vector<SolidGeometry<VecType>> polys;
-    polys.reserve(1 + obstacles.size());
-    polys.push_back(active);
-    for (const auto &o : obstacles) {
-        polys.push_back(o);
+    return find_all_polygon_casts_vs_obstacles<VecType>(
+        active, obstacles, slide, max_t);
+}
+
+// Packing collide for two solids without owned 2-element sweep vectors.
+template <class VecType, class Tracer = DefaultTracer>
+inline bool solids_packing_collide(
+    const SolidGeometry<VecType> &a,
+    const SolidGeometry<VecType> &b,
+    Tracer *tracer = nullptr
+) {
+    for (size_t i = 0; i < a.line_parts.size(); ++i) {
+        if (a.line_parts[i].is_subtractive) {
+            continue;
+        }
+        for (size_t j = 0; j < b.line_parts.size(); ++j) {
+            if (b.line_parts[j].is_subtractive) {
+                continue;
+            }
+            if (check_part_vs_part_intersect<VecType, Tracer>(
+                    a, static_cast<int>(i), b, static_cast<int>(j), tracer)) {
+                return true;
+            }
+        }
     }
-    return find_all_polygon_casts<VecType>(0, polys, slide, max_t);
+    return try_add_containment_collision(a, b);
 }

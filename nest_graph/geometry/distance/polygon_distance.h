@@ -21,7 +21,6 @@ template <class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(
     const VecType* lsA, int nA,
     const VecType* lsB, int nB,
-    bool known_overlap,
     int& it1,
     int& it2,
     int GRADIENT_THRESHOLD = 24,
@@ -43,9 +42,9 @@ inline DistanceResult<VecType> narrow_phase_distance(
 
     auto res = (s1 + s2 > GRADIENT_THRESHOLD)
         ? convex_linestrings_distance_gjk_gradient<VecType>(
-            p1, s1, p2, s2, known_overlap, warm1, warm2)
+            p1, s1, p2, s2, warm1, warm2)
         : convex_linestrings_distance_gjk<VecType>(
-            p1, s1, p2, s2, known_overlap, warm1, warm2);
+            p1, s1, p2, s2, warm1, warm2);
 
     if (swapped) {
         it1 = res.it2;
@@ -61,14 +60,13 @@ template <class VecType, class Tracer = DefaultTracer>
 inline DistanceResult<VecType> narrow_phase_distance(
     const VecType* lsA, int nA,
     const VecType* lsB, int nB,
-    bool known_overlap,
     int GRADIENT_THRESHOLD = 24,
     Tracer* tracer = nullptr
 ) {
     int it1 = 0;
     int it2 = 0;
     return narrow_phase_distance<VecType, Tracer>(
-        lsA, nA, lsB, nB, known_overlap, it1, it2, GRADIENT_THRESHOLD, tracer);
+        lsA, nA, lsB, nB, it1, it2, GRADIENT_THRESHOLD, tracer);
 }
 
 template <class VecType, class Tracer = DefaultTracer>

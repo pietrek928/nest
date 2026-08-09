@@ -44,12 +44,23 @@ nb::tuple solid_aabb_tuple(const GeometryHolder &g) {
 }
 
 std::vector<SolidGeometry2d> solids_from_holders(
-    const std::vector<GeometryHolder> &holders
+    std::vector<GeometryHolder> holders
 ) {
     std::vector<SolidGeometry2d> out;
     out.reserve(holders.size());
+    for (auto &h : holders) {
+        out.push_back(std::move(h.solid));
+    }
+    return out;
+}
+
+std::vector<const SolidGeometry2d *> solid_ptrs_from_holders(
+    const std::vector<GeometryHolder> &holders
+) {
+    std::vector<const SolidGeometry2d *> out;
+    out.reserve(holders.size());
     for (const auto &h : holders) {
-        out.push_back(h.solid);
+        out.push_back(&h.solid);
     }
     return out;
 }

@@ -1,15 +1,12 @@
 # CFLAGS="-Wno-error=incompatible-pointer-types" pip install --force-reinstall --no-binary=shapely --upgrade shapely
 
 import cv2 as cv
-import math
-import time
 import numpy as np
 from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
 from shapely.geometry import box as shapely_box
 from shapely.geometry import Point
-from shapely.ops import nearest_points
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
 from typing import Iterator, NamedTuple, Sequence, Tuple
@@ -26,35 +23,17 @@ from .config import (
 )
 from .geometry import (
     Geometry,
-    GuidanceConfig,
     batch_check_validity,
-    find_polygon_distances,
     find_polygon_intersections,
-    find_polygon_intersections_bipartite,
 )
 from .placement_scene import (
-    PlacementScene,
-    guidance_config_for_board_edge_anchor,
     guidance_config_for_graph,
     is_valid_placement,
-    placement_footprint_inside_board,
-    placement_ok_for_outline,
     placement_scene_for_part,
     footprints_inside_board,
-    proposition_translation,
 )
-from .propose.placement_common import clear_of_geoms
-from .propose.placement_outline import (
-    outline_ring_geom,
-    outline_kiss_tolerance,
-    outline_standoff_distance,
-)
-from .propose.placement_perimeter import edge_inward_at_point
-from .propose.placements_guidance import (
-    candidate_from_proposition,
-    is_cast_move,
-    sorted_guidance_propositions,
-)
+from .propose.placement_common import as_geometry
+from .propose.placement_outline import outline_standoff_distance
 from .board import (
     board_context_from_geometry,
     default_sheet_padding,
@@ -66,6 +45,8 @@ from .propose import (
     proposed_transforms_for_groups,
     border_edge_transforms_for_group,
 )
+from .propose.pipeline import collect_propose_batch_for_nest
+from .propose.post_pack import run_post_pack_passes
 from .propose.compaction import (
     compact_selection,
     selection_pairwise_independent,
@@ -78,14 +59,46 @@ from .propose.local_se2 import local_se2_selection
 from .propose.context import (
     analyze_free_space,
     build_free_space_snapshot,
-    outline_coverage_ratio,
     part_is_concave,
-    propose_push_point,
     sheet_has_narrow_corridor,
     should_use_border_focus,
 )
+# Re-exported for scripts/nesting_evaluator.py and tests that still import the
+# private build_graph names; implementations live in the propose package.
+from .propose.context import (  # noqa: F401
+    LateBorderSatInfo,
+    late_border_saturation_active as _late_border_saturation_active,
+    late_border_saturation_info as _late_border_saturation_info,
+)
+from .propose.first_pass_border import (  # noqa: F401
+    border_kiss_indices as _border_kiss_indices,
+    border_pack_graph as _border_pack_graph,
+    border_saturation_transform_batch as _border_saturation_transform_batch,
+    guidance_border_refine as _guidance_border_refine,
+    perimeter_sort_key as _perimeter_sort_key,
+    sequential_border_augment as _sequential_border_augment,
+)
+from .propose.void_selection import (  # noqa: F401
+    apply_void_selection_boosts,
+    boost_border_scores as _boost_border_scores,
+    boost_keyed_proposal_scores as _boost_keyed_proposal_scores,
+    boost_small_part_scores as _boost_small_part_scores,
+    boost_void_island_scores as _boost_void_island_scores,
+    centroid_in_free as _centroid_in_free,
+    count_graph_in_free as _count_graph_in_free,
+    count_props_in_free as _count_props_in_free,
+    count_props_near_pole as _count_props_near_pole,
+    count_selected_by_proposer as _count_selected_by_proposer,
+    count_selected_in_free as _count_selected_in_free,
+    format_prop_accept as _format_prop_accept,
+    pin_nest_void_independent as _pin_nest_void_independent,
+    proposer_key_owner as _proposer_key_owner,
+    transform_row_key as _transform_row_key,
+    void_attractor_radius as _void_attractor_radius,
+    xy_in_free as _xy_in_free,
+    zones_have_void_hijack as _zones_have_void_hijack,
+)
 from .propose.feedback import ProposeFeedbackState
-from .propose.ranking import score_placement_tightness
 from .propose.geometry import ProposeGeometry
 from .track_perf import show_performance
 from .elem_graph import (
@@ -119,6 +132,8 @@ class NestState:
 
     Do not mutate ``polys`` under a live NestState; construct a new NestState on
     rebuild so the lazy ``native_geoms`` cache stays coherent.
+    Prefer passing ``native_geoms`` from ``make_polygon_graph`` / SE2 apply_transform
+    so propose hot paths skip re-``from_shapely`` (and re-decomp) of the pack.
     """
 
     polys: list
@@ -131,9 +146,15 @@ class NestState:
 
     @property
     def native_geoms(self) -> list[Geometry]:
-        """Cached ``Geometry.from_shapely`` for each poly (built once)."""
+        """Cached Geometry per poly index (built once; prefer graph-placed solids)."""
         if self._native_geoms is None:
-            self._native_geoms = [Geometry.from_shapely(p) for p in self.polys]
+            out: list[Geometry] = []
+            for p in self.polys:
+                g = as_geometry(p)
+                if g is None:
+                    raise ValueError("NestState.native_geoms: empty/invalid poly")
+                out.append(g)
+            self._native_geoms = out
         return self._native_geoms
 
 
@@ -145,6 +166,29 @@ def nest_state_extra_voids(nest_state: NestState | None) -> list[Geometry] | Non
     if n <= 0:
         return None
     return list(nest_state.native_geoms[:n])
+
+
+def _native_geoms_from_transforms(
+    group_id: Sequence[int],
+    transform: Sequence,
+    bases: dict[int, Geometry],
+    *,
+    seed_polys: Sequence | None = None,
+    seed_count: int = 0,
+) -> list[Geometry]:
+    """SE2 solids from part bases (no re-decomp of transformed Shapely)."""
+    out: list[Geometry] = []
+    n = len(group_id)
+    for i in range(n):
+        if seed_count > 0 and i < seed_count and seed_polys is not None and i < len(seed_polys):
+            g = as_geometry(seed_polys[i])
+            if g is None:
+                raise ValueError("seed poly empty")
+            out.append(g)
+            continue
+        gid = int(group_id[i])
+        out.append(bases[gid].apply_transform(np.asarray(transform[i], dtype=np.float64)))
+    return out
 
 
 def _poly_and_transforms(item):
@@ -165,142 +209,14 @@ def _selection_coverage_pct(
     return 100.0 * parts_area / board_area
 
 
-def _late_border_saturation_active(
-    cfg: BuildGraphConfig,
-    nest_state: NestState | None,
-    board: BaseGeometry,
-    *,
-    had_void_override: bool = False,
-) -> bool:
-    """Return whether late border-only propose should run.
-
-    Exp1: skip sat when free space is a large contiguous void.
-    Exp3: when not large_void, also require pack-hull rim progress below threshold.
-    """
-    return _late_border_saturation_info(
-        cfg, nest_state, board, had_void_override=had_void_override,
-    ).active
-
-
-class LateBorderSatInfo(NamedTuple):
-    active: bool
-    outline_cov: float
-    sat_override: bool
-    rim_progress: float
-    free_kind: str
-
-
-def _late_border_saturation_info(
-    cfg: BuildGraphConfig,
-    nest_state: NestState | None,
-    board: BaseGeometry,
-    *,
-    had_void_override: bool = False,
-) -> LateBorderSatInfo:
-    empty = LateBorderSatInfo(
-        active=False, outline_cov=0.0, sat_override=False,
-        rim_progress=0.0, free_kind="",
-    )
-    if nest_state is None or not cfg.propose.late_border_saturation:
-        return empty
-    placed = [
-        nest_state.polys[i]
-        for i in nest_state.selected_indices
-        if nest_state.polys[i] is not None and not nest_state.polys[i].is_empty
-    ]
-    if not placed:
-        return empty
-    sheet, _ = board_context_from_geometry(board)
-    min_dist = cfg.board_min_dist()
-    native = nest_state.native_geoms
-    pack_geoms = [
-        native[i]
-        for i in nest_state.selected_indices
-        if 0 <= i < len(native)
-        and nest_state.polys[i] is not None
-        and not nest_state.polys[i].is_empty
-    ]
-    outline_cov = float(
-        outline_coverage_ratio(placed, sheet, min_dist, pack_geoms=pack_geoms)
-    )
-    threshold = float(cfg.propose.place_border_coverage_threshold)
-
-    mean_part = float(np.mean([float(p.area) for p in placed]))
-    void_thr = float(cfg.propose.late_border_void_override_ratio)
-    if void_thr <= 0.0:
-        void_thr = 2.5
-    free_info = analyze_free_space(
-        sheet, placed, mean_part, min_dist, void_ratio_threshold=void_thr,
-    )
-    free_kind = str(free_info.kind)
-    void_ratio = float(free_info.max_void_ratio)
-    override_ratio = float(cfg.propose.late_border_void_override_ratio)
-    release_ratio = float(cfg.propose.late_border_void_release_ratio)
-    entry_override = (
-        override_ratio > 0.0
-        and free_info.kind == "large_void"
-        and void_ratio > override_ratio
-    )
-    # Hysteresis: once unlocked this pack, hold while void still meaningful.
-    hold_override = (
-        had_void_override
-        and release_ratio > 0.0
-        and outline_cov < threshold
-        and void_ratio > release_ratio
-    )
-    sat_override = entry_override or hold_override
-
-    sheet_perim = float(sheet.exterior.length) if not sheet.is_empty else 0.0
-    rim_progress = 0.0
-    if sheet_perim > 1e-12:
-        hull = unary_union(placed).convex_hull
-        if hull is not None and not hull.is_empty and hasattr(hull, "exterior"):
-            rim_progress = float(
-                np.clip(float(hull.exterior.length) / sheet_perim, 0.0, 1.0)
-            )
-
-    if outline_cov >= threshold:
-        # Rim metric already satisfied — no late border-only.
-        return LateBorderSatInfo(
-            active=False,
-            outline_cov=outline_cov,
-            sat_override=False,
-            rim_progress=rim_progress,
-            free_kind=free_kind,
-        )
-    if sat_override:
-        # Exp1 / hysteresis: unlock full propose despite low outline_kiss_cov.
-        return LateBorderSatInfo(
-            active=False,
-            outline_cov=outline_cov,
-            sat_override=True,
-            rim_progress=rim_progress,
-            free_kind=free_kind,
-        )
-    # Without large_void, keep sat only while pack hull_rim_fill is still open.
-    hull_thr = float(cfg.propose.late_border_hull_threshold)
-    if hull_thr > 0.0 and rim_progress >= hull_thr:
-        return LateBorderSatInfo(
-            active=False,
-            outline_cov=outline_cov,
-            sat_override=False,
-            rim_progress=rim_progress,
-            free_kind=free_kind,
-        )
-    return LateBorderSatInfo(
-        active=True,
-        outline_cov=outline_cov,
-        sat_override=False,
-        rim_progress=rim_progress,
-        free_kind=free_kind,
-    )
-
-
 def _base_geometries(polygons) -> list[Geometry]:
-    return [
-        Geometry.from_shapely(_poly_and_transforms(item)[0])
-        for item in polygons
-    ]
+    out: list[Geometry] = []
+    for item in polygons:
+        g = as_geometry(_poly_and_transforms(item)[0])
+        if g is None:
+            raise ValueError("_base_geometries: empty/invalid part")
+        out.append(g)
+    return out
 
 
 def _iter_candidates(
@@ -350,7 +266,7 @@ def placement_board_score(
     board_geom: Geometry,
     placed: Geometry,
 ) -> float:
-    if not placement_footprint_inside_board(placed, board_geom):
+    if not placed.fully_inside(board_geom):
         cx, cy = placed.center()
         return -board.distance(Point(cx, cy))
     cx, cy = placed.center()
@@ -398,7 +314,9 @@ def select_non_intersecting_polygons(polygons: np.ndarray):
     selected_geoms: list[Geometry] = []
     selected: list = []
     for p in polygons:
-        geom = Geometry.from_shapely(p)
+        geom = as_geometry(p)
+        if geom is None:
+            continue
         if geom.intersects_any(selected_geoms):
             continue
         selected_geoms.append(geom)
@@ -584,11 +502,10 @@ def transforms_around(
     n: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    sx, sy, sa = s
-    return np.concatenate([
-        p + rng.uniform(-1, 1, (p.shape[0], 3)) * [sx, sy, sa]
-        for _ in range(n)
-    ])
+    from nest_graph.propose.placements_selection_expand import (
+        transforms_around as _transforms_around,
+    )
+    return _transforms_around(p, s, n, rng)
 
 
 def transform_shuffle_mix(
@@ -966,6 +883,52 @@ def improve_rules(
     return [rs for _, rs in scored[:n]]
 
 
+def _make_void_attractor_rule_set(
+    pole: Point,
+    *,
+    ngroups: int,
+    radius: float,
+    weight: float,
+) -> PlacementRuleSet:
+    """Strong PointPlaceRule attractors at the free-space pole for nest_by_graph."""
+    rs = PlacementRuleSet()
+    px, py = float(pole.x), float(pole.y)
+    r = max(float(radius), 1e-4)
+    w = float(weight)
+    for g in range(max(int(ngroups), 1)):
+        rs.append_rule(PointPlaceRule(pos=Vec2(x=px, y=py), r=r, w=w, group=g))
+    return rs
+
+
+def _merge_void_attractor_into_rule_sets(
+    rule_sets: list[PlacementRuleSet],
+    attractor: PlacementRuleSet,
+    *,
+    nest_rule_sets_used: int,
+    max_rules_per_set: int,
+) -> list[PlacementRuleSet]:
+    """Prepend void attractors onto the rule sets used by nest_by_graph."""
+    if not rule_sets or attractor is None:
+        return rule_sets
+    n_touch = min(max(int(nest_rule_sets_used), 1), len(rule_sets))
+    out: list[PlacementRuleSet] = []
+    for i, rs in enumerate(rule_sets):
+        if i >= n_touch:
+            out.append(rs)
+            continue
+        merged = _copy_rule_set(attractor)
+        for pr in rs.point_rules:
+            merged.append_rule(pr)
+        for cr in rs.circle_rules:
+            merged.append_rule(cr)
+        for pr in rs.point_angle_rules:
+            merged.append_rule(pr)
+        for cr in rs.circle_angle_rules:
+            merged.append_rule(cr)
+        out.append(truncate_rule_set(merged, max_rules_per_set))
+    return out
+
+
 def score_rule_sets_with_dfs(
     graph: ElemGraph,
     rule_sets: list[PlacementRuleSet],
@@ -1047,36 +1010,6 @@ def _nest_seed_from_boosted_scores(
     return _greedy_independent_set_ordered(graph, order)
 
 
-def _void_attractor_radius(min_dist: float, sheet_diag: float, place_rule_radius: float) -> float:
-    """Sheet-aware PointPlaceRule radius (legacy local r is too sharp for large voids)."""
-    return max(float(place_rule_radius), float(min_dist) * 4.0, 0.25 * float(sheet_diag))
-
-
-def _nest_outline_boundary(outline: BaseGeometry):
-    if hasattr(outline, "exterior"):
-        return outline.exterior
-    return outline.boundary
-
-
-def _border_kiss_indices(
-    polys: list,
-    outline: BaseGeometry,
-    min_dist: float,
-) -> list[int]:
-    tol = outline_kiss_tolerance(min_dist)
-    return [
-        i
-        for i, poly in enumerate(polys)
-        if abs(outline_standoff_distance(poly, outline) - min_dist) <= tol
-    ]
-
-
-def _perimeter_sort_key(poly, outline: BaseGeometry) -> float:
-    ring = _nest_outline_boundary(outline)
-    touch = nearest_points(ring, poly.centroid)[0]
-    return float(ring.project(touch))
-
-
 def _expand_border_selection(
     graph: ElemGraph,
     polys: list,
@@ -1133,10 +1066,6 @@ def _first_pass_border_ring_selection(
     return _greedy_independent_set_ordered(graph, order)
 
 
-def _transform_row_key(t: np.ndarray) -> tuple[float, float, float]:
-    return (round(float(t[0]), 4), round(float(t[1]), 4), round(float(t[2]), 4))
-
-
 def _locked_graph_indices(
     transforms: list[np.ndarray],
     phase1_transforms: list[np.ndarray],
@@ -1154,749 +1083,6 @@ def _prepend_group_transforms(
     if batch.shape[0] == 0:
         return phase1
     return dedupe_transforms(np.concatenate([phase1, batch], axis=0))
-
-
-def _border_saturation_transform_batch(
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    parts: list[tuple[Polygon, int]],
-    nest_state: NestState,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Propose-only batch for outline saturation (no random/history noise)."""
-    min_dist = cfg.board_min_dist(first_pass=True)
-    polys = nest_state.polys
-    selected = nest_state.selected_indices
-    group_id = nest_state.group_id
-    transform = nest_state.transform
-    part_by_gid = {gid: poly for poly, gid in parts}
-    pack_polys = [polys[i] for i in selected]
-    phase1_by_group: list[list[np.ndarray]] = [[], []]
-    for idx in selected:
-        phase1_by_group[group_id[idx]].append(transform[idx])
-    native = nest_state.native_geoms
-    full_packed_geoms = [
-        native[i] for i in selected if 0 <= i < len(native)
-    ]
-    if len(full_packed_geoms) != len(selected):
-        full_packed_geoms = None
-    propose_by_group = proposed_transforms_for_groups(
-        board,
-        parts,
-        polys,
-        selected,
-        cfg.first_pass_propose_config(),
-        min_dist=min_dist,
-        border_only_propose=True,
-        use_full_packed_obstacle=cfg.propose.use_full_packed_obstacle,
-        packed_group_ids=group_id,
-        packed_transforms=transform,
-        user_holes=cfg.rules.board_holes,
-        seeded=bool(nest_state.seed_count > 0),
-        pocket_keys_out={},
-        densify_stats_out={},
-        zones_used_out=[],
-        full_packed_geoms=full_packed_geoms,
-    )
-    out: list[np.ndarray] = []
-    for gid in range(len(phase1_by_group)):
-        phase1 = (
-            np.asarray(phase1_by_group[gid], dtype=np.float64)
-            if phase1_by_group[gid]
-            else np.zeros((0, 3))
-        )
-        proposed = propose_by_group.get(gid, np.zeros((0, 3)))
-        augment_coords = _border_augment_coords(
-            cfg,
-            board,
-            part_by_gid[gid],
-            pack_polys,
-            min_dist=min_dist,
-        )
-        augment = (
-            np.asarray(augment_coords, dtype=np.float64)
-            if augment_coords
-            else np.zeros((0, 3))
-        )
-        extra = dedupe_transforms(
-            np.concatenate([proposed, augment], axis=0),
-        )
-        cap = max(cfg.propose.first_pass_max_proposals * 4, 128)
-        room = max(cap - phase1.shape[0], 0)
-        if extra.shape[0] > room:
-            extra = extra[:room]
-        merged = dedupe_transforms(np.concatenate([phase1, extra], axis=0))
-        out.append(merged)
-    return (out[0], out[1])
-
-
-def _outline_anchor_inward(
-    poly,
-    outline: BaseGeometry,
-) -> tuple[Point, tuple[float, float]]:
-    ring = _nest_outline_boundary(outline)
-    anchor, _ = nearest_points(ring, poly)
-    if isinstance(outline, Polygon):
-        edge_info = edge_inward_at_point(outline, anchor)
-        if edge_info is not None:
-            return edge_info
-    if hasattr(outline, "representative_point"):
-        interior = outline.representative_point()
-    else:
-        interior = ring.interpolate(0.5, normalized=True)
-    ox = anchor.x - interior.x
-    oy = anchor.y - interior.y
-    dist = float(np.hypot(ox, oy))
-    if dist < 1e-9:
-        return anchor, (-1.0, -1.0)
-    return anchor, (ox / dist, oy / dist)
-
-
-def _neighbor_excess_gap(geoms: list[Geometry], min_dist: float) -> float:
-    if len(geoms) < 2:
-        return 0.0
-    results = find_polygon_distances(geoms, aura=0.5)
-    nearest = [float("inf")] * len(geoms)
-    for r in results:
-        d = 0.0 if r.intersect else math.sqrt(r.distance_sq)
-        if 0 <= r.polyA_idx < len(nearest):
-            nearest[r.polyA_idx] = min(nearest[r.polyA_idx], d)
-        if 0 <= r.polyB_idx < len(nearest):
-            nearest[r.polyB_idx] = min(nearest[r.polyB_idx], d)
-    return sum(
-        max(0.0, nd - min_dist)
-        for nd in nearest
-        if nd < float("inf")
-    )
-
-
-def _border_tightness_cost(
-    polys: list,
-    outline: BaseGeometry,
-    min_dist: float,
-    *,
-    geoms: list[Geometry] | None = None,
-) -> float:
-    """Lower is tighter: excess neighbor gap plus outline standoff error.
-
-    Pass ``geoms`` (or Geometry items in ``polys``) to avoid per-trial
-    ``from_shapely`` of the full pack.
-    """
-    if not polys and not geoms:
-        return 0.0
-    if geoms is None:
-        geoms = [
-            p if isinstance(p, Geometry) else Geometry.from_shapely(p)
-            for p in polys
-        ]
-    ring_geom = outline_ring_geom(outline)
-    if ring_geom is not None:
-        kiss = sum(
-            abs(g.standoff_distance(ring_geom) - min_dist)
-            for g in geoms
-        )
-    else:
-        kiss = sum(
-            abs(outline_standoff_distance(poly, outline) - min_dist)
-            for poly in polys
-        )
-    excess_gap = _neighbor_excess_gap(geoms, min_dist)
-    return 2.0 * excess_gap + 1.0 * kiss
-
-
-def _border_refine_candidates(
-    x: float,
-    y: float,
-    theta: float,
-    g,
-    *,
-    min_dist: float,
-    max_props: int,
-) -> list[tuple[float, float, float]]:
-    """Cast snaps plus fractional slide steps along guidance propositions."""
-    out: list[tuple[float, float, float]] = []
-    seen: set[tuple[float, float, float]] = set()
-
-    def add(coords: tuple[float, float, float]) -> None:
-        key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
-        if key in seen:
-            return
-        seen.add(key)
-        out.append(coords)
-
-    for prop in sorted_guidance_propositions(g)[:max_props]:
-        use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
-        add(candidate_from_proposition(x, y, theta, prop, use_full_cast=use_cast))
-        if use_cast:
-            continue
-        tx, ty = proposition_translation(prop)
-        mag = math.hypot(tx, ty)
-        if mag < 1e-9:
-            continue
-        step_scale = 0.2
-        step_len = step_scale * max(min_dist, 1e-4)
-        if not g.is_penetrating:
-            step_len = step_scale * mag
-        for frac in (0.15, 0.25, 0.4, 0.7, 1.0):
-            nx = x + tx / mag * step_len * frac
-            ny = y + ty / mag * step_len * frac
-            add((nx, ny, theta))
-    return out
-
-
-def _border_refine_micro_walk(
-    x: float,
-    y: float,
-    theta: float,
-    g,
-    *,
-    scene: PlacementScene,
-    part_geom: Geometry,
-    others_geoms: list[Geometry],
-    outline: BaseGeometry,
-    edge_cfg: GuidanceConfig,
-    min_dist: float,
-    eps: float,
-    walk_steps: int = 4,
-    step_scale: float = 0.2,
-) -> tuple[float, float, float]:
-    """Step along top guidance slides from an accepted refine pose."""
-    cx, cy, ctheta = x, y, theta
-    for _ in range(walk_steps):
-        props = sorted_guidance_propositions(g)[:3]
-        if not props:
-            break
-        moved = False
-        for prop in props:
-            tx, ty = proposition_translation(prop)
-            mag = math.hypot(tx, ty)
-            if mag < 1e-9:
-                continue
-            use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
-            if use_cast:
-                step_len = mag
-            else:
-                step_len = step_scale * max(min_dist, 1e-4)
-                if not g.is_penetrating:
-                    step_len = step_scale * mag
-            nx = cx + tx / mag * step_len
-            ny = cy + ty / mag * step_len
-            ntheta = ctheta
-            if abs(float(prop.rotation_rad)) > 1e-6:
-                delta = float(prop.rotation_rad) - ctheta
-                while delta > math.pi:
-                    delta -= 2 * math.pi
-                while delta < -math.pi:
-                    delta += 2 * math.pi
-                ntheta = ctheta + delta * (1.0 if use_cast else 0.2)
-            cand_geom = part_geom.apply_transform(
-                np.asarray((nx, ny, ntheta), dtype=np.float64),
-            )
-            if not placement_ok_for_outline(
-                scene,
-                cand_geom,
-                outline,
-                others_geoms,
-                min_dist,
-                edge_cfg,
-                epsilon_ratio=eps,
-                require_outline_kiss=True,
-            ):
-                continue
-            cx, cy, ctheta = nx, ny, ntheta
-            placed = scene.placed_at((cx, cy, ctheta))
-            g = scene.guidance(placed, (cx, cy), edge_cfg)
-            moved = True
-            break
-        if not moved:
-            break
-    return (cx, cy, ctheta)
-
-
-def _guidance_border_refine(
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    parts: list[tuple[Polygon, int]],
-    *,
-    outline: BaseGeometry,
-    pack_polys: list,
-    pack_gids: list[int],
-    pack_tr: list[np.ndarray],
-) -> tuple[list, list[int], list[np.ndarray]]:
-    """Tighten border ring placements using per-anchor guidance casts."""
-    passes = max(cfg.propose.first_pass_guidance_refine_passes, 0)
-    if passes <= 0 or len(pack_polys) < 2:
-        return pack_polys, pack_gids, pack_tr
-
-    min_dist = cfg.board_min_dist(first_pass=True)
-    eps = cfg.placement_epsilon_ratio(first_pass=True)
-    propose_cfg = cfg.first_pass_propose_config()
-    sheet, voids = board_context_from_geometry(board)
-    board_geom = Geometry.from_shapely(sheet)
-    pad = default_sheet_padding(board)
-    bounds = padded_board_bounds(board, pad)
-    part_by_gid = {gid: poly for poly, gid in parts}
-    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
-
-    polys = list(pack_polys)
-    gids = list(pack_gids)
-    trs = [np.asarray(t, dtype=np.float64) for t in pack_tr]
-    geoms = [bases[gid].apply_transform(t) for gid, t in zip(gids, trs, strict=True)]
-    max_props = max(propose_cfg.guidance_max_propositions, 1)
-
-    for _ in range(passes):
-        base_cost = _border_tightness_cost(polys, outline, min_dist, geoms=geoms)
-        improved = False
-        order = sorted(
-            range(len(polys)),
-            key=lambda i: _perimeter_sort_key(polys[i], outline),
-        )
-        for idx in order:
-            gid = gids[idx]
-            part_poly = part_by_gid[gid]
-            x, y, theta = float(trs[idx][0]), float(trs[idx][1]), float(trs[idx][2])
-            anchor, inward = _outline_anchor_inward(polys[idx], outline)
-            others_geoms = [geoms[j] for j in range(len(geoms)) if j != idx]
-            scene = placement_scene_for_part(
-                sheet, board_geom, voids, bases[gid], base_geoms=others_geoms,
-            )
-            edge_cfg = guidance_config_for_board_edge_anchor(
-                anchor,
-                inward,
-                min_dist=min_dist,
-                board_bounds=bounds,
-                epsilon_ratio=eps,
-                target_angle_rad=theta,
-                max_propositions=max_props,
-                use_tight_packing=propose_cfg.guidance_use_tight_packing,
-                use_corner_alignment=propose_cfg.guidance_use_corner_alignment,
-                enable_grid_exploration=propose_cfg.guidance_enable_grid,
-                diversity_dist_ratio=propose_cfg.guidance_diversity_dist_ratio,
-            )
-            placed = scene.placed_at((x, y, theta))
-            g = scene.guidance(placed, (x, y), edge_cfg)
-            best_coords: tuple[float, float, float] | None = None
-            best_cost = base_cost
-            for candidate in _border_refine_candidates(
-                x, y, theta, g, min_dist=min_dist, max_props=max_props,
-            ):
-                cand_poly = transform_poly(part_poly, candidate)
-                cand_geom = bases[gid].apply_transform(np.asarray(candidate, dtype=np.float64))
-                if not placement_ok_for_outline(
-                    scene,
-                    cand_geom,
-                    outline,
-                    others_geoms,
-                    min_dist,
-                    edge_cfg,
-                    epsilon_ratio=eps,
-                    require_outline_kiss=True,
-                ):
-                    continue
-                trial_polys = list(polys)
-                trial_polys[idx] = cand_poly
-                trial_geoms = list(geoms)
-                trial_geoms[idx] = cand_geom
-                cost = _border_tightness_cost(
-                    trial_polys, outline, min_dist, geoms=trial_geoms,
-                )
-                if cost + 1e-9 < best_cost:
-                    best_coords = candidate
-                    best_cost = cost
-            if best_coords is None:
-                continue
-            mx, my, mtheta = best_coords
-            walked = _border_refine_micro_walk(
-                mx, my, mtheta, g,
-                scene=scene,
-                part_geom=bases[gid],
-                others_geoms=others_geoms,
-                outline=outline,
-                edge_cfg=edge_cfg,
-                min_dist=min_dist,
-                eps=eps,
-            )
-            walk_poly = transform_poly(part_poly, walked)
-            walk_geom = bases[gid].apply_transform(
-                np.asarray(walked, dtype=np.float64),
-            )
-            if placement_ok_for_outline(
-                scene,
-                walk_geom,
-                outline,
-                others_geoms,
-                min_dist,
-                edge_cfg,
-                epsilon_ratio=eps,
-                require_outline_kiss=True,
-            ):
-                trial_polys = list(polys)
-                trial_polys[idx] = walk_poly
-                trial_geoms = list(geoms)
-                trial_geoms[idx] = walk_geom
-                walk_cost = _border_tightness_cost(
-                    trial_polys, outline, min_dist, geoms=trial_geoms,
-                )
-                if walk_cost + 1e-9 < best_cost:
-                    best_coords = walked
-                    best_cost = walk_cost
-            polys[idx] = transform_poly(part_poly, best_coords)
-            trs[idx] = np.asarray(best_coords, dtype=np.float64)
-            geoms[idx] = bases[gid].apply_transform(trs[idx])
-            base_cost = best_cost
-            improved = True
-        if not improved:
-            break
-
-    return polys, gids, trs
-
-
-def _border_pack_graph(
-    pack_polys: list,
-    pack_gids: list[int],
-    pack_tr: list[np.ndarray],
-    *,
-    board_geom: Geometry | None = None,
-) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
-    if board_geom is not None:
-        kept_polys: list = []
-        kept_gids: list[int] = []
-        kept_tr: list[np.ndarray] = []
-        for poly, gid, tr in zip(pack_polys, pack_gids, pack_tr, strict=True):
-            geom = Geometry.from_shapely(poly)
-            if placement_footprint_inside_board(geom, board_geom):
-                kept_polys.append(poly)
-                kept_gids.append(gid)
-                kept_tr.append(tr)
-        pack_polys, pack_gids, pack_tr = kept_polys, kept_gids, kept_tr
-    placed_geoms = [Geometry.from_shapely(p) for p in pack_polys]
-    graph = ElemGraph()
-    graph.reserve_elems(len(placed_geoms))
-    for n, geom in enumerate(placed_geoms):
-        cx, cy = geom.center()
-        graph.append_elem(
-            pack_gids[n],
-            Vec2(x=cx, y=cy),
-            Circle.from_center_radius(cx, cy, geom.radius()),
-        )
-    hits = find_polygon_intersections(placed_geoms)
-    for i, j in hits:
-        graph.add_collision(i, j)
-    selected_out = list(range(len(pack_polys)))
-    assert selection_is_independent(graph, selected_out)
-    return graph, pack_polys, pack_gids, pack_tr, selected_out
-
-
-def _border_augment_coords(
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    part_poly: Polygon,
-    placed_polys: list,
-    *,
-    min_dist: float,
-) -> list[tuple[float, float, float]]:
-    """Fast outline candidates: board snap + chain fit against full packed union."""
-    from nest_graph.propose.placements_edge import (
-        propose_placements_board_edge,
-        propose_placements_group_fit,
-    )
-    from nest_graph.propose.placements_primary import (
-        propose_placements_neighbor_slide,
-    )
-    from nest_graph.propose.context import border_focal_for_propose, propose_push_point
-    from nest_graph.propose.geometry import ProposeGeometry
-
-    sheet, _ = board_context_from_geometry(board)
-    obstacle = unary_union(placed_polys) if placed_polys else Polygon()
-    propose_cfg = cfg.first_pass_propose_config()
-    push = propose_push_point(
-        board,
-        obstacle,
-        smart_push=propose_cfg.smart_push_target,
-        min_dist=min_dist,
-        use_border_focus=True,
-    )
-    geom = ProposeGeometry(
-        board,
-        obstacle,
-        part_poly,
-        min_dist,
-        epsilon_ratio=propose_cfg.placement_clearance_epsilon_ratio,
-        propose_cfg=propose_cfg,
-    )
-    coords: list[tuple[float, float, float]] = []
-    coords.extend(
-        propose_placements_board_edge(
-            part_poly,
-            sheet,
-            obstacle,
-            min_dist=min_dist,
-            propose_cfg=propose_cfg,
-            propose_geom=geom,
-            pt_push=push,
-            top_n=propose_cfg.first_pass_max_proposals,
-            samples_per_edge=propose_cfg.board_edge_samples_per_edge,
-        ),
-    )
-    if not obstacle.is_empty:
-        focal = unary_union([border_focal_for_propose(board, min_dist), obstacle])
-        coords.extend(
-            propose_placements_group_fit(
-                focal,
-                part_poly,
-                sheet,
-                obstacle,
-                min_dist=min_dist,
-                top_n=propose_cfg.first_pass_max_proposals,
-                samples_per_edge=propose_cfg.first_pass_group_edge_samples_per_edge,
-                propose_geom=geom,
-                pt_push=push,
-            ),
-        )
-        coords.extend(
-            propose_placements_neighbor_slide(
-                obstacle,
-                part_poly,
-                sheet,
-                min_dist,
-                propose_geom=geom,
-                pt_push=push,
-                num_angles=propose_cfg.placement_num_angles,
-                top_n=propose_cfg.first_pass_max_proposals,
-            ),
-        )
-    seen: set[tuple[float, float, float]] = set()
-    out: list[tuple[float, float, float]] = []
-    for c in coords:
-        key = (round(c[0], 3), round(c[1], 3), round(c[2], 2))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(c)
-    return out
-
-
-def _first_pass_interior_fill(
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    parts: list[tuple[Polygon, int]],
-    *,
-    pack_polys: list,
-    pack_gids: list[int],
-    pack_tr: list[np.ndarray],
-    placed_geoms: list[Geometry],
-    sheet: Polygon,
-    board_geom: Geometry,
-    voids: list,
-    min_dist: float,
-    eps: float,
-    guidance_cfg: GuidanceConfig,
-    part_by_gid: dict[int, Polygon],
-    bases: dict[int, Geometry],
-) -> tuple[list, list[int], list[np.ndarray], list[Geometry]]:
-    """Add up to first_pass_interior_max non-outline parts after border augment."""
-    interior_max = max(cfg.propose.first_pass_interior_max, 0)
-    if interior_max <= 0:
-        return pack_polys, pack_gids, pack_tr, placed_geoms
-
-    propose_cfg = cfg.first_pass_propose_config().model_copy(deep=True)
-    propose_cfg.ranking_mode = "contact_hybrid"
-    propose_cfg.use_contact_ranking = True
-    propose_cfg.place_profiles_enabled = True
-
-    polys = list(pack_polys)
-    gids = list(pack_gids)
-    trs = list(pack_tr)
-    geoms = list(placed_geoms)
-    catalog = [(part_by_gid[gid], gid) for gid in part_by_gid]
-
-    for _ in range(interior_max):
-        densify_stats: dict = {}
-        pocket_keys: dict = {}
-        by_group = proposed_transforms_for_groups(
-            board,
-            catalog,
-            polys,
-            list(range(len(polys))),
-            propose_cfg,
-            min_dist=min_dist,
-            use_full_packed_obstacle=True,
-            packed_group_ids=gids,
-            packed_transforms=trs,
-            user_holes=cfg.rules.board_holes,
-            pocket_keys_out=pocket_keys,
-            densify_stats_out=densify_stats,
-            seeded=False,
-            full_packed_geoms=geoms if geoms else None,
-        )
-        pack_union = unary_union(polys) if polys else Polygon()
-        push = propose_push_point(
-            board,
-            pack_union,
-            smart_push=propose_cfg.smart_push_target,
-            min_dist=min_dist,
-            use_border_focus=False,
-        )
-        candidates: list[tuple[float, int, np.ndarray, Polygon, Geometry]] = []
-        for gid, part_poly in part_by_gid.items():
-            arr = by_group.get(gid)
-            if arr is None or arr.shape[0] == 0:
-                continue
-            for row in arr:
-                coords = np.asarray(row, dtype=np.float64).reshape(3)
-                shapely_placed = transform_poly(part_poly, coords)
-                geom = bases[gid].apply_transform(coords)
-                scene = placement_scene_for_part(
-                    sheet, board_geom, voids, bases[gid], base_geoms=geoms,
-                )
-                if not placement_ok_for_outline(
-                    scene,
-                    geom,
-                    board,
-                    geoms,
-                    min_dist,
-                    guidance_cfg,
-                    epsilon_ratio=eps,
-                    require_outline_kiss=False,
-                ):
-                    continue
-                pg = ProposeGeometry(
-                    board, pack_union, part_poly, min_dist,
-                    epsilon_ratio=eps, propose_cfg=propose_cfg,
-                )
-                tight = score_placement_tightness(
-                    (float(coords[0]), float(coords[1]), float(coords[2])),
-                    pg, push, min_dist,
-                )
-                cost = -tight if tight > float("-inf") else float("inf")
-                candidates.append((cost, gid, coords, shapely_placed, geom))
-        if not candidates:
-            break
-        candidates.sort(key=lambda row: row[0])
-        added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
-        for cost, gid, coords, shapely_placed, geom in candidates:
-            blocker_geoms = geoms + [row[3] for row in added]
-            if not clear_of_geoms(geom, blocker_geoms, min_dist):
-                continue
-            if not placement_footprint_inside_board(geom, board_geom):
-                continue
-            added.append((gid, coords, shapely_placed, geom))
-            break
-        if not added:
-            break
-        for gid, coords, shapely_placed, geom in added:
-            polys.append(shapely_placed)
-            gids.append(gid)
-            trs.append(coords)
-            geoms.append(geom)
-
-    return polys, gids, trs, geoms
-
-
-def _sequential_border_augment(
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    parts: list[tuple[Polygon, int]],
-    *,
-    outline: BaseGeometry,
-    polys: list,
-    group_id: list[int],
-    transform: list[np.ndarray],
-    selected: list[int],
-    skip_guidance_refine: bool = False,
-) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
-    """Fill outline gaps by proposing against the full packed union each step."""
-    min_dist = cfg.board_min_dist(first_pass=True)
-    eps = cfg.placement_epsilon_ratio(first_pass=True)
-    sheet, voids = board_context_from_geometry(board)
-    board_geom = Geometry.from_shapely(sheet)
-    pad = default_sheet_padding(board)
-    guidance_cfg = guidance_config_for_graph(
-        min_dist,
-        board_bounds=padded_board_bounds(board, pad),
-        epsilon_ratio=eps,
-    )
-    part_by_gid = {gid: poly for poly, gid in parts}
-    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
-
-    pack_polys = [polys[i] for i in selected]
-    pack_gids = [group_id[i] for i in selected]
-    pack_tr = [transform[i] for i in selected]
-    placed_geoms = [Geometry.from_shapely(p) for p in pack_polys]
-    max_rounds = max(cfg.propose.first_pass_sequential_augment_max, 0)
-
-    for _ in range(max_rounds):
-        candidates: list[tuple[float, int, np.ndarray, Polygon, Geometry]] = []
-        for gid, part_poly in part_by_gid.items():
-            for c in _border_augment_coords(
-                cfg, board, part_poly, pack_polys, min_dist=min_dist,
-            ):
-                coords = np.asarray(c, dtype=np.float64)
-                shapely_placed = transform_poly(part_poly, coords)
-                geom = bases[gid].apply_transform(coords)
-                scene = placement_scene_for_part(
-                    sheet, board_geom, voids, bases[gid], base_geoms=placed_geoms,
-                )
-                if not placement_ok_for_outline(
-                    scene,
-                    geom,
-                    outline,
-                    placed_geoms,
-                    min_dist,
-                    guidance_cfg,
-                    epsilon_ratio=eps,
-                    require_outline_kiss=True,
-                ):
-                    continue
-                cost = abs(outline_standoff_distance(shapely_placed, outline) - min_dist)
-                candidates.append((cost, gid, coords, shapely_placed, geom))
-        if not candidates:
-            break
-        candidates.sort(key=lambda row: row[0])
-        added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
-        for cost, gid, coords, shapely_placed, geom in candidates:
-            blocker_geoms = placed_geoms + [row[3] for row in added]
-            if not clear_of_geoms(geom, blocker_geoms, min_dist):
-                continue
-            if not placement_footprint_inside_board(geom, board_geom):
-                continue
-            added.append((gid, coords, shapely_placed, geom))
-        if not added:
-            break
-        for gid, coords, shapely_placed, geom in added:
-            pack_polys.append(shapely_placed)
-            pack_gids.append(gid)
-            pack_tr.append(coords)
-            placed_geoms.append(geom)
-
-    pack_polys, pack_gids, pack_tr, placed_geoms = _first_pass_interior_fill(
-        cfg,
-        board,
-        parts,
-        pack_polys=pack_polys,
-        pack_gids=pack_gids,
-        pack_tr=pack_tr,
-        placed_geoms=placed_geoms,
-        sheet=sheet,
-        board_geom=board_geom,
-        voids=voids,
-        min_dist=min_dist,
-        eps=eps,
-        guidance_cfg=guidance_cfg,
-        part_by_gid=part_by_gid,
-        bases=bases,
-    )
-
-    if not skip_guidance_refine:
-        pack_polys, pack_gids, pack_tr = _guidance_border_refine(
-            cfg,
-            board,
-            parts,
-            outline=outline,
-            pack_polys=pack_polys,
-            pack_gids=pack_gids,
-            pack_tr=pack_tr,
-        )
-    return _border_pack_graph(pack_polys, pack_gids, pack_tr, board_geom=board_geom)
 
 
 def _first_pass_layered_selection(
@@ -1944,6 +1130,13 @@ def _first_pass_layered_selection(
             group_id=group_id_cur,
             transform=transform_cur,
             selected_indices=list(sel_cur),
+            _native_geoms=_native_geoms_from_transforms(
+                group_id_cur,
+                transform_cur,
+                {0: Geometry.from_shapely(parts[0][0]), 1: Geometry.from_shapely(parts[1][0])}
+                if len(parts) >= 2
+                else {gid: Geometry.from_shapely(poly) for poly, gid in parts},
+            ),
         )
         batch2 = _border_saturation_transform_batch(
             cfg,
@@ -2005,407 +1198,15 @@ def _first_pass_layered_selection(
             pack_gids=pack_gids,
             pack_tr=pack_tr,
         )
-    return _border_pack_graph(pack_polys, pack_gids, pack_tr, board_geom=board_geom)
-
-
-def _boost_border_scores(
-    polys: list,
-    scores: list[float],
-    outline: BaseGeometry,
-    min_dist: float,
-    *,
-    weight: float = 8.0,
-) -> None:
-    """Favor graph nodes flush to the nest outline when scoring nest/DFS."""
-    scale = outline_kiss_tolerance(min_dist)
-    for i, sc in enumerate(scores):
-        err = abs(outline_standoff_distance(polys[i], outline) - min_dist)
-        scores[i] = sc + weight * max(0.0, 1.0 - err / scale)
-
-
-def _boost_void_island_scores(
-    polys: list,
-    scores: list[float],
-    free_poly: BaseGeometry | None,
-    *,
-    weight: float,
-    pole: Point | None = None,
-    pole_radius: float = 0.0,
-    sheet_diag: float = 0.0,
-) -> int:
-    """EMS-style distance-to-pole boost for Python DFS/finalize scores.
-
-    ``weight`` scales ``max(0, 1 - dist/pole_norm)`` for nodes in the free
-    poly (or within ``pole_radius`` of the pole). Flat legacy boost when
-    ``sheet_diag <= 0`` and pole is unset beyond the in_free check.
-    """
-    if weight <= 0.0 or not scores:
-        return 0
-    diag = float(sheet_diag)
-    if diag <= 1e-12 and free_poly is not None and not free_poly.is_empty:
-        minx, miny, maxx, maxy = free_poly.bounds
-        diag = float(np.hypot(maxx - minx, maxy - miny))
-    if diag <= 1e-12 and pole is not None and pole_radius > 0.0:
-        diag = float(pole_radius) * 4.0
-    if diag <= 1e-12:
-        diag = 1.0
-
-    n = 0
-    for i, sc in enumerate(scores):
-        if i >= len(polys):
-            break
-        poly = polys[i]
-        if poly is None or poly.is_empty:
-            continue
-        c = poly.centroid
-        in_free = (
-            free_poly is not None
-            and not free_poly.is_empty
-            and (free_poly.contains(c) or free_poly.intersects(c))
-        )
-        near_pole = (
-            pole is not None
-            and pole_radius > 0.0
-            and float(c.distance(pole)) <= float(pole_radius)
-        )
-        if not (in_free or near_pole):
-            continue
-        if pole is not None:
-            dist = float(c.distance(pole))
-            factor = max(0.0, 1.0 - dist / diag)
-        else:
-            factor = 1.0
-        scores[i] = float(sc) + float(weight) * factor
-        n += 1
-    return n
-
-
-def _boost_keyed_proposal_scores(
-    group_id: Sequence[int],
-    transforms: Sequence,
-    scores: list[float],
-    keys_by_group: dict[int, set[tuple[float, float, float]]] | None,
-    *,
-    weight: float,
-) -> int:
-    """Add ``weight`` to scores whose (group, transform key) is in ``keys_by_group``."""
-    if weight <= 0.0 or not scores or not keys_by_group:
-        return 0
-    n = 0
-    for i, sc in enumerate(scores):
-        if i >= len(group_id) or i >= len(transforms):
-            break
-        gid = int(group_id[i])
-        keys = keys_by_group.get(gid)
-        if not keys:
-            continue
-        key = _transform_row_key(np.asarray(transforms[i], dtype=np.float64))
-        if key not in keys:
-            continue
-        scores[i] = float(sc) + float(weight)
-        n += 1
-    return n
-
-
-def _boost_small_part_scores(
-    group_id: Sequence[int],
-    scores: list[float],
-    part_areas: Sequence[float],
-    *,
-    weight: float,
-) -> int:
-    """Boost smaller catalog groups: weight * (1 - area/max_area) on large_void."""
-    if weight <= 0.0 or not scores or not part_areas:
-        return 0
-    areas = [float(a) for a in part_areas]
-    max_a = max(areas) if areas else 0.0
-    if max_a <= 1e-12:
-        return 0
-    n = 0
-    for i, sc in enumerate(scores):
-        if i >= len(group_id):
-            break
-        gid = int(group_id[i])
-        if gid < 0 or gid >= len(areas):
-            continue
-        factor = max(0.0, 1.0 - areas[gid] / max_a)
-        if factor <= 0.0:
-            continue
-        scores[i] = float(sc) + float(weight) * factor
-        n += 1
-    return n
-
-
-def apply_void_selection_boosts(
-    *,
-    polys: list,
-    group_id: Sequence[int],
-    transform: Sequence,
-    scores: list[float],
-    free_info,
-    free_poly,
-    part_areas: Sequence[float],
-    propose_stats: dict | None,
-    cfg: "BuildGraphConfig",
-    sheet_diag: float,
-    void_r: float,
-) -> dict[str, int]:
-    """Apply void-island, pocket-key, and small-part score boosts (demo + evaluator)."""
-    hits = {
-        "void_island": 0,
-        "pocket_keys": 0,
-        "small_part": 0,
-    }
-    pole_w = float(cfg.propose.void_island_score_boost)
-    pocket_w = float(getattr(cfg.propose, "pocket_score_boost", 0.0) or 0.0)
-    small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
-    if free_info.kind == "large_void" and pole_w > 0.0:
-        hits["void_island"] = _boost_void_island_scores(
-            polys,
-            scores,
-            free_poly,
-            weight=pole_w,
-            pole=free_info.target_pt,
-            pole_radius=void_r,
-            sheet_diag=sheet_diag,
-        )
-    if pocket_w > 0.0 and propose_stats is not None:
-        keys = propose_stats.get("pocket_keys") or {}
-        hits["pocket_keys"] = _boost_keyed_proposal_scores(
-            group_id,
-            transform,
-            scores,
-            keys,
-            weight=pocket_w,
-        )
-    if free_info.kind == "large_void" and small_w > 0.0:
-        hits["small_part"] = _boost_small_part_scores(
-            group_id,
-            scores,
-            part_areas,
-            weight=small_w,
-        )
-    return hits
-
-
-def _make_void_attractor_rule_set(
-    pole: Point,
-    *,
-    ngroups: int,
-    radius: float,
-    weight: float,
-) -> PlacementRuleSet:
-    """Strong PointPlaceRule attractors at the free-space pole for nest_by_graph."""
-    rs = PlacementRuleSet()
-    px, py = float(pole.x), float(pole.y)
-    r = max(float(radius), 1e-4)
-    w = float(weight)
-    for g in range(max(int(ngroups), 1)):
-        rs.append_rule(PointPlaceRule(pos=Vec2(x=px, y=py), r=r, w=w, group=g))
-    return rs
-
-
-def _merge_void_attractor_into_rule_sets(
-    rule_sets: list[PlacementRuleSet],
-    attractor: PlacementRuleSet,
-    *,
-    nest_rule_sets_used: int,
-    max_rules_per_set: int,
-) -> list[PlacementRuleSet]:
-    """Prepend void attractors onto the rule sets used by nest_by_graph."""
-    if not rule_sets or attractor is None:
-        return rule_sets
-    n_touch = min(max(int(nest_rule_sets_used), 1), len(rule_sets))
-    out: list[PlacementRuleSet] = []
-    for i, rs in enumerate(rule_sets):
-        if i >= n_touch:
-            out.append(rs)
-            continue
-        merged = _copy_rule_set(attractor)
-        for pr in rs.point_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_rules:
-            merged.append_rule(cr)
-        for pr in rs.point_angle_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_angle_rules:
-            merged.append_rule(cr)
-        out.append(truncate_rule_set(merged, max_rules_per_set))
-    return out
-
-
-def _centroid_in_free(poly, free_poly: BaseGeometry | None) -> bool:
-    if free_poly is None or free_poly.is_empty or poly is None or poly.is_empty:
-        return False
-    c = poly.centroid
-    return bool(free_poly.contains(c) or free_poly.intersects(c))
-
-
-def _xy_in_free(x: float, y: float, free_poly: BaseGeometry | None) -> bool:
-    if free_poly is None or free_poly.is_empty:
-        return False
-    p = Point(float(x), float(y))
-    return bool(free_poly.contains(p) or free_poly.intersects(p))
-
-
-def _count_selected_in_free(
-    polys: list,
-    selected: Sequence[int],
-    free_poly: BaseGeometry | None,
-) -> int:
-    return sum(
-        1 for i in selected if _centroid_in_free(polys[i], free_poly)
+    part_by_gid = {gid: poly for poly, gid in parts}
+    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
+    return _border_pack_graph(
+        pack_polys,
+        pack_gids,
+        pack_tr,
+        board_geom=board_geom,
+        bases=bases,
     )
-
-
-def _proposer_key_owner(
-    proposer_keys: dict[str, set[tuple[float, float, float]]] | None,
-) -> dict[tuple[float, float, float], str]:
-    """Map transform key → first-writer proposer name."""
-    owner: dict[tuple[float, float, float], str] = {}
-    if not proposer_keys:
-        return owner
-    for name, keys in proposer_keys.items():
-        for key in keys:
-            if key not in owner:
-                owner[key] = name
-    return owner
-
-
-def _count_selected_by_proposer(
-    transforms: Sequence,
-    selected: Sequence[int],
-    proposer_keys: dict[str, set[tuple[float, float, float]]] | None,
-) -> dict[str, int]:
-    owner = _proposer_key_owner(proposer_keys)
-    counts: dict[str, int] = {}
-    for i in selected:
-        if i < 0 or i >= len(transforms):
-            continue
-        key = _transform_row_key(np.asarray(transforms[i], dtype=np.float64))
-        name = owner.get(key)
-        if name is None:
-            continue
-        counts[name] = counts.get(name, 0) + 1
-    return counts
-
-
-def _format_prop_accept(
-    emitted: dict[str, int],
-    pool: dict[str, int],
-    nest: dict[str, int],
-    refine: dict[str, int],
-    *,
-    limit: int = 8,
-) -> str:
-    names = sorted(
-        set(emitted) | set(pool) | set(nest) | set(refine),
-        key=lambda n: (-int(emitted.get(n, 0)), n),
-    )
-    parts = []
-    for name in names[:limit]:
-        parts.append(
-            f"{name}:e{int(emitted.get(name, 0))}/p{int(pool.get(name, 0))}/"
-            f"n{int(nest.get(name, 0))}/r{int(refine.get(name, 0))}"
-        )
-    return " ".join(parts)
-
-
-def _pin_nest_void_independent(
-    graph: ElemGraph,
-    selected_nest: Sequence[int],
-    selected_refine: Sequence[int],
-    polys: list,
-    free_poly: BaseGeometry | None,
-    scores: list[float] | None = None,
-    *,
-    stats_out: dict | None = None,
-) -> list[int]:
-    """P3: re-add nest-void nodes missing from refine if collision-clear.
-
-    Uses ``graph.collisions`` (not Shapely pose-clear). Optional ``stats_out``
-    records pin_candidates / pin_added / pin_blocked_collision / pin_ms.
-    """
-    t0 = time.perf_counter()
-    refine = list(selected_refine)
-    refine_set = set(refine)
-    candidates = [
-        i for i in selected_nest
-        if i not in refine_set and _centroid_in_free(polys[i], free_poly)
-    ]
-    pin_added = 0
-    pin_blocked = 0
-    if not candidates:
-        if stats_out is not None:
-            stats_out["pin_candidates"] = 0
-            stats_out["pin_added"] = 0
-            stats_out["pin_blocked_collision"] = 0
-            stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
-        return refine
-    if scores is not None and len(scores) == len(graph.group_id):
-        candidates.sort(key=lambda v: scores[v], reverse=True)
-    for v in candidates:
-        if any(u in refine_set for u in graph.collisions[v]):
-            pin_blocked += 1
-            continue
-        refine.append(v)
-        refine_set.add(v)
-        pin_added += 1
-    if stats_out is not None:
-        stats_out["pin_candidates"] = len(candidates)
-        stats_out["pin_added"] = pin_added
-        stats_out["pin_blocked_collision"] = pin_blocked
-        stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
-    return refine
-
-
-def _count_graph_in_free(polys: list, free_poly: BaseGeometry | None) -> int:
-    return sum(1 for p in polys if _centroid_in_free(p, free_poly))
-
-
-def _count_props_in_free(
-    proposed_by_group: Sequence[np.ndarray] | None,
-    free_poly: BaseGeometry | None,
-) -> int:
-    if not proposed_by_group or free_poly is None or free_poly.is_empty:
-        return 0
-    n = 0
-    for arr in proposed_by_group:
-        if arr is None or len(arr) == 0:
-            continue
-        for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
-            if _xy_in_free(float(row[0]), float(row[1]), free_poly):
-                n += 1
-    return n
-
-
-def _count_props_near_pole(
-    proposed_by_group: Sequence[np.ndarray] | None,
-    pole: Point | None,
-    radius: float,
-) -> int:
-    """Count proposals whose (x,y) lies within ``radius`` of the void pole."""
-    if (
-        not proposed_by_group
-        or pole is None
-        or float(radius) <= 0.0
-    ):
-        return 0
-    r = float(radius)
-    n = 0
-    for arr in proposed_by_group:
-        if arr is None or len(arr) == 0:
-            continue
-        for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
-            if float(np.hypot(float(row[0]) - float(pole.x), float(row[1]) - float(pole.y))) <= r:
-                n += 1
-    return n
-
-
-def _zones_have_void_hijack(zones: Sequence[str] | None) -> bool:
-    if not zones:
-        return False
-    return any("void_seek(large_void)" in str(z) for z in zones)
 
 
 def _project_angles_to_allowed(
@@ -2488,20 +1289,19 @@ def _build_transform_batch(
             ]
             if len(full_packed_geoms) != len(selected):
                 full_packed_geoms = None
-        propose_by_group = proposed_transforms_for_groups(
+        propose_by_group, batch_stats = collect_propose_batch_for_nest(
             board,
             parts,
             polys,
             selected,
             propose_cfg,
             min_dist=min_dist,
-            border_only_propose=border_only,
+            border_only=border_only,
             use_full_packed_obstacle=(
                 cfg.propose.use_full_packed_obstacle and not empty_sheet
             ),
             rules=rules,
             proposer_counts_out=proposer_counts_out,
-            zones_used_out=zones_used if propose_stats_out is not None else None,
             propose_feedback=propose_feedback,
             packed_group_ids=(
                 nest_state.group_id if nest_state is not None else None
@@ -2512,10 +1312,11 @@ def _build_transform_batch(
             group_allowed_angles=group_allowed_angles,
             user_holes=cfg.rules.board_holes,
             seeded=seeded,
-            pocket_keys_out=pocket_keys_raw,
-            densify_stats_out=densify_stats,
             full_packed_geoms=full_packed_geoms,
         )
+        zones_used = list(batch_stats.get("zones_used") or [])
+        pocket_keys_raw = dict(batch_stats.get("pocket_keys_raw") or {})
+        densify_stats = dict(batch_stats.get("densify_stats") or {})
         # Project angles before keying so MIS boost matches graph transforms.
         proposal_keys: dict[int, set[tuple[float, float, float]]] = {}
         pocket_keys: dict[int, set[tuple[float, float, float]]] = {}
@@ -2538,37 +1339,16 @@ def _build_transform_batch(
             else:
                 pocket_keys[gid] = set(raw)
         if propose_stats_out is not None:
-            propose_stats_out["proposal_count"] = sum(
-                arr.shape[0] for arr in propose_by_group.values()
-            )
-            propose_stats_out["zones_used"] = zones_used
+            propose_stats_out.update(batch_stats)
             propose_stats_out["proposal_keys"] = proposal_keys
             propose_stats_out["pocket_keys"] = pocket_keys
-            propose_stats_out["densify_stats"] = dict(densify_stats)
+            propose_stats_out["zones_used"] = zones_used
+            propose_stats_out["densify_stats"] = densify_stats
             propose_stats_out["proposed_by_group"] = {
                 gid: np.asarray(arr, dtype=np.float64)
                 for gid, arr in propose_by_group.items()
             }
             propose_stats_out["border_only"] = bool(border_only)
-            propose_stats_out["proposer_keys"] = densify_stats.get("proposer_keys") or {}
-            propose_stats_out["emitted_by_proposer"] = densify_stats.get(
-                "emitted_by_proposer"
-            ) or {}
-            propose_stats_out["pool_by_proposer"] = densify_stats.get(
-                "pool_by_proposer"
-            ) or {}
-            propose_stats_out["pocket_by_tag"] = densify_stats.get("pocket_by_tag") or {}
-            propose_stats_out["cascade_stopped_after"] = densify_stats.get(
-                "cascade_stopped_after", "none"
-            )
-            propose_stats_out["cascade_skipped_proposers"] = list(
-                densify_stats.get("cascade_skipped_proposers") or []
-            )
-            propose_stats_out["nms_kept"] = int(densify_stats.get("nms_kept", 0))
-            propose_stats_out["nms_dropped"] = int(densify_stats.get("nms_dropped", 0))
-            propose_stats_out["conflict_penalty_applied"] = int(
-                densify_stats.get("conflict_penalty_applied", 0)
-            )
         if empty_sheet and cfg.propose.use_board_edge_seeds:
             for part_poly, group_id in parts:
                 border_pin_by_group[group_id] = border_edge_transforms_for_group(
@@ -2943,6 +1723,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     p1 = cfg.rules.rect_polygon()
     p2 = cfg.rules.tri_polygon()
     parts = [(p1, 0), (p2, 1)]
+    part_bases = {0: Geometry.from_shapely(p1), 1: Geometry.from_shapely(p2)}
     max_verts = max(len(list(p.exterior.coords)) for p, _ in parts)
     max_interiors = max(len(getattr(p, "interiors", ()) or ()) for p, _ in parts)
     cfg = cfg.with_runtime_lean(
@@ -3608,12 +2389,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     history[0],
                     trim_history(history[1], selected_t[1], sc.history_max),
                 )
+        seed_n = nest_state.seed_count if nest_state is not None else 0
         nest_state = NestState(
             polys=polys,
             group_id=group_id,
             transform=transform,
             selected_indices=list(selected_polys),
-            seed_count=nest_state.seed_count if nest_state is not None else 0,
+            seed_count=seed_n,
+            _native_geoms=_native_geoms_from_transforms(
+                group_id,
+                transform,
+                part_bases,
+                seed_polys=polys,
+                seed_count=seed_n,
+            ),
         )
         rule_sets = _inject_repulsor_rules(rule_sets, cfg, p_sheet, nest_state)
 
@@ -3621,24 +2410,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
 
 
 def transform_selection(s, n, rng: np.random.Generator):
-    yield transforms_around(s, (0.1, 0.1, 1.5), n, rng)
-    yield transforms_around(s, (0.1, 0.1, 0), n, rng)
-    yield transforms_around(s, (0, 0, 1.5), n, rng)
-    yield transforms_around(s, (0.05, 0.05, 1), n, rng)
-    yield transforms_around(s, (0.05, 0.05, 0), n, rng)
-    yield transforms_around(s, (0, 0, 1), n, rng)
-    yield transforms_around(s, (0.01, 0.01, 0.01), n, rng)
-    yield transforms_around(s, (0.01, 0.01, 0), n, rng)
-    yield transforms_around(s, (0, 0, 0.01), n, rng)
-    yield transforms_around(s, (0.001, 0.001, 0.001), n, rng)
-    yield transforms_around(s, (0.001, 0.001, 0), n, rng)
-    yield transforms_around(s, (0, 0, 0.001), n, rng)
+    """Expand selected transforms for the next graph batch (selection_expand proposer)."""
+    from nest_graph.propose.placements_selection_expand import selection_expand_arrays
+    yield from selection_expand_arrays(s, n, rng)
 
 
 def transform_history(h, n, rng: np.random.Generator):
-    yield transforms_around(h, (0.05, 0.05, 0.1), n, rng)
-    yield transforms_around(h, (0.05, 0.05, 0), n, rng)
-    yield transforms_around(h, (0, 0, 0.1), n, rng)
+    """Expand history transforms for the next graph batch (history_expand proposer)."""
+    from nest_graph.propose.placements_selection_expand import history_expand_arrays
+    yield from history_expand_arrays(h, n, rng)
 
 
 def test_placement():

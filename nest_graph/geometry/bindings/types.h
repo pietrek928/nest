@@ -39,6 +39,8 @@ struct GeometryHolder {
 nb::tuple circle_bounds_tuple(const GeometryHolder &g);
 nb::tuple solid_aabb_tuple(const GeometryHolder &g);
 std::vector<SolidGeometry2d> solids_from_holders(
+    std::vector<GeometryHolder> holders);
+std::vector<const SolidGeometry2d *> solid_ptrs_from_holders(
     const std::vector<GeometryHolder> &holders);
 Vec2d slide_vector_from_handle(nb::handle slide);
 GeometryHolder geometry_from_line_coords(std::vector<Vec2d> pts);

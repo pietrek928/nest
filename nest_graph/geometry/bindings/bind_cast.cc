@@ -32,13 +32,13 @@ void bind_cast_api(nb::module_ &m) {
     m.def(
         "find_closest_polygon_cast",
         [](const GeometryHolder &active,
-           const std::vector<GeometryHolder> &obstacles,
+           std::vector<GeometryHolder> obstacles,
            nb::handle slide,
            double max_t) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide(
                 active.solid,
-                solids_from_holders(obstacles),
+                solids_from_holders(std::move(obstacles)),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -50,13 +50,13 @@ void bind_cast_api(nb::module_ &m) {
     m.def(
         "find_all_polygon_casts",
         [](const GeometryHolder &active,
-           const std::vector<GeometryHolder> &obstacles,
+           std::vector<GeometryHolder> obstacles,
            nb::handle slide,
            double max_t) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide_all(
                 active.solid,
-                solids_from_holders(obstacles),
+                solids_from_holders(std::move(obstacles)),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -71,7 +71,7 @@ void bind_snap_api(nb::module_ &m) {
         "polish_se2_part",
         [](const GeometryHolder &part,
            nb::handle pose,
-           const std::vector<GeometryHolder> &obstacles,
+           std::vector<GeometryHolder> obstacles,
            nb::object board,
            const std::vector<std::tuple<double, double>> &dirs,
            int n_angles,
@@ -110,7 +110,7 @@ void bind_snap_api(nb::module_ &m) {
                 static_cast<Vec2d::Scalar>(px),
                 static_cast<Vec2d::Scalar>(py),
                 static_cast<Vec2d::Scalar>(pth),
-                solids_from_holders(obstacles),
+                solids_from_holders(std::move(obstacles)),
                 board_ptr,
                 dir_vecs,
                 n_angles,
