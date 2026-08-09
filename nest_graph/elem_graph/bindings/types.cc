@@ -15,8 +15,10 @@ void bind_elem_graph_types(nb::module_ &m) {
         .value("Sum", ScoreAggregation::Sum)
         .value("Max", ScoreAggregation::Max);
 
-    nb::enum_<SelectMode>(m, "SelectMode")
+    nb::enum_<SelectMode>(m, "SelectMode", nb::is_arithmetic())
+        .value("greedy_score", SelectMode::GreedyScore)
         .value("GreedyScore", SelectMode::GreedyScore)
+        .value("weighted_greedy", SelectMode::WeightedGreedy)
         .value("WeightedGreedy", SelectMode::WeightedGreedy);
 
     nb::class_<SelectOptions>(m, "SelectOptions")

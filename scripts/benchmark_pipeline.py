@@ -9,174 +9,207 @@ from pathlib import Path
 
 import numpy as np
 
-from nest_graph.config import BuildGraphConfig, ProposeConfig
+from nest_graph.config import (
+    BuildGraphConfig,
+    DfsMode,
+    ProposeAblation,
+    ProposeConfig,
+)
 from scripts.nesting_evaluator import NestingPipelineEvaluator, metrics_meet_floors
 from scripts.nesting_fixtures import get_all_cases, resolve_cases
 
 
-def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
+def _build_cfg(
+    propose_name: ProposeAblation | str,
+    dfs_mode: DfsMode | str,
+) -> BuildGraphConfig:
     cfg = BuildGraphConfig()
-    cfg.selection.dfs_mode = dfs_mode
+    cfg.selection.dfs_mode = DfsMode(dfs_mode)
+    propose = ProposeAblation(propose_name)
 
-    if propose_name == "shipped":
-        pass
-    elif propose_name == "local_compact":
-        cfg.propose = ProposeConfig.local_compact_profile()
-    elif propose_name == "no_void_boost":
-        cfg.propose = cfg.propose.model_copy(update={
-            "void_island_score_boost": 0.0,
-            "void_attractor_rule_weight": 0.0,
-            "enable_gravity_compaction": False,
-        })
-    elif propose_name == "void_boost_high":
-        cfg.propose = cfg.propose.model_copy(update={
-            "void_island_score_boost": 128.0,
-            "pocket_score_boost": 100.0,
-            "void_attractor_rule_weight": 48.0,
-        })
-    elif propose_name == "no_void_yield_densify":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_void_yield_densify_accept": False,
-        })
-    elif propose_name == "no_void_pole_clear":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_void_pole_clear_densify": False,
-        })
-    elif propose_name == "no_free_space_cloud":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_free_space_cloud": False,
-        })
-    elif propose_name == "no_greedy_nest":
-        cfg.propose = cfg.propose.model_copy(update={
-            "void_greedy_nest_seed": False,
-        })
-    elif propose_name == "no_pocket_fit":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_pocket_fit": False,
-        })
-    elif propose_name == "no_small_prefer":
-        cfg.propose = cfg.propose.model_copy(update={
-            "small_part_void_score_boost": 0.0,
-        })
-    elif propose_name == "no_pocket_mis_boost":
-        cfg.propose = cfg.propose.model_copy(update={
-            "pocket_score_boost": 0.0,
-        })
-    elif propose_name == "no_cluster_repack":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_cluster_repack": False,
-        })
-    elif propose_name == "no_cluster_copy":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_cluster_copy": False,
-        })
-    elif propose_name == "no_side_pack":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_side_pack": False,
-        })
-    elif propose_name == "no_open_void_pocket":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_open_void_pocket": False,
-        })
-    elif propose_name == "no_local_se2":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_local_se2": False,
-        })
-    elif propose_name == "no_cluster_relocate":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_cluster_relocate": False,
-        })
-    elif propose_name == "no_densify_hijack":
-        cfg.propose = cfg.propose.model_copy(update={
-            "densify_on_void_hijack": False,
-        })
-    elif propose_name == "no_void_elite":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_void_elite_archive": False,
-            "stratified_void_elite_quota": 0,
-        })
-    elif propose_name == "no_keep_hist_sterile":
-        cfg.propose = cfg.propose.model_copy(update={
-            "keep_history_on_void_sterile": False,
-        })
-    elif propose_name == "no_unified_reserve":
-        cfg.propose = cfg.propose.model_copy(update={
-            "unified_void_reserve": False,
-        })
-    elif propose_name == "no_void_contact_hybrid":
-        cfg.propose = cfg.propose.model_copy(update={
-            "void_seek_contact_hybrid": False,
-        })
-    elif propose_name == "no_motif_topo_anchors":
-        cfg.propose = cfg.propose.model_copy(update={
-            "motif_use_topo_anchors": False,
-        })
-    elif propose_name == "no_override":
-        cfg.propose = cfg.propose.model_copy(update={
-            "late_border_void_override_ratio": 0.0,
-            "late_border_void_release_ratio": 0.0,
-        })
-    elif propose_name == "no_void_hijack":
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_void_large_hijack": False,
-            "void_island_score_boost": 0.0,
-            "void_attractor_rule_weight": 0.0,
-            "enable_gravity_compaction": False,
-        })
-    elif propose_name == "no_void_rank":
-        cfg.propose = cfg.propose.model_copy(update={
-            "void_rank_pole_weight": 0.0,
-        })
-    elif propose_name == "gravity_void_pole":
-        # Diagnose-only: gravity remains off in shipped; this preset enables it.
-        cfg.propose = cfg.propose.model_copy(update={
-            "enable_gravity_compaction": True,
-        })
-    elif propose_name == "void_pso":
-        # OOS-3 gated: only enable when props_pole≈0 after OOS-1+4; off by default.
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_point_cloud": True,
-            "use_guidance_walk": True,
-        })
-    elif propose_name == "lean_void_combo":
-        cfg.propose = cfg.propose.model_copy(update={
-            "propose_cascade_short_circuit": True,
-            "use_pose_nms": False,
-            "use_multi_pole_void": True,
-            "use_conflict_degree_rank": False,
-            "use_ema_proposer_scales": False,
-        })
-    elif propose_name == "cascade_only":
-        cfg.propose = cfg.propose.model_copy(update={
-            "propose_cascade_short_circuit": True,
-        })
-    elif propose_name == "nms_only":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_pose_nms": True,
-        })
-    elif propose_name == "conflict_degree_rank":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_conflict_degree_rank": True,
-        })
-    elif propose_name == "multi_pole_void":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_multi_pole_void": True,
-        })
-    elif propose_name == "ema_scales":
-        cfg.propose = cfg.propose.model_copy(update={
-            "use_ema_proposer_scales": True,
-        })
-    elif propose_name == "no_propose":
-        cfg.propose = ProposeConfig(
-            use_neighbor_slide=False,
-            use_voronoi=False,
-            use_point_cloud=False,
-            use_guidance_walk=False,
-            use_ribbon_seeds=False,
-            use_group_edge_seeds=False,
-            use_border_edge_seeds=False,
-            use_guidance_propositions=False,
-        )
+    match propose:
+        case ProposeAblation.SHIPPED:
+            pass
+        case ProposeAblation.LOCAL_COMPACT:
+            cfg.propose = ProposeConfig.local_compact_profile()
+        case ProposeAblation.NO_VOID_BOOST:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_island_score_boost": 0.0,
+                "void_attractor_rule_weight": 0.0,
+                "enable_gravity_compaction": False,
+            })
+        case ProposeAblation.VOID_BOOST_HIGH:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_island_score_boost": 128.0,
+                "pocket_score_boost": 100.0,
+                "void_attractor_rule_weight": 48.0,
+            })
+        case ProposeAblation.NO_VOID_YIELD_DENSIFY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_void_yield_densify_accept": False,
+            })
+        case ProposeAblation.NO_VOID_POLE_CLEAR:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_void_pole_clear_densify": False,
+            })
+        case ProposeAblation.NO_FREE_SPACE_CLOUD:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_free_space_cloud": False,
+            })
+        case ProposeAblation.NO_GREEDY_NEST:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_greedy_nest_seed": False,
+            })
+        case ProposeAblation.NO_POCKET_FIT:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_pocket_fit": False,
+            })
+        case ProposeAblation.NO_SMALL_PREFER:
+            cfg.propose = cfg.propose.model_copy(update={
+                "small_part_void_score_boost": 0.0,
+            })
+        case ProposeAblation.NO_POCKET_MIS_BOOST:
+            cfg.propose = cfg.propose.model_copy(update={
+                "pocket_score_boost": 0.0,
+            })
+        case ProposeAblation.NO_CLUSTER_REPACK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_cluster_repack": False,
+            })
+        case ProposeAblation.NO_CLUSTER_COPY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_cluster_copy": False,
+            })
+        case ProposeAblation.NO_SIDE_PACK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_side_pack": False,
+            })
+        case ProposeAblation.NO_OPEN_VOID_POCKET:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_open_void_pocket": False,
+            })
+        case ProposeAblation.NO_LOCAL_SE2:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_local_se2": False,
+            })
+        case ProposeAblation.NO_CLUSTER_RELOCATE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_cluster_relocate": False,
+            })
+        case ProposeAblation.NO_DENSIFY_HIJACK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "densify_on_void_hijack": False,
+            })
+        case ProposeAblation.NO_VOID_ELITE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_void_elite_archive": False,
+                "stratified_void_elite_quota": 0,
+            })
+        case ProposeAblation.NO_KEEP_HIST_STERILE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "keep_history_on_void_sterile": False,
+            })
+        case ProposeAblation.NO_UNIFIED_RESERVE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "unified_void_reserve": False,
+            })
+        case ProposeAblation.NO_VOID_CONTACT_HYBRID:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_seek_contact_hybrid": False,
+            })
+        case ProposeAblation.NO_MOTIF_TOPO_ANCHORS:
+            cfg.propose = cfg.propose.model_copy(update={
+                "motif_use_topo_anchors": False,
+            })
+        case ProposeAblation.NO_OVERRIDE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "late_border_void_override_ratio": 0.0,
+                "late_border_void_release_ratio": 0.0,
+            })
+        case ProposeAblation.NO_VOID_HIJACK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_void_large_hijack": False,
+                "void_island_score_boost": 0.0,
+                "void_attractor_rule_weight": 0.0,
+                "enable_gravity_compaction": False,
+            })
+        case ProposeAblation.NO_VOID_RANK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_rank_pole_weight": 0.0,
+            })
+        case ProposeAblation.GRAVITY_VOID_POLE:
+            # Diagnose-only: gravity remains off in shipped; this preset enables it.
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_gravity_compaction": True,
+            })
+        case ProposeAblation.VOID_PSO:
+            # OOS-3 gated: only enable when props_pole≈0 after OOS-1+4; off by default.
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_point_cloud": True,
+                "use_guidance_walk": True,
+            })
+        case ProposeAblation.LEAN_VOID_COMBO:
+            cfg.propose = cfg.propose.model_copy(update={
+                "propose_cascade_short_circuit": True,
+                "use_pose_nms": False,
+                "use_multi_pole_void": True,
+                "use_conflict_degree_rank": False,
+                "use_ema_proposer_scales": False,
+            })
+        case ProposeAblation.CASCADE_ONLY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "propose_cascade_short_circuit": True,
+            })
+        case ProposeAblation.NMS_ONLY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_pose_nms": True,
+            })
+        case ProposeAblation.CONFLICT_DEGREE_RANK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_conflict_degree_rank": True,
+            })
+        case ProposeAblation.MULTI_POLE_VOID:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_multi_pole_void": True,
+            })
+        case ProposeAblation.EMA_SCALES:
+            cfg.propose = cfg.propose.model_copy(update={
+                "use_ema_proposer_scales": True,
+            })
+        case ProposeAblation.NO_EDGE_FREE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "edge_free_weight": 0.0,
+                "selection_geom_weight": 0.0,
+            })
+        case ProposeAblation.NO_EDGE_FREE_RANK:
+            cfg.propose = cfg.propose.model_copy(update={
+                "edge_free_weight": 0.0,
+            })
+        case ProposeAblation.NO_SELECTION_GEOM:
+            cfg.propose = cfg.propose.model_copy(update={
+                "selection_geom_weight": 0.0,
+            })
+        case ProposeAblation.NEST_BY_GRAPH_ONLY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "selection_geom_weight": 0.0,
+                "void_greedy_nest_seed": False,
+            })
+        case ProposeAblation.GREEDY_NEST_ONLY:
+            cfg.propose = cfg.propose.model_copy(update={
+                "void_greedy_nest_seed": True,
+                "selection_geom_weight": 0.0,
+            })
+        case ProposeAblation.NO_PROPOSE:
+            cfg.propose = ProposeConfig(
+                use_neighbor_slide=False,
+                use_voronoi=False,
+                use_point_cloud=False,
+                use_guidance_walk=False,
+                use_ribbon_seeds=False,
+                use_group_edge_seeds=False,
+                use_border_edge_seeds=False,
+                use_guidance_propositions=False,
+            )
     return cfg
 
 
@@ -206,46 +239,17 @@ def main() -> None:
     parser.add_argument(
         "--propose",
         nargs="*",
-        default=["shipped"],
-        choices=[
-            "shipped",
-            "local_compact",
-            "no_propose",
-            "no_void_boost",
-            "void_boost_high",
-            "no_void_yield_densify",
-            "no_void_pole_clear",
-            "no_free_space_cloud",
-            "no_void_hijack",
-            "no_override",
-            "no_greedy_nest",
-            "no_pocket_fit",
-            "no_small_prefer",
-            "no_pocket_mis_boost",
-            "no_cluster_repack",
-            "no_cluster_copy",
-            "no_side_pack",
-            "no_open_void_pocket",
-            "no_local_se2",
-            "no_cluster_relocate",
-            "no_densify_hijack",
-            "no_void_elite",
-            "no_keep_hist_sterile",
-            "no_unified_reserve",
-            "no_void_contact_hybrid",
-            "no_motif_topo_anchors",
-            "no_void_rank",
-            "gravity_void_pole",
-            "void_pso",
-            "lean_void_combo",
-            "cascade_only",
-            "nms_only",
-            "conflict_degree_rank",
-            "multi_pole_void",
-            "ema_scales",
-        ],
+        default=[ProposeAblation.SHIPPED],
+        type=ProposeAblation,
+        choices=list(ProposeAblation),
     )
-    parser.add_argument("--dfs-modes", nargs="*", default=["merged_loose_tight"])
+    parser.add_argument(
+        "--dfs-modes",
+        nargs="*",
+        default=[DfsMode.MERGED_LOOSE_TIGHT],
+        type=DfsMode,
+        choices=list(DfsMode),
+    )
     parser.add_argument("--seeds", type=int, nargs="*", default=[0])
     parser.add_argument("--gate", action="store_true", help="Fail if case floors / baselines not met")
     parser.add_argument("--update-baselines", action="store_true", help="Update docs/nesting_baselines.json")
@@ -320,8 +324,8 @@ def main() -> None:
                     "case": case.name,
                     "family": case.family,
                     "demand": case.demand_ratio,
-                    "propose": propose,
-                    "dfs_mode": dfs_mode,
+                    "propose": str(propose),
+                    "dfs_mode": str(dfs_mode),
                     "parts": float(avg_parts),
                     "area": float(avg_area),
                     "parts_delta": float(avg_parts_delta),

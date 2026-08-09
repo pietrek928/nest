@@ -76,6 +76,13 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
     const SelectOptions &select = SelectOptions{}
 );
 
+// Weighted MIS using a precomputed score vector (does not call compute_scores).
+std::vector<Tvertex> nest_by_scores(
+    const ElemGraph &g,
+    const std::vector<Tscore> &scores,
+    const SelectOptions &select = SelectOptions{}
+);
+
 ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse);
 
 std::vector<Tscore> score_elems(

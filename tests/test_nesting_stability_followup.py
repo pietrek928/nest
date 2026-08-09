@@ -23,13 +23,13 @@ def test_void_seek_budget_floors_survive_lean():
     lean = ProposeConfig().with_complexity_lean(n_holes=2, max_part_vertices=8)
     assert lean.candidate_pool <= 24
     cfg = ProposeConfig.for_place("void_seek", base=lean)
-    assert cfg.candidate_pool >= 64
-    assert cfg.max_proposals >= 40
+    assert cfg.candidate_pool >= 1024
+    assert cfg.max_proposals >= 512
     scaled = floor_void_seek_budgets(
         ProposeConfig(candidate_pool=8, max_proposals=4),
     )
-    assert scaled.candidate_pool == 64
-    assert scaled.max_proposals == 40
+    assert scaled.candidate_pool == 1024
+    assert scaled.max_proposals == 512
 
 
 def test_extend_counted_dedupes_claimed_keys():

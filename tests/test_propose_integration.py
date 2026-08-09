@@ -142,15 +142,15 @@ def test_default_config_first_pass_tuned():
     assert cfg.selection.dfs_max_tries == 4
     assert cfg.selection.dfs_refine_max_passes == 1024
     assert cfg.selection.dfs_refine_max_stagnant_passes == 4
-    assert cfg.propose.candidate_pool == 64
+    assert cfg.propose.candidate_pool == 1024
     assert cfg.propose.use_contact_clearance_hybrid is True
     assert cfg.propose.contact_clearance_hybrid_weight == 0.25
     assert cfg.propose.obstacle_nearest_k == 3
     assert cfg.propose.neighbor_slide_pool_fraction == 0.5
     assert cfg.propose.contact_tightness_hybrid_weight == 0.15
     assert cfg.propose.cast_squeeze_top_k == 8
-    assert cfg.sampling.max_transforms_per_group == 1200
-    assert cfg.propose.max_proposals == 40
+    assert cfg.sampling.max_transforms_per_group == 5000
+    assert cfg.propose.max_proposals == 512
     assert cfg.propose.use_voronoi is True
     assert cfg.propose.use_point_cloud is False
     assert cfg.propose.use_guidance_propositions is True

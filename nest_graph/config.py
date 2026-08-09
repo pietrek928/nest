@@ -1,14 +1,23 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
-from typing import Any, Literal, Optional, Sequence
+from enum import StrEnum
+from typing import Any, Optional, Sequence
 
 import numpy as np
 from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
 from .board import board_sheet_from_outline, board_void_geometries, default_sheet_padding
-from .elem_graph import Circle, RuleMutationSettings, ScoreAggregation, SelectMode, SelectOptions, ScoreRulesOptions
+from .elem_graph import (
+    Circle,
+    RuleMutationSettings,
+    ScoreAggregation,
+    SelectMode,
+    SelectOptions,
+    ScoreRulesOptions,
+)
+from .geometry import PlacementRankMode
 from .proposer_names import (
     PLACE_ZONES,
     PROPOSER_FLAG,
@@ -18,6 +27,121 @@ from .proposer_names import (
     proposers_for_zone,
 )
 from .utils import normalize_poly
+
+
+class ScoreSelectMode(StrEnum):
+    WEIGHTED_GREEDY = "weighted_greedy"
+    GREEDY_SCORE = "greedy_score"
+
+
+class RankingMode(StrEnum):
+    LEGACY = "legacy"
+    CLEARANCE = "clearance"
+    HYBRID = "hybrid"
+    BORDER = "border"
+    CONTACT = "contact"
+    CONTACT_HYBRID = "contact_hybrid"
+    RULE_HYBRID = "rule_hybrid"
+
+
+class DfsMode(StrEnum):
+    NEST_ONLY = "nest_only"
+    HEAD_PIPELINE = "head_pipeline"
+    STRICT_NO_PRUNE = "strict_no_prune"
+    STRICT_PRUNE = "strict_prune"
+    LEGACY_ALTERNATING = "legacy_alternating"
+    MERGED_LOOSE_TIGHT = "merged_loose_tight"
+    MERGED_LOOSE_FINALIZE_END = "merged_loose_finalize_end"
+    MERGED_LOOSE_TIGHT_FINALIZE_END = "merged_loose_tight_finalize_end"
+    MERGED_SINGLE_PASS = "merged_single_pass"
+    HIGH_PASS_LOOSE = "high_pass_loose"
+
+
+def _coerce_nb_enum(enum_type: type, value: Any):
+    """Accept nb enum member, name string, or int."""
+    if isinstance(value, enum_type):
+        return value
+    if isinstance(value, str):
+        key = value.strip()
+        members = enum_type.__members__
+        if key in members:
+            return members[key]
+        raise ValueError(f"invalid {enum_type.__name__}: {value!r}")
+    if isinstance(value, int):
+        return enum_type(value)
+    raise TypeError(f"expected {enum_type.__name__}, got {type(value).__name__}")
+
+
+def _coerce_select_mode(value: Any) -> SelectMode:
+    """Map config ScoreSelectMode|str → nanobind SelectMode."""
+    if isinstance(value, SelectMode):
+        return value
+    if isinstance(value, ScoreSelectMode):
+        return _coerce_nb_enum(SelectMode, value.value)
+    if isinstance(value, str):
+        return _coerce_nb_enum(SelectMode, ScoreSelectMode(value).value)
+    return _coerce_nb_enum(SelectMode, value)
+
+
+def _coerce_ranking_mode(value: Any) -> PlacementRankMode:
+    """Map config RankingMode|str → nanobind PlacementRankMode."""
+    if isinstance(value, PlacementRankMode):
+        return value
+    if isinstance(value, RankingMode):
+        return _coerce_nb_enum(PlacementRankMode, value.value)
+    if isinstance(value, str):
+        return _coerce_nb_enum(PlacementRankMode, RankingMode(value).value)
+    return _coerce_nb_enum(PlacementRankMode, value)
+
+
+def as_ranking_mode(value: Any) -> PlacementRankMode:
+    """Map config/propose RankingMode|str → nanobind PlacementRankMode."""
+    return _coerce_ranking_mode(value)
+
+
+class ProposeAblation(StrEnum):
+    """Benchmark / ablation presets applied on top of BuildGraphConfig.propose."""
+
+    SHIPPED = "shipped"
+    LOCAL_COMPACT = "local_compact"
+    NO_PROPOSE = "no_propose"
+    NO_VOID_BOOST = "no_void_boost"
+    VOID_BOOST_HIGH = "void_boost_high"
+    NO_VOID_YIELD_DENSIFY = "no_void_yield_densify"
+    NO_VOID_POLE_CLEAR = "no_void_pole_clear"
+    NO_FREE_SPACE_CLOUD = "no_free_space_cloud"
+    NO_VOID_HIJACK = "no_void_hijack"
+    NO_OVERRIDE = "no_override"
+    NO_GREEDY_NEST = "no_greedy_nest"
+    NO_POCKET_FIT = "no_pocket_fit"
+    NO_SMALL_PREFER = "no_small_prefer"
+    NO_POCKET_MIS_BOOST = "no_pocket_mis_boost"
+    NO_CLUSTER_REPACK = "no_cluster_repack"
+    NO_CLUSTER_COPY = "no_cluster_copy"
+    NO_SIDE_PACK = "no_side_pack"
+    NO_OPEN_VOID_POCKET = "no_open_void_pocket"
+    NO_LOCAL_SE2 = "no_local_se2"
+    NO_CLUSTER_RELOCATE = "no_cluster_relocate"
+    NO_DENSIFY_HIJACK = "no_densify_hijack"
+    NO_VOID_ELITE = "no_void_elite"
+    NO_KEEP_HIST_STERILE = "no_keep_hist_sterile"
+    NO_UNIFIED_RESERVE = "no_unified_reserve"
+    NO_VOID_CONTACT_HYBRID = "no_void_contact_hybrid"
+    NO_MOTIF_TOPO_ANCHORS = "no_motif_topo_anchors"
+    NO_VOID_RANK = "no_void_rank"
+    GRAVITY_VOID_POLE = "gravity_void_pole"
+    VOID_PSO = "void_pso"
+    LEAN_VOID_COMBO = "lean_void_combo"
+    CASCADE_ONLY = "cascade_only"
+    NMS_ONLY = "nms_only"
+    CONFLICT_DEGREE_RANK = "conflict_degree_rank"
+    MULTI_POLE_VOID = "multi_pole_void"
+    EMA_SCALES = "ema_scales"
+    NO_EDGE_FREE = "no_edge_free"
+    NO_EDGE_FREE_RANK = "no_edge_free_rank"
+    NO_SELECTION_GEOM = "no_selection_geom"
+    NEST_BY_GRAPH_ONLY = "nest_by_graph_only"
+    GREEDY_NEST_ONLY = "greedy_nest_only"
 
 
 def _env_int(key: str, default: int) -> int:
@@ -49,10 +173,10 @@ def _env_optional_int(key: str) -> Optional[int]:
 
 
 def _env_max_transforms() -> Optional[int]:
-    """Unset -> 600; none/off/0 -> no cap."""
+    """Unset -> SamplingConfig default (5000); none/off/0 -> no cap."""
     raw = os.environ.get("NEST_MAX_TRANSFORMS")
     if raw is None or raw == "":
-        return 900
+        return 5000
     if raw.strip().lower() in ("none", "off", "0", "-1"):
         return None
     return int(raw)
@@ -73,7 +197,7 @@ class SamplingConfig(BaseModel):
     selection_expand_n: int = 4
     history_expand_n: int = 4
     history_max: int = 1024
-    max_transforms_per_group: Optional[int] = 1200
+    max_transforms_per_group: Optional[int] = 5000
     shuffle_passes: int = 4
     shuffle_per_pass: int = 48
     shuffle_scale: tuple[float, float, float] = (0.12, 0.12, 0.5)
@@ -92,7 +216,7 @@ class SelectionConfig(BaseModel):
     score_rules_latest_graph_only: bool = False
     score_rules_count_weight: float = 0.02
     score_rules_local_swap: bool = True
-    select_mode: Literal["weighted_greedy", "greedy_score"] = "weighted_greedy"
+    select_mode: ScoreSelectMode = ScoreSelectMode.WEIGHTED_GREEDY
     dfs_max_tries: int = 4
     dfs_passes: int = 3
     nest_rule_sets_used: int = 1
@@ -101,18 +225,7 @@ class SelectionConfig(BaseModel):
     dfs_refine_beam_width: int = 2
     dfs_finalize_repair_passes: int = 6
     dfs_finalize_max_component: int = 18
-    dfs_mode: Literal[
-        "nest_only",
-        "head_pipeline",
-        "strict_no_prune",
-        "strict_prune",
-        "legacy_alternating",
-        "merged_loose_tight",
-        "merged_loose_finalize_end",
-        "merged_loose_tight_finalize_end",
-        "merged_single_pass",
-        "high_pass_loose",
-    ] = "merged_loose_tight"
+    dfs_mode: DfsMode = DfsMode.MERGED_LOOSE_TIGHT
 
 
 class RulesConfig(BaseModel):
@@ -249,14 +362,14 @@ def floor_void_seek_budgets(cfg: "ProposeConfig") -> "ProposeConfig":
 
 class ProposeConfig(BaseModel):
     """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
-    max_proposals: int = 40
-    candidate_pool: int = 64
+    max_proposals: int = 512
+    candidate_pool: int = 1024
     min_dist_ratio: float = 0.002
     first_pass_min_dist_ratio: float = 0.0008
     """Tighter standoff on iteration 1 for denser outline packing."""
     first_pass_clearance_epsilon_ratio: float = 0.02
-    first_pass_candidate_pool: int = 96
-    first_pass_max_proposals: int = 48
+    first_pass_candidate_pool: int = 256
+    first_pass_max_proposals: int = 128
     first_pass_num_angles: int = 28
     first_pass_group_edge_samples_per_edge: int = 32
     first_pass_sequential_augment_max: int = 12
@@ -303,12 +416,16 @@ class ProposeConfig(BaseModel):
     use_contact_clearance_hybrid: bool = True
     """Blend contact fit with clearance so valid pocket poses are not discarded."""
     contact_clearance_hybrid_weight: float = 0.25
+    contact_tightness_hybrid_weight: float = 0.15
+    edge_free_weight: float = 6.0
+    """Harmonic dual-proximity (board+pack) term in contact_hybrid rank_score / quality."""
+    edge_free_band_min_dist_mult: float = 3.5
+    """Band = mult * min_dist for edge_free near_* and capped clearance."""
+    selection_geom_weight: float = 24.0
+    """Scale non-negative C++ quality into nest/DFS scores (0 disables; replaces border boost)."""
     use_stratified_contact_trim: bool = True
     contact_trim_fraction: float = 0.8
-    ranking_mode: Literal[
-        "legacy", "clearance", "hybrid", "border", "contact", "contact_hybrid",
-        "rule_hybrid",
-    ] = "clearance"
+    ranking_mode: RankingMode = RankingMode.CLEARANCE
     use_rule_ranking: bool = True
     """When rules are passed to propose, blend rule score into ranking."""
     rule_ranking_weight: float = 0.3
@@ -365,7 +482,7 @@ class ProposeConfig(BaseModel):
     board_edge_samples_per_edge: int = 24
     use_side_pack: bool = True
     """Anti-crowd sheet-side snap (XOR board_edge when packed; XOR group_fit under void)."""
-    side_pack_top_n: int = 32
+    side_pack_top_n: int = 256
     side_pack_samples_per_edge: int = 16
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
     """Tight (x,y) and modest angle jitter for outline snap seeds only."""
@@ -537,7 +654,7 @@ class ProposeConfig(BaseModel):
     @staticmethod
     def void_seek_budget_floors() -> tuple[int, int]:
         """Minimum (candidate_pool, max_proposals) under void_seek / densify."""
-        return 64, 40
+        return 1024, 512
 
     @classmethod
     def for_place(
@@ -549,14 +666,15 @@ class ProposeConfig(BaseModel):
         root = base.model_dump() if base is not None else cls().model_dump()
         profiles: dict[str, dict[str, Any]] = {
             PlaceZone.EMPTY_BORDER.value: {
-                "ranking_mode": "border",
+                "ranking_mode": RankingMode.BORDER,
                 "border_focus_ranking": True,
                 "use_border_focus": True,
                 "use_contact_ranking": False,
                 "cast_squeeze_top_k": 12,
+                "edge_free_weight": 0.0,
             },
             PlaceZone.BORDER_GAP.value: {
-                "ranking_mode": "border",
+                "ranking_mode": RankingMode.BORDER,
                 "border_focus_ranking": True,
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": False,
@@ -571,7 +689,7 @@ class ProposeConfig(BaseModel):
                 "placement_num_angles": 8,
             },
             PlaceZone.INTERIOR_POCKET.value: {
-                "ranking_mode": "contact_hybrid",
+                "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
                 "use_full_packed_obstacle": True,
@@ -582,7 +700,7 @@ class ProposeConfig(BaseModel):
                 "use_group_edge_seeds": True,
             },
             PlaceZone.CLUSTER_EDGE.value: {
-                "ranking_mode": "contact_hybrid",
+                "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_guidance_propositions": True,
                 "guidance_use_tight_packing": True,
                 "guidance_use_corner_alignment": True,
@@ -600,7 +718,7 @@ class ProposeConfig(BaseModel):
                 "use_group_edge_seeds": True,
             },
             PlaceZone.INTER_CLUSTER.value: {
-                "ranking_mode": "clearance",
+                "ranking_mode": RankingMode.CLEARANCE,
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": True,
                 "use_board_edge_seeds": False,
@@ -610,7 +728,7 @@ class ProposeConfig(BaseModel):
                 "use_voronoi": True,
             },
             PlaceZone.VOID_SEEK.value: {
-                "ranking_mode": "contact_hybrid",
+                "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
                 "use_full_packed_obstacle": True,
@@ -618,8 +736,8 @@ class ProposeConfig(BaseModel):
                 "use_side_pack": True,
                 "use_neighbor_slide": False,
                 "cast_squeeze_top_k": 4,
-                "candidate_pool": 64,
-                "max_proposals": 40,
+                "candidate_pool": 1024,
+                "max_proposals": 512,
                 "raycast_num_rays": 8,
                 "use_voronoi": False,
                 "use_point_cloud": False,
@@ -631,7 +749,7 @@ class ProposeConfig(BaseModel):
             zone == PlaceZone.VOID_SEEK.value
             and not bool(root.get("void_seek_contact_hybrid", True))
         ):
-            patch["ranking_mode"] = "clearance"
+            patch["ranking_mode"] = RankingMode.CLEARANCE
             patch["use_contact_ranking"] = False
             patch["use_contact_clearance_hybrid"] = False
         patch.update(overrides)
@@ -844,7 +962,7 @@ class BuildGraphConfig(BaseModel):
         p.placement_num_angles = p.first_pass_num_angles
         p.placement_clearance_epsilon_ratio = p.first_pass_clearance_epsilon_ratio
         p.group_edge_samples_per_edge = p.first_pass_group_edge_samples_per_edge
-        p.ranking_mode = "border"
+        p.ranking_mode = RankingMode.BORDER
         return p
 
     @classmethod
@@ -856,10 +974,10 @@ class BuildGraphConfig(BaseModel):
                 random_per_iter_when_proposed=64,
                 structured_jitter_per_proposal=12,
                 initial_random=256,
-                max_transforms_per_group=1200,
+                max_transforms_per_group=5000,
                 seed=seed,
             ),
-            selection=SelectionConfig(dfs_mode="merged_loose_tight"),
+            selection=SelectionConfig(dfs_mode=DfsMode.MERGED_LOOSE_TIGHT),
             propose=ProposeConfig(),
         )
 
@@ -899,7 +1017,7 @@ class BuildGraphConfig(BaseModel):
                     "NEST_SCORE_RULES_LOCAL_SWAP", True,
                 ),
                 select_mode=os.environ.get(
-                    "NEST_SELECT_MODE", "weighted_greedy",
+                    "NEST_SELECT_MODE", ScoreSelectMode.WEIGHTED_GREEDY,
                 ),
                 dfs_max_tries=_env_int("NEST_DFS_MAX_TRIES", 4),
                 dfs_passes=_env_int("NEST_DFS_PASSES", 3),
@@ -912,7 +1030,7 @@ class BuildGraphConfig(BaseModel):
                 dfs_finalize_max_component=_env_int("NEST_DFS_FINALIZE_COMPONENT", 18),
                 nest_rule_sets_used=_env_int("NEST_NEST_RULE_SETS", 1),
                 dfs_mode=os.environ.get(
-                    "NEST_DFS_MODE", "merged_loose_tight",
+                    "NEST_DFS_MODE", DfsMode.MERGED_LOOSE_TIGHT,
                 ),
             ),
             output=OutputConfig(
@@ -1145,13 +1263,14 @@ def _make_rule_mutation_settings(
     return preset
 
 
-def _make_select_options(mode: str, local_swap: bool, aggregation: str = "sum"):
+def _make_select_options(
+    mode: ScoreSelectMode | SelectMode | str,
+    local_swap: bool,
+    aggregation: str = "sum",
+):
     """Build SelectOptions for elem_graph tests and benchmarks."""
     opts = SelectOptions()
-    if mode == "weighted_greedy":
-        opts.mode = SelectMode.WeightedGreedy
-    else:
-        opts.mode = SelectMode.GreedyScore
+    opts.mode = _coerce_select_mode(mode)
     opts.local_swap = local_swap
     opts.aggregation = (
         ScoreAggregation.Sum if aggregation == "sum" else ScoreAggregation.Max

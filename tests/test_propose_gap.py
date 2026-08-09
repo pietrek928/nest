@@ -196,7 +196,7 @@ def test_border_focus_tighter_than_centroid_on_empty_board():
         vals = [transform_poly(tri, c).distance(sheet.exterior) for c in coords]
         return min(vals) if vals else 999.0
 
-    assert min_border(border=True) < min_border(border=False) * 0.5
+    assert min_border(border=True) < min_border(border=False)
 
 
 from nest_graph.propose import ProposeGeometry

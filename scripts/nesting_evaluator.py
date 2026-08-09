@@ -12,7 +12,6 @@ from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
     _build_transform_batch,
-    _boost_border_scores,
     _count_graph_in_free,
     _count_props_in_free,
     _count_props_near_pole,
@@ -21,23 +20,22 @@ from nest_graph.build_graph import (
     _format_prop_accept,
     _late_border_saturation_info,
     _make_initial_rule_sets,
-    _make_void_attractor_rule_set,
-    _merge_void_attractor_into_rule_sets,
-    _nest_seed_from_boosted_scores,
+    _native_geoms_from_transforms,
     _pin_nest_void_independent,
-    _void_attractor_radius,
+    _void_pole_near_radius,
     _zones_have_void_hijack,
     active_rule_set,
     apply_dfs_refinement,
-    apply_void_selection_boosts,
     archive_void_elite_transforms,
+    compose_and_nest_selection,
     improve_rules,
     make_polygon_graph,
     void_elite_count,
     void_elite_tuple_from_archive,
 )
 from nest_graph.config import BuildGraphConfig, score_rules_options
-from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
+from nest_graph.elem_graph import score_elems, selection_is_independent
+from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.placement_scene import placement_clearance_epsilon
 from nest_graph.propose import (
     ProposeGeometry,
@@ -47,8 +45,6 @@ from nest_graph.propose import (
     obstacle_shape_for_propose,
 )
 from nest_graph.propose.compaction import compact_selection, selection_pairwise_independent
-from nest_graph.propose.pipeline import allow_void_repack
-from nest_graph.propose.post_pack import run_post_pack_passes
 from nest_graph.propose.context import (
     analyze_free_space,
     build_free_space_snapshot,
@@ -57,8 +53,9 @@ from nest_graph.propose.context import (
     propose_push_point,
     should_use_border_focus,
 )
-from nest_graph.propose.pipeline import propose_coords_from_candidates
-from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
+from nest_graph.propose.placement_common import as_geometry
+from nest_graph.propose.pipeline import allow_void_repack, propose_coords_from_candidates
+from nest_graph.propose.post_pack import run_post_pack_passes
 from nest_graph.utils import transform_poly
 from scripts.nesting_fixtures import NestCase
 
@@ -650,78 +647,50 @@ class NestingPipelineEvaluator:
                 self.sheet, packed_for_free, mean_part, min_dist,
                 void_ratio_threshold=void_thr,
             )
-            free_poly = free_info.target_poly
-            nest_rules = rule_sets
-            refine_rules = active_rules
             sheet_diag = 0.0
             if self.sheet is not None and not self.sheet.is_empty:
                 minx, miny, maxx, maxy = self.sheet.bounds
                 sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
-            attr_w = float(self.cfg.propose.void_attractor_rule_weight)
-            pole_w = float(self.cfg.propose.void_island_score_boost)
-            pocket_w = float(self.cfg.propose.pocket_score_boost)
-            small_w = float(self.cfg.propose.small_part_void_score_boost)
-            void_r = _void_attractor_radius(
-                min_dist, sheet_diag, self.cfg.rules.place_rule_radius,
+            part_bases = {
+                i: Geometry.from_shapely(p[0]) for i, p in enumerate(self.parts)
+            }
+            candidate_geoms = _native_geoms_from_transforms(
+                group_id, transform, part_bases,
             )
-            if (
-                free_info.kind == "large_void"
-                and free_info.target_pt is not None
-                and attr_w > 0.0
-            ):
-                attractor = _make_void_attractor_rule_set(
-                    free_info.target_pt,
-                    ngroups=len(self.parts),
-                    radius=void_r,
-                    weight=attr_w,
-                )
-                nest_rules = _merge_void_attractor_into_rule_sets(
-                    rule_sets,
-                    attractor,
-                    nest_rule_sets_used=sel.nest_rule_sets_used,
-                    max_rules_per_set=self.cfg.rules.max_rules_per_set,
-                )
-                refine_rules = active_rule_set(nest_rules)
-                scores = list(score_elems(graph, refine_rules))
-            apply_void_selection_boosts(
+            packed_geoms: list[Geometry] = []
+            if next_polys:
+                packed_geoms = [
+                    g for g in (as_geometry(p) for p in next_polys) if g is not None
+                ]
+            composed = compose_and_nest_selection(
+                graph=graph,
+                rule_sets=rule_sets,
+                active_rules=active_rules,
+                scores=scores,
                 polys=polys,
                 group_id=group_id,
                 transform=transform,
-                scores=scores,
-                free_info=free_info,
-                free_poly=free_poly,
+                candidate_geoms=candidate_geoms,
+                packed_geoms=packed_geoms,
                 part_areas=part_areas,
-                propose_stats=propose_stats,
+                free_info=free_info,
                 cfg=self.cfg,
+                selection=sel,
+                first_pass=first_pass,
+                outline=self.sheet,
+                min_dist=min_dist,
+                sheet_area=float(self.sheet.area) if self.sheet is not None else 0.0,
                 sheet_diag=sheet_diag,
-                void_r=void_r,
+                propose_stats=propose_stats,
+                ngroups=len(self.parts),
             )
-
-            use_greedy_nest = (
-                bool(self.cfg.propose.void_greedy_nest_seed)
-                and free_info.kind == "large_void"
-                and scores
-                and (pole_w > 0.0 or pocket_w > 0.0 or small_w > 0.0)
-            )
-            if use_greedy_nest:
-                selected = _nest_seed_from_boosted_scores(graph, scores)
-            else:
-                selected = list(
-                    nest_by_graph(graph, nest_rules[: sel.nest_rule_sets_used])[0]
-                )
-            n_void_nest = _count_selected_in_free(polys, selected, free_poly)
-            # Match demo: nest uses void-boosted scores; refine gets a copy so
-            # first-pass border boost cannot tilt DFS against void islands.
-            refine_scores = list(scores)
-            if (
-                first_pass
-                and should_use_border_focus(Polygon(), self.cfg.propose)
-                and free_info.kind != "large_void"
-            ):
-                _boost_border_scores(
-                    polys, refine_scores, self.sheet, min_dist,
-                    weight=self.cfg.propose.border_selection_score_boost,
-                )
+            scores = composed.scores
+            refine_scores = composed.refine_scores
+            selected = composed.selected_nest
+            refine_rules = composed.refine_rules
+            free_poly = composed.free_poly
+            free_info = composed.free_info
+            n_void_nest = composed.n_void_nest
             _, selected_polys, _score_sum = apply_dfs_refinement(
                 graph,
                 refine_rules,
@@ -769,7 +738,13 @@ class NestingPipelineEvaluator:
             ] if proposed_map else None
             n_void_props = _count_props_in_free(proposed_list, free_poly)
             n_void_graph = _count_graph_in_free(polys, free_poly)
-            pole_radius_metric = 0.25 * sheet_diag if sheet_diag > 0.0 else 0.0
+            pole_radius_metric = (
+                _void_pole_near_radius(
+                    sheet_diag,
+                    float(getattr(self.cfg.propose, "void_pole_near_diag_ratio", 0.25) or 0.25),
+                )
+                if sheet_diag > 0.0 else 0.0
+            )
             n_props_pole = _count_props_near_pole(
                 proposed_list, free_info.target_pt, pole_radius_metric,
             )

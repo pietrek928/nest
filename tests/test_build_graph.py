@@ -449,7 +449,7 @@ def test_shipped_config_matches_benchmarks():
     assert cfg.propose.use_neighbor_slide is False
     assert cfg.propose.placement_num_angles == 18
     assert cfg.sampling.initial_random == 256
-    assert cfg.sampling.max_transforms_per_group == 1200
+    assert cfg.sampling.max_transforms_per_group == 5000
 
     bench = BuildGraphConfig.benchmark_aligned(seed=7)
     assert bench.sampling.seed == 7

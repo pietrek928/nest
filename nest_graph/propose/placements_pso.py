@@ -43,7 +43,13 @@ def propose_placements_point_cloud(
         ray_dirs = propose_cfg.point_cloud_ray_dirs
         cull_ratio = propose_cfg.point_cloud_cull_ratio
     bound_centroid = boundary.centroid
-    base_hull_area = base_shape.convex_hull.area if not base_shape.is_empty else 0
+    if isinstance(base_shape, Geometry):
+        base_hull_area = float(base_shape.convex_hull_area())
+    else:
+        from nest_graph.propose.placement_common import as_geometry
+        from nest_graph.geometry import Geometry as _G
+        g = as_geometry(base_shape) if not getattr(base_shape, "is_empty", True) else None
+        base_hull_area = float(g.convex_hull_area()) if g is not None else 0.0
     ribbon_pts = sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist)
 
     # 1. Initialize Particles: [x, y, theta, phi]
@@ -196,7 +202,7 @@ def evaluate_ray_placement(
     final_placed = propose_geom.placed_at((curr_x, curr_y, curr_theta))
     if not propose_geom.valid(final_placed, pt_push, (curr_x, curr_y)):
         return 1e6, (curr_x, curr_y, curr_theta)
-    # Hull scoring only: Shapely transform_poly + convex_hull.
+    # Hull scoring uses native convex_hull_area via calculate_complex_score.
     final_shape = transform_poly(shape_to_place, (curr_x, curr_y, curr_theta))
 
     score = calculate_complex_score(

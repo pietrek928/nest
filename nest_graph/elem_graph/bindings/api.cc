@@ -31,6 +31,17 @@ void bind_elem_graph_api(nb::module_ &m) {
         nb::arg("select") = SelectOptions{});
 
     m.def(
+        "nest_by_scores",
+        [](const ElemGraph &g,
+           const std::vector<Tscore> &scores,
+           const SelectOptions &select) {
+            return ::nest_by_scores(g, scores, select);
+        },
+        nb::arg("g"),
+        nb::arg("scores"),
+        nb::arg("select") = SelectOptions{});
+
+    m.def(
         "sort_graph",
         &sort_graph,
         nb::arg("g"),

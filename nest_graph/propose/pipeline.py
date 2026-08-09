@@ -24,7 +24,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms, floor_void_seek_budgets
+from nest_graph.config import ProposeConfig, RankingMode, dedupe_transforms, floor_void_seek_budgets
 from nest_graph.geometry import Geometry
 from nest_graph.proposer_names import (
     BATCH_FOLLOW_PROPOSERS,
@@ -417,7 +417,9 @@ def _void_seek_densify(
         return arr, zone_label, False, False, None, telem
 
     densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
-    densify_rank = "contact_hybrid" if propose_cfg.use_pocket_fit else "clearance"
+    densify_rank = (
+        RankingMode.CONTACT_HYBRID if propose_cfg.use_pocket_fit else RankingMode.CLEARANCE
+    )
     densify_cfg = densify_cfg.model_copy(update={
         "use_guidance_propositions": True,
         "guidance_use_tight_packing": True,
@@ -430,8 +432,8 @@ def _void_seek_densify(
         "use_border_focus": False,
         "border_focus_ranking": False,
         "ranking_mode": densify_rank,
-        "use_contact_ranking": densify_rank == "contact_hybrid",
-        "use_contact_clearance_hybrid": densify_rank == "contact_hybrid",
+        "use_contact_ranking": densify_rank == RankingMode.CONTACT_HYBRID,
+        "use_contact_clearance_hybrid": densify_rank == RankingMode.CONTACT_HYBRID,
         "propose_cascade_short_circuit": bool(
             propose_cfg.propose_cascade_short_circuit
         ),
@@ -1657,6 +1659,7 @@ def propose_coords_from_candidates(
                     rules=rules,
                     group_id=group_id,
                     base_shape=base_shape,
+                    void_pole=void_pole,
                 )
             else:
                 pool = _trim_candidates_by_contact(
@@ -1901,12 +1904,12 @@ def propose_coords_with_strategy(
         hybrid_update = {
             "trim_candidates_by_clearance": False,
         }
-        if rank_mode == "clearance":
-            rank_mode = "contact_hybrid"
+        if rank_mode == RankingMode.CLEARANCE:
+            rank_mode = RankingMode.CONTACT_HYBRID
             hybrid_update.update({
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
-                "ranking_mode": "contact_hybrid",
+                "ranking_mode": RankingMode.CONTACT_HYBRID,
             })
         cfg = cfg.model_copy(update=hybrid_update)
 
@@ -2662,7 +2665,7 @@ def proposed_transforms_for_groups(
             ):
                 # Annulus rim: keep border docking but shoot inward toward the hole.
                 cfg = cfg.model_copy(update={
-                    "ranking_mode": "contact_hybrid",
+                    "ranking_mode": RankingMode.CONTACT_HYBRID,
                     "use_contact_ranking": True,
                     "use_contact_clearance_hybrid": True,
                     "use_full_packed_obstacle": True,
@@ -2679,7 +2682,7 @@ def proposed_transforms_for_groups(
                     "use_contact_clearance_hybrid": True,
                     "use_border_focus": False,
                     "border_focus_ranking": False,
-                    "ranking_mode": "contact_hybrid",
+                    "ranking_mode": RankingMode.CONTACT_HYBRID,
                     "smart_push_target": True,
                     "use_cluster_copy": True,
                 })

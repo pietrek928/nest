@@ -8,7 +8,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry, sheet_hole_polygons
-from nest_graph.config import ProposeConfig
+from nest_graph.config import ProposeConfig, RankingMode
 from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.propose.placement_outline import outline_standoff_distance
 
@@ -800,30 +800,35 @@ def effective_ranking_mode(
     base_shape: BaseGeometry,
     *,
     rules=None,
-) -> str:
+) -> RankingMode:
     if (
         propose_cfg.border_focus_ranking
         and should_use_border_focus(base_shape, propose_cfg)
     ):
-        base_mode = "border"
+        base_mode = RankingMode.BORDER
     elif (
         propose_cfg.use_contact_ranking
         and base_shape is not None
         and not base_shape.is_empty
     ):
         if propose_cfg.use_contact_clearance_hybrid:
-            base_mode = "contact_hybrid"
+            base_mode = RankingMode.CONTACT_HYBRID
         else:
-            base_mode = "contact"
+            base_mode = RankingMode.CONTACT
     else:
-        base_mode = propose_cfg.ranking_mode
+        base_mode = RankingMode(propose_cfg.ranking_mode)
     if (
         propose_cfg.use_rule_ranking
         and rules is not None
         and rules.size() > 0
-        and base_mode in ("border", "contact", "contact_hybrid", "rule_hybrid")
+        and base_mode in (
+            RankingMode.BORDER,
+            RankingMode.CONTACT,
+            RankingMode.CONTACT_HYBRID,
+            RankingMode.RULE_HYBRID,
+        )
     ):
-        return "rule_hybrid"
+        return RankingMode.RULE_HYBRID
     return base_mode
 
 

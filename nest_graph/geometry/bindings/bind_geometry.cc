@@ -8,6 +8,7 @@ namespace nb = nanobind;
 
 #include "bind_internal.h"
 #include "common/polylabel.h"
+#include "convex/hull.h"
 #include "geometry_factory.h"
 #include "intersect/polygon_intersect.h"
 #include "python_converters.h"
@@ -169,6 +170,11 @@ void bind_geometry_class(nb::module_ &m) {
             "area",
             [](const GeometryHolder &holder) {
                 return static_cast<double>(holder.solid.area());
+            })
+        .def(
+            "convex_hull_area",
+            [](const GeometryHolder &holder) {
+                return static_cast<double>(solid_convex_hull_area(holder.solid));
             })
         .def(
             "translate",

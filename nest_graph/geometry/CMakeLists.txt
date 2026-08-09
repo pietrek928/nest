@@ -10,6 +10,7 @@ nanobind_add_module(geometry
   bindings/bind_intersect.cc
   bindings/bind_cast.cc
   bindings/bind_batch.cc
+  bindings/bind_rank.cc
 )
 target_link_libraries(geometry PRIVATE nest_graph_headers)
 target_include_directories(geometry PRIVATE

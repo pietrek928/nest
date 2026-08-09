@@ -18,7 +18,7 @@ from nest_graph.board import (
     default_sheet_padding,
     padded_board_bounds,
 )
-from nest_graph.config import BuildGraphConfig, dedupe_transforms
+from nest_graph.config import BuildGraphConfig, RankingMode, dedupe_transforms
 from nest_graph.elem_graph import (
     Circle,
     ElemGraph,
@@ -644,7 +644,7 @@ def first_pass_interior_fill(
         return pack_polys, pack_gids, pack_tr, placed_geoms
 
     propose_cfg = cfg.first_pass_propose_config().model_copy(deep=True)
-    propose_cfg.ranking_mode = "contact_hybrid"
+    propose_cfg.ranking_mode = RankingMode.CONTACT_HYBRID
     propose_cfg.use_contact_ranking = True
     propose_cfg.place_profiles_enabled = True
 

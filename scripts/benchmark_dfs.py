@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from nest_graph.config import BuildGraphConfig, SelectionConfig
+from nest_graph.config import BuildGraphConfig, DfsMode, SelectionConfig
 from nest_graph.build_graph import apply_dfs_refinement
 from nest_graph.elem_graph import selection_is_independent
 from scripts.nesting_evaluator import NestingPipelineEvaluator
@@ -16,11 +16,11 @@ from scripts.nesting_fixtures import resolve_cases
 
 
 DFS_MODES = (
-    "nest_only",
-    "merged_loose_finalize_end",
-    "merged_loose_tight_finalize_end",
-    "merged_single_pass",
-    "merged_loose_tight",
+    DfsMode.NEST_ONLY,
+    DfsMode.MERGED_LOOSE_FINALIZE_END,
+    DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END,
+    DfsMode.MERGED_SINGLE_PASS,
+    DfsMode.MERGED_LOOSE_TIGHT,
 )
 
 

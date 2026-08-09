@@ -96,6 +96,10 @@ from nest_graph.propose.void_selection import (
     format_prop_accept,
     pin_nest_void_independent,
 )
+from nest_graph.propose.selection_compose import (
+    ComposedSelection,
+    compose_and_nest_selection,
+)
 
 __all__ = [
     "ALL_PROPOSER_NAMES",
@@ -108,6 +112,8 @@ __all__ = [
     "make_propose_context",
     "run_post_pack_passes",
     "apply_void_selection_boosts",
+    "compose_and_nest_selection",
+    "ComposedSelection",
     "border_focal_for_propose",
     "first_pass_border_coords",
     "format_prop_accept",

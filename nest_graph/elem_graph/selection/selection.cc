@@ -1,6 +1,7 @@
 #include "selection/selection.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 #include "graph/graph_index.h"
 #include "scoring/scoring.h"
@@ -323,4 +324,22 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
         result.push_back(selected);
     }
     return result;
+}
+
+std::vector<Tvertex> nest_by_scores(
+    const ElemGraph &g,
+    const std::vector<Tscore> &scores,
+    const SelectOptions &select
+) {
+    if (scores.size() != g.size()) {
+        throw std::invalid_argument("nest_by_scores: scores size != graph size");
+    }
+    std::vector<bool> marked;
+    std::vector<Tvertex> selected;
+    std::vector<Tvertex> order_buf;
+    const auto elems_by_group = get_elems_by_group(g);
+    PlacementRuleSet empty_rules;
+    select_elems(
+        g, elems_by_group, empty_rules, scores, marked, selected, order_buf, select);
+    return selected;
 }

@@ -157,6 +157,20 @@
 | Does repack emit side_pack? | Pass `cascade_zone=zone` so void/border_gap staging matches main pipeline. |
 | Wall-fill on all hard zones? | **void_seek only.** `interior_pocket` cannot enable SIDE_PACK. |
 
+### Ranking / selection hybrid (answered)
+
+| Question | Answer |
+|----------|--------|
+| Dual-edge / contact_hybrid for propose? | **Yes** — C++ `batch_rank_local_placements`. |
+| Same hybrid for DFS/nest? | **Yes** — `batch_score_placed_contact_hybrid` + compose into scores; `nest_by_scores` + refine/finalize. |
+| Rewrite RBF kernels? | **No** — keep RBF formula; rewrite selection **pipeline** + MIS scored entry. |
+| Shapely hull in prod ranking? | **No** — C++ monotone chain; **yes in tests** as oracle. |
+| Cap clearance / harmonic edge_free? | **Yes**. |
+| Border boost with hybrid? | **Skip** when selection geom on; `selection_geom_weight` inherits its 24.0 magnitude. |
+| Can DFS reuse the signed propose score? | **No** — DFS sums scores; negative weights invert `score/(1+collisions)` ordering, block growth accepts, and kill 1→2 swaps. Selection uses non-negative `quality`. |
+| Geometry inside elem_graph? | **No** headers merge. Bound `Geometry` for hybrid/hull; floats into `nest_by_scores`. |
+| Void attractor with nest_by_scores? | **Skip** when selection geom on (avoid triple pull with island+hybrid). |
+
 ### Propose / void-fill research (open)
 
 | Question | Why ask |
@@ -167,6 +181,11 @@
 | Weighted stratify: per-segment quotas (min 2) then cross-segment cost truncation can drop far-segment picks when Σquotas > top_n — allocate by largest remainder instead? | Anti-crowd fidelity; masked today by `far_segs` gate |
 | Repack-internal propose with `cascade_zone=zone` — net gain or churn during relocation? | New intentional surface; watch bench |
 | Densify clearance floor uses ranking clearance — rename or keep as yield heuristic? | Naming vs SoT |
+| Return natives from `make_polygon_graph`? | Avoid rebuild via transforms |
+| Native hull verts for bay difference? | More Shapely removal |
+| Document ranking ↔ guidance sweep? | Copy tax |
+| `selection_geom_weight` vs rule scale? | Mid-pack balance |
+| Export C++ tightness for first_pass/repack? | Kill G27 dual |
 
 Glossary: `side_pack` permitted by zone (incl. `cluster_edge`), staged by pack count / void; raw emit; `free_space_cloud` densify recovery with funnel keys.
 
@@ -210,6 +229,7 @@ Do next (patches) before new geometry stacks:
 | `propose/pipeline.py` | `_collect_candidates` staged emit (`_collect_pocket_candidates` → `_collect_builder_candidates` / `_collect_explorer_candidates` → `_collect_cast_refine_candidates`), ranking handoff, `proposed_transforms_for_groups`. |
 | `propose/first_pass_border.py` | First-pass border stack: `first_pass_border_coords`, `border_saturation_transform_batch`, `guidance_border_refine`, `first_pass_interior_fill`, `sequential_border_augment`, `border_pack_graph`. |
 | `propose/void_selection.py` | Void-aware score boosts, P3 pin repair, `format_prop_accept` funnel line, free/pole counters. |
+| `propose/selection_compose.py` | Shared mid-pack compose + nest seed (`compose_and_nest_selection`); G22/G24 policy. |
 | `propose/context.py` | Zone classification, free-space analysis, `late_border_saturation_info`. |
 | `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / `compaction` / `cluster_repack`. |
 

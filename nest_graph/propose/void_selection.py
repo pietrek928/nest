@@ -14,7 +14,14 @@ from shapely.geometry.base import BaseGeometry
 
 from nest_graph.propose.placement_outline import (
     outline_kiss_tolerance,
+    outline_ring_geom,
     outline_standoff_distance,
+)
+from nest_graph.geometry import (
+    Geometry,
+    PlacementRankConfig,
+    PlacementRankMode,
+    batch_score_placed_contact_hybrid,
 )
 
 
@@ -171,6 +178,70 @@ def boost_small_part_scores(
     return n
 
 
+def boost_selection_geom_quality(
+    candidate_geoms: list[Geometry],
+    scores: list[float],
+    *,
+    board_ring: Geometry,
+    packed: list[Geometry],
+    min_dist: float,
+    part_areas: Sequence[float],
+    group_id: Sequence[int],
+    sheet_area: float,
+    propose_cfg,
+    stats_out: dict | None = None,
+) -> int:
+    """Add non-negative C++ contact_hybrid quality into nest/DFS scores."""
+    w = float(getattr(propose_cfg, "selection_geom_weight", 0.0) or 0.0)
+    if w <= 0.0 or not scores or not candidate_geoms:
+        if stats_out is not None:
+            stats_out["geom_ms"] = 0.0
+            stats_out["geom_share"] = 0.0
+            stats_out["geom_hits"] = 0
+        return 0
+    t0 = time.perf_counter()
+    band = float(getattr(propose_cfg, "edge_free_band_min_dist_mult", 3.5)) * float(min_dist)
+    cfg = PlacementRankConfig()
+    cfg.min_dist = float(min_dist)
+    cfg.clearance_weight = float(propose_cfg.contact_clearance_hybrid_weight)
+    cfg.tightness_weight = float(propose_cfg.contact_tightness_hybrid_weight)
+    cfg.edge_free_weight = float(propose_cfg.edge_free_weight)
+    cfg.edge_free_band_mult = float(getattr(propose_cfg, "edge_free_band_min_dist_mult", 3.5))
+    cfg.kiss_tol = float(outline_kiss_tolerance(min_dist))
+    cfg.tight_scale = max(band, 1e-6)
+    cfg.sheet_area = max(float(sheet_area), 1e-12)
+    cfg.mode = PlacementRankMode.contact_hybrid
+    # Batch API uses one part_area for edge_free area_frac; mean is fine for MIS ordering.
+    areas = [float(a) for a in part_areas] if part_areas else [1.0]
+    cfg.part_area = float(np.mean(areas)) if areas else 1.0
+    _ = group_id  # reserved for per-group area_frac if a follow-up batches by group
+
+    results = batch_score_placed_contact_hybrid(
+        candidate_geoms,
+        board_ring,
+        list(packed),
+        None,
+        cfg,
+    )
+    geom_added = 0.0
+    n = 0
+    for i, res in enumerate(results):
+        if i >= len(scores):
+            break
+        q = max(0.0, float(res.quality))
+        delta = w * q
+        scores[i] = float(scores[i]) + delta
+        geom_added += delta
+        n += 1
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    total = sum(abs(float(s)) for s in scores) + 1e-12
+    if stats_out is not None:
+        stats_out["geom_ms"] = float(elapsed_ms)
+        stats_out["geom_share"] = float(geom_added / total)
+        stats_out["geom_hits"] = int(n)
+    return n
+
+
 def apply_void_selection_boosts(
     *,
     polys: list,
@@ -184,16 +255,24 @@ def apply_void_selection_boosts(
     cfg,
     sheet_diag: float,
     void_r: float,
+    candidate_geoms: list[Geometry] | None = None,
+    packed_geoms: list[Geometry] | None = None,
+    outline: BaseGeometry | None = None,
+    min_dist: float = 0.0,
+    sheet_area: float = 0.0,
+    geom_stats_out: dict | None = None,
 ) -> dict[str, int]:
-    """Apply void-island, pocket-key, and small-part score boosts (demo + evaluator)."""
+    """Apply void-island, pocket-key, small-part, and selection-geom score boosts."""
     hits = {
         "void_island": 0,
         "pocket_keys": 0,
         "small_part": 0,
+        "selection_geom": 0,
     }
     pole_w = float(cfg.propose.void_island_score_boost)
     pocket_w = float(getattr(cfg.propose, "pocket_score_boost", 0.0) or 0.0)
     small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
+    geom_w = float(getattr(cfg.propose, "selection_geom_weight", 0.0) or 0.0)
     if free_info.kind == "large_void" and pole_w > 0.0:
         hits["void_island"] = boost_void_island_scores(
             polys,
@@ -220,6 +299,23 @@ def apply_void_selection_boosts(
             part_areas,
             weight=small_w,
         )
+    if geom_w > 0.0 and candidate_geoms is not None and outline is not None:
+        board_ring = outline_ring_geom(outline)
+        if board_ring is None and isinstance(outline, Geometry):
+            board_ring = outline
+        if board_ring is not None:
+            hits["selection_geom"] = boost_selection_geom_quality(
+                candidate_geoms,
+                scores,
+                board_ring=board_ring,
+                packed=list(packed_geoms or []),
+                min_dist=float(min_dist),
+                part_areas=part_areas,
+                group_id=group_id,
+                sheet_area=float(sheet_area) if sheet_area > 0 else float(getattr(outline, "area", 1.0) or 1.0),
+                propose_cfg=cfg.propose,
+                stats_out=geom_stats_out,
+            )
     return hits
 
 

@@ -12,4 +12,5 @@ void bind_intersect_api(nb::module_ &m);
 void bind_cast_types(nb::module_ &m);
 void bind_cast_api(nb::module_ &m);
 void bind_batch_api(nb::module_ &m);
+void bind_rank_api(nb::module_ &m);
 void bind_snap_api(nb::module_ &m);

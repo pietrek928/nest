@@ -13,6 +13,7 @@ from typing import Iterator, NamedTuple, Sequence, Tuple
 
 from .config import (
     BuildGraphConfig,
+    DfsMode,
     SelectionConfig,
     dedupe_transforms,
     expand_structured_transforms,
@@ -106,6 +107,12 @@ from .propose.void_selection import (  # noqa: F401
     xy_in_free as _xy_in_free,
     zones_have_void_hijack as _zones_have_void_hijack,
 )
+from .propose.selection_compose import (  # noqa: F401
+    compose_and_nest_selection,
+    make_void_attractor_rule_set as _make_void_attractor_rule_set,
+    merge_void_attractor_into_rule_sets as _merge_void_attractor_into_rule_sets,
+    nest_seed_from_boosted_scores as _nest_seed_from_boosted_scores,
+)
 from .propose.feedback import ProposeFeedbackState
 from .propose.geometry import ProposeGeometry
 from .track_perf import show_performance
@@ -113,7 +120,7 @@ from .elem_graph import (
     ElemGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings, RefineSelectionOptions, FinalizeSelectionOptions,
-    nest_by_graph, sort_graph, score_elems, augment_rules, score_rules,
+    nest_by_graph, nest_by_scores, sort_graph, score_elems, augment_rules, score_rules,
     ScoreRulesOptions,
     increase_selection_dfs, increase_score_dfs,
     refine_selection, finalize_selection, selection_is_independent,
@@ -121,6 +128,7 @@ from .elem_graph import (
 
 # Track performance
 nest_by_graph = show_performance(nest_by_graph)
+nest_by_scores = show_performance(nest_by_scores)
 sort_graph = show_performance(sort_graph)
 score_elems = show_performance(score_elems)
 # augment_rules = show_performance(augment_rules)
@@ -888,52 +896,6 @@ def improve_rules(
     return [rs for _, rs in scored[:n]]
 
 
-def _make_void_attractor_rule_set(
-    pole: Point,
-    *,
-    ngroups: int,
-    radius: float,
-    weight: float,
-) -> PlacementRuleSet:
-    """Strong PointPlaceRule attractors at the free-space pole for nest_by_graph."""
-    rs = PlacementRuleSet()
-    px, py = float(pole.x), float(pole.y)
-    r = max(float(radius), 1e-4)
-    w = float(weight)
-    for g in range(max(int(ngroups), 1)):
-        rs.append_rule(PointPlaceRule(pos=Vec2(x=px, y=py), r=r, w=w, group=g))
-    return rs
-
-
-def _merge_void_attractor_into_rule_sets(
-    rule_sets: list[PlacementRuleSet],
-    attractor: PlacementRuleSet,
-    *,
-    nest_rule_sets_used: int,
-    max_rules_per_set: int,
-) -> list[PlacementRuleSet]:
-    """Prepend void attractors onto the rule sets used by nest_by_graph."""
-    if not rule_sets or attractor is None:
-        return rule_sets
-    n_touch = min(max(int(nest_rule_sets_used), 1), len(rule_sets))
-    out: list[PlacementRuleSet] = []
-    for i, rs in enumerate(rule_sets):
-        if i >= n_touch:
-            out.append(rs)
-            continue
-        merged = _copy_rule_set(attractor)
-        for pr in rs.point_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_rules:
-            merged.append_rule(cr)
-        for pr in rs.point_angle_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_angle_rules:
-            merged.append_rule(cr)
-        out.append(truncate_rule_set(merged, max_rules_per_set))
-    return out
-
-
 def score_rule_sets_with_dfs(
     graph: ElemGraph,
     rule_sets: list[PlacementRuleSet],
@@ -1001,18 +963,6 @@ def _greedy_independent_set_ordered(
         kept.append(v)
         kept_set.add(v)
     return kept
-
-
-def _nest_seed_from_boosted_scores(
-    graph: ElemGraph,
-    scores: Sequence[float],
-) -> list[int]:
-    """Score-descending greedy MIS so Python void boost reaches the nest seed."""
-    n = min(len(scores), len(graph.collisions))
-    if n <= 0:
-        return []
-    order = sorted(range(n), key=lambda i: float(scores[i]), reverse=True)
-    return _greedy_independent_set_ordered(graph, order)
 
 
 def _expand_border_selection(
@@ -1688,14 +1638,14 @@ def apply_dfs_refinement(
     *,
     dfs_passes: int | None = None,
     dfs_max_tries: int | None = None,
-    mode: str | None = None,
+    mode: DfsMode | str | None = None,
     selection: SelectionConfig | None = None,
 ) -> tuple[list[int], list[int], float]:
     """Refine selection; return (pre_finalize, final, score_sum_final)."""
     sel = selection if selection is not None else SelectionConfig()
     passes = dfs_passes if dfs_passes is not None else sel.dfs_passes
     max_tries = dfs_max_tries if dfs_max_tries is not None else sel.dfs_max_tries
-    mode = mode if mode is not None else sel.dfs_mode
+    mode = DfsMode(mode if mode is not None else sel.dfs_mode)
     finalize_opts = _finalize_options(sel)
 
     selected = list(selected)
@@ -1706,10 +1656,10 @@ def apply_dfs_refinement(
     def _finalize() -> list[int]:
         return list(finalize_selection(graph, selected, scores, finalize_opts))
 
-    if mode == "nest_only":
+    if mode == DfsMode.NEST_ONLY:
         return selected, selected, selection_score_sum(scores, selected)
 
-    if mode == "legacy_alternating":
+    if mode == DfsMode.LEGACY_ALTERNATING:
         for _ in range(passes):
             selected = list(increase_selection_dfs(
                 graph_sorted_rev, selected, max_tries,
@@ -1724,7 +1674,7 @@ def apply_dfs_refinement(
         final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    if mode == "head_pipeline":
+    if mode == DfsMode.HEAD_PIPELINE:
         loose = _head_loose_refine_options(sel)
         tight = RefineSelectionOptions()
         tight.min_collisions = 1
@@ -1747,7 +1697,7 @@ def apply_dfs_refinement(
         pre_finalize = selected
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
-    if mode == "strict_no_prune":
+    if mode == DfsMode.STRICT_NO_PRUNE:
         strict = _strict_refine_options(sel)
         for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
@@ -1755,7 +1705,7 @@ def apply_dfs_refinement(
         pre_finalize = selected
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
-    if mode == "strict_prune":
+    if mode == DfsMode.STRICT_PRUNE:
         strict = _strict_refine_options(sel)
         for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
@@ -1767,21 +1717,21 @@ def apply_dfs_refinement(
     loose = _loose_refine_options(sel)
     tight = _tight_refine_options(sel)
 
-    if mode == "merged_single_pass":
+    if mode == DfsMode.MERGED_SINGLE_PASS:
         for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             pre_finalize = selected
             final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    if mode == "merged_loose_finalize_end":
+    if mode == DfsMode.MERGED_LOOSE_FINALIZE_END:
         for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         pre_finalize = selected
         final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    if mode in ("merged_loose_tight_finalize_end", "high_pass_loose"):
+    if mode in (DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END, DfsMode.HIGH_PASS_LOOSE):
         for _ in range(passes):
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             selected = list(refine_selection(graph, selected, scores, tight))
@@ -2031,79 +1981,50 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 sheet, packed_for_free, mean_part, min_dist,
                 void_ratio_threshold=void_thr,
             )
-            free_poly = free_info.target_poly
-            nest_rules = rule_sets
-            refine_rules = active_rules
             sheet_diag = 0.0
             if sheet is not None and not sheet.is_empty:
                 minx, miny, maxx, maxy = sheet.bounds
                 sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
-            attr_w = float(cfg.propose.void_attractor_rule_weight)
-            pole_w = float(cfg.propose.void_island_score_boost)
-            pocket_w = float(cfg.propose.pocket_score_boost)
-            small_w = float(cfg.propose.small_part_void_score_boost)
-            void_r = _void_attractor_radius(
-                min_dist, sheet_diag, cfg.rules.place_rule_radius,
+            candidate_geoms = _native_geoms_from_transforms(
+                group_id, transform, part_bases,
             )
-            if (
-                free_info.kind == "large_void"
-                and free_info.target_pt is not None
-                and attr_w > 0.0
-            ):
-                attractor = _make_void_attractor_rule_set(
-                    free_info.target_pt,
-                    ngroups=cfg.rules.ngroups,
-                    radius=void_r,
-                    weight=attr_w,
-                )
-                nest_rules = _merge_void_attractor_into_rule_sets(
-                    rule_sets,
-                    attractor,
-                    nest_rule_sets_used=sel.nest_rule_sets_used,
-                    max_rules_per_set=cfg.rules.max_rules_per_set,
-                )
-                refine_rules = active_rule_set(nest_rules)
-                scores = list(score_elems(graph, refine_rules))
-            boost_hits = apply_void_selection_boosts(
+            packed_geoms: list[Geometry] = []
+            if nest_state is not None and nest_state.selected_indices:
+                native = nest_state.native_geoms
+                packed_geoms = [
+                    native[i] for i in nest_state.selected_indices if i < len(native)
+                ]
+            composed = compose_and_nest_selection(
+                graph=graph,
+                rule_sets=rule_sets,
+                active_rules=active_rules,
+                scores=scores,
                 polys=polys,
                 group_id=group_id,
                 transform=transform,
-                scores=scores,
-                free_info=free_info,
-                free_poly=free_poly,
+                candidate_geoms=candidate_geoms,
+                packed_geoms=packed_geoms,
                 part_areas=part_areas,
-                propose_stats=propose_stats,
+                free_info=free_info,
                 cfg=cfg,
+                selection=sel,
+                first_pass=first_pass,
+                outline=p_sheet,
+                min_dist=min_dist,
+                sheet_area=float(sheet.area) if sheet is not None else 0.0,
                 sheet_diag=sheet_diag,
-                void_r=void_r,
+                propose_stats=propose_stats,
+                ngroups=cfg.rules.ngroups,
             )
-
-            use_greedy_nest = (
-                bool(cfg.propose.void_greedy_nest_seed)
-                and free_info.kind == "large_void"
-                and scores
-                and (pole_w > 0.0 or pocket_w > 0.0 or small_w > 0.0)
-            )
-            if use_greedy_nest:
-                selected_nest = _nest_seed_from_boosted_scores(graph, scores)
-            else:
-                selected_nest = list(
-                    nest_by_graph(graph, nest_rules[: sel.nest_rule_sets_used])[0]
-                )
+            scores = composed.scores
+            refine_scores = composed.refine_scores
+            selected_nest = composed.selected_nest
+            refine_rules = composed.refine_rules
+            free_poly = composed.free_poly
+            free_info = composed.free_info
+            n_void_nest = composed.n_void_nest
+            boost_hits = composed.boost_hits
             old_len = len(selected_nest)
-            n_void_nest = _count_selected_in_free(polys, selected_nest, free_poly)
-            # Nest uses void-boosted scores. Keep a copy for refine so first-pass
-            # border-kiss boost cannot tilt DFS against void islands (P0+P1).
-            refine_scores = list(scores)
-            if (
-                first_pass
-                and should_use_border_focus(Polygon(), cfg.propose)
-                and free_info.kind != "large_void"
-            ):
-                _boost_border_scores(
-                    polys, refine_scores, p_sheet, min_dist,
-                    weight=cfg.propose.border_selection_score_boost,
-                )
             _, selected_polys, _ = apply_dfs_refinement(
                 graph,
                 refine_rules,
