@@ -1,6 +1,7 @@
 """Rigid cluster-copy proposer: reuse packed motifs elsewhere on the sheet."""
 
 from dataclasses import dataclass
+import math
 from typing import List, Optional, Sequence, Tuple
 
 from shapely import MultiPolygon, Polygon
@@ -9,15 +10,23 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
-from nest_graph.propose.context import cluster_packed_indices, placement_free_region
+from nest_graph.propose.context import (
+    cluster_packed_indices,
+    placement_free_region,
+    void_pole_seed_coords,
+)
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.void_topology import polylabel
+from nest_graph.propose.void_topology import (
+    multi_pole_seed_coords,
+    polylabel,
+    topology_pocket_poles,
+)
 from nest_graph.utils import compose_transforms, relative_transform, transform_poly
 
 
 @dataclass(frozen=True)
 class ClusterPattern:
-    """Relative SE(2) motif extracted from a packed cluster."""
+    """Relative SE(2) motif extracted from a packed contact cluster."""
 
     members: tuple[tuple[int, tuple[float, float, float]], ...]
     part_count: int
@@ -52,7 +61,6 @@ def extract_cluster_patterns(
 
     patterns: list[ClusterPattern] = []
     for _area, idxs in scored[:max_patterns]:
-        # Reference = largest-area member
         ref_i = max(idxs, key=lambda i: float(placed[i].area))
         ref_t = (
             float(transforms[ref_i][0]),
@@ -84,8 +92,6 @@ def free_pocket_anchors(
     max_anchors: int,
 ) -> list[tuple[float, float, float]]:
     """Polylabel / multi-pole anchors in free pockets of sheet\\obstacle."""
-    from nest_graph.propose.void_topology import multi_pole_seed_coords
-
     free = placement_free_region(sheet, obstacle, min_dist)
     if free.is_empty:
         return []
@@ -113,13 +119,12 @@ def free_pocket_anchors(
             if pt is None or pt.is_empty:
                 continue
             out.append((float(pt.x), float(pt.y), 0.0))
-            out.append((float(pt.x), float(pt.y), float(__import__("math").pi)))
+            out.append((float(pt.x), float(pt.y), float(math.pi)))
         if len(out) >= max_anchors * 2:
             break
     return out[: max_anchors * 2]
 
 
-# Back-compat private alias.
 _free_pocket_anchors = free_pocket_anchors
 
 
@@ -130,12 +135,198 @@ def _mirror_anchors(
     minx, miny, maxx, maxy = sheet.bounds
     cx = 0.5 * (minx + maxx)
     cy = 0.5 * (miny + maxy)
-    x, y, a = ref
+    x, y, a = float(ref[0]), float(ref[1]), float(ref[2])
     return [
         (2.0 * cx - x, y, -a),
-        (x, 2.0 * cy - y, -a),
-        (2.0 * cx - x, 2.0 * cy - y, a + float(__import__("math").pi)),
+        (x, 2.0 * cy - y, math.pi - a),
+        (2.0 * cx - x, 2.0 * cy - y, a + float(math.pi)),
     ]
+
+
+def _dedupe_anchors(
+    anchors: Sequence[tuple[float, float, float]],
+) -> list[tuple[float, float, float]]:
+    seen: set[tuple[float, float, float]] = set()
+    out: list[tuple[float, float, float]] = []
+    for a in anchors:
+        key = (round(float(a[0]), 2), round(float(a[1]), 2), round(float(a[2]), 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((float(a[0]), float(a[1]), float(a[2])))
+    return out
+
+
+def dedupe_anchors(
+    anchors: Sequence[tuple[float, float, float]],
+) -> list[tuple[float, float, float]]:
+    """Public alias for shared void/repack anchor dedupe (round-2 local)."""
+    return _dedupe_anchors(anchors)
+
+
+def void_seek_motif_anchors(
+    sheet: Polygon,
+    base_shape: BaseGeometry,
+    *,
+    min_dist: float,
+    propose_cfg: ProposeConfig,
+    free_space=None,
+    void_pole: Point | None = None,
+    patterns: Sequence[ClusterPattern] = (),
+) -> list[tuple[float, float, float]]:
+    """Unified anchor priority for void_seek motif stamps (§4).
+
+    topology / void_pole → topology_pocket scan → free_pocket → mirror last.
+    """
+    anchors: list[tuple[float, float, float]] = []
+    n_seed = int(propose_cfg.cluster_copy_anchor_seeds)
+
+    if free_space is not None and getattr(free_space, "topology_poles", None):
+        anchors.extend(list(free_space.topology_poles))
+    if void_pole is not None and not getattr(void_pole, "is_empty", True):
+        anchors.extend(void_pole_seed_coords(void_pole, num_angles=4))
+
+    packed_for_topo: list = []
+    if hasattr(base_shape, "geoms"):
+        packed_for_topo = [
+            g for g in base_shape.geoms if g is not None and not g.is_empty
+        ]
+    elif base_shape is not None and not base_shape.is_empty:
+        packed_for_topo = [base_shape]
+    if packed_for_topo and (
+        free_space is None or not getattr(free_space, "topology_poles", None)
+    ):
+        anchors.extend(
+            topology_pocket_poles(
+                sheet,
+                packed_for_topo,
+                min_dist=min_dist,
+                max_anchors=n_seed,
+            )
+        )
+
+    anchors.extend(free_pocket_anchors(sheet, base_shape, min_dist, n_seed))
+
+    for pat in patterns:
+        anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
+
+    return _dedupe_anchors(anchors)
+
+
+def emit_packing_clear(
+    propose_geom: ProposeGeometry,
+    coords: tuple[float, float, float],
+) -> bool:
+    """Propose-emit packing SoT: fully_inside + packed collision (not Scene margin)."""
+    placed = propose_geom.placed_at(coords)
+    if placed is None:
+        return False
+    if not placed.fully_inside(propose_geom.board_geom):
+        return False
+    return bool(propose_geom.passes_full_packed_collision(placed))
+
+
+def _packing_clear(
+    propose_geom: ProposeGeometry,
+    coords: tuple[float, float, float],
+) -> bool:
+    return emit_packing_clear(propose_geom, coords)
+
+
+def _full_motif_packing_clear(
+    pat: ClusterPattern,
+    t_anchor: tuple[float, float, float],
+    group_id: int,
+    shape_to_place: Polygon,
+    propose_geom: ProposeGeometry,
+    part_by_group: dict[int, Polygon] | None,
+) -> bool:
+    """True if every motif member is packing-clear at ``t_anchor``."""
+    for gid, t_rel_m in pat.members:
+        t_m = compose_transforms(t_anchor, t_rel_m)
+        if int(gid) == int(group_id):
+            if not _packing_clear(propose_geom, t_m):
+                return False
+            continue
+        if part_by_group is not None and int(gid) in part_by_group:
+            # Other groups: centroid must stay on board (no foreign ProposeGeometry).
+            placed_m = transform_poly(part_by_group[int(gid)], t_m)
+            if placed_m is None or placed_m.is_empty:
+                return False
+            if not propose_geom.sheet.buffer(1e-5).covers(placed_m.centroid):
+                return False
+        else:
+            # Unknown foreign solid: require leader-cell clear only (leader path).
+            continue
+    return True
+
+
+def stamp_motif_leader_follower(
+    patterns: Sequence[ClusterPattern],
+    group_id: int,
+    shape_to_place: Polygon,
+    *,
+    propose_geom: ProposeGeometry,
+    anchors: Sequence[tuple[float, float, float]],
+    top_n: int = 16,
+    part_by_group: dict[int, Polygon] | None = None,
+    skip_reasons: dict[str, int] | None = None,
+) -> list[tuple[float, float, float]]:
+    """Propose-side motif stamp: full-motif packing clear, else same-group leader only.
+
+    Emits single-group candidate transforms under packing clearance (not Scene
+    margin). Selection/repack uses ``stamp_motif_at_anchor`` (atomic peeled
+    placement under ``is_pose_clear``) with ``pattern_fallback`` as the partial path.
+    """
+    if not patterns or not anchors:
+        if skip_reasons is not None:
+            skip_reasons["no_anchors" if not anchors else "no_patterns"] = (
+                skip_reasons.get("no_anchors" if not anchors else "no_patterns", 0) + 1
+            )
+        return []
+
+    seen: set[tuple[float, float, float]] = set()
+    out: list[tuple[float, float, float]] = []
+
+    def _maybe_add(coords: tuple[float, float, float]) -> bool:
+        key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 2))
+        if key in seen:
+            return False
+        seen.add(key)
+        if not _packing_clear(propose_geom, coords):
+            if skip_reasons is not None:
+                skip_reasons["collide"] = skip_reasons.get("collide", 0) + 1
+            return False
+        out.append(coords)
+        return True
+
+    for pat in patterns:
+        rels = [t_rel for gid, t_rel in pat.members if int(gid) == int(group_id)]
+        if not rels:
+            if skip_reasons is not None:
+                skip_reasons["no_rels"] = skip_reasons.get("no_rels", 0) + 1
+            continue
+        for t_anchor in anchors:
+            for t_rel in rels:
+                coords = compose_transforms(t_anchor, t_rel)
+                if _full_motif_packing_clear(
+                    pat, t_anchor, group_id, shape_to_place, propose_geom, part_by_group,
+                ):
+                    if _maybe_add(coords) and len(out) >= top_n:
+                        return out
+                    continue
+                # Leader-follower fallback: same-group member only.
+                if _maybe_add(coords):
+                    if skip_reasons is not None:
+                        skip_reasons["fallback_leader"] = (
+                            skip_reasons.get("fallback_leader", 0) + 1
+                        )
+                    if len(out) >= top_n:
+                        return out
+                else:
+                    if skip_reasons is not None:
+                        skip_reasons["leader_fail"] = skip_reasons.get("leader_fail", 0) + 1
+    return out
 
 
 def propose_placements_cluster_copy(
@@ -151,73 +342,38 @@ def propose_placements_cluster_copy(
     propose_cfg: ProposeConfig,
     top_n: int = 16,
     free_space=None,
+    void_pole: Point | None = None,
+    skip_reasons: dict[str, int] | None = None,
 ) -> List[Tuple[float, float, float]]:
-    """Emit absolute transforms for group_id by placing pattern members at new anchors."""
+    """Emit absolute transforms for group_id via shared leader-follower stamp."""
     if not patterns or sheet.is_empty:
         return []
     if not propose_cfg.use_cluster_copy:
         return []
 
-    anchors: list[tuple[float, float, float]] = []
-    anchors.extend(
-        _free_pocket_anchors(
-            sheet, base_shape, min_dist, propose_cfg.cluster_copy_anchor_seeds,
-        )
-    )
-    # Prefer snapshot topology poles; fall back to a one-shot scan.
-    if free_space is not None and getattr(free_space, "topology_poles", None):
-        anchors.extend(list(free_space.topology_poles))
-    else:
-        packed_for_topo = []
-        if hasattr(base_shape, "geoms"):
-            packed_for_topo = [
-                g for g in base_shape.geoms if g is not None and not g.is_empty
-            ]
-        elif base_shape is not None and not base_shape.is_empty:
-            packed_for_topo = [base_shape]
-        if packed_for_topo:
-            from nest_graph.propose.void_topology import topology_pocket_poles
-            anchors.extend(
-                topology_pocket_poles(
-                    sheet,
-                    packed_for_topo,
-                    min_dist=min_dist,
-                    max_anchors=propose_cfg.cluster_copy_anchor_seeds,
-                )
-            )
-    for pat in patterns:
-        anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
+    pole = void_pole
+    if pole is None and free_space is not None:
+        analysis = getattr(free_space, "analysis", None)
+        if analysis is not None and getattr(analysis, "target_pt", None) is not None:
+            pole = analysis.target_pt
+    if pole is None and pt_push is not None and not pt_push.is_empty:
+        pole = pt_push
 
-    seen: set[tuple[float, float, float]] = set()
-    out: list[tuple[float, float, float]] = []
-    for pat in patterns:
-        rels = [t_rel for gid, t_rel in pat.members if gid == group_id]
-        if not rels:
-            continue
-        for t_anchor in anchors:
-            for t_rel in rels:
-                coords = compose_transforms(t_anchor, t_rel)
-                key = (round(coords[0], 2), round(coords[1], 2), round(coords[2], 2))
-                if key in seen:
-                    continue
-                seen.add(key)
-                if not propose_geom.valid_at(coords, pt_push):
-                    continue
-                # Cheap full-motif check: every member must stay in sheet and clear voids.
-                motif_ok = True
-                for gid, t_rel_m in pat.members:
-                    t_m = compose_transforms(t_anchor, t_rel_m)
-                    if gid == group_id:
-                        placed_m = transform_poly(shape_to_place, t_m)
-                    else:
-                        # Other members: only require footprint inside sheet AABB.
-                        placed_m = Point(t_m[0], t_m[1]).buffer(min_dist)
-                    if not sheet.buffer(1e-5).covers(placed_m.centroid):
-                        motif_ok = False
-                        break
-                if not motif_ok:
-                    continue
-                out.append(coords)
-                if len(out) >= top_n:
-                    return out
-    return out
+    anchors = void_seek_motif_anchors(
+        sheet,
+        base_shape,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        free_space=free_space,
+        void_pole=pole,
+        patterns=patterns,
+    )
+    return stamp_motif_leader_follower(
+        patterns,
+        group_id,
+        shape_to_place,
+        propose_geom=propose_geom,
+        anchors=anchors,
+        top_n=top_n,
+        skip_reasons=skip_reasons,
+    )

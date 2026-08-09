@@ -32,6 +32,17 @@ def void_attractor_radius(
     return max(float(place_rule_radius), float(min_dist) * 4.0, 0.25 * float(sheet_diag))
 
 
+def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
+    """Shared radius for densify pole_near accept and void_leak props_pole telem.
+
+    Densify measures placed *centroid* distance; props_pole measures transform
+    *(x, y)* — same radius, different measure.
+    """
+    if float(sheet_diag) <= 1e-12 or float(ratio) <= 0.0:
+        return 0.0
+    return float(ratio) * float(sheet_diag)
+
+
 def boost_border_scores(
     polys: list,
     scores: list[float],

@@ -38,6 +38,14 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
         cfg.propose = cfg.propose.model_copy(update={
             "enable_void_yield_densify_accept": False,
         })
+    elif propose_name == "no_void_pole_clear":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_void_pole_clear_densify": False,
+        })
+    elif propose_name == "no_free_space_cloud":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_free_space_cloud": False,
+        })
     elif propose_name == "no_greedy_nest":
         cfg.propose = cfg.propose.model_copy(update={
             "void_greedy_nest_seed": False,
@@ -62,6 +70,10 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
         cfg.propose = cfg.propose.model_copy(update={
             "use_cluster_copy": False,
         })
+    elif propose_name == "no_side_pack":
+        cfg.propose = cfg.propose.model_copy(update={
+            "use_side_pack": False,
+        })
     elif propose_name == "no_open_void_pocket":
         cfg.propose = cfg.propose.model_copy(update={
             "use_open_void_pocket": False,
@@ -77,6 +89,15 @@ def _build_cfg(propose_name: str, dfs_mode: str) -> BuildGraphConfig:
     elif propose_name == "no_densify_hijack":
         cfg.propose = cfg.propose.model_copy(update={
             "densify_on_void_hijack": False,
+        })
+    elif propose_name == "no_void_elite":
+        cfg.propose = cfg.propose.model_copy(update={
+            "enable_void_elite_archive": False,
+            "stratified_void_elite_quota": 0,
+        })
+    elif propose_name == "no_keep_hist_sterile":
+        cfg.propose = cfg.propose.model_copy(update={
+            "keep_history_on_void_sterile": False,
         })
     elif propose_name == "no_unified_reserve":
         cfg.propose = cfg.propose.model_copy(update={
@@ -193,6 +214,8 @@ def main() -> None:
             "no_void_boost",
             "void_boost_high",
             "no_void_yield_densify",
+            "no_void_pole_clear",
+            "no_free_space_cloud",
             "no_void_hijack",
             "no_override",
             "no_greedy_nest",
@@ -201,10 +224,13 @@ def main() -> None:
             "no_pocket_mis_boost",
             "no_cluster_repack",
             "no_cluster_copy",
+            "no_side_pack",
             "no_open_void_pocket",
             "no_local_se2",
             "no_cluster_relocate",
             "no_densify_hijack",
+            "no_void_elite",
+            "no_keep_hist_sterile",
             "no_unified_reserve",
             "no_void_contact_hybrid",
             "no_motif_topo_anchors",

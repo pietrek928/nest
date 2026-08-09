@@ -24,7 +24,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, dedupe_transforms
+from nest_graph.config import ProposeConfig, dedupe_transforms, floor_void_seek_budgets
 from nest_graph.geometry import Geometry
 from nest_graph.proposer_names import (
     BATCH_FOLLOW_PROPOSERS,
@@ -66,6 +66,7 @@ from nest_graph.propose.placements_edge import (
     propose_placements_ribbon_free,
     propose_placements_sheet_corners,
     propose_placements_sheet_edge,
+    propose_placements_side_pack,
 )
 from nest_graph.propose.placements_geo import propose_placements_raycasting, propose_placements_voronoi
 from nest_graph.propose.placements_guidance import (
@@ -89,6 +90,9 @@ from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
     propose_placements_cluster_copy,
 )
+from nest_graph.propose.placements_free_space_cloud import (
+    propose_placements_free_space_cloud,
+)
 from nest_graph.propose.placements_pocket import (
     propose_placements_pocket_fit,
 )
@@ -96,17 +100,22 @@ from nest_graph.propose.placements_pso import propose_placements_point_cloud
 from nest_graph.propose.ranking import (
     _rank_proposal_coords,
     _score_placement_border,
+    _score_placement_clearance,
     _trim_candidates_by_clearance,
     _trim_candidates_by_contact,
     _trim_candidates_stratified,
     cast_squeeze_ranked_coords,
     select_guidance_cast_seeds,
 )
+from nest_graph.propose.placements_selection_expand import (
+    propose_placements_history_expand,
+    propose_placements_selection_expand,
+)
 from nest_graph.propose.pose_diversity import (
     apply_conflict_degree_penalty,
     apply_pose_nms,
 )
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.void_selection import transform_row_key, void_pole_near_radius
 
 _LOG = logging.getLogger(__name__)
 _proposal_key = transform_row_key
@@ -125,10 +134,79 @@ _CASCADE_EXPLORERS = frozenset({
 })
 _CASCADE_BUILDERS = frozenset({
     "group_fit",
+    "side_pack",
     "board_edge",
     "sheet_corners",
     "sheet_edge",
 })
+
+
+def _fast_packed_crowd_ref(packed_transforms: Sequence | None) -> Point | None:
+    """Bbox center of packed (x, y) — O(N), no Shapely union."""
+    if not packed_transforms:
+        return None
+    xs: list[float] = []
+    ys: list[float] = []
+    for t in packed_transforms:
+        if t is None:
+            continue
+        try:
+            xs.append(float(t[0]))
+            ys.append(float(t[1]))
+        except (TypeError, IndexError, ValueError):
+            continue
+    if not xs:
+        return None
+    return Point(0.5 * (min(xs) + max(xs)), 0.5 * (min(ys) + max(ys)))
+
+
+def _packed_count(extras: PackedProposeExtras) -> int:
+    if extras.packed_transforms:
+        return len(extras.packed_transforms)
+    if extras.packed_polys:
+        return len(extras.packed_polys)
+    return 0
+
+
+def _emit_side_pack(
+    ctx: ProposeContext,
+    extras: PackedProposeExtras,
+    state: _CollectState,
+    *,
+    top_n: int | None = None,
+    cascade_zone: str | None = None,
+) -> None:
+    cfg = ctx.propose_cfg
+    if not (
+        _proposer_enabled("side_pack", ctx.enabled_proposers)
+        and bool(getattr(cfg, "use_side_pack", True))
+    ):
+        return
+    crowd = _fast_packed_crowd_ref(extras.packed_transforms)
+    pole = extras.void_pole if extras.void_pole is not None else ctx.void_pole
+    # Pack bbox is the anti-crowd ref; void_pole substitutes only when pack is empty.
+    if crowd is None and pole is not None and not getattr(pole, "is_empty", True):
+        crowd = pole
+    cap = int(top_n) if top_n is not None else int(getattr(cfg, "side_pack_top_n", 16) or 16)
+    # Void / densify: over-emit so packing filter still leaves survivors.
+    if cascade_zone == "void_seek":
+        cap = max(cap, max(int(cfg.max_proposals) // 2, 16))
+    cap = max(1, min(cap, max(int(ctx.pool), 1)))
+    state.ext(
+        "side_pack",
+        propose_placements_side_pack(
+            ctx.shape_to_place,
+            ctx.sheet,
+            min_dist=ctx.min_dist,
+            propose_cfg=cfg,
+            propose_geom=ctx.propose_geom,
+            top_n=cap,
+            crowd_ref=crowd,
+            samples_per_edge=int(getattr(cfg, "side_pack_samples_per_edge", 12) or 12),
+            num_angles=min(ctx.n_angles, 8),
+        ),
+        max_items=cap * 2,
+    )
 
 
 def _cascade_active(propose_cfg: ProposeConfig, zone: str | None) -> bool:
@@ -141,6 +219,7 @@ def _count_fast_valid_seeds(
     *,
     limit: int,
     pt_push: Point | None = None,
+    crash_counter: dict | None = None,
 ) -> int:
     if not seeds or limit <= 0:
         return 0
@@ -150,6 +229,10 @@ def _count_fast_valid_seeds(
         flags = batch_valid_flags(propose_geom, sample, push)
     except (ValueError, RuntimeError) as e:
         _LOG.warning("Fast valid check crashed: %s", e)
+        if crash_counter is not None:
+            crash_counter["cascade_crashes"] = int(
+                crash_counter.get("cascade_crashes", 0)
+            ) + 1
         return 0
     return sum(1 for f in flags if f)
 
@@ -165,7 +248,7 @@ def _count_transforms_in_void(
     target_poly: Polygon | None,
     part_poly: Polygon,
 ) -> int:
-    """Count SE(2) rows whose placed centroid lies in ``target_poly``."""
+    """Count SE(2) rows whose placed centroid lies in ``target_poly`` (iv)."""
     if (
         arr is None
         or getattr(arr, "shape", (0,))[0] == 0
@@ -183,6 +266,359 @@ def _count_transforms_in_void(
         if target_poly.covers(placed.centroid):
             n += 1
     return n
+
+
+def _count_transforms_pole_near(
+    arr: np.ndarray,
+    void_pole: Point | None,
+    part_poly: Polygon,
+    *,
+    sheet_diag: float,
+    near_ratio: float = 0.25,
+) -> int:
+    """Count packing-candidate rows with centroid within near_ratio * sheet_diag of pole."""
+    if (
+        arr is None
+        or getattr(arr, "shape", (0,))[0] == 0
+        or void_pole is None
+        or getattr(void_pole, "is_empty", True)
+        or part_poly is None
+        or part_poly.is_empty
+        or sheet_diag <= 1e-12
+    ):
+        return 0
+    thr = void_pole_near_radius(sheet_diag, near_ratio)
+    if thr <= 0.0:
+        return 0
+    n = 0
+    for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
+        placed = transform_poly(
+            part_poly, (float(row[0]), float(row[1]), float(row[2])),
+        )
+        if placed is None or placed.is_empty:
+            continue
+        c = placed.centroid
+        if float(Point(float(c.x), float(c.y)).distance(void_pole)) <= thr:
+            n += 1
+    return n
+
+
+def allow_void_repack(
+    *,
+    free_kind: str | None,
+    n_void_nest: int,
+    n_void_refine: int,
+) -> bool:
+    """Unified allow_repack predicate (§9)."""
+    if free_kind == "large_void":
+        return True
+    return int(n_void_nest) > int(n_void_refine)
+
+
+def _void_seek_densify(
+    *,
+    arr: np.ndarray,
+    zone: str | None,
+    zone_label: str,
+    board: BaseGeometry,
+    sheet: Polygon,
+    part_poly: Polygon,
+    placed: Sequence[BaseGeometry],
+    obstacle_shape: BaseGeometry,
+    propose_cfg: ProposeConfig,
+    cfg: ProposeConfig,
+    min_dist: float,
+    primary_target: Point | None,
+    void_hijack_from: str | None,
+    part_free_space,
+    full_packed_geoms: Sequence[Geometry],
+    cluster_patterns,
+    angle_override,
+    corridor_guidance_seeds,
+    packed_gids_aligned,
+    packed_trs_aligned,
+    poles_reserve_only: bool,
+    rules,
+    group_id: int,
+    densify_count_floor: int,
+    floor_ratio: float,
+    group_pocket_emitted: int,
+    free_ratio: float,
+    sterile_zones: tuple[str, ...],
+    border_only_propose: bool,
+    push: Point,
+) -> tuple[np.ndarray, str, bool, bool, str | None, dict]:
+    """Sterile densify + optional free_space_cloud (§3, §6). Behavior-neutral extract."""
+    telem: dict = {
+        "total_counts": {},
+        "proposer_keys": {},
+        "emitted_by_proposer": {},
+        "pool_by_proposer": {},
+        "pocket_by_tag": {},
+        "pocket_emitted": 0,
+        "pocket_attempted": 0,
+        "pocket_accepted": 0,
+        "pocket_keys": [],
+        "pocket_skips": [],
+    }
+    hijack_densify = (
+        bool(propose_cfg.densify_on_void_hijack)
+        and placed
+        and not border_only_propose
+        and (
+            void_hijack_from is not None
+            or zone == "void_seek"
+        )
+        and (
+            group_pocket_emitted == 0
+            or arr.shape[0] < densify_count_floor
+        )
+    )
+    need_densify = hijack_densify or (
+        arr.shape[0] < densify_count_floor
+        and placed
+        and not border_only_propose
+        and free_ratio > 0.2
+        and zone in sterile_zones
+    )
+    if (
+        (not need_densify)
+        and floor_ratio > 0.0
+        and arr.shape[0] > 0
+        and placed
+        and not border_only_propose
+        and (
+            (zone in sterile_zones and free_ratio > 0.2)
+            or (
+                void_hijack_from is not None
+                and bool(propose_cfg.densify_on_void_hijack)
+            )
+        )
+    ):
+        densify_geom = ProposeGeometry(
+            board,
+            obstacle_shape,
+            part_poly,
+            min_dist,
+            epsilon_ratio=cfg.placement_clearance_epsilon_ratio,
+            propose_cfg=cfg,
+            full_packed_geoms=full_packed_geoms,
+        )
+        best_cl = max(
+            (
+                _score_placement_clearance(tuple(r), densify_geom, push, cfg, min_dist)
+                for r in arr
+            ),
+            default=float("-inf"),
+        )
+        if best_cl < float(min_dist) * floor_ratio:
+            need_densify = True
+    if not need_densify:
+        return arr, zone_label, False, False, None, telem
+
+    densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
+    densify_rank = "contact_hybrid" if propose_cfg.use_pocket_fit else "clearance"
+    densify_cfg = densify_cfg.model_copy(update={
+        "use_guidance_propositions": True,
+        "guidance_use_tight_packing": True,
+        "guidance_use_corner_alignment": True,
+        "guidance_enable_grid": False,
+        "cast_squeeze_top_k": max(4, int(densify_cfg.cast_squeeze_top_k)),
+        "use_neighbor_slide": False,
+        "use_ribbon_seeds": True,
+        "use_full_packed_obstacle": True,
+        "use_border_focus": False,
+        "border_focus_ranking": False,
+        "ranking_mode": densify_rank,
+        "use_contact_ranking": densify_rank == "contact_hybrid",
+        "use_contact_clearance_hybrid": densify_rank == "contact_hybrid",
+        "propose_cascade_short_circuit": bool(
+            propose_cfg.propose_cascade_short_circuit
+        ),
+        "cascade_sniper_stop_n": int(propose_cfg.cascade_sniper_stop_n),
+        "cascade_explorer_budget_scale": float(
+            propose_cfg.cascade_explorer_budget_scale
+        ),
+    })
+    densify_cfg = apply_proposer_pool_scales(
+        densify_cfg, propose_cfg.place_proposer_pool_scales,
+    )
+    densify_cfg = floor_void_seek_budgets(densify_cfg)
+    densify_obs = simplify_obstacle_union(placed, min_dist)
+    if densify_obs is None or densify_obs.is_empty:
+        densify_obs = obstacle_shape_for_propose(
+            placed,
+            part_poly,
+            min_dist,
+            propose_cfg=densify_cfg,
+            sheet=sheet,
+            ref_point=primary_target,
+        )
+    densify_push = (
+        primary_target
+        if primary_target is not None
+        else propose_push_point(
+            board,
+            densify_obs,
+            smart_push=True,
+            min_dist=min_dist,
+            use_border_focus=False,
+        )
+    )
+    densify_enabled = ProposeConfig.proposers_for_place("void_seek")
+    densify_counts: dict[str, int] = {}
+    densify_pocket: dict = {}
+    densify_keys: dict[str, set[tuple[float, float, float]]] = {}
+    group_cascade: dict = {}
+    group_diversity: dict = {}
+    densify_coords = propose_coords_with_strategy(
+        densify_obs,
+        part_poly,
+        board,
+        densify_cfg,
+        min_dist=min_dist,
+        pt_push=densify_push,
+        focal_shape=densify_obs,
+        enabled_proposers=densify_enabled,
+        rules=rules,
+        group_id=group_id,
+        proposer_counts=densify_counts,
+        full_packed_geoms=full_packed_geoms,
+        cluster_patterns=cluster_patterns,
+        placement_angles_override=angle_override,
+        guidance_seed_coords=corridor_guidance_seeds,
+        packed_polys=placed,
+        packed_group_ids=packed_gids_aligned,
+        packed_transforms=packed_trs_aligned,
+        pocket_stats_out=densify_pocket,
+        free_space=part_free_space,
+        guidance_reserve_only=poles_reserve_only,
+        void_pole=primary_target,
+        proposer_keys_out=densify_keys,
+        cascade_zone="void_seek",
+        cascade_stats_out=group_cascade,
+        diversity_stats_out=group_diversity,
+    )
+    for name, n in densify_counts.items():
+        n_u = len(densify_keys.get(name) or ())
+        telem["total_counts"][name] = n_u if n_u else int(n)
+    for name, keys in densify_keys.items():
+        telem["proposer_keys"][name] = set(keys)
+        telem["emitted_by_proposer"][name] = len(keys)
+    for name, n in (densify_pocket.get("pool_by_proposer") or {}).items():
+        telem["pool_by_proposer"][name] = int(n)
+    for tag, n in (densify_pocket.get("by_tag") or {}).items():
+        telem["pocket_by_tag"][tag] = int(n)
+    telem["pocket_emitted"] = int(densify_pocket.get("emitted", 0))
+    telem["pocket_attempted"] = int(densify_pocket.get("attempted", 0))
+    telem["pocket_accepted"] = int(densify_pocket.get("selected", 0))
+    telem["pocket_keys"] = list(densify_pocket.get("pocket_keys") or [])
+    telem["pocket_skips"] = [str(sk) for sk in (densify_pocket.get("pocket_skip") or [])]
+
+    densify_arr = propositions_to_ndarray(densify_coords)
+    yield_poly = None
+    if part_free_space is not None and part_free_space.analysis is not None:
+        yield_poly = part_free_space.analysis.target_poly
+    use_void_yield = (
+        bool(getattr(propose_cfg, "enable_void_yield_densify_accept", True))
+        and (void_hijack_from is not None or zone == "void_seek")
+        and yield_poly is not None
+        and not yield_poly.is_empty
+    )
+    accepted = False
+    reason: str | None = None
+    if use_void_yield:
+        old_iv = _count_transforms_in_void(arr, yield_poly, part_poly)
+        new_iv = _count_transforms_in_void(densify_arr, yield_poly, part_poly)
+        pole_pt = primary_target
+        sheet_diag = 0.0
+        if sheet is not None and not sheet.is_empty:
+            minx, miny, maxx, maxy = sheet.bounds
+            sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
+        near_r = float(
+            getattr(propose_cfg, "void_pole_near_diag_ratio", 0.25) or 0.25
+        )
+        use_pole = bool(
+            getattr(propose_cfg, "enable_void_pole_clear_densify", True)
+        )
+        old_pn = (
+            _count_transforms_pole_near(
+                arr, pole_pt, part_poly,
+                sheet_diag=sheet_diag, near_ratio=near_r,
+            )
+            if use_pole else 0
+        )
+        new_pn = (
+            _count_transforms_pole_near(
+                densify_arr, pole_pt, part_poly,
+                sheet_diag=sheet_diag, near_ratio=near_r,
+            )
+            if use_pole else 0
+        )
+        if new_iv > old_iv:
+            accepted = True
+            reason = "void_yield_gain"
+            arr = densify_arr[: densify_cfg.max_proposals]
+            zone_label = f"{zone}→void_seek"
+        elif (
+            old_iv == 0
+            and new_iv == 0
+            and use_pole
+            and new_pn > old_pn
+        ):
+            accepted = True
+            reason = "void_pole_clear"
+            arr = densify_arr[: densify_cfg.max_proposals]
+            zone_label = f"{zone}→void_seek"
+        else:
+            reason = "void_yield_drop"
+    elif densify_arr.shape[0] > arr.shape[0] or (
+        arr.shape[0] == 0 and densify_arr.shape[0] > 0
+    ):
+        accepted = True
+        reason = "count_gain"
+        arr = densify_arr[: densify_cfg.max_proposals]
+        zone_label = f"{zone}→void_seek"
+    else:
+        reason = "count_drop"
+
+    void_path = void_hijack_from is not None or zone == "void_seek"
+    if (
+        arr.shape[0] == 0
+        and void_path
+        and bool(getattr(propose_cfg, "use_free_space_cloud", True))
+        and _proposer_enabled("free_space_cloud", densify_enabled)
+        and yield_poly is not None
+        and not yield_poly.is_empty
+    ):
+        cloud_geom = ProposeGeometry(
+            board,
+            densify_obs,
+            part_poly,
+            min_dist,
+            epsilon_ratio=cfg.placement_clearance_epsilon_ratio,
+            propose_cfg=densify_cfg,
+            full_packed_geoms=full_packed_geoms,
+        )
+        cloud = propose_placements_free_space_cloud(
+            yield_poly,
+            propose_geom=cloud_geom,
+            propose_cfg=propose_cfg,
+            top_n=max(int(densify_cfg.max_proposals), 1),
+            allowed_angles=angle_override,
+        )
+        if cloud:
+            accepted = True
+            reason = "free_space_cloud"
+            arr = propositions_to_ndarray(cloud)[: densify_cfg.max_proposals]
+            zone_label = f"{zone}→void_seek"
+            cloud_keys = {_proposal_key(c) for c in cloud}
+            telem["proposer_keys"]["free_space_cloud"] = cloud_keys
+            telem["emitted_by_proposer"]["free_space_cloud"] = len(cloud)
+            telem["pool_by_proposer"]["free_space_cloud"] = len(cloud)
+            telem["total_counts"]["free_space_cloud"] = len(cloud)
+
+    return arr, zone_label, True, accepted, reason, telem
 
 
 def base_shape_from_selection(
@@ -230,19 +666,19 @@ def _extend_counted(
     items = list(new_items)
     if max_items is not None and len(items) > max_items:
         items = items[:max_items]
-    n = len(items)
+    to_add: list[tuple[float, float, float]] = []
+    for item in items:
+        key = _proposal_key(item)
+        if claimed_keys is not None:
+            if key in claimed_keys:
+                continue
+            claimed_keys.add(key)
+        if proposer_keys is not None:
+            proposer_keys.setdefault(name, set()).add(key)
+        to_add.append(item)
     if proposer_counts is not None:
-        proposer_counts[name] = proposer_counts.get(name, 0) + n
-    if proposer_keys is not None:
-        bucket = proposer_keys.setdefault(name, set())
-        for item in items:
-            key = _proposal_key(item)
-            if claimed_keys is not None:
-                if key in claimed_keys:
-                    continue
-                claimed_keys.add(key)
-            bucket.add(key)
-    candidates.extend(items)
+        proposer_counts[name] = proposer_counts.get(name, 0) + len(to_add)
+    candidates.extend(to_add)
 
 
 def _filter_valid_candidates(
@@ -322,9 +758,8 @@ class _CollectState:
         self.candidates: List[Tuple[float, float, float]] = []
         self.proposer_counts = proposer_counts
         self.proposer_keys = proposer_keys
-        self.claimed_keys: set[tuple[float, float, float]] | None = (
-            set() if proposer_keys is not None else None
-        )
+        # Always dedupe emit→pool keys so counts match unique survivors.
+        self.claimed_keys: set[tuple[float, float, float]] = set()
         self.cascade_stats_out = cascade_stats_out
         self.skip_builders = False
         self.skip_explorers = False
@@ -467,24 +902,42 @@ def _collect_builder_candidates(
     ctx: ProposeContext,
     extras: PackedProposeExtras,
     state: _CollectState,
+    *,
+    cascade_zone: str | None = None,
 ) -> None:
-    """Builder stage: ``group_fit``, ``sheet_corners``/``sheet_edge``, ``board_edge``."""
+    """Builder stage: sheet/cluster edge snaps + group_fit.
+
+    Zone permission is ``ZONE_PROPOSERS`` / ``enabled_proposers``. Staging:
+    ``use_side = use_side_pack and (packed_n >= 2 or void_path)`` — mid-pack XOR
+    turns off ``board_edge``; early void turns on ``side_pack`` (VOID_SEEK has
+    neither BOARD_EDGE nor GROUP_FIT). Void XOR group_fit; mid-pack XOR board_edge;
+    border_gap may run both group_fit and side_pack (different rings).
+    """
     if state.skip_builders:
         return
     cfg = ctx.propose_cfg
     pool = ctx.pool
     n_angles = ctx.n_angles
     border_focus = ctx.border_focus
+    packed_n = _packed_count(extras)
+    void_path = cascade_zone == "void_seek"
+    # Staging (not zone policy): mid-pack or early void → side_pack; else board_edge.
+    use_side = bool(getattr(cfg, "use_side_pack", True)) and (
+        packed_n >= 2 or void_path
+    )
+    use_board = (not use_side) or packed_n < 2
 
-    if (
-        _proposer_enabled("group_fit", ctx.enabled_proposers)
+    # Void path: side_pack XOR group_fit. Non-void: group_fit when enabled.
+    run_group_fit = (
+        (not void_path)
+        and _proposer_enabled("group_fit", ctx.enabled_proposers)
         and cfg.use_group_edge_seeds
         and ctx.focal_shape is not None
         and not ctx.focal_shape.is_empty
         and not ctx.base_shape.is_empty
         and ctx.use_free_region
-    ):
-        # Packed packs: keep angles/samples modest (profiles already lower samples).
+    )
+    if run_group_fit:
         gf_angles = min(n_angles, 8)
         state.ext(
             "group_fit",
@@ -502,8 +955,14 @@ def _collect_builder_candidates(
             ),
         )
 
+    # Zone permission via enabled_proposers inside _emit_side_pack.
+    if use_side:
+        _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
+
     board_edge_on = (
-        _proposer_enabled("board_edge", ctx.enabled_proposers)
+        use_board
+        and (not use_side or packed_n < 2)
+        and _proposer_enabled("board_edge", ctx.enabled_proposers)
         and cfg.use_board_edge_seeds
         and (border_focus or cfg.board_edge_when_packed)
     )
@@ -512,6 +971,7 @@ def _collect_builder_candidates(
         and cfg.use_border_edge_seeds
         and border_focus
         and not board_edge_on
+        and not use_side
     ):
         # Fold sheet_edge samples into sheet_corners counting (no separate key).
         state.ext(
@@ -797,6 +1257,45 @@ def _collect_cast_refine_candidates(
     )
 
 
+def _collect_expand_candidates(
+    ctx: ProposeContext,
+    extras: PackedProposeExtras,
+    state: _CollectState,
+    *,
+    group_id: int = 0,
+) -> None:
+    """Emit selection_expand (and optional history_expand) after cast refine."""
+    cfg = ctx.propose_cfg
+    rng = np.random.default_rng(abs(hash((group_id, round(ctx.min_dist, 6)))) % (2**31))
+    seeds: list[tuple[float, float, float]] = []
+    if extras.packed_transforms is not None and extras.packed_group_ids is not None:
+        for gid, tr in zip(extras.packed_group_ids, extras.packed_transforms, strict=False):
+            if int(gid) != int(group_id):
+                continue
+            t = tuple(float(x) for x in tr[:3])
+            seeds.append(t)
+    if (
+        seeds
+        and _proposer_enabled("selection_expand", ctx.enabled_proposers)
+    ):
+        # Light emit — mixer still adds a thin expand remainder.
+        n = 1
+        state.ext(
+            "selection_expand",
+            propose_placements_selection_expand(seeds, n=n, rng=rng),
+            max_items=max(8, cfg.candidate_pool // 4),
+        )
+    if (
+        seeds
+        and _proposer_enabled("history_expand", ctx.enabled_proposers)
+    ):
+        state.ext(
+            "history_expand",
+            propose_placements_history_expand(seeds, n=1, rng=rng),
+            max_items=max(4, cfg.candidate_pool // 8),
+        )
+
+
 def _apply_cascade_budget(
     ctx: ProposeContext,
     extras: PackedProposeExtras,
@@ -819,7 +1318,11 @@ def _apply_cascade_budget(
             sniper_seeds.extend(list(ctx.guidance_seed_coords))
         stop_n = max(int(getattr(cfg, "cascade_sniper_stop_n", 4) or 4), 1)
         n_valid = _count_fast_valid_seeds(
-            sniper_seeds, ctx.propose_geom, limit=stop_n, pt_push=ctx.pt_push,
+            sniper_seeds,
+            ctx.propose_geom,
+            limit=stop_n,
+            pt_push=ctx.pt_push,
+            crash_counter=state.cascade_stats_out,
         )
         if n_valid >= stop_n:
             state.skip_builders = True
@@ -881,8 +1384,29 @@ def _collect_candidates(
         motif_reserve=motif_reserve,
     )
 
+    # Wall-fill: void_seek sniper short-circuit still emits side_pack (even if
+    # pocket/motif reserves are non-empty). interior_pocket cannot enable SIDE_PACK.
+    if (
+        state.skip_builders
+        and cascade_zone == "void_seek"
+        and bool(getattr(ctx.propose_cfg, "use_side_pack", True))
+    ):
+        n0 = len(state.candidates)
+        _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
+        if (
+            len(state.candidates) > n0
+            and state.cascade_stats_out is not None
+        ):
+            skipped = list(
+                state.cascade_stats_out.get("cascade_skipped_proposers") or []
+            )
+            if "side_pack" in skipped:
+                state.cascade_stats_out["cascade_skipped_proposers"] = [
+                    n for n in skipped if n != "side_pack"
+                ]
+
     if mode == "cascade":
-        _collect_builder_candidates(ctx, extras, state)
+        _collect_builder_candidates(ctx, extras, state, cascade_zone=cascade_zone)
         # Builder-stage short-circuit: pool already full of snipers+builders.
         hard_zone = bool(cascade_zone) and cascade_zone in _CASCADE_HARD_ZONES
         if (
@@ -896,9 +1420,10 @@ def _collect_candidates(
         _collect_explorer_candidates(ctx, extras, state)
     else:
         _collect_explorer_candidates(ctx, extras, state)
-        _collect_builder_candidates(ctx, extras, state)
+        _collect_builder_candidates(ctx, extras, state, cascade_zone=cascade_zone)
 
     _collect_cast_refine_candidates(ctx, state)
+    _collect_expand_candidates(ctx, extras, state, group_id=group_id)
     return _filter_distant_collisions(state.candidates, ctx.propose_geom)
 
 
@@ -1351,7 +1876,6 @@ def propose_coords_with_strategy(
         packed_polys=packed_polys,
         packed_group_ids=packed_group_ids,
         packed_transforms=packed_transforms,
-        native_geoms=full_packed_geoms,
         free_space=free_space,
         cluster_patterns=cluster_patterns,
         pocket_stats=pocket_stats,
@@ -1890,6 +2414,104 @@ def collect_propose_batch_for_nest(
     return propose_by_group, stats
 
 
+def _prepare_group_propose(
+    board: BaseGeometry,
+    parts: Sequence[Tuple[Polygon, int]],
+    selected_polys: Sequence[BaseGeometry],
+    selected_indices: Sequence[int],
+    propose_cfg: ProposeConfig,
+    *,
+    min_dist: float,
+    user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    seeded: bool = False,
+    packed_group_ids: Sequence[int] | None = None,
+    packed_transforms: Sequence | None = None,
+    full_packed_geoms: Sequence[Geometry] | None = None,
+) -> tuple:
+    """Shared pre-loop setup for ``proposed_transforms_for_groups`` (behavior-neutral)."""
+    sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
+    placed = [selected_polys[i] for i in selected_indices]
+    n_holes = len(getattr(sheet, "interiors", ()) or ())
+    sheet_vertices = len(list(sheet.exterior.coords)) if hasattr(sheet, "exterior") else 0
+    max_verts = 0
+    max_interiors = 0
+    concave_parts = False
+    for part_poly, _gid in parts:
+        max_verts = max(max_verts, len(list(part_poly.exterior.coords)))
+        max_interiors = max(max_interiors, len(getattr(part_poly, "interiors", ()) or ()))
+        if part_is_concave(part_poly):
+            concave_parts = True
+    propose_cfg = propose_cfg.with_complexity_lean(
+        n_holes=n_holes,
+        max_part_vertices=max_verts,
+        max_part_interiors=max_interiors,
+        sheet_vertices=sheet_vertices,
+        concave_parts=concave_parts,
+        seeded=seeded,
+    )
+    if full_packed_geoms is not None and len(full_packed_geoms) == len(placed):
+        full_packed_geoms = list(full_packed_geoms)
+    else:
+        full_packed_geoms = [
+            p if isinstance(p, Geometry) else Geometry.from_shapely(p)
+            for p in placed
+        ]
+    cluster_patterns: list = []
+    packed_gids_aligned: list[int] | None = None
+    packed_trs_aligned: list | None = None
+    if packed_group_ids is not None and packed_transforms is not None and placed:
+        packed_gids_aligned = [
+            int(packed_group_ids[i]) for i in selected_indices if i < len(packed_group_ids)
+        ]
+        packed_trs_aligned = [
+            packed_transforms[i]
+            for i in selected_indices
+            if i < len(packed_transforms)
+        ]
+        if len(packed_gids_aligned) != len(placed) or len(packed_trs_aligned) != len(placed):
+            packed_gids_aligned = None
+            packed_trs_aligned = None
+    if (
+        propose_cfg.use_cluster_copy
+        and packed_gids_aligned is not None
+        and packed_trs_aligned is not None
+    ):
+        cluster_patterns = extract_cluster_patterns(
+            placed,
+            packed_gids_aligned,
+            packed_trs_aligned,
+            min_dist=min_dist,
+            max_patterns=propose_cfg.cluster_copy_max_patterns,
+            min_members=propose_cfg.cluster_copy_min_members,
+            sheet=sheet,
+        )
+    void_thr = float(propose_cfg.late_border_void_override_ratio)
+    if void_thr <= 0.0:
+        void_thr = 2.5
+    free_snap = None
+    if placed:
+        mean_area = float(np.mean([float(p.area) for p, _ in parts])) if parts else 1.0
+        free_snap = build_free_space_snapshot(
+            sheet,
+            placed,
+            mean_area,
+            min_dist,
+            void_ratio_threshold=void_thr,
+            pack_geoms=full_packed_geoms,
+        )
+    return (
+        sheet,
+        placed,
+        propose_cfg,
+        full_packed_geoms,
+        cluster_patterns,
+        packed_gids_aligned,
+        packed_trs_aligned,
+        void_thr,
+        free_snap,
+    )
+
+
 def proposed_transforms_for_groups(
     board: BaseGeometry,
     parts: Sequence[Tuple[Polygon, int]],
@@ -1922,62 +2544,30 @@ def proposed_transforms_for_groups(
     Pass ``full_packed_geoms`` aligned with ``selected_indices`` (e.g. from
     ``NestState.native_geoms``) to skip per-call ``from_shapely`` of the pack.
     """
-    sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
-    placed = [selected_polys[i] for i in selected_indices]
-    n_holes = len(getattr(sheet, "interiors", ()) or ())
-    sheet_vertices = len(list(sheet.exterior.coords)) if hasattr(sheet, "exterior") else 0
-    max_verts = 0
-    max_interiors = 0
-    concave_parts = False
-    for part_poly, _gid in parts:
-        max_verts = max(max_verts, len(list(part_poly.exterior.coords)))
-        max_interiors = max(max_interiors, len(getattr(part_poly, "interiors", ()) or ()))
-        if part_is_concave(part_poly):
-            concave_parts = True
-    propose_cfg = propose_cfg.with_complexity_lean(
-        n_holes=n_holes,
-        max_part_vertices=max_verts,
-        max_part_interiors=max_interiors,
-        sheet_vertices=sheet_vertices,
-        concave_parts=concave_parts,
+    (
+        sheet,
+        placed,
+        propose_cfg,
+        full_packed_geoms,
+        cluster_patterns,
+        packed_gids_aligned,
+        packed_trs_aligned,
+        void_thr,
+        free_snap,
+    ) = _prepare_group_propose(
+        board,
+        parts,
+        selected_polys,
+        selected_indices,
+        propose_cfg,
+        min_dist=min_dist,
+        user_holes=user_holes,
         seeded=seeded,
+        packed_group_ids=packed_group_ids,
+        packed_transforms=packed_transforms,
+        full_packed_geoms=full_packed_geoms,
     )
-    if full_packed_geoms is not None and len(full_packed_geoms) == len(placed):
-        full_packed_geoms = list(full_packed_geoms)
-    else:
-        full_packed_geoms = [
-            p if isinstance(p, Geometry) else Geometry.from_shapely(p)
-            for p in placed
-        ]
-    cluster_patterns = []
-    packed_gids_aligned: list[int] | None = None
-    packed_trs_aligned: list | None = None
-    if packed_group_ids is not None and packed_transforms is not None and placed:
-        packed_gids_aligned = [
-            int(packed_group_ids[i]) for i in selected_indices if i < len(packed_group_ids)
-        ]
-        packed_trs_aligned = [
-            packed_transforms[i]
-            for i in selected_indices
-            if i < len(packed_transforms)
-        ]
-        if len(packed_gids_aligned) != len(placed) or len(packed_trs_aligned) != len(placed):
-            packed_gids_aligned = None
-            packed_trs_aligned = None
-    if (
-        propose_cfg.use_cluster_copy
-        and packed_gids_aligned is not None
-        and packed_trs_aligned is not None
-    ):
-        cluster_patterns = extract_cluster_patterns(
-            placed,
-            packed_gids_aligned,
-            packed_trs_aligned,
-            min_dist=min_dist,
-            max_patterns=propose_cfg.cluster_copy_max_patterns,
-            min_members=propose_cfg.cluster_copy_min_members,
-            sheet=sheet,
-        )
+    densify_stats_patterns = len(cluster_patterns)
     out: dict[int, np.ndarray] = {}
     total_counts: dict[str, int] = {}
     pocket_emitted = 0
@@ -1997,22 +2587,6 @@ def proposed_transforms_for_groups(
     emitted_by_proposer: dict[str, int] = {}
     pool_by_proposer: dict[str, int] = {}
     pocket_by_tag: dict[str, int] = {}
-    void_thr = float(propose_cfg.late_border_void_override_ratio)
-    if void_thr <= 0.0:
-        void_thr = 2.5
-    free_snap = None
-    if placed:
-        # Mean catalog area for a stable board-level snapshot; Mode A still
-        # re-checks per part area against the same threshold.
-        mean_area = float(np.mean([float(p.area) for p, _ in parts])) if parts else 1.0
-        free_snap = build_free_space_snapshot(
-            sheet,
-            placed,
-            mean_area,
-            min_dist,
-            void_ratio_threshold=void_thr,
-            pack_geoms=full_packed_geoms,
-        )
     for part_idx, (part_poly, group_id) in enumerate(parts):
         zone: str | None = None
         zone_info = None
@@ -2079,6 +2653,8 @@ def proposed_transforms_for_groups(
                     )
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
+            if zone == "void_seek":
+                cfg = floor_void_seek_budgets(cfg)
             if (
                 zone == "border_gap"
                 and zone_info is not None
@@ -2365,184 +2941,66 @@ def proposed_transforms_for_groups(
         densify_count_floor = max(4, int(cfg.max_proposals) // 3)
         floor_ratio = float(getattr(propose_cfg, "densify_clearance_floor_ratio", 1.0))
         group_pocket_emitted = int(pocket_stats.get("emitted", 0))
-        # Mode A hijack already implies a large void — do not require free_ratio.
-        hijack_densify = (
-            bool(propose_cfg.densify_on_void_hijack)
-            and void_hijack_from is not None
-            and placed
-            and not border_only_propose
-            and (
-                group_pocket_emitted == 0
-                or arr.shape[0] < densify_count_floor
-            )
-        )
-        need_densify = hijack_densify or (
-            arr.shape[0] < densify_count_floor
-            and placed
-            and not border_only_propose
-            and free_ratio > 0.2
-            and zone in sterile_zones
-        )
-        if (
-            (not need_densify)
-            and floor_ratio > 0.0
-            and arr.shape[0] > 0
-            and placed
-            and not border_only_propose
-            and (
-                (zone in sterile_zones and free_ratio > 0.2)
-                or (
-                    void_hijack_from is not None
-                    and bool(propose_cfg.densify_on_void_hijack)
-                )
-            )
-        ):
-            from nest_graph.propose.ranking import _score_placement_clearance
-            densify_geom = ProposeGeometry(
-                board,
-                obstacle_shape,
-                part_poly,
-                min_dist,
-                epsilon_ratio=cfg.placement_clearance_epsilon_ratio,
-                propose_cfg=cfg,
-                full_packed_geoms=full_packed_geoms,
-            )
-            best_cl = max(
-                (
-                    _score_placement_clearance(tuple(r), densify_geom, push, cfg, min_dist)
-                    for r in arr
-                ),
-                default=float("-inf"),
-            )
-            if best_cl < float(min_dist) * floor_ratio:
-                need_densify = True
-        if need_densify:
-            densify_fired += 1
-            densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
-            densify_rank = "contact_hybrid" if propose_cfg.use_pocket_fit else "clearance"
-            densify_cfg = densify_cfg.model_copy(update={
-                "use_guidance_propositions": True,
-                "guidance_use_tight_packing": True,
-                "guidance_use_corner_alignment": True,
-                "guidance_enable_grid": False,
-                "cast_squeeze_top_k": max(4, int(densify_cfg.cast_squeeze_top_k)),
-                "use_neighbor_slide": False,
-                "use_ribbon_seeds": True,
-                "use_full_packed_obstacle": True,
-                "use_border_focus": False,
-                "border_focus_ranking": False,
-                "ranking_mode": densify_rank,
-                "use_contact_ranking": densify_rank == "contact_hybrid",
-                "use_contact_clearance_hybrid": densify_rank == "contact_hybrid",
-                "propose_cascade_short_circuit": bool(
-                    propose_cfg.propose_cascade_short_circuit
-                ),
-                "cascade_sniper_stop_n": int(propose_cfg.cascade_sniper_stop_n),
-                "cascade_explorer_budget_scale": float(
-                    propose_cfg.cascade_explorer_budget_scale
-                ),
-            })
-            densify_cfg = apply_proposer_pool_scales(
-                densify_cfg, propose_cfg.place_proposer_pool_scales,
-            )
-            densify_obs = obstacle_shape_for_propose(
-                placed,
-                part_poly,
-                min_dist,
-                propose_cfg=densify_cfg.model_copy(update={"obstacle_nearest_k": 6}),
+        arr, zone_label, fired, accepted, densify_reason, densify_telem = (
+            _void_seek_densify(
+                arr=arr,
+                zone=zone,
+                zone_label=zone_label,
+                board=board,
                 sheet=sheet,
-                ref_point=primary_target,
-            )
-            if densify_obs is None or densify_obs.is_empty:
-                densify_obs = simplify_obstacle_union(placed, min_dist)
-            densify_push = (
-                primary_target
-                if primary_target is not None
-                else propose_push_point(
-                    board,
-                    densify_obs,
-                    smart_push=True,
-                    min_dist=min_dist,
-                    use_border_focus=False,
-                )
-            )
-            densify_enabled = ProposeConfig.proposers_for_place("void_seek")
-            densify_counts: dict[str, int] = {}
-            densify_pocket: dict = {}
-            densify_keys: dict[str, set[tuple[float, float, float]]] = {}
-            densify_coords = propose_coords_with_strategy(
-                densify_obs,
-                part_poly,
-                board,
-                densify_cfg,
+                part_poly=part_poly,
+                placed=placed,
+                obstacle_shape=obstacle_shape,
+                propose_cfg=propose_cfg,
+                cfg=cfg,
                 min_dist=min_dist,
-                pt_push=densify_push,
-                focal_shape=densify_obs,
-                enabled_proposers=densify_enabled,
-                rules=rules,
-                group_id=group_id,
-                proposer_counts=densify_counts,
+                primary_target=primary_target,
+                void_hijack_from=void_hijack_from,
+                part_free_space=part_free_space,
                 full_packed_geoms=full_packed_geoms,
                 cluster_patterns=cluster_patterns,
-                placement_angles_override=angle_override,
-                guidance_seed_coords=corridor_guidance_seeds,
-                packed_polys=placed,
-                packed_group_ids=packed_gids_aligned,
-                packed_transforms=packed_trs_aligned,
-                pocket_stats_out=densify_pocket,
-                free_space=part_free_space,
-                guidance_reserve_only=poles_reserve_only,
-                void_pole=primary_target,
-                proposer_keys_out=densify_keys,
-                cascade_zone="void_seek",
-                cascade_stats_out=group_cascade,
-                diversity_stats_out=group_diversity,
+                angle_override=angle_override,
+                corridor_guidance_seeds=corridor_guidance_seeds,
+                packed_gids_aligned=packed_gids_aligned,
+                packed_trs_aligned=packed_trs_aligned,
+                poles_reserve_only=poles_reserve_only,
+                rules=rules,
+                group_id=group_id,
+                densify_count_floor=densify_count_floor,
+                floor_ratio=floor_ratio,
+                group_pocket_emitted=group_pocket_emitted,
+                free_ratio=free_ratio,
+                sterile_zones=sterile_zones,
+                border_only_propose=border_only_propose,
+                push=push,
             )
-            for name, n in densify_counts.items():
-                total_counts[name] = total_counts.get(name, 0) + n
-            for name, keys in densify_keys.items():
-                proposer_keys_agg.setdefault(name, set()).update(keys)
-            for name, n in (densify_pocket.get("emitted_by_proposer") or {}).items():
-                emitted_by_proposer[name] = emitted_by_proposer.get(name, 0) + int(n)
-            for name, n in (densify_pocket.get("pool_by_proposer") or {}).items():
-                pool_by_proposer[name] = pool_by_proposer.get(name, 0) + int(n)
-            for tag, n in (densify_pocket.get("by_tag") or {}).items():
-                pocket_by_tag[tag] = pocket_by_tag.get(tag, 0) + int(n)
-            pocket_emitted += int(densify_pocket.get("emitted", 0))
-            pocket_attempted += int(densify_pocket.get("attempted", 0))
-            pocket_accepted += int(densify_pocket.get("selected", 0))
-            for pk in densify_pocket.get("pocket_keys") or []:
-                pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
-            for sk in densify_pocket.get("pocket_skip") or []:
-                pocket_skips_all.append(str(sk))
-            densify_arr = propositions_to_ndarray(densify_coords)
-            yield_poly = None
-            if part_free_space is not None and part_free_space.analysis is not None:
-                yield_poly = part_free_space.analysis.target_poly
-            use_void_yield = (
-                bool(getattr(propose_cfg, "enable_void_yield_densify_accept", True))
-                and void_hijack_from is not None
-                and yield_poly is not None
-                and not yield_poly.is_empty
-            )
-            if use_void_yield:
-                old_iv = _count_transforms_in_void(arr, yield_poly, part_poly)
-                new_iv = _count_transforms_in_void(densify_arr, yield_poly, part_poly)
-                if new_iv > old_iv:
-                    densify_accepted += 1
-                    densify_reasons.append("void_yield_gain")
-                    arr = densify_arr[: densify_cfg.max_proposals]
-                    zone_label = f"{zone}→void_seek"
-                else:
-                    densify_reasons.append("void_yield_drop")
-            elif densify_arr.shape[0] > arr.shape[0]:
+        )
+        if fired:
+            densify_fired += 1
+            if accepted:
                 densify_accepted += 1
-                densify_reasons.append("count_gain")
-                arr = densify_arr[: densify_cfg.max_proposals]
-                zone_label = f"{zone}→void_seek"
-            else:
-                densify_reasons.append("count_drop")
-
+            if densify_reason is not None:
+                densify_reasons.append(densify_reason)
+            for name, n in densify_telem["total_counts"].items():
+                total_counts[name] = total_counts.get(name, 0) + int(n)
+            for name, keys in densify_telem["proposer_keys"].items():
+                proposer_keys_agg.setdefault(name, set()).update(keys)
+            for name, n in densify_telem["emitted_by_proposer"].items():
+                emitted_by_proposer[name] = max(
+                    int(emitted_by_proposer.get(name, 0)), int(n),
+                )
+            for name, n in densify_telem["pool_by_proposer"].items():
+                pool_by_proposer[name] = max(
+                    int(pool_by_proposer.get(name, 0)), int(n),
+                )
+            for tag, n in densify_telem["pocket_by_tag"].items():
+                pocket_by_tag[tag] = pocket_by_tag.get(tag, 0) + int(n)
+            pocket_emitted += int(densify_telem["pocket_emitted"])
+            pocket_attempted += int(densify_telem["pocket_attempted"])
+            pocket_accepted += int(densify_telem["pocket_accepted"])
+            for pk in densify_telem["pocket_keys"]:
+                pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
+            pocket_skips_all.extend(densify_telem["pocket_skips"])
         if (
             zones_used_out is not None
             and propose_cfg.place_profiles_enabled
@@ -2595,6 +3053,7 @@ def proposed_transforms_for_groups(
         densify_stats_out["conflict_penalty_applied"] = int(
             diversity_agg.get("conflict_penalty_applied", 0)
         )
+        densify_stats_out["cluster_patterns"] = int(densify_stats_patterns)
 
     # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
     if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:

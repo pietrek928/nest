@@ -1,4 +1,4 @@
-"""Thin post-pack pass runner for benches without the full demo render loop."""
+"""Thin post-pack pass runner for demo / benches / evaluator."""
 
 from typing import Sequence
 
@@ -6,7 +6,10 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.propose.cluster_repack import cluster_repack_selection
+from nest_graph.propose.cluster_repack import (
+    cluster_repack_selection,
+    cluster_relocate_selection,
+)
 from nest_graph.propose.compaction import compact_selection, selection_pairwise_independent
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.propose.selection_edit import SelectionEditCtx
@@ -27,11 +30,20 @@ def run_post_pack_passes(
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     board_adj_indices: Sequence[int] | None = None,
     allow_repack: bool = True,
+    allow_relocate: bool = True,
     allow_compaction: bool = False,
     allow_local_se2: bool = True,
+    void_poly=None,
+    pt_push: Point | None = None,
+    free_space=None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
-    """Run compact → cluster_repack → local_se2 gates using SelectionEditCtx."""
-    stats: dict = {"compaction": None, "repack": None, "local_se2": None}
+    """Run compact → cluster_repack → cluster_relocate → local_se2 (demo parity)."""
+    stats: dict = {
+        "compaction": None,
+        "repack": None,
+        "relocate": None,
+        "local_se2": None,
+    }
     sel = list(selected_indices)
     out_polys = list(polys)
     out_tr = list(transforms)
@@ -55,11 +67,32 @@ def run_post_pack_passes(
         ctx.transforms = out_tr
         stats["compaction"] = {"ok": selection_pairwise_independent(out_polys, sel)}
     if allow_repack and propose_cfg.enable_cluster_repack:
-        out_polys, out_tr, sel, repack_stats = cluster_repack_selection(ctx)
+        out_polys, out_tr, sel, repack_stats = cluster_repack_selection(
+            ctx,
+            void_poly=void_poly,
+            pt_push=pt_push if pt_push is not None else pole,
+            free_space=free_space,
+        )
         ctx.polys = out_polys
         ctx.transforms = out_tr
         ctx.selected_indices = sel
         stats["repack"] = repack_stats
+    if allow_relocate and getattr(propose_cfg, "enable_cluster_relocate", True):
+        out_polys, out_tr, reloc_stats = cluster_relocate_selection(
+            sheet,
+            out_polys,
+            out_tr,
+            group_ids,
+            sel,
+            part_by_group,
+            min_dist,
+            propose_cfg,
+            pole=pole,
+            fixed_obstacles=fixed_obstacles,
+        )
+        ctx.polys = out_polys
+        ctx.transforms = out_tr
+        stats["relocate"] = reloc_stats
     if allow_local_se2:
         out_polys, out_tr, se2_stats = local_se2_selection(ctx)
         stats["local_se2"] = se2_stats

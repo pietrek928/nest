@@ -26,8 +26,11 @@ from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placements_pattern import (
     ClusterPattern,
+    dedupe_anchors,
     free_pocket_anchors,
+    void_seek_motif_anchors,
 )
+from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
 from nest_graph.propose.pipeline import propose_coords_with_strategy
 from nest_graph.propose.ranking import score_placement_tightness
 from nest_graph.utils import compose_transforms, relative_transform, transform_poly
@@ -342,7 +345,13 @@ def stamp_motif_at_anchor(
     fixed: BaseGeometry,
     min_dist: float,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
-    """Strict multi-member clear stamp; returns [(idx, tr, poly), ...] or None."""
+    """Atomic peeled-motif stamp under Scene ``is_pose_clear``.
+
+    Assigns peeled indices to pattern members and accepts only when every
+    member clears. Returns ``[(idx, tr, poly), ...]`` or None. Propose emit
+    uses ``stamp_motif_leader_follower`` (packing clear, single-group
+    candidates); partial recovery here is ``pattern_fallback`` in the caller.
+    """
     mapping = assign_peeled_to_pattern(pat, peeled_indices, group_ids)
     if mapping is None:
         return None
@@ -391,44 +400,24 @@ def _motif_stamp_attempt(
         return None
 
     anchors: list[tuple[float, float, float]] = []
-    # Order: snap/topo poles → free_pocket → void pole → optional aligned pocket poses.
-    if propose_cfg.motif_use_topo_anchors:
-        if free_space is not None and getattr(free_space, "topology_poles", None):
-            anchors.extend(list(free_space.topology_poles))
-        else:
-            from nest_graph.propose.void_topology import topology_pocket_poles
-            packed = []
-            if hasattr(kept_union, "geoms"):
-                packed = [g for g in kept_union.geoms if g is not None and not g.is_empty]
-            elif kept_union is not None and not kept_union.is_empty:
-                packed = [kept_union]
-            if packed:
-                anchors.extend(
-                    topology_pocket_poles(
-                        sheet,
-                        packed,
-                        min_dist=min_dist,
-                        max_anchors=int(propose_cfg.cluster_copy_anchor_seeds),
-                    )
-                )
+    # Unified void_seek anchor priority (§4) — topology/pole → pocket → (mirror via patterns).
     anchors.extend(
-        free_pocket_anchors(
+        void_seek_motif_anchors(
             sheet,
             kept_union,
-            min_dist,
-            int(propose_cfg.cluster_copy_anchor_seeds),
+            min_dist=min_dist,
+            propose_cfg=propose_cfg,
+            free_space=free_space,
+            void_pole=pole,
+            patterns=fitting,
         )
     )
-    if pole is not None and not pole.is_empty:
-        anchors.extend(void_pole_seed_coords(pole, num_angles=4))
     if (
         propose_cfg.motif_use_topo_anchors
         and void_poly is not None
         and not void_poly.is_empty
         and fitting
     ):
-        from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
-        # Use largest peeled part for pocket-align SE(2) seeds.
         largest_gid = max(
             (int(group_ids[i]) for i in peeled),
             key=lambda g: float(part_by_group[g].area) if g in part_by_group else 0.0,
@@ -440,14 +429,7 @@ def _motif_stamp_attempt(
             ):
                 anchors.append(coords)
 
-    seen: set[tuple[float, float, float]] = set()
-    unique_anchors: list[tuple[float, float, float]] = []
-    for a in anchors:
-        key = (round(a[0], 2), round(a[1], 2), round(a[2], 2))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_anchors.append(a)
+    unique_anchors = dedupe_anchors(anchors)
 
     for pat in fitting:
         for anchor in unique_anchors:
@@ -658,6 +640,7 @@ def cluster_repack_selection(
                 packed_group_ids=packed_gids[: len(packed_polys)],
                 packed_transforms=packed_trs[: len(packed_polys)],
                 full_packed_geoms=packed_polys,
+                cascade_zone=zone,
             )
         except Exception:
             coords = []

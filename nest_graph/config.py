@@ -1,7 +1,7 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Sequence
 
 import numpy as np
 from pydantic import BaseModel, Field
@@ -233,6 +233,20 @@ class OutputConfig(BaseModel):
     progress: bool = True
 
 
+
+def floor_void_seek_budgets(cfg: "ProposeConfig") -> "ProposeConfig":
+    """Ensure void_seek propose budgets are not lean-/scale-capped below root."""
+    pool_floor, prop_floor = ProposeConfig.void_seek_budget_floors()
+    pool = max(int(cfg.candidate_pool), pool_floor)
+    props = max(int(cfg.max_proposals), prop_floor)
+    if pool == int(cfg.candidate_pool) and props == int(cfg.max_proposals):
+        return cfg
+    return cfg.model_copy(update={
+        "candidate_pool": pool,
+        "max_proposals": props,
+    })
+
+
 class ProposeConfig(BaseModel):
     """Perimeter walk + erosion + raycast + voronoi; ranked to max_proposals. See docs/first_pass_tuning.md."""
     max_proposals: int = 40
@@ -349,6 +363,10 @@ class ProposeConfig(BaseModel):
     local_se2_max_fine_steps: int = 24
     use_board_edge_seeds: bool = True
     board_edge_samples_per_edge: int = 24
+    use_side_pack: bool = True
+    """Anti-crowd sheet-side snap (XOR board_edge when packed; XOR group_fit under void)."""
+    side_pack_top_n: int = 32
+    side_pack_samples_per_edge: int = 16
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
     """Tight (x,y) and modest angle jitter for outline snap seeds only."""
     board_edge_guidance_refine: bool = True
@@ -404,6 +422,25 @@ class ProposeConfig(BaseModel):
     """Fire densify after Mode A void_seek hijack when pocket/pool is sterile."""
     enable_void_yield_densify_accept: bool = True
     """Under void hijack: accept densify when in-void transform count rises (not raw pool size)."""
+    enable_void_pole_clear_densify: bool = True
+    """Under void hijack when iv==0 both sides: accept densify if pole_near count rises."""
+    void_pole_near_diag_ratio: float = 0.25
+    """pole_near radius = ratio * sheet_diag (shared with void_leak props_pole radius;
+    densify measures placed centroid, props_pole measures transform xy)."""
+    use_free_space_cloud: bool = True
+    """Sterile VOID_SEEK fallback: Halton xy in void bbox filtered by void_poly.contains."""
+    free_space_cloud_samples: int = 64
+    """Max Halton xy samples before angle expand / trim."""
+    free_space_cloud_angles: int = 8
+    """Discrete angle grains for free_space_cloud."""
+    enable_void_elite_archive: bool = True
+    """Persist refine-rejected void transforms as next-iter stratified niche seeds."""
+    keep_history_on_void_sterile: bool = True
+    """Under void/sat hijack, do not sterile-drop history/window when props=0."""
+    stratified_void_elite_quota: int = 15
+    """Max void-elite rows reserved inside max_transforms_per_group."""
+    stratified_history_quota: int = 15
+    """Max history/window elite rows reserved inside max_transforms_per_group."""
     unified_void_reserve: bool = True
     """Share reserve budget across poles ⊕ pocket ⊕ motif cluster_copy."""
     poles_reserve_only_on_hijack: bool = True
@@ -497,6 +534,11 @@ class ProposeConfig(BaseModel):
             return False, 3
         return False, 3
 
+    @staticmethod
+    def void_seek_budget_floors() -> tuple[int, int]:
+        """Minimum (candidate_pool, max_proposals) under void_seek / densify."""
+        return 64, 40
+
     @classmethod
     def for_place(
         cls,
@@ -521,6 +563,7 @@ class ProposeConfig(BaseModel):
                 "obstacle_nearest_k": 4,
                 "cast_squeeze_top_k": 12,
                 "use_board_edge_seeds": True,
+                "use_side_pack": True,
                 "use_neighbor_slide": True,
                 "board_edge_guidance_refine": False,
                 "board_edge_samples_per_edge": 12,
@@ -553,6 +596,8 @@ class ProposeConfig(BaseModel):
                 "obstacle_nearest_k": 3,
                 "contact_clearance_hybrid_weight": 0.1,
                 "contact_tightness_hybrid_weight": 0.25,
+                "use_side_pack": True,
+                "use_group_edge_seeds": True,
             },
             PlaceZone.INTER_CLUSTER.value: {
                 "ranking_mode": "clearance",
@@ -569,11 +614,12 @@ class ProposeConfig(BaseModel):
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
                 "use_full_packed_obstacle": True,
-                "use_group_edge_seeds": True,
+                "use_group_edge_seeds": False,
+                "use_side_pack": True,
                 "use_neighbor_slide": False,
                 "cast_squeeze_top_k": 4,
-                "candidate_pool": 24,
-                "max_proposals": 16,
+                "candidate_pool": 64,
+                "max_proposals": 40,
                 "raycast_num_rays": 8,
                 "use_voronoi": False,
                 "use_point_cloud": False,
@@ -595,7 +641,10 @@ class ProposeConfig(BaseModel):
                 if key in root and root[key] is False and val is True:
                     del patch[key]
         root.update(patch)
-        return cls(**root)
+        cfg = cls(**root)
+        if zone == PlaceZone.VOID_SEEK.value:
+            cfg = floor_void_seek_budgets(cfg)
+        return cfg
 
     def with_complexity_lean(
         self,
@@ -620,6 +669,8 @@ class ProposeConfig(BaseModel):
             return self
         data = self.model_dump()
         data["use_batch_pack"] = False
+        # Lean shrinks non-void zones; void_seek budgets are restored in for_place
+        # via profile + floor_void_seek_budgets (do not rely on this base staying large).
         data["candidate_pool"] = min(int(data["candidate_pool"]), 24)
         data["max_proposals"] = min(int(data["max_proposals"]), 16)
         data["raycast_num_rays"] = min(int(data["raycast_num_rays"]), 8)
@@ -941,6 +992,102 @@ def subsample_transforms_with_pinned(
         return dedupe_transforms(np.concatenate([pinned, rest], axis=0))
     idx = rng.choice(rest.shape[0], size=cap_rest, replace=False)
     return dedupe_transforms(np.concatenate([pinned, rest[idx]], axis=0))
+
+
+def _transform_row_key4(row: np.ndarray | Sequence[float]) -> tuple[float, float, float]:
+    return (round(float(row[0]), 4), round(float(row[1]), 4), round(float(row[2]), 4))
+
+
+def _take_niche(
+    rows: np.ndarray,
+    quota: int,
+    claimed: set[tuple[float, float, float]],
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    if quota <= 0 or rows is None or getattr(rows, "shape", (0,))[0] == 0:
+        return []
+    picked: list[np.ndarray] = []
+    order = np.arange(rows.shape[0])
+    rng.shuffle(order)
+    for i in order:
+        row = rows[int(i)]
+        key = _transform_row_key4(row)
+        if key in claimed:
+            continue
+        claimed.add(key)
+        picked.append(row)
+        if len(picked) >= quota:
+            break
+    return picked
+
+
+def subsample_transforms_stratified(
+    *,
+    selection: np.ndarray,
+    proposals: np.ndarray,
+    void_elite: np.ndarray,
+    history: np.ndarray,
+    expand_rest: np.ndarray,
+    max_n: Optional[int],
+    rng: np.random.Generator,
+    n_props: int | None = None,
+    n_void_elite: int | None = None,
+    n_hist: int | None = None,
+) -> np.ndarray:
+    """Strict niche quotas; expand/random fills the remainder only.
+
+    Order in the returned array: selection → proposals → void_elite → history → rest.
+    """
+    empty = np.zeros((0, 3), dtype=np.float64)
+    selection = selection if selection is not None else empty
+    proposals = proposals if proposals is not None else empty
+    void_elite = void_elite if void_elite is not None else empty
+    history = history if history is not None else empty
+    expand_rest = expand_rest if expand_rest is not None else empty
+
+    if max_n is None:
+        return dedupe_transforms(
+            np.concatenate(
+                [selection, proposals, void_elite, history, expand_rest], axis=0,
+            )
+        )
+    max_n = int(max_n)
+    if max_n <= 0:
+        return empty
+
+    # Default niche sizes scale with cap; props/void/hist stay bounded.
+    prop_q = int(n_props) if n_props is not None else min(40, max(8, max_n // 16))
+    void_q = int(n_void_elite) if n_void_elite is not None else 15
+    hist_q = int(n_hist) if n_hist is not None else 15
+
+    claimed: set[tuple[float, float, float]] = set()
+    out_rows: list[np.ndarray] = []
+
+    # Selection: keep all that fit (priority).
+    sel_q = max_n
+    out_rows.extend(_take_niche(selection, sel_q, claimed, rng))
+    remain = max_n - len(out_rows)
+    if remain <= 0:
+        return np.asarray(out_rows[:max_n], dtype=np.float64)
+
+    out_rows.extend(_take_niche(proposals, min(prop_q, remain), claimed, rng))
+    remain = max_n - len(out_rows)
+    if remain <= 0:
+        return np.asarray(out_rows[:max_n], dtype=np.float64)
+
+    out_rows.extend(_take_niche(void_elite, min(void_q, remain), claimed, rng))
+    remain = max_n - len(out_rows)
+    if remain <= 0:
+        return np.asarray(out_rows[:max_n], dtype=np.float64)
+
+    out_rows.extend(_take_niche(history, min(hist_q, remain), claimed, rng))
+    remain = max_n - len(out_rows)
+    if remain > 0:
+        out_rows.extend(_take_niche(expand_rest, remain, claimed, rng))
+
+    if not out_rows:
+        return empty
+    return np.asarray(out_rows[:max_n], dtype=np.float64)
 
 
 def expand_structured_transforms(

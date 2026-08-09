@@ -18,6 +18,7 @@ from .config import (
     expand_structured_transforms,
     score_rules_options,
     shuffle_transforms,
+    subsample_transforms_stratified,
     subsample_transforms_with_pinned,
     trim_history,
 )
@@ -45,8 +46,14 @@ from .propose import (
     proposed_transforms_for_groups,
     border_edge_transforms_for_group,
 )
-from .propose.pipeline import collect_propose_batch_for_nest
+from .propose.pipeline import allow_void_repack, collect_propose_batch_for_nest
 from .propose.post_pack import run_post_pack_passes
+from .propose.placements_selection_expand import (
+    history_expand_arrays,
+    selection_expand_arrays,
+    transforms_around as _transforms_around_impl,
+)
+from .propose.void_topology import iterative_multi_poles
 from .propose.compaction import (
     compact_selection,
     selection_pairwise_independent,
@@ -95,6 +102,7 @@ from .propose.void_selection import (  # noqa: F401
     proposer_key_owner as _proposer_key_owner,
     transform_row_key as _transform_row_key,
     void_attractor_radius as _void_attractor_radius,
+    void_pole_near_radius as _void_pole_near_radius,
     xy_in_free as _xy_in_free,
     zones_have_void_hijack as _zones_have_void_hijack,
 )
@@ -502,10 +510,7 @@ def transforms_around(
     n: int,
     rng: np.random.Generator,
 ) -> np.ndarray:
-    from nest_graph.propose.placements_selection_expand import (
-        transforms_around as _transforms_around,
-    )
-    return _transforms_around(p, s, n, rng)
+    return _transforms_around_impl(p, s, n, rng)
 
 
 def transform_shuffle_mix(
@@ -1209,6 +1214,61 @@ def _first_pass_layered_selection(
     )
 
 
+def void_elite_tuple_from_archive(
+    archive: dict[int, list[np.ndarray]] | None,
+    ngroups: int,
+) -> tuple[np.ndarray, ...]:
+    """Build per-group void-elite arrays for ``_build_transform_batch``."""
+    out: list[np.ndarray] = []
+    for g in range(max(int(ngroups), 0)):
+        rows = (archive or {}).get(g) or []
+        if rows:
+            out.append(np.asarray(rows, dtype=np.float64).reshape(-1, 3))
+        else:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+    return tuple(out)
+
+
+def archive_void_elite_transforms(
+    *,
+    selected_nest: Sequence[int],
+    selected_refine: Sequence[int],
+    polys: Sequence,
+    transforms: Sequence,
+    group_ids: Sequence[int],
+    free_poly,
+    scores: Sequence[float] | None,
+    max_keep: int = 32,
+    enabled: bool = True,
+) -> dict[int, list[np.ndarray]]:
+    """Top-scoring nest-void losers (missing from refine) → next-iter elite seeds."""
+    if not enabled or free_poly is None or getattr(free_poly, "is_empty", True):
+        return {}
+    refine_set = set(int(i) for i in selected_refine)
+    scored: list[tuple[float, int]] = []
+    for v in selected_nest:
+        vi = int(v)
+        if vi in refine_set:
+            continue
+        if not _centroid_in_free(polys[vi], free_poly):
+            continue
+        sc_v = float(scores[vi]) if scores is not None and vi < len(scores) else 0.0
+        scored.append((sc_v, vi))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    next_elite: dict[int, list[np.ndarray]] = {}
+    for _sc, v in scored[: max(int(max_keep), 0)]:
+        gid = int(group_ids[v]) if v < len(group_ids) else 0
+        row = np.asarray(transforms[v], dtype=np.float64).reshape(3)
+        next_elite.setdefault(gid, []).append(row)
+    return next_elite
+
+
+def void_elite_count(archive: dict[int, list[np.ndarray]] | None) -> int:
+    if not archive:
+        return 0
+    return sum(len(v) for v in archive.values())
+
+
 def _project_angles_to_allowed(
     transforms: np.ndarray,
     allowed: Sequence[float],
@@ -1246,6 +1306,8 @@ def _build_transform_batch(
     propose_stats_out: dict | None = None,
     propose_feedback=None,
     group_allowed_angles: Sequence[tuple[float, ...] | None] | tuple = (),
+    void_elite_t: tuple[np.ndarray, ...] | None = None,
+    keep_history_on_sterile: bool = False,
 ) -> tuple[np.ndarray, ...]:
     sc = cfg.sampling
     scale = sc.transform_scale
@@ -1363,7 +1425,7 @@ def _build_transform_batch(
         selection_window, ngroups=max(len(selected_t), 2),
     )
 
-    def one_group(
+    def _mix_group_transform_batch(
         group_id: int,
         sel: np.ndarray,
         hist: np.ndarray,
@@ -1392,7 +1454,7 @@ def _build_transform_batch(
             if proposed.shape[0] > 0:
                 batch_parts.append(proposed)
         elif proposed.shape[0] > 0:
-            batch_parts.append(proposed)
+            # Proposed rows go into the stratified proposals niche; only jitter here.
             if pinned.shape[0] == 0:
                 jitter_n = (
                     sc.structured_jitter_per_proposal_empty
@@ -1415,6 +1477,9 @@ def _build_transform_batch(
                 else sc.random_per_iter
             )
         )
+        allowed = None
+        if group_allowed_angles and group_id < len(group_allowed_angles):
+            allowed = group_allowed_angles[group_id]
         # When proposers are sterile on a packed sheet, avoid flooding the graph with
         # colliding history/jitter that only inflate score_rules cost.
         sterile_pack = (
@@ -1422,64 +1487,98 @@ def _build_transform_batch(
             and proposed.shape[0] == 0
             and not border_batch
         )
+        expand_n = sc.selection_expand_n
         if sterile_pack:
-            # Keep exploring near the current selection; drop stale history/shuffles.
+            expand_n = max(1, expand_n // 2)
+        elif not empty_sheet:
+            # Collect already emits selection_expand; keep mixer expand thin.
+            expand_n = max(1, expand_n // 2)
+        elite = (
+            void_elite_t[group_id]
+            if void_elite_t is not None and group_id < len(void_elite_t)
+            else np.zeros((0, 3))
+        )
+        expand_parts: list[np.ndarray] = []
+        hist_niche = np.zeros((0, 3), dtype=np.float64)
+        keep_hist = (not sterile_pack) or keep_history_on_sterile
+        if sterile_pack and not keep_hist:
             n_random = min(max(sc.random_per_iter_when_proposed, 32), 64)
-            batch_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
+            expand_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
             if sel.shape[0] > 0:
-                batch_parts.append(sel)
-                batch_parts.extend(
-                    transform_selection(sel, max(sc.selection_expand_n, 2), rng),
-                )
+                expand_parts.extend(transform_selection(sel, max(expand_n, 1), rng))
         else:
-            batch_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
+            expand_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
             if hist.shape[0] > 0:
-                batch_parts.append(hist)
+                hist_niche = hist
             if sel.shape[0] > 0:
-                batch_parts.append(sel)
-                batch_parts.extend(transform_selection(sel, sc.selection_expand_n, rng))
-                batch_parts.extend(transform_history(hist, sc.history_expand_n, rng))
+                expand_parts.extend(transform_selection(sel, expand_n, rng))
+                if hist.shape[0] > 0:
+                    expand_parts.extend(transform_history(hist, sc.history_expand_n, rng))
             if window.shape[0] > 0:
-                batch_parts.append(window)
-                batch_parts.extend(transform_selection(window, sc.selection_expand_n, rng))
+                # Window elites fold into history niche; light expand into remainder.
+                if hist_niche.shape[0] == 0:
+                    hist_niche = window
+                else:
+                    hist_niche = np.concatenate([hist_niche, window], axis=0)
+                expand_parts.extend(transform_selection(window, expand_n, rng))
             if sc.shuffle_passes > 0 and (
                 sel.shape[0] > 0 or hist.shape[0] > 0 or window.shape[0] > 0
             ):
                 for _ in range(sc.shuffle_passes):
-                    batch_parts.append(
+                    expand_parts.append(
                         transform_shuffle_mix(
                             sel, hist, sc.shuffle_per_pass, rng, sc.shuffle_scale,
                         )
                     )
-        merged = dedupe_transforms(np.concatenate(batch_parts))
-        merged = shuffle_transforms(merged, rng)
-        allowed = None
-        if group_allowed_angles and group_id < len(group_allowed_angles):
-            allowed = group_allowed_angles[group_id]
+        if expand_parts:
+            expand_rest = dedupe_transforms(np.concatenate(expand_parts))
+        else:
+            expand_rest = np.zeros((0, 3), dtype=np.float64)
+        # Structured jitter / border pins from earlier batch_parts → expand remainder.
+        if batch_parts:
+            extra = dedupe_transforms(np.concatenate(batch_parts))
+            expand_rest = (
+                dedupe_transforms(np.concatenate([expand_rest, extra]))
+                if expand_rest.shape[0]
+                else extra
+            )
+        pin_budget = min(proposed.shape[0], max(cfg.propose.max_proposals, 1))
+        proposal_pins = proposed[:pin_budget] if pin_budget > 0 else np.zeros((0, 3))
+        if pinned.shape[0] > 0:
+            proposal_pins = (
+                dedupe_transforms(np.concatenate([pinned, proposal_pins], axis=0))
+                if proposal_pins.shape[0]
+                else pinned
+            )
+        if allowed is not None and proposal_pins.shape[0] > 0:
+            proposal_pins = dedupe_transforms(
+                _project_angles_to_allowed(proposal_pins, allowed)
+            )
+        elite_q = int(getattr(cfg.propose, "stratified_void_elite_quota", 15))
+        hist_q = int(getattr(cfg.propose, "stratified_history_quota", 15))
+        merged = subsample_transforms_stratified(
+            selection=sel,
+            proposals=proposal_pins,
+            void_elite=elite,
+            history=hist_niche,
+            expand_rest=expand_rest,
+            max_n=sc.max_transforms_per_group,
+            rng=rng,
+            n_props=max(cfg.propose.max_proposals, 1),
+            n_void_elite=elite_q,
+            n_hist=hist_q,
+        )
         if allowed is not None and merged.shape[0] > 0:
             merged = _project_angles_to_allowed(merged, allowed)
             merged = dedupe_transforms(merged)
-        pin_budget = min(proposed.shape[0], max(cfg.propose.max_proposals, 1))
-        proposal_pins = proposed[:pin_budget] if pin_budget > 0 else np.zeros((0, 3))
-        if pinned.shape[0] > 0 or proposal_pins.shape[0] > 0:
-            all_pinned = dedupe_transforms(
-                np.concatenate([pinned, proposal_pins], axis=0)
-            )
-            if allowed is not None and all_pinned.shape[0] > 0:
-                all_pinned = _project_angles_to_allowed(all_pinned, allowed)
-                all_pinned = dedupe_transforms(all_pinned)
-        else:
-            all_pinned = pinned
-        return subsample_transforms_with_pinned(
-            merged, all_pinned, sc.max_transforms_per_group, rng,
-        )
+        return merged
 
     out = []
     for i in range(len(selected_t)):
         sel = selected_t[i] if i < len(selected_t) else np.zeros((0, 3))
         hist = history[i] if i < len(history) else np.zeros((0, 3))
         win = window_t[i] if i < len(window_t) else np.zeros((0, 3))
-        out.append(one_group(i, sel, hist, win))
+        out.append(_mix_group_transform_batch(i, sel, hist, win))
     return tuple(out)
 
 
@@ -1758,6 +1857,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     nest_state: NestState | None = None
     propose_feedback = ProposeFeedbackState()
     had_void_override = False
+    void_elite_by_group: dict[int, list[np.ndarray]] = {0: [], 1: []}
     board_area = p_sheet.area
     part_areas = (p1.area, p2.area)
     iters = tuple(range(out.n_iters))
@@ -1783,6 +1883,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             "sat_override": sat_info.sat_override,
             "rim_progress": sat_info.rim_progress,
         }
+        keep_hist_sterile = bool(
+            (sat_info.sat_override or had_void_override)
+            and bool(getattr(cfg.propose, "keep_history_on_void_sterile", True))
+        )
+        ngroups = max(len(parts) if parts else len(selected_t), 2)
+        void_elite_t = void_elite_tuple_from_archive(void_elite_by_group, ngroups)
+        elite_n = void_elite_count(void_elite_by_group)
+        propose_stats["void_elite_seeded"] = elite_n
+        propose_stats["keep_history_on_sterile"] = keep_hist_sterile
         selected_t = _build_transform_batch(
             cfg,
             selected_t,
@@ -1798,6 +1907,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             proposer_counts_out=proposer_counts,
             propose_stats_out=propose_stats,
             propose_feedback=propose_feedback,
+            void_elite_t=void_elite_t,
+            keep_history_on_sterile=keep_hist_sterile,
         )
         first_pass = nest_state is None
         graph, polys, group_id, transform = make_polygon_graph(
@@ -2022,6 +2133,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     "pin_blocked_collision": 0,
                     "pin_ms": 0.0,
                 }
+            # Archive refine-rejected / pin-blocked void transforms for next-iter seeds.
+            void_elite_by_group = archive_void_elite_transforms(
+                selected_nest=selected_nest,
+                selected_refine=selected_polys,
+                polys=polys,
+                transforms=transform,
+                group_ids=group_id,
+                free_poly=free_poly,
+                scores=refine_scores,
+                max_keep=int(getattr(cfg.propose, "stratified_void_elite_quota", 15)),
+                enabled=bool(getattr(cfg.propose, "enable_void_elite_archive", True)),
+            )
             n_void_refine = _count_selected_in_free(
                 polys, selected_polys, free_poly,
             )
@@ -2031,7 +2154,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             ] if proposed_map else None
             n_void_props = _count_props_in_free(proposed_list, free_poly)
             n_void_graph = _count_graph_in_free(polys, free_poly)
-            pole_radius_metric = 0.25 * sheet_diag if sheet_diag > 0.0 else 0.0
+            pole_radius_metric = _void_pole_near_radius(
+                sheet_diag,
+                float(getattr(cfg.propose, "void_pole_near_diag_ratio", 0.25) or 0.25),
+            )
             n_props_pole = _count_props_near_pole(
                 proposed_list, free_info.target_pt, pole_radius_metric,
             )
@@ -2039,6 +2165,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             hijack = int(_zones_have_void_hijack(zones))
             outline_cov = float(propose_stats.get("outline_cov", 0.0))
             sat_override = int(bool(propose_stats.get("sat_override", False)))
+            if hijack or sat_override:
+                had_void_override = True
             rim_progress = float(propose_stats.get("rim_progress", 0.0))
             zone_snip = ",".join(str(z) for z in zones[:4])
             pf_em = int(proposer_counts.get("_pocket_fit_emitted", 0) or proposer_counts.get("pocket_fit", 0))
@@ -2064,6 +2192,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             refine_bp = _count_selected_by_proposer(transform, selected_polys, proposer_keys)
             prop_accept = _format_prop_accept(emitted_bp, pool_bp, nest_bp, refine_bp)
             pocket_by_tag = dict(propose_stats.get("pocket_by_tag") or densify.get("pocket_by_tag") or {})
+            elite_seeded = int(propose_stats.get("void_elite_seeded", 0))
+            elite_next = void_elite_count(void_elite_by_group)
+            cc_e = int(emitted_bp.get("cluster_copy", 0))
+            cc_p = int(pool_bp.get("cluster_copy", 0))
+            sp_e = int(emitted_bp.get("side_pack", 0))
+            sp_p = int(pool_bp.get("side_pack", 0))
+            fsc_e = int(emitted_bp.get("free_space_cloud", 0))
+            fsc_p = int(pool_bp.get("free_space_cloud", 0))
+            n_patterns = int(densify.get("cluster_patterns", 0))
             void_leak = (
                 f"void_leak free={free_info.kind} ratio={free_info.max_void_ratio:.1f} "
                 f"props={n_void_props} props_pole={n_props_pole} hijack={hijack} "
@@ -2079,6 +2216,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"{pin_stats.get('pin_candidates', 0)}"
                 f"(block={pin_stats.get('pin_blocked_collision', 0)},"
                 f"{pin_stats.get('pin_ms', 0.0):.1f}ms) "
+                f"elite={elite_seeded}->{elite_next} "
+                f"cluster_copy={cc_e}/{cc_p} patterns={n_patterns} "
+                f"side_pack={sp_e}/{sp_p} cloud={fsc_e}/{fsc_p} "
                 f"densify={densify_a}/{densify_f}"
                 f"{f' reason={densify_reason}' if densify_reason else ''}"
                 f"{f' pocket_skip=[{skip_snip}]' if skip_snip else ''}"
@@ -2133,6 +2273,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     densify.get("conflict_penalty_applied", 0)
                 ),
                 "multi_pole_count": int(densify.get("multi_pole_count", 0) or 0),
+                "void_elite_seeded": elite_seeded,
+                "void_elite_archived": elite_next,
+                "cluster_copy_emitted": cc_e,
+                "cluster_copy_pool": cc_p,
+                "side_pack_emitted": sp_e,
+                "side_pack_pool": sp_p,
+                "free_space_cloud_emitted": fsc_e,
+                "free_space_cloud_pool": fsc_p,
+                "cluster_patterns": n_patterns,
+                "keep_history_on_sterile": bool(
+                    propose_stats.get("keep_history_on_sterile", False)
+                ),
             }
             print(void_leak)
         # EMA pool scales from refine survival (next iter).
@@ -2180,31 +2332,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         seed_n = nest_state.seed_count if nest_state is not None else 0
         fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
         relocate_accepted = False
-        if (
-            cfg.propose.enable_gravity_compaction
-            and len(selected_polys) >= 2
-        ):
-            polys, transform = compact_selection(
-                sheet_compact,
-                list(polys),
-                list(transform),
-                group_id,
-                selected_polys,
-                part_by_group,
-                min_dist,
-                fixed_obstacles=fixed_obs,
-                gravity=(
-                    free_info.target_pt
-                    if (
-                        free_info is not None
-                        and free_info.kind == "large_void"
-                        and free_info.target_pt is not None
-                    )
-                    else None
-                ),
-            )
-            assert selection_pairwise_independent(polys, selected_polys)
-        # Post-DFS pack relocate when mid-pack free is still a large void.
+        # Post-DFS pack when mid-pack free is still a large void.
         sel_geoms = [
             polys[i] for i in selected_polys
             if polys[i] is not None and not polys[i].is_empty
@@ -2222,10 +2350,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         )
         free_post = free_snap_post.analysis
         void_leak_stats = propose_stats.get("void_leak") if propose_stats else None
-        # S5: when void_leak exists, require refine>0 so peel is not wasted on strip.
         allow_repack = True
         if isinstance(void_leak_stats, dict):
-            allow_repack = int(void_leak_stats.get("refine", 0)) > 0
+            allow_repack = allow_void_repack(
+                free_kind=void_leak_stats.get("free_kind")
+                or (free_info.kind if free_info is not None else None),
+                n_void_nest=int(void_leak_stats.get("nest", 0)),
+                n_void_refine=int(void_leak_stats.get("refine", 0)),
+            )
+        elif free_info is not None:
+            allow_repack = allow_void_repack(
+                free_kind=free_info.kind,
+                n_void_nest=0,
+                n_void_refine=0,
+            )
         if free_post.kind == "large_void" and free_post.target_pt is not None:
             push_pt = free_post.target_pt
             reloc_poles: list = [free_post.target_pt]
@@ -2234,46 +2372,60 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 and free_post.target_poly is not None
                 and not free_post.target_poly.is_empty
             ):
-                from nest_graph.propose.void_topology import iterative_multi_poles
-                from shapely import Point as ShapelyPoint
-
                 xy_poles = iterative_multi_poles(
                     free_post.target_poly,
                     min_dist=min_dist,
                     max_poles=int(cfg.propose.multi_pole_max_poles),
                 )
                 if xy_poles:
-                    reloc_poles = [ShapelyPoint(x, y) for x, y in xy_poles]
+                    reloc_poles = [Point(x, y) for x, y in xy_poles]
                     push_pt = reloc_poles[0]
             void_leak_prev = propose_stats.get("void_leak")
             if isinstance(void_leak_prev, dict):
                 void_leak_prev["multi_pole_count"] = len(reloc_poles)
-            if allow_repack:
-                polys, transform, selected_polys, repack_stats = cluster_repack_selection(
-                    sheet_compact,
-                    list(polys),
-                    list(transform),
-                    group_id,
-                    selected_polys,
-                    part_by_group,
-                    min_dist,
-                    cfg.propose,
-                    pole=push_pt,
-                    void_poly=free_post.target_poly,
-                    fixed_obstacles=fixed_obs,
-                    pt_push=push_pt,
-                    free_space=free_snap_post,
+            gravity_pt = (
+                free_info.target_pt
+                if (
+                    free_info is not None
+                    and free_info.kind == "large_void"
+                    and free_info.target_pt is not None
                 )
-            else:
-                repack_stats = {
-                    "attempted": 0,
-                    "accepted": 0,
-                    "motif_accepted": 0,
-                    "skipped_refine_zero": 1,
-                }
-            # Refresh void pole after an accepted motif stamp (selection moved).
-            reloc_pole = push_pt
-            if int(repack_stats.get("accepted", 0)) > 0:
+                else None
+            )
+            polys, transform, selected_polys, pack_stats = run_post_pack_passes(
+                sheet_compact,
+                list(polys),
+                list(transform),
+                group_id,
+                selected_polys,
+                part_by_group,
+                min_dist,
+                cfg.propose,
+                pole=push_pt,
+                gravity=gravity_pt,
+                fixed_obstacles=fixed_obs,
+                allow_repack=allow_repack,
+                allow_relocate=True,
+                allow_compaction=bool(cfg.propose.enable_gravity_compaction),
+                allow_local_se2=True,
+                void_poly=free_post.target_poly,
+                pt_push=push_pt,
+                free_space=free_snap_post,
+            )
+            repack_stats = pack_stats.get("repack") or {
+                "attempted": 0,
+                "accepted": 0,
+                "motif_accepted": 0,
+                "skipped_refine_zero": int(not allow_repack),
+            }
+            reloc_stats = pack_stats.get("relocate") or {
+                "attempted": 0, "accepted": 0, "moved": 0,
+            }
+            se2_stats = pack_stats.get("local_se2") or {
+                "attempted": 0, "moved": 0, "tangent_moves": 0,
+            }
+            # Refresh void pole after accepted motif; alternate spine if needed.
+            if int(repack_stats.get("accepted", 0)) > 0 and len(reloc_poles) > 1:
                 sel_geoms = [
                     polys[i] for i in selected_polys
                     if polys[i] is not None and not polys[i].is_empty
@@ -2285,37 +2437,26 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     min_dist,
                     void_ratio_threshold=void_thr_post,
                 )
-                if free_snap_post.analysis.target_pt is not None:
-                    reloc_pole = free_snap_post.analysis.target_pt
-                elif len(reloc_poles) > 1:
-                    reloc_pole = reloc_poles[min(1, len(reloc_poles) - 1)]
-            elif len(reloc_poles) > 1:
-                # Alternate spine poles when repack skipped.
-                reloc_pole = reloc_poles[min(1, len(reloc_poles) - 1)]
-            polys, transform, reloc_stats = cluster_relocate_selection(
-                sheet_compact,
-                list(polys),
-                list(transform),
-                group_id,
-                selected_polys,
-                part_by_group,
-                min_dist,
-                cfg.propose,
-                pole=reloc_pole,
-                fixed_obstacles=fixed_obs,
-            )
-            polys, transform, se2_stats = local_se2_selection(
-                sheet_compact,
-                list(polys),
-                list(transform),
-                group_id,
-                selected_polys,
-                part_by_group,
-                min_dist,
-                cfg.propose,
-                pole=reloc_pole,
-                fixed_obstacles=fixed_obs,
-            )
+                reloc_pole = (
+                    free_snap_post.analysis.target_pt
+                    if free_snap_post.analysis.target_pt is not None
+                    else reloc_poles[min(1, len(reloc_poles) - 1)]
+                )
+                if reloc_pole is not None and reloc_pole is not push_pt:
+                    polys, transform, reloc_stats2 = cluster_relocate_selection(
+                        sheet_compact,
+                        list(polys),
+                        list(transform),
+                        group_id,
+                        selected_polys,
+                        part_by_group,
+                        min_dist,
+                        cfg.propose,
+                        pole=reloc_pole,
+                        fixed_obstacles=fixed_obs,
+                    )
+                    if int(reloc_stats2.get("accepted", 0)):
+                        reloc_stats = reloc_stats2
             relocate_accepted = bool(
                 int(repack_stats.get("accepted", 0))
                 or int(reloc_stats.get("accepted", 0))
@@ -2411,13 +2552,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
 
 def transform_selection(s, n, rng: np.random.Generator):
     """Expand selected transforms for the next graph batch (selection_expand proposer)."""
-    from nest_graph.propose.placements_selection_expand import selection_expand_arrays
     yield from selection_expand_arrays(s, n, rng)
 
 
 def transform_history(h, n, rng: np.random.Generator):
     """Expand history transforms for the next graph batch (history_expand proposer)."""
-    from nest_graph.propose.placements_selection_expand import history_expand_arrays
     yield from history_expand_arrays(h, n, rng)
 
 

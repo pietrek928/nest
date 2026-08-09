@@ -338,7 +338,7 @@ def border_refine_candidates(
 
     for prop in sorted_guidance_propositions(g)[:max_props]:
         use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
-        add(candidate_from_proposition(x, y, theta, prop, use_full_cast=use_cast))
+        add(candidate_from_proposition(x, y, theta, prop))
         if use_cast:
             continue
         tx, ty = proposition_translation(prop)

@@ -19,41 +19,33 @@ from nest_graph.propose.placement_outline import (
 )
 from nest_graph.propose.placement_perimeter import (
     angles_for_edge_contact,
+    anti_crowd_far_segments,
+    anti_crowd_segment_weights,
     exterior_anchor_points,
     finalize_edge_propositions,
     select_stratified_by_segment,
+    select_stratified_by_segment_weighted,
+    _segment_index_at_point,
 )
 
-def _board_edge_snap_seeds(
+
+def _sheet_exterior_snap_propositions(
     shape_to_place: Polygon,
     sheet: Polygon,
-    base_shape: BaseGeometry,
     *,
     min_dist: float,
     num_angles: int,
     samples_per_edge: int,
     propose_geom: ProposeGeometry,
-    pt_push: Point,
-    top_n: int,
-) -> list[tuple[tuple[float, float, float], Point, tuple[float, float]]]:
-    """Snap seeds along nest outline; return (coords, anchor, inward) for guidance refine."""
+    segment_filter: set[int] | None = None,
+) -> list[dict]:
+    """Shared exterior snap loop: anchors → angles → snap → contact error dicts."""
     propositions: list[dict] = []
-    anchor_pts = exterior_anchor_points(sheet, samples_per_edge)
-
-    def _add_seed(
-        coords: tuple[float, float, float],
-        anchor: Point,
-        inward: tuple[float, float],
-        cost: float,
-    ) -> None:
-        propositions.append({
-            "coords": coords,
-            "anchor": anchor,
-            "inward": inward,
-            "cost": cost,
-        })
-
-    for contact in anchor_pts:
+    for contact in exterior_anchor_points(sheet, samples_per_edge):
+        if segment_filter is not None:
+            seg_i = _segment_index_at_point(sheet, contact)
+            if seg_i not in segment_filter:
+                continue
         snap_contact, inward = inward_at_contact(sheet, contact)
         for angle in angles_for_edge_contact(sheet, contact, num_angles):
             coords = snap_coords_along_exterior(
@@ -70,14 +62,59 @@ def _board_edge_snap_seeds(
             if coords is None:
                 continue
             placed_geom = propose_geom.placed_at(coords)
+            if placed_geom is None:
+                continue
             err = placement_contact_error(placed_geom, sheet, min_dist, None)
-            _add_seed(coords, snap_contact, inward, err)
+            propositions.append({
+                "coords": coords,
+                "anchor": snap_contact,
+                "inward": inward,
+                "cost": err,
+            })
+    return propositions
+
+
+def _board_edge_snap_seeds(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    base_shape: BaseGeometry,
+    *,
+    min_dist: float,
+    num_angles: int,
+    samples_per_edge: int,
+    propose_geom: ProposeGeometry,
+    pt_push: Point,
+    top_n: int,
+) -> list[tuple[tuple[float, float, float], Point, tuple[float, float]]]:
+    """Snap seeds along nest outline; return (coords, anchor, inward) for guidance refine."""
+    _ = base_shape  # reserved for future focal-aware seeding
+    propositions = _sheet_exterior_snap_propositions(
+        shape_to_place,
+        sheet,
+        min_dist=min_dist,
+        num_angles=num_angles,
+        samples_per_edge=samples_per_edge,
+        propose_geom=propose_geom,
+    )
 
     # Snap-then-batch: one full-guidance filter for board-edge snaps.
     if propositions and pt_push is not None:
         raw = [p["coords"] for p in propositions]
         valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
         propositions = [p for p in propositions if p["coords"] in valid]
+
+    def _add_seed(
+        coords: tuple[float, float, float],
+        anchor: Point,
+        inward: tuple[float, float],
+        cost: float,
+    ) -> None:
+        propositions.append({
+            "coords": coords,
+            "anchor": anchor,
+            "inward": inward,
+            "cost": cost,
+        })
 
     corner_coords = _sheet_corner_seeds(
         shape_to_place,
@@ -150,6 +187,62 @@ def propose_placements_board_edge(
     # Snap-only SoT. Hybrid refine is placements_guidance.propose_placements_board_edge
     # so this module never imports guidance (no cycle).
     return snap_coords[:top_n]
+
+
+def propose_placements_side_pack(
+    shape_to_place: Polygon,
+    sheet: Polygon,
+    *,
+    min_dist: float,
+    propose_cfg: ProposeConfig,
+    propose_geom: ProposeGeometry,
+    top_n: int = 16,
+    crowd_ref: Point | None = None,
+    samples_per_edge: int | None = None,
+    num_angles: int | None = None,
+) -> List[Tuple[float, float, float]]:
+    """Sheet-exterior snap with anti-crowd segment weights; emit raw coords (no filter).
+
+    ``crowd_ref`` None → length-only stratify (rim spread). With ``crowd_ref`` (packed
+    bbox center), far sheet sides get more slots. Central collect owns clearance.
+    """
+    if sheet is None or sheet.is_empty or not bool(getattr(propose_cfg, "use_side_pack", True)):
+        return []
+    n_angles = num_angles if num_angles is not None else propose_cfg.placement_num_angles
+    samples = (
+        samples_per_edge
+        if samples_per_edge is not None
+        else int(getattr(propose_cfg, "side_pack_samples_per_edge", 0) or 0)
+        or propose_cfg.board_edge_samples_per_edge
+    )
+    cap = max(int(top_n), 1)
+    # Over-emit so packing SoT at collect end can still leave far-side survivors.
+    emit_cap = max(cap * 2, cap)
+    weights = None
+    far_segs: set[int] | None = None
+    if crowd_ref is not None and not getattr(crowd_ref, "is_empty", True):
+        weights = anti_crowd_segment_weights(sheet, crowd_ref)
+        if weights:
+            far_segs = anti_crowd_far_segments(weights)
+
+    propositions = _sheet_exterior_snap_propositions(
+        shape_to_place,
+        sheet,
+        min_dist=min_dist,
+        num_angles=n_angles,
+        samples_per_edge=samples,
+        propose_geom=propose_geom,
+        segment_filter=far_segs,
+    )
+    if not propositions:
+        return []
+    selected = select_stratified_by_segment_weighted(
+        sheet,
+        propositions,
+        emit_cap,
+        segment_weights=weights,
+    )
+    return [p["coords"] for p in selected][:emit_cap]
 
 
 def propose_placements_group_fit(
@@ -283,7 +376,7 @@ def _sheet_corner_seeds(
 
             for dx, dy in alignments:
                 placed = rotated.translate(dx, dy)
-                if not placed.footprint_inside(propose_geom.board_geom):
+                if not placed.fully_inside(propose_geom.board_geom):
                     continue
                 border_dist = placed.standoff_distance(ring_geom)
                 if border_dist < min_dist - 1e-6:
@@ -370,7 +463,7 @@ def propose_placements_sheet_edge(
             ]
             for dx, dy in alignments:
                 placed = rotated.translate(dx, dy)
-                if not placed.footprint_inside(propose_geom.board_geom):
+                if not placed.fully_inside(propose_geom.board_geom):
                     continue
                 coords = (dx, dy, float(angle))
                 err = placement_contact_error(placed, sheet, min_dist, None)

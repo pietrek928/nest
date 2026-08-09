@@ -242,8 +242,9 @@ def test_collect_state_tracks_keys_and_skips():
     )
     state.ext("board_edge", [(1.0, 2.0, 0.0), (1.0, 2.0, 0.0)])
     # Duplicate keys are claimed once so funnel counts do not double-count.
-    assert state.proposer_counts["board_edge"] == 2
+    assert state.proposer_counts["board_edge"] == 1
     assert len(state.proposer_keys["board_edge"]) == 1
+    assert len(state.candidates) == 1
     state.mark_skip("snipers", ["raycasting", "voronoi"])
     assert state.cascade_stats_out["cascade_stopped_after"] == "snipers"
     assert state.cascade_stats_out["cascade_skipped_proposers"] == [

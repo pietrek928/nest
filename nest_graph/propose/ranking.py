@@ -619,7 +619,7 @@ def _cast_squeeze_one(
             continue
         use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
         candidate = candidate_from_proposition(
-            x, y, theta, prop, use_full_cast=use_cast,
+            x, y, theta, prop,
         )
         trial = propose_geom.placed_at(candidate)
         if not propose_geom.valid(

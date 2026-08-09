@@ -31,11 +31,9 @@ class PackedProposeExtras:
     packed_polys: Sequence | None = None
     packed_group_ids: Sequence[int] | None = None
     packed_transforms: Sequence | None = None
-    native_geoms: Sequence | None = None
     free_space: FreeSpaceSnapshot | None = None
     cluster_patterns: Sequence | None = None
     pocket_stats: PocketStats | None = None
-    prop_accept: dict | None = None
     void_pole: Point | None = None
 
 

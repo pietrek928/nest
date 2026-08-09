@@ -3,6 +3,7 @@ import math
 import numpy as np
 from shapely import LineString, LinearRing, Point, Polygon
 from shapely.geometry.base import BaseGeometry
+from typing import Sequence
 
 from nest_graph.utils import get_shape_exteriors
 
@@ -168,18 +169,62 @@ def angles_for_edge_contact(
     return angles
 
 
-def select_stratified_by_segment(
+def segment_midpoints(boundary: Polygon) -> list[Point]:
+    """Midpoint of each exterior edge segment (same order as length list)."""
+    coords = list(boundary.exterior.coords)
+    mids: list[Point] = []
+    for i in range(len(coords) - 1):
+        p0, p1 = coords[i], coords[i + 1]
+        mids.append(Point(
+            0.5 * (float(p0[0]) + float(p1[0])),
+            0.5 * (float(p0[1]) + float(p1[1])),
+        ))
+    return mids
+
+
+def anti_crowd_segment_weights(
+    boundary: Polygon,
+    crowd_ref: Point,
+) -> list[float]:
+    """Length × (0.25 + dist(mid, crowd_ref) / sheet_diag) per exterior segment."""
+    seg_lens = _exterior_segment_lengths(boundary)
+    minx, miny, maxx, maxy = boundary.bounds
+    sheet_diag = math.hypot(float(maxx - minx), float(maxy - miny))
+    if sheet_diag < 1e-12:
+        sheet_diag = 1.0
+    mids = segment_midpoints(boundary)
+    weights: list[float] = []
+    for sl, mid in zip(seg_lens, mids, strict=True):
+        crowd_w = 0.25 + float(mid.distance(crowd_ref)) / sheet_diag
+        weights.append(float(sl) * crowd_w)
+    return weights
+
+
+def anti_crowd_far_segments(weights: Sequence[float]) -> set[int]:
+    """Segment indices at or above the median weight (coarse far-side gate)."""
+    if not weights:
+        return set()
+    med = sorted(float(w) for w in weights)[len(weights) // 2]
+    return {i for i, w in enumerate(weights) if float(w) >= med}
+
+
+def select_stratified_by_segment_weighted(
     boundary: Polygon,
     propositions: list[dict],
     top_n: int,
     *,
     anchor_key: str = "anchor",
+    segment_weights: Sequence[float] | None = None,
 ) -> list[dict]:
-    """Reserve top_n slots per exterior segment proportional to edge length."""
+    """Reserve top_n slots per exterior segment proportional to weights (or length)."""
     if not propositions:
         return []
     seg_lens = _exterior_segment_lengths(boundary)
-    total = sum(seg_lens) or 1.0
+    if segment_weights is not None and len(segment_weights) == len(seg_lens):
+        weights = [max(float(w), 0.0) for w in segment_weights]
+    else:
+        weights = list(seg_lens)
+    total = sum(weights) or 1.0
     by_seg: dict[int, list[dict]] = {}
     for prop in propositions:
         anchor = prop[anchor_key]
@@ -187,9 +232,9 @@ def select_stratified_by_segment(
         by_seg.setdefault(seg_i, []).append(prop)
 
     picked: list[dict] = []
-    for seg_i, seg_len in enumerate(seg_lens):
+    for seg_i, w in enumerate(weights):
         bucket = sorted(by_seg.get(seg_i, []), key=lambda row: row["cost"])
-        quota = max(2, int(round(top_n * seg_len / total)))
+        quota = max(2, int(round(top_n * w / total)))
         picked.extend(bucket[:quota])
 
     seen: set[tuple[float, float, float]] = set()
@@ -214,6 +259,23 @@ def select_stratified_by_segment(
         if len(out) >= top_n:
             break
     return out
+
+
+def select_stratified_by_segment(
+    boundary: Polygon,
+    propositions: list[dict],
+    top_n: int,
+    *,
+    anchor_key: str = "anchor",
+) -> list[dict]:
+    """Reserve top_n slots per exterior segment proportional to edge length."""
+    return select_stratified_by_segment_weighted(
+        boundary,
+        propositions,
+        top_n,
+        anchor_key=anchor_key,
+        segment_weights=None,
+    )
 
 
 def finalize_edge_propositions(

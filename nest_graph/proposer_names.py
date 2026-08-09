@@ -32,10 +32,12 @@ class ProposerName(StrEnum):
     # sheet_edge folded into sheet_corners counting; kept for pool-scale keys only.
     SHEET_EDGE = "sheet_edge"
     BOARD_EDGE = "board_edge"
+    SIDE_PACK = "side_pack"
     GUIDANCE_CAST_REFINE = "guidance_cast_refine"
     BATCH_PACK = "batch_pack"
     CLUSTER_COPY = "cluster_copy"
     POCKET_FIT = "pocket_fit"
+    FREE_SPACE_CLOUD = "free_space_cloud"
     SELECTION_EXPAND = "selection_expand"
     HISTORY_EXPAND = "history_expand"
 
@@ -56,10 +58,12 @@ PROPOSER_FLAG: dict[ProposerName, str | None] = {
     ProposerName.SHEET_CORNERS: "use_border_edge_seeds",
     ProposerName.SHEET_EDGE: "use_border_edge_seeds",
     ProposerName.BOARD_EDGE: "use_board_edge_seeds",
+    ProposerName.SIDE_PACK: "use_side_pack",
     ProposerName.GUIDANCE_CAST_REFINE: "use_guidance_propositions",
     ProposerName.BATCH_PACK: "use_batch_pack",
     ProposerName.CLUSTER_COPY: "use_cluster_copy",
     ProposerName.POCKET_FIT: "use_pocket_fit",
+    ProposerName.FREE_SPACE_CLOUD: "use_free_space_cloud",
     ProposerName.SELECTION_EXPAND: None,
     ProposerName.HISTORY_EXPAND: None,
 }
@@ -72,6 +76,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
     }),
     PlaceZone.BORDER_GAP: frozenset({
         ProposerName.BOARD_EDGE,
+        ProposerName.SIDE_PACK,
         ProposerName.SHEET_CORNERS,
         ProposerName.PERIMETER_WALK,
         ProposerName.GROUP_FIT,
@@ -80,6 +85,8 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.CLUSTER_COPY,
         ProposerName.POCKET_FIT,
+        ProposerName.SELECTION_EXPAND,
+        ProposerName.HISTORY_EXPAND,
     }),
     PlaceZone.INTERIOR_POCKET: frozenset({
         ProposerName.EROSION,
@@ -90,9 +97,12 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.CLUSTER_COPY,
         ProposerName.GROUP_FIT,
         ProposerName.POCKET_FIT,
+        ProposerName.SELECTION_EXPAND,
+        ProposerName.HISTORY_EXPAND,
     }),
     PlaceZone.CLUSTER_EDGE: frozenset({
         ProposerName.GROUP_FIT,
+        ProposerName.SIDE_PACK,
         ProposerName.NEIGHBOR_SLIDE,
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.PERIMETER_WALK,
@@ -100,6 +110,8 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.CLUSTER_COPY,
         ProposerName.RIBBON_FREE,
         ProposerName.POCKET_FIT,
+        ProposerName.SELECTION_EXPAND,
+        ProposerName.HISTORY_EXPAND,
     }),
     PlaceZone.INTER_CLUSTER: frozenset({
         ProposerName.RIBBON_FREE,
@@ -109,6 +121,8 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.CLUSTER_COPY,
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.POCKET_FIT,
+        ProposerName.SELECTION_EXPAND,
+        ProposerName.HISTORY_EXPAND,
     }),
     # No VORONOI / NEIGHBOR_SLIDE — large open void drift spam; explorers = erosion+raycast.
     PlaceZone.VOID_SEEK: frozenset({
@@ -116,9 +130,12 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.RIBBON_FREE,
         ProposerName.RAYCASTING,
         ProposerName.GUIDANCE_CAST_REFINE,
-        ProposerName.GROUP_FIT,
+        ProposerName.SIDE_PACK,
         ProposerName.CLUSTER_COPY,
         ProposerName.POCKET_FIT,
+        ProposerName.FREE_SPACE_CLOUD,
+        ProposerName.SELECTION_EXPAND,
+        ProposerName.HISTORY_EXPAND,
     }),
 }
 

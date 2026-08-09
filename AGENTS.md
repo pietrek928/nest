@@ -134,12 +134,41 @@
 | Warm-index after `nA>nB`? | **Action.** Router un-swaps before return. |
 | `cached_narrow_phase_intersect`? | **Delete.** |
 | `polish_se2` double cast? | **Action.** One TOI/normal → tangent → Scene once. |
-| Clearance SoT? | **Action.** One `is_pose_clear` via `StaticCollisionScene`; guidance `valid_at` separate. |
+| Clearance SoT? | **Action.** One `is_pose_clear` via `StaticCollisionScene`; guidance `valid_at` separate. Propose emit packing clear = `emit_packing_clear` (fully_inside + packed collide) — stage-split from Scene. |
 | Board adj twice? | **Action.** One `is_board_adj` (standoff); one `cluster_contact` (`2·gap`); delete `_contact_neighbors`. |
 | Standoff vs solid distance for board adj? | **Standoff** (edge-to-edge). |
 | `_as_geometry` copy-paste? | **Action.** Single helper in `placement_common.py`. |
 | `footprint_inside` vs `fully_inside`? | **Deprecate** `footprint_inside`; use `fully_inside`. |
 | Merge rim / obstacle / guide tangents? | **No.** Document normal sourcing only. |
+| side_pack zone whitelist in pipeline? | **Deleted.** Permission = `ZONE_PROPOSERS`; staging = `packed_n >= 2 or void_path`. |
+| Motif stamp propose vs repack? | **Keep both.** Propose `stamp_motif_leader_follower` (packing); repack `stamp_motif_at_anchor` (Scene atomic) + `pattern_fallback`. Share anchors + `dedupe_anchors`. |
+
+### Propose / void-fill review (answered)
+
+| Question | Answer |
+|----------|--------|
+| Repack stamp vs propose leader-follower? | **Keep both.** Different contracts (peeled atomic vs single-group emit). Share anchors + dedupe only. |
+| Unify densify iv/pole with props telem? | **Radius only** via `void_pole_near_radius`. Centroid vs xy stay different measures. |
+| Round-2 vs round-4 funnel break? | **No.** Funnel uses round-4 (`transform_row_key`). Cloud writes `proposer_keys`. |
+| Filter side_pack at emit? | **No.** Raw over-emit; packing filter at collect end is SoT. |
+| Zone policy location? | **Permission** = `ZONE_PROPOSERS`. **Staging** = `packed_n` / `void_path` XOR with `board_edge` lives in pipeline. |
+| Keep cloud in zone set? | **Yes**, densify-only emit, dual-gated by flag + `_proposer_enabled`. |
+| Native void densify accept? | **Same lex as hijack** (`void_yield_gain` → `void_pole_clear`). |
+| Does repack emit side_pack? | Pass `cascade_zone=zone` so void/border_gap staging matches main pipeline. |
+| Wall-fill on all hard zones? | **void_seek only.** `interior_pocket` cannot enable SIDE_PACK. |
+
+### Propose / void-fill research (open)
+
+| Question | Why ask |
+|----------|---------|
+| Rim saturated (`e ≫ p ≈ 0`): shift budget from sheet-snap to interior colonization? | Structural mid-pack ceiling |
+| Densify replaces `arr` but unions pre-densify `proposer_keys` — intersect with final array? | Funnel accuracy |
+| Two sterile ladders (densify zones vs graph `sterile_pack`) — one predicate? | Consolidation candidate |
+| Weighted stratify: per-segment quotas (min 2) then cross-segment cost truncation can drop far-segment picks when Σquotas > top_n — allocate by largest remainder instead? | Anti-crowd fidelity; masked today by `far_segs` gate |
+| Repack-internal propose with `cascade_zone=zone` — net gain or churn during relocation? | New intentional surface; watch bench |
+| Densify clearance floor uses ranking clearance — rename or keep as yield heuristic? | Naming vs SoT |
+
+Glossary: `side_pack` permitted by zone (incl. `cluster_edge`), staged by pack count / void; raw emit; `free_space_cloud` densify recovery with funnel keys.
 
 ### Nanobind bindings (copy tax — action)
 

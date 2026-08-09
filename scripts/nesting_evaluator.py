@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
@@ -29,8 +30,11 @@ from nest_graph.build_graph import (
     active_rule_set,
     apply_dfs_refinement,
     apply_void_selection_boosts,
+    archive_void_elite_transforms,
     improve_rules,
     make_polygon_graph,
+    void_elite_count,
+    void_elite_tuple_from_archive,
 )
 from nest_graph.config import BuildGraphConfig, score_rules_options
 from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
@@ -43,11 +47,8 @@ from nest_graph.propose import (
     obstacle_shape_for_propose,
 )
 from nest_graph.propose.compaction import compact_selection, selection_pairwise_independent
-from nest_graph.propose.cluster_repack import (
-    cluster_repack_selection,
-    cluster_relocate_selection,
-)
-from nest_graph.propose.local_se2 import local_se2_selection
+from nest_graph.propose.pipeline import allow_void_repack
+from nest_graph.propose.post_pack import run_post_pack_passes
 from nest_graph.propose.context import (
     analyze_free_space,
     build_free_space_snapshot,
@@ -571,6 +572,7 @@ class NestingPipelineEvaluator:
         }
         last_proposal_yield = 0.0
         had_void_override = False
+        void_elite_by_group: dict[int, list[np.ndarray]] = {}
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
@@ -585,6 +587,15 @@ class NestingPipelineEvaluator:
                 "sat_override": sat_info.sat_override,
                 "rim_progress": sat_info.rim_progress,
             }
+            keep_hist_sterile = bool(
+                (sat_info.sat_override or had_void_override)
+                and bool(getattr(self.cfg.propose, "keep_history_on_void_sterile", True))
+            )
+            ngroups = max(len(self.parts) if self.parts else len(selected_t), 1)
+            void_elite_t = void_elite_tuple_from_archive(void_elite_by_group, ngroups)
+            elite_n = void_elite_count(void_elite_by_group)
+            propose_stats["void_elite_seeded"] = elite_n
+            propose_stats["keep_history_on_sterile"] = keep_hist_sterile
             selected_t = _build_transform_batch(
                 self.cfg, selected_t, history, rng,
                 board=self.sheet,
@@ -594,6 +605,8 @@ class NestingPipelineEvaluator:
                 border_saturation=sat_info.active,
                 group_allowed_angles=self.case.group_allowed_angles,
                 propose_stats_out=propose_stats,
+                void_elite_t=void_elite_t,
+                keep_history_on_sterile=keep_hist_sterile,
             )
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
@@ -736,6 +749,17 @@ class NestingPipelineEvaluator:
                     refine_scores,
                     stats_out=pin_stats,
                 )
+            void_elite_by_group = archive_void_elite_transforms(
+                selected_nest=selected,
+                selected_refine=selected_polys,
+                polys=polys,
+                transforms=transform,
+                group_ids=group_id,
+                free_poly=free_poly,
+                scores=refine_scores,
+                max_keep=int(getattr(self.cfg.propose, "stratified_void_elite_quota", 15)),
+                enabled=bool(getattr(self.cfg.propose, "enable_void_elite_archive", True)),
+            )
             n_void_refine = _count_selected_in_free(
                 polys, selected_polys, free_poly,
             )
@@ -750,6 +774,10 @@ class NestingPipelineEvaluator:
                 proposed_list, free_info.target_pt, pole_radius_metric,
             )
             zones = propose_stats.get("zones_used") or []
+            hijack = bool(_zones_have_void_hijack(zones))
+            sat_override = bool(propose_stats.get("sat_override", False))
+            if hijack or sat_override:
+                had_void_override = True
             densify = propose_stats.get("densify_stats") or {}
             proposer_keys = propose_stats.get("proposer_keys") or densify.get("proposer_keys") or {}
             emitted_bp = dict(
@@ -767,18 +795,20 @@ class NestingPipelineEvaluator:
                 transform, selected_polys, proposer_keys,
             )
             prop_accept = _format_prop_accept(emitted_bp, pool_bp, nest_bp, refine_bp)
+            elite_seeded = int(propose_stats.get("void_elite_seeded", 0))
+            elite_next = void_elite_count(void_elite_by_group)
             last_void_leak = {
                 "free_kind": free_info.kind,
                 "max_void_ratio": float(free_info.max_void_ratio),
                 "props": n_void_props,
                 "props_pole": n_props_pole,
-                "hijack": _zones_have_void_hijack(zones),
+                "hijack": hijack,
                 "graph": n_void_graph,
                 "nest": n_void_nest,
                 "refine": n_void_refine,
                 "border_only": bool(propose_stats.get("border_only", False)),
                 "outline_cov": float(propose_stats.get("outline_cov", 0.0)),
-                "sat_override": bool(propose_stats.get("sat_override", False)),
+                "sat_override": sat_override,
                 "rim_progress": float(propose_stats.get("rim_progress", 0.0)),
                 "emitted_by_proposer": emitted_bp,
                 "pool_by_proposer": pool_bp,
@@ -794,38 +824,25 @@ class NestingPipelineEvaluator:
                 "pin_added": int(pin_stats.get("pin_added", 0)),
                 "pin_blocked_collision": int(pin_stats.get("pin_blocked_collision", 0)),
                 "pin_ms": float(pin_stats.get("pin_ms", 0.0)),
+                "void_elite_seeded": elite_seeded,
+                "void_elite_archived": elite_next,
+                "cluster_copy_emitted": int(emitted_bp.get("cluster_copy", 0)),
+                "cluster_copy_pool": int(pool_bp.get("cluster_copy", 0)),
+                "cluster_patterns": int(densify.get("cluster_patterns", 0)),
+                "densify_fired": int(
+                    densify.get("fired", 0)
+                ),
+                "densify_accepted": int(
+                    densify.get("accepted", 0)
+                ),
+                "keep_history_on_sterile": bool(
+                    propose_stats.get("keep_history_on_sterile", False)
+                ),
             }
             prop_n = int(propose_stats.get("proposal_count", 0))
             if prop_n > 0:
                 last_proposal_yield = min(1.0, n_void_graph / prop_n) if n_void_graph else (
                     min(1.0, len(polys) / prop_n)
-                )
-
-            if (
-                self.cfg.propose.enable_gravity_compaction
-                and len(selected_polys) >= 2
-            ):
-                part_by_group = {
-                    i: self.parts[i][0] for i in range(len(self.parts))
-                }
-                polys, transform = compact_selection(
-                    self.sheet,
-                    list(polys),
-                    list(transform),
-                    group_id,
-                    selected_polys,
-                    part_by_group,
-                    min_dist,
-                    fixed_obstacles=seed_polys,
-                    gravity=(
-                        free_info.target_pt
-                        if (
-                            free_info is not None
-                            and free_info.kind == "large_void"
-                            and free_info.target_pt is not None
-                        )
-                        else None
-                    ),
                 )
 
             part_by_group = {
@@ -842,44 +859,29 @@ class NestingPipelineEvaluator:
             free_post = free_snap.analysis
             allow_repack = True
             if isinstance(last_void_leak, dict):
-                allow_repack = int(last_void_leak.get("refine", 0)) > 0
+                allow_repack = allow_void_repack(
+                    free_kind=last_void_leak.get("free_kind")
+                    or (free_info.kind if free_info is not None else None),
+                    n_void_nest=int(last_void_leak.get("nest", 0)),
+                    n_void_refine=int(last_void_leak.get("refine", 0)),
+                )
+            elif free_info is not None:
+                allow_repack = allow_void_repack(
+                    free_kind=free_info.kind,
+                    n_void_nest=0,
+                    n_void_refine=0,
+                )
             if free_post.kind == "large_void" and free_post.target_pt is not None:
-                if allow_repack:
-                    polys, transform, selected_polys, _repack = cluster_repack_selection(
-                        self.sheet,
-                        list(polys),
-                        list(transform),
-                        group_id,
-                        selected_polys,
-                        part_by_group,
-                        min_dist,
-                        self.cfg.propose,
-                        pole=free_post.target_pt,
-                        void_poly=free_post.target_poly,
-                        fixed_obstacles=seed_polys,
-                        pt_push=free_post.target_pt,
-                        free_space=free_snap,
+                gravity_pt = (
+                    free_info.target_pt
+                    if (
+                        free_info is not None
+                        and free_info.kind == "large_void"
+                        and free_info.target_pt is not None
                     )
-                else:
-                    _repack = {
-                        "attempted": 0,
-                        "accepted": 0,
-                        "motif_accepted": 0,
-                        "skipped_refine_zero": 1,
-                    }
-                reloc_pole = free_post.target_pt
-                if int(_repack.get("accepted", 0)) > 0:
-                    sel_geoms = [
-                        polys[i] for i in selected_polys
-                        if polys[i] is not None and not polys[i].is_empty
-                    ]
-                    free_snap = build_free_space_snapshot(
-                        self.sheet, sel_geoms, mean_part, min_dist,
-                        void_ratio_threshold=void_thr,
-                    )
-                    if free_snap.analysis.target_pt is not None:
-                        reloc_pole = free_snap.analysis.target_pt
-                polys, transform, _reloc = cluster_relocate_selection(
+                    else None
+                )
+                polys, transform, selected_polys, pack_stats = run_post_pack_passes(
                     self.sheet,
                     list(polys),
                     list(transform),
@@ -888,21 +890,25 @@ class NestingPipelineEvaluator:
                     part_by_group,
                     min_dist,
                     self.cfg.propose,
-                    pole=reloc_pole,
+                    pole=free_post.target_pt,
+                    gravity=gravity_pt,
                     fixed_obstacles=seed_polys,
+                    allow_repack=allow_repack,
+                    allow_relocate=True,
+                    allow_compaction=bool(self.cfg.propose.enable_gravity_compaction),
+                    allow_local_se2=True,
+                    void_poly=free_post.target_poly,
+                    pt_push=free_post.target_pt,
+                    free_space=free_snap,
                 )
-                polys, transform, _se2 = local_se2_selection(
-                    self.sheet,
-                    list(polys),
-                    list(transform),
-                    group_id,
-                    selected_polys,
-                    part_by_group,
-                    min_dist,
-                    self.cfg.propose,
-                    pole=reloc_pole,
-                    fixed_obstacles=seed_polys,
-                )
+                _repack = pack_stats.get("repack") or {
+                    "attempted": 0,
+                    "accepted": 0,
+                    "motif_accepted": 0,
+                    "skipped_refine_zero": int(not allow_repack),
+                }
+                _reloc = pack_stats.get("relocate") or {}
+                _se2 = pack_stats.get("local_se2") or {}
                 assert selection_pairwise_independent(polys, selected_polys)
                 if isinstance(last_void_leak, dict):
                     last_void_leak["repack"] = _repack
@@ -1083,7 +1089,6 @@ class NestingPipelineEvaluator:
             standoff_hits = 0
             obstacle_union = None
             if seed_polys or selected_polys:
-                from shapely.ops import unary_union
                 # Obstacle for standoff: seeds + sheet exterior as distance target
                 # Standoff = distance to nearest packed seed or other new parts? Plan says
                 # obstacle union of seeds (locked) for new parts.

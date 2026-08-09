@@ -243,16 +243,10 @@ def candidate_from_proposition(
     y: float,
     theta: float,
     prop,
-    *,
-    use_full_cast: bool,
 ) -> Tuple[float, float, float]:
     tx, ty = proposition_translation(prop)
-    if use_full_cast:
-        nx, ny = x + tx, y + ty
-        ntheta = _normalize_angle(theta + float(prop.rotation_rad))
-    else:
-        nx, ny = x + tx, y + ty
-        ntheta = _normalize_angle(theta + float(prop.rotation_rad))
+    nx, ny = x + tx, y + ty
+    ntheta = _normalize_angle(theta + float(prop.rotation_rad))
     return (nx, ny, ntheta)
 
 
@@ -293,7 +287,7 @@ def propose_placements_guidance_cast(
                 return out
             use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
             candidate = candidate_from_proposition(
-                x, y, theta, prop, use_full_cast=use_cast,
+                x, y, theta, prop,
             )
             if _coords_too_close(candidate, out, dist_thresh, angle_thresh):
                 continue
@@ -359,7 +353,7 @@ def propose_placements_board_edge_guidance_cast(
                 return out
             use_cast = not g.is_penetrating and is_cast_move(prop.move_type or "")
             candidate = candidate_from_proposition(
-                x, y, theta, prop, use_full_cast=use_cast,
+                x, y, theta, prop,
             )
             if _coords_too_close(candidate, out, dist_thresh, angle_thresh):
                 continue
