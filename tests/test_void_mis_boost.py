@@ -13,8 +13,8 @@ from nest_graph.elem_graph import PlacementRuleSet, PointPlaceRule, Vec2
 from nest_graph.utils import transform_poly
 
 
-def test_gravity_compaction_disabled_by_default():
-    assert ProposeConfig().enable_gravity_compaction is False
+def test_gravity_compaction_enabled_by_default():
+    assert ProposeConfig().enable_gravity_compaction is True
     assert ProposeConfig().void_island_score_boost == 64.0
     assert ProposeConfig().void_attractor_rule_weight == 16.0
     assert ProposeConfig().enable_void_large_hijack is True

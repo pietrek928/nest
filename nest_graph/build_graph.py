@@ -30,9 +30,7 @@ from .geometry import (
 )
 from .placement_scene import (
     guidance_config_for_graph,
-    is_valid_placement,
     placement_scene_for_part,
-    footprints_inside_board,
 )
 from .propose.placement_common import as_geometry
 from .propose.placement_outline import outline_standoff_distance
@@ -55,10 +53,7 @@ from .propose.placements_selection_expand import (
     transforms_around as _transforms_around_impl,
 )
 from .propose.void_topology import iterative_multi_poles
-from .propose.compaction import (
-    compact_selection,
-    selection_pairwise_independent,
-)
+from .propose.placement_common import selection_pairwise_independent
 from .propose.cluster_repack import (
     cluster_repack_selection,
     cluster_relocate_selection,
@@ -259,8 +254,8 @@ def _iter_candidates(
             placed = base.apply_transform(t)
             scene = placement_scene_for_part(sheet, board_geom, void_geoms, base)
             cx, cy = placed.center()
-            if not is_valid_placement(
-                scene, placed, (cx, cy), min_dist, guidance_cfg,
+            if not scene.is_valid(
+                placed, (cx, cy), min_dist, guidance_cfg,
                 epsilon_ratio=epsilon_ratio,
             ):
                 continue
@@ -282,10 +277,11 @@ def placement_board_score(
     board_geom: Geometry,
     placed: Geometry,
 ) -> float:
-    if not placed.fully_inside(board_geom):
-        cx, cy = placed.center()
-        return -board.distance(Point(cx, cy))
+    """Heuristic score: prefer inside sheet near boundary (analysis, not validity SoT)."""
+    del board_geom
     cx, cy = placed.center()
+    if not board.contains(Point(cx, cy)):
+        return -board.distance(Point(cx, cy))
     return 2.0 * board.boundary.distance(Point(cx, cy))
 
 
@@ -438,16 +434,9 @@ def make_polygon_graph(
             candidates.append((i, p, t, placed, base))
             placed_solids.append(placed)
 
-    footprint_ok = (
-        footprints_inside_board(placed_solids, board_geom)
-        if placed_solids
-        else []
-    )
-
     by_group: dict[int, list[int]] = {}
     for k, (i, _p, _t, _placed, _base) in enumerate(candidates):
-        if footprint_ok[k]:
-            by_group.setdefault(i, []).append(k)
+        by_group.setdefault(i, []).append(k)
 
     valid_by_k: dict[int, bool] = {}
     for group_i, indices in by_group.items():
@@ -469,7 +458,7 @@ def make_polygon_graph(
 
     pending: list[tuple] = []
     for k, (i, p, t, placed, base) in enumerate(candidates):
-        if not footprint_ok[k] or not valid_by_k.get(k, False):
+        if not valid_by_k.get(k, False):
             continue
         pending.append((i, p, t, placed))
 
@@ -1064,7 +1053,7 @@ def _first_pass_layered_selection(
     """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
     min_dist = cfg.board_min_dist(first_pass=True)
     outline = board
-    sheet, _ = board_context_from_geometry(board)
+    sheet, voids = board_context_from_geometry(board)
     board_geom = Geometry.from_shapely(sheet)
     polys_cur = polys
     group_id_cur = group_id
@@ -1159,7 +1148,7 @@ def _first_pass_layered_selection(
         pack_polys,
         pack_gids,
         pack_tr,
-        board_geom=board_geom,
+        void_geoms=voids,
         bases=bases,
     )
 
@@ -2248,7 +2237,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 })
         assert selection_is_independent(graph, selected_polys)
         min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
-        sheet_compact, _ = board_context_from_geometry(p_outline, user_holes=user_holes)
+        sheet_compact, void_geoms_post = board_context_from_geometry(p_outline, user_holes=user_holes)
         part_by_group = {0: p1, 1: p2}
         seed_n = nest_state.seed_count if nest_state is not None else 0
         fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
@@ -2304,15 +2293,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             void_leak_prev = propose_stats.get("void_leak")
             if isinstance(void_leak_prev, dict):
                 void_leak_prev["multi_pole_count"] = len(reloc_poles)
-            gravity_pt = (
-                free_info.target_pt
-                if (
-                    free_info is not None
-                    and free_info.kind == "large_void"
-                    and free_info.target_pt is not None
-                )
-                else None
-            )
             polys, transform, selected_polys, pack_stats = run_post_pack_passes(
                 sheet_compact,
                 list(polys),
@@ -2323,11 +2303,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 min_dist,
                 cfg.propose,
                 pole=push_pt,
-                gravity=gravity_pt,
                 fixed_obstacles=fixed_obs,
+                void_geoms=void_geoms_post,
                 allow_repack=allow_repack,
                 allow_relocate=True,
-                allow_compaction=bool(cfg.propose.enable_gravity_compaction),
                 allow_local_se2=True,
                 void_poly=free_post.target_poly,
                 pt_push=push_pt,
@@ -2375,6 +2354,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         cfg.propose,
                         pole=reloc_pole,
                         fixed_obstacles=fixed_obs,
+                        void_geoms=void_geoms_post,
                     )
                     if int(reloc_stats2.get("accepted", 0)):
                         reloc_stats = reloc_stats2

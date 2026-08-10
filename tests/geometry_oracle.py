@@ -141,13 +141,15 @@ def assert_pose_clear_matches_shapely(
     obs_g: list[Geometry] | None = None,
 ) -> None:
     """Compare Geometry is_pose_clear to Shapely contain + min distance."""
+    from nest_graph.board import board_context_from_geometry
     from nest_graph.propose.placement_common import is_pose_clear
 
     cand_g = cand_g if cand_g is not None else as_geometry(candidate)
-    board_g = board_g if board_g is not None else as_geometry(sheet)
+    _ = board_g  # board containment is separate from Scene clearance
     obs_g = obs_g if obs_g is not None else [as_geometry(o) for o in obstacles]
+    _, voids = board_context_from_geometry(sheet)
 
-    our = is_pose_clear(cand_g, board_g, obs_g, min_dist)
+    our = is_pose_clear(cand_g, voids, obs_g, min_dist)
 
     if candidate is None or candidate.is_empty:
         assert our is False

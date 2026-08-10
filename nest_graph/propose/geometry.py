@@ -14,7 +14,6 @@ from nest_graph.placement_scene import (
     guidance_config_for_scene,
     guidance_kwargs_for_propose,
     placement_clearance_epsilon,
-    footprints_inside_board,
     proposition_translation,
 )
 
@@ -136,27 +135,6 @@ class ProposeGeometry:
         )
         return self.scene.guidance(placed, xy, cfg)
 
-    def footprint_clear_of_voids(self, placed: Geometry) -> bool:
-        if not placed.fully_inside(self.scene.board_geom):
-            return False
-        cx, cy = placed.center()
-        g = self.scene.guidance(placed, (cx, cy), self._guidance_cfg)
-        return not g.is_penetrating
-
-    def footprint_clear_of_voids_batch(self, placed_list: Sequence[Geometry]) -> list[bool]:
-        if not placed_list:
-            return []
-        footprint_ok = footprints_inside_board(placed_list, self.scene.board_geom)
-        out: list[bool] = []
-        for placed, ok in zip(placed_list, footprint_ok, strict=True):
-            if not ok:
-                out.append(False)
-                continue
-            cx, cy = placed.center()
-            g = self.scene.guidance(placed, (cx, cy), self._guidance_cfg)
-            out.append(not g.is_penetrating)
-        return out
-
     def passes_full_packed_collision(self, placed: Geometry) -> bool:
         if not self.full_packed_geoms:
             return True
@@ -218,12 +196,9 @@ def batch_valid_flags(
     """Batch validity matching ProposeGeometry.valid_at (base+void + guidance).
 
     Uses ``batch_evaluate_local_placement`` for both bool and guidance modes.
-    Void-only ``batch_check_validity`` is reserved for graph-build footprint checks.
     """
     if not transforms:
         return []
-    placed_list = [propose_geom.placed_at(c) for c in transforms]
-    footprint_ok = footprints_inside_board(placed_list, propose_geom.board_geom)
     cfg = guidance_cfg if guidance_cfg is not None else propose_geom._propose_guidance_cfg(pt_push)
     margin = 0.0
     if propose_geom._min_dist > 0.0:
@@ -231,43 +206,39 @@ def batch_valid_flags(
             propose_geom._min_dist, ratio=propose_geom._epsilon_ratio,
         )
 
-    survivors = [
-        (i, (float(c[0]), float(c[1]), float(c[2])))
-        for i, (c, ok) in enumerate(zip(transforms, footprint_ok, strict=True))
-        if ok
-    ]
-    if not survivors:
-        if return_guidance:
-            return [None] * len(transforms)
-        return [False] * len(transforms)
-
-    indices, survivor_transforms = zip(*survivors, strict=True)
     obstacles = propose_geom.obstacle_geoms_for_batch()
+    survivor_transforms = [
+        (float(c[0]), float(c[1]), float(c[2])) for c in transforms
+    ]
     guidance_list = batch_evaluate_local_placement(
         propose_geom.part,
-        list(survivor_transforms),
+        survivor_transforms,
         obstacles,
         (float(pt_push.x), float(pt_push.y)),
         cfg,
     )
 
     if not return_guidance:
-        out = [False] * len(transforms)
-        for i, g in zip(indices, guidance_list, strict=True):
+        out: list[bool] = []
+        for g in guidance_list:
             if g.is_penetrating:
+                out.append(False)
                 continue
             if margin > 0.0 and float(g.clearance) < margin:
+                out.append(False)
                 continue
-            out[i] = True
+            out.append(True)
         return out
 
-    out_guidance: list[object | None] = [None] * len(transforms)
-    for i, g in zip(indices, guidance_list, strict=True):
+    out_guidance: list[object | None] = []
+    for g in guidance_list:
         if g.is_penetrating:
+            out_guidance.append(None)
             continue
         if margin > 0.0 and float(g.clearance) < margin:
+            out_guidance.append(None)
             continue
-        out_guidance[i] = g
+        out_guidance.append(g)
     return out_guidance
 
 

@@ -44,7 +44,7 @@ from nest_graph.propose import (
     effective_ranking_mode,
     obstacle_shape_for_propose,
 )
-from nest_graph.propose.compaction import compact_selection, selection_pairwise_independent
+from nest_graph.propose.placement_common import as_geometry, selection_pairwise_independent
 from nest_graph.propose.context import (
     analyze_free_space,
     build_free_space_snapshot,
@@ -53,7 +53,6 @@ from nest_graph.propose.context import (
     propose_push_point,
     should_use_border_focus,
 )
-from nest_graph.propose.placement_common import as_geometry
 from nest_graph.propose.pipeline import allow_void_repack, propose_coords_from_candidates
 from nest_graph.propose.post_pack import run_post_pack_passes
 from nest_graph.utils import transform_poly
@@ -847,15 +846,6 @@ class NestingPipelineEvaluator:
                     n_void_refine=0,
                 )
             if free_post.kind == "large_void" and free_post.target_pt is not None:
-                gravity_pt = (
-                    free_info.target_pt
-                    if (
-                        free_info is not None
-                        and free_info.kind == "large_void"
-                        and free_info.target_pt is not None
-                    )
-                    else None
-                )
                 polys, transform, selected_polys, pack_stats = run_post_pack_passes(
                     self.sheet,
                     list(polys),
@@ -866,11 +856,9 @@ class NestingPipelineEvaluator:
                     min_dist,
                     self.cfg.propose,
                     pole=free_post.target_pt,
-                    gravity=gravity_pt,
                     fixed_obstacles=seed_polys,
                     allow_repack=allow_repack,
                     allow_relocate=True,
-                    allow_compaction=bool(self.cfg.propose.enable_gravity_compaction),
                     allow_local_se2=True,
                     void_poly=free_post.target_poly,
                     pt_push=free_post.target_pt,
@@ -910,39 +898,7 @@ class NestingPipelineEvaluator:
             next_gids = list(seed_gids) + placed_gids
             next_tr = list(seed_tr) + placed_tr
             next_sel = list(range(len(next_polys)))
-
-            # Densify the full pack (incl. former seeds) so Mode B closes gaps.
             n_seed = len(seed_polys)
-            if (
-                self.cfg.propose.enable_gravity_compaction
-                and len(next_sel) >= 2
-            ):
-                gid_to_part = {
-                    int(gid): poly for poly, gid in self.case.groups
-                }
-                next_polys, next_tr = compact_selection(
-                    self.sheet,
-                    next_polys,
-                    next_tr,
-                    next_gids,
-                    next_sel,
-                    gid_to_part,
-                    min_dist,
-                    gravity=(
-                        free_info.target_pt
-                        if (
-                            free_info is not None
-                            and free_info.kind == "large_void"
-                            and free_info.target_pt is not None
-                        )
-                        else None
-                    ),
-                )
-                if n_seed > 0:
-                    seed_polys = list(next_polys[:n_seed])
-                    seed_tr = list(next_tr[:n_seed])
-                    seed_gids = list(next_gids[:n_seed])
-                    extra_voids = _seed_extra_voids(seed_polys)
 
             nest_state = NestState(
                 polys=next_polys,

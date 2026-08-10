@@ -132,5 +132,5 @@ def test_propose_geometry_validation(board):
     )
     placed = geom.placed_at((0.5, 0.5, 0.0))
     push = board.centroid
-    assert geom.footprint_clear_of_voids(placed)
+    assert geom.valid_at((0.5, 0.5, 0.0), push)
     assert not geom.hits_base(placed)

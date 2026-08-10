@@ -129,7 +129,6 @@ class ProposeAblation(StrEnum):
     NO_VOID_CONTACT_HYBRID = "no_void_contact_hybrid"
     NO_MOTIF_TOPO_ANCHORS = "no_motif_topo_anchors"
     NO_VOID_RANK = "no_void_rank"
-    GRAVITY_VOID_POLE = "gravity_void_pole"
     VOID_PSO = "void_pso"
     LEAN_VOID_COMBO = "lean_void_combo"
     CASCADE_ONLY = "cascade_only"
@@ -519,8 +518,8 @@ class ProposeConfig(BaseModel):
     """hull_rim_fill: keep late sat while pack_hull_perim / sheet_perim is below this (when not large_void)."""
     place_proposer_pool_scales: dict[str, float] = Field(default_factory=dict)
     """Rolling feedback scale per proposer name (1.0 = default)."""
-    enable_gravity_compaction: bool = False
-    """Post-refine gravity slide toward min x+y sheet vertex (off during void-MIS experiment)."""
+    enable_gravity_compaction: bool = True
+    """Floater pole SE(2) via local_se2 (requires void pole; no corner fallback)."""
     void_island_score_boost: float = 64.0
     """EMS pole weight for continuous distance-to-pole DFS score boost (0 disables)."""
     void_attractor_rule_weight: float = 16.0

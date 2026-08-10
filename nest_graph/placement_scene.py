@@ -23,7 +23,7 @@ def footprints_inside_board(
     placed: Sequence[Geometry],
     board_geom: Geometry,
 ) -> list[bool]:
-    """Batch containment vs the same board solid (prefer ``fully_inside``)."""
+    """Oracle/tests only — production validity uses locked void solids."""
     if not placed:
         return []
     return [p.fully_inside(board_geom) for p in placed]
@@ -350,8 +350,7 @@ class PlacementScene:
         epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
         skip_footprint: bool = False,
     ) -> bool:
-        if not skip_footprint and not placed.fully_inside(self.board_geom):
-            return False
+        del skip_footprint  # board membership = voids in guidance obstacles
         g = self.guidance(placed, xy, config)
         if g.is_penetrating:
             return False
@@ -460,27 +459,16 @@ def placement_ok_for_outline(
     require_outline_kiss: bool = True,
     kiss_tolerance_scale: float = 2.0,
 ) -> bool:
-    """Footprint + optional outline kiss + neighbor clearance + guidance validity."""
-    from nest_graph.propose.placement_common import clear_of_geoms
+    """Optional outline kiss + one clearance SoT (voids+packed Scene)."""
+    from nest_graph.propose.placement_common import is_pose_clear
     from nest_graph.propose.placement_outline import outline_kiss_ok
 
-    if not placed.fully_inside(scene.board_geom):
-        return False
+    del config, epsilon_ratio  # guidance margin is stage-split; Scene is SoT here
     if require_outline_kiss and not outline_kiss_ok(
         placed, outline, min_dist, scale=kiss_tolerance_scale,
     ):
         return False
-    if others and not clear_of_geoms(placed, others, min_dist):
-        return False
-    return is_valid_placement(
-        scene,
-        placed,
-        placed.center(),
-        min_dist,
-        config,
-        epsilon_ratio=epsilon_ratio,
-        skip_footprint=True,
-    )
+    return is_pose_clear(placed, scene.void_geoms, others, min_dist)
 
 
 def unit_vector(v: Tuple[float, float] | Sequence[float]) -> tuple[float, float]:

@@ -55,9 +55,7 @@ polish_se2_part(
     const Scalar distance_margin = clearance;
 
     auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
-        if (board != nullptr && !is_solid_fully_contained(placed, *board)) {
-            return false;
-        }
+        (void)board;  // board membership via void solids in obstacles
         if (obstacles.empty()) {
             return true;
         }

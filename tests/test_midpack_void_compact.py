@@ -1,14 +1,16 @@
-"""Unit tests for mid-pack free-space analysis and gravity compaction."""
+"""Unit tests for mid-pack free-space analysis and local_se2 gravity gate."""
 
 import numpy as np
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, box
 
-from nest_graph.propose.compaction import (
-    compact_selection,
-    selection_pairwise_independent,
-    sheet_gravity_point,
-)
+from nest_graph.config import ProposeConfig
 from nest_graph.propose.context import analyze_free_space
+from nest_graph.propose.local_se2 import local_se2_selection
+from nest_graph.propose.placement_common import (
+    is_pose_clear,
+    selection_pairwise_independent,
+)
+from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.utils import transform_poly
 
 
@@ -32,34 +34,66 @@ def test_analyze_free_space_swiss_cheese():
     assert info.max_void_ratio <= 2.5
 
 
-def test_sheet_gravity_is_min_x_plus_y():
-    sheet = Polygon([(0, 0), (1.2, 0), (0, 1.1)])
-    g = sheet_gravity_point(sheet)
-    assert abs(g.x) < 1e-9 and abs(g.y) < 1e-9
-
-
-def test_compact_selection_reduces_gravity_distance():
-    sheet = box(0, 0, 8, 8)
+def test_gravity_gate_off_skips_floater_pole_pull():
+    sheet = box(0, 0, 20, 20)
     part = box(0, 0, 1, 1)
-    # Two parts far from the gravity corner (0,0), with a gap between them.
-    transforms = [
-        np.array([5.0, 5.0, 0.0]),
-        np.array([5.0, 6.5, 0.0]),
-    ]
-    polys = [transform_poly(part, t) for t in transforms]
-    before = sum(p.centroid.distance(sheet_gravity_point(sheet)) for p in polys)
-    out_polys, out_tr = compact_selection(
-        sheet,
-        polys,
-        transforms,
-        group_ids=[0, 0],
-        selected_indices=[0, 1],
-        part_by_group={0: part},
-        min_dist=0.15,
+    tr0 = np.array([2.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0)]
+    pole = Point(15.0, 15.0)
+    cfg = ProposeConfig(
+        enable_local_se2=True,
+        enable_gravity_compaction=False,
+        local_se2_n_angles=4,
     )
-    assert selection_pairwise_independent(out_polys, [0, 1], 0.15, require_clearance=True)
-    after = sum(p.centroid.distance(sheet_gravity_point(sheet)) for p in out_polys)
-    assert after < before - 1e-6
-    # Angles preserved.
-    assert abs(out_tr[0][2] - transforms[0][2]) < 1e-12
-    assert abs(out_tr[1][2] - transforms[1][2]) < 1e-12
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[tr0.copy()],
+        group_ids=[0],
+        selected_indices=[0],
+        part_by_group={0: part},
+        min_dist=0.25,
+        propose_cfg=cfg,
+        pole=pole,
+        board_adj_indices=[],
+    )
+    out_p, out_t, stats = local_se2_selection(ctx)
+    assert stats["attempted"] == 0
+    assert abs(out_t[0][0] - tr0[0]) < 1e-12
+    assert abs(out_t[0][1] - tr0[1]) < 1e-12
+    assert abs(out_p[0].centroid.distance(polys[0].centroid)) < 1e-9
+
+
+def test_gravity_gate_on_moves_floater_toward_pole():
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 1, 1)
+    tr0 = np.array([2.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0)]
+    pole = Point(15.0, 15.0)
+    cfg = ProposeConfig(
+        enable_local_se2=True,
+        enable_gravity_compaction=True,
+        local_se2_n_angles=4,
+    )
+    d0 = float(polys[0].centroid.distance(pole))
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[tr0.copy()],
+        group_ids=[0],
+        selected_indices=[0],
+        part_by_group={0: part},
+        min_dist=0.25,
+        propose_cfg=cfg,
+        pole=pole,
+        board_adj_indices=[],
+    )
+    out_p, out_t, stats = local_se2_selection(ctx)
+    d1 = float(out_p[0].centroid.distance(pole))
+    assert d1 < d0
+    assert stats["pole_distance_delta"] < 0.0
+    assert selection_pairwise_independent(out_p, [0])
+    from nest_graph.geometry import Geometry
+
+    cand_g = Geometry.from_shapely(out_p[0])
+    assert is_pose_clear(cand_g, [], [], 0.25)

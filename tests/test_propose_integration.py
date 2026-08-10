@@ -167,5 +167,5 @@ def test_default_config_first_pass_tuned():
 def test_propose_geometry_validation(nest_board, rect_poly):
     geom = ProposeGeometry(nest_board, Polygon(), rect_poly, min_dist=0.001)
     placed = geom.placed_at((0.5, 0.5, 0.0))
-    assert geom.footprint_clear_of_voids(placed)
+    assert geom.valid_at((0.5, 0.5, 0.0), geom.sheet.centroid)
     assert not geom.hits_base(placed)

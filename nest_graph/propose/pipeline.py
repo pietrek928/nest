@@ -209,6 +209,64 @@ def _emit_side_pack(
     )
 
 
+def _emit_board_edge_reserve(
+    ctx: ProposeContext,
+    extras: PackedProposeExtras,
+    state: _CollectState,
+    *,
+    reserve_only: bool = False,
+) -> bool:
+    """Emit board_edge snaps. Returns True when the proposer was armed.
+
+    ``reserve_only`` caps to ``board_edge_batch_reserve`` (mid-pack / void /
+    cascade sniper bypass). Full pool×2 when False and not mid-pack side path.
+    """
+    cfg = ctx.propose_cfg
+    if not (
+        bool(cfg.use_board_edge_seeds)
+        and _proposer_enabled("board_edge", ctx.enabled_proposers)
+        and (ctx.border_focus or cfg.board_edge_when_packed)
+    ):
+        return False
+    packed_near_border = True
+    if ctx.base_shape is not None and not ctx.base_shape.is_empty:
+        packed_near_border = float(
+            ctx.base_shape.distance(ctx.sheet.exterior)
+        ) <= max(ctx.min_dist * 8.0, 1e-3)
+    if not (packed_near_border or ctx.border_focus):
+        return False
+    n_angles = ctx.n_angles
+    pool = ctx.pool
+    be_angles = (
+        max(n_angles, 12)
+        if ctx.base_shape is None or ctx.base_shape.is_empty
+        else min(n_angles, 8)
+    )
+    packed_n = _packed_count(extras)
+    mid_pack = packed_n >= 2 or reserve_only
+    be_top = (
+        max(int(cfg.board_edge_batch_reserve), 1)
+        if mid_pack
+        else pool * 2
+    )
+    state.ext(
+        "board_edge",
+        propose_placements_board_edge(
+            ctx.shape_to_place,
+            ctx.sheet,
+            ctx.base_shape,
+            min_dist=ctx.min_dist,
+            propose_cfg=cfg,
+            propose_geom=ctx.propose_geom,
+            pt_push=ctx.pt_push,
+            num_angles=be_angles,
+            top_n=be_top,
+        ),
+        max_items=be_top,
+    )
+    return True
+
+
 def _cascade_active(propose_cfg: ProposeConfig, zone: str | None) -> bool:
     return bool(getattr(propose_cfg, "propose_cascade_short_circuit", False)) and bool(zone)
 
@@ -639,7 +697,8 @@ def _proposer_enabled(
 ) -> bool:
     if enabled_proposers is None:
         return True
-    return name in enabled_proposers
+    key = name.value if isinstance(name, ProposerName) else str(name)
+    return key in _normalize_proposers(enabled_proposers)
 
 
 def _normalize_proposers(iterable) -> set[str]:
@@ -766,6 +825,7 @@ class _CollectState:
         self.skip_builders = False
         self.skip_explorers = False
         self.explorer_scale = 1.0
+        self.board_edge_reserved = False
         if cascade_stats_out is not None:
             cascade_stats_out.setdefault("cascade_stopped_after", "none")
             cascade_stats_out.setdefault("cascade_skipped_proposers", [])
@@ -910,10 +970,8 @@ def _collect_builder_candidates(
     """Builder stage: sheet/cluster edge snaps + group_fit.
 
     Zone permission is ``ZONE_PROPOSERS`` / ``enabled_proposers``. Staging:
-    ``use_side = use_side_pack and (packed_n >= 2 or void_path)`` — mid-pack XOR
-    turns off ``board_edge``; early void turns on ``side_pack`` (VOID_SEEK has
-    neither BOARD_EDGE nor GROUP_FIT). Void XOR group_fit; mid-pack XOR board_edge;
-    border_gap may run both group_fit and side_pack (different rings).
+    mid-pack / void enables ``side_pack``; ``board_edge`` stays available with a
+    reserve quota (no hard XOR-off when packed_n >= 2).
     """
     if state.skip_builders:
         return
@@ -923,11 +981,11 @@ def _collect_builder_candidates(
     border_focus = ctx.border_focus
     packed_n = _packed_count(extras)
     void_path = cascade_zone == "void_seek"
-    # Staging (not zone policy): mid-pack or early void → side_pack; else board_edge.
+    # Staging: mid-pack or void → side_pack; board_edge may co-exist via reserve.
     use_side = bool(getattr(cfg, "use_side_pack", True)) and (
         packed_n >= 2 or void_path
     )
-    use_board = (not use_side) or packed_n < 2
+    use_board = bool(cfg.use_board_edge_seeds)
 
     # Void path: side_pack XOR group_fit. Non-void: group_fit when enabled.
     run_group_fit = (
@@ -957,17 +1015,21 @@ def _collect_builder_candidates(
             ),
         )
 
+    # Rim reserve before side_pack so claimed_keys keep board_edge snaps.
+    # Skip if void_seek already reserved early (before explorers).
+    board_edge_on = (
+        use_board
+        and _proposer_enabled("board_edge", ctx.enabled_proposers)
+        and (border_focus or cfg.board_edge_when_packed)
+        and not state.board_edge_reserved
+    )
+    if board_edge_on:
+        _emit_board_edge_reserve(ctx, extras, state, reserve_only=use_side)
+
     # Zone permission via enabled_proposers inside _emit_side_pack.
     if use_side:
         _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
 
-    board_edge_on = (
-        use_board
-        and (not use_side or packed_n < 2)
-        and _proposer_enabled("board_edge", ctx.enabled_proposers)
-        and cfg.use_board_edge_seeds
-        and (border_focus or cfg.board_edge_when_packed)
-    )
     if (
         _proposer_enabled("sheet_corners", ctx.enabled_proposers)
         and cfg.use_border_edge_seeds
@@ -1002,36 +1064,6 @@ def _collect_builder_candidates(
                 base_shape=ctx.base_shape,
             ),
         )
-    if not board_edge_on:
-        return
-
-    # Skip expensive outline snaps when packed mass is far from the border.
-    packed_near_border = True
-    if ctx.base_shape is not None and not ctx.base_shape.is_empty:
-        packed_near_border = float(
-            ctx.base_shape.distance(ctx.sheet.exterior)
-        ) <= max(ctx.min_dist * 8.0, 1e-3)
-    if not (packed_near_border or border_focus):
-        return
-    be_angles = (
-        max(n_angles, 12)
-        if ctx.base_shape is None or ctx.base_shape.is_empty
-        else min(n_angles, 8)
-    )
-    state.ext(
-        "board_edge",
-        propose_placements_board_edge(
-            ctx.shape_to_place,
-            ctx.sheet,
-            ctx.base_shape,
-            min_dist=ctx.min_dist,
-            propose_cfg=cfg,
-            propose_geom=ctx.propose_geom,
-            pt_push=ctx.pt_push,
-            num_angles=be_angles,
-            top_n=pool * 2,
-        ),
-    )
 
 
 def _collect_explorer_candidates(
@@ -1386,15 +1418,17 @@ def _collect_candidates(
         motif_reserve=motif_reserve,
     )
 
-    # Wall-fill: void_seek sniper short-circuit still emits side_pack (even if
-    # pocket/motif reserves are non-empty). interior_pocket cannot enable SIDE_PACK.
-    if (
-        state.skip_builders
-        and cascade_zone == "void_seek"
-        and bool(getattr(ctx.propose_cfg, "use_side_pack", True))
-    ):
+    # Void / mid-pack: claim board_edge rim slots before explorers / side_pack
+    # flood claimed_keys (mode=free runs explorers first).
+    if cascade_zone == "void_seek":
+        if _emit_board_edge_reserve(ctx, extras, state, reserve_only=True):
+            state.board_edge_reserved = True
+
+    # Wall-fill: void_seek sniper short-circuit still emits side_pack.
+    if state.skip_builders and cascade_zone == "void_seek":
         n0 = len(state.candidates)
-        _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
+        if bool(getattr(ctx.propose_cfg, "use_side_pack", True)):
+            _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
         if (
             len(state.candidates) > n0
             and state.cascade_stats_out is not None
@@ -1402,9 +1436,10 @@ def _collect_candidates(
             skipped = list(
                 state.cascade_stats_out.get("cascade_skipped_proposers") or []
             )
-            if "side_pack" in skipped:
+            keep = {"side_pack", "board_edge"}
+            if keep.intersection(skipped):
                 state.cascade_stats_out["cascade_skipped_proposers"] = [
-                    n for n in skipped if n != "side_pack"
+                    n for n in skipped if n not in keep
                 ]
 
     if mode == "cascade":
@@ -2086,7 +2121,7 @@ def _batch_obstacle_geoms(placed: Sequence[BaseGeometry]) -> list[Geometry]:
 
 
 def _batch_pair_valid(
-    board_g: Geometry,
+    voids: list[Geometry],
     part_a: Geometry,
     coords_a: tuple[float, float, float],
     part_b: Geometry,
@@ -2096,10 +2131,10 @@ def _batch_pair_valid(
 ) -> bool:
     placed_a = part_a.apply_transform(coords_a)
     placed_b = part_b.apply_transform(coords_b)
-    if not is_pose_clear(placed_a, board_g, obstacle_geoms, min_dist):
+    if not is_pose_clear(placed_a, voids, obstacle_geoms, min_dist):
         return False
     return is_pose_clear(
-        placed_b, board_g, [*obstacle_geoms, placed_a], min_dist,
+        placed_b, voids, [*obstacle_geoms, placed_a], min_dist,
     )
 
 
@@ -2128,7 +2163,6 @@ def _batch_pack_pair_order(
     min_dist: float,
     placed: Sequence[BaseGeometry],
     obstacle_geoms: list[Geometry] | None = None,
-    board_g: Geometry | None = None,
 ) -> list[tuple[tuple[float, float, float], tuple[float, float, float], float]]:
     anchor_poly = parts_by_group[anchor_gid]
     follow_poly = parts_by_group[follow_gid]
@@ -2148,9 +2182,7 @@ def _batch_pack_pair_order(
             ),
         },
     )
-    sheet, _voids = board_context_from_geometry(board)
-    if board_g is None:
-        board_g = Geometry.from_shapely(sheet)
+    sheet, voids = board_context_from_geometry(board)
     obs = (
         list(obstacle_geoms)
         if obstacle_geoms is not None
@@ -2162,7 +2194,7 @@ def _batch_pack_pair_order(
 
     for coords_a in anchor_seeds:
         placed_a_g = anchor_part.apply_transform(coords_a)
-        if not is_pose_clear(placed_a_g, board_g, obs, min_dist):
+        if not is_pose_clear(placed_a_g, voids, obs, min_dist):
             continue
 
         # Shapely mirror only for follow proposers / free-space topology.
@@ -2200,7 +2232,7 @@ def _batch_pack_pair_order(
         focal_g = _as_batch_geometry(focal) if focal is not None else None
         for coords_b in follow_coords[: propose_cfg.batch_pack_follow_proposals]:
             if not _batch_pair_valid(
-                board_g, anchor_part, coords_a, follow_part, coords_b,
+                voids, anchor_part, coords_a, follow_part, coords_b,
                 obs, min_dist,
             ):
                 continue
@@ -2235,8 +2267,6 @@ def augment_batch_pack_proposals(
     # Shapely union only for follow ProposeGeometry / free-space; clearance uses Geometry list.
     base_obstacle = unary_union(placed) if placed else Polygon()
     obstacle_geoms = _batch_obstacle_geoms(placed)
-    sheet, _ = board_context_from_geometry(board)
-    board_g = Geometry.from_shapely(sheet)
     all_pairs: list[
         tuple[tuple[float, float, float], tuple[float, float, float], float, int, int]
     ] = []
@@ -2268,7 +2298,6 @@ def augment_batch_pack_proposals(
             min_dist=min_dist,
             placed=placed,
             obstacle_geoms=obstacle_geoms,
-            board_g=board_g,
         ):
             all_pairs.append((coords_a, coords_b, score, anchor_gid, follow_gid))
 

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from shapely.geometry import Point, box
 
+from nest_graph.board import board_context_from_geometry
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.propose import first_pass_border_coords
 from nest_graph.propose.context import (
@@ -174,8 +175,9 @@ def test_first_pass_border_coords_are_clear_and_deduped():
     assert coords, "border augment must emit candidates on an open sheet"
     keys = {(round(c[0], 3), round(c[1], 3), round(c[2], 2)) for c in coords}
     assert len(keys) == len(coords)
+    _, voids = board_context_from_geometry(board)
     for c in coords[:12]:
-        assert is_pose_clear(transform_poly(part, c), board, placed, min_dist)
+        assert is_pose_clear(transform_poly(part, c), voids, placed, min_dist)
 
 
 def test_first_pass_border_coords_on_empty_pack():

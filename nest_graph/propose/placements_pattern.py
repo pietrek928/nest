@@ -217,20 +217,19 @@ def emit_packing_clear(
     propose_geom: ProposeGeometry,
     coords: tuple[float, float, float],
 ) -> bool:
-    """Propose-emit packing SoT: fully_inside + packed collision (not Scene margin)."""
+    """Propose-emit packing SoT: Penetrating vs voids+packed (margin 0, not Scene)."""
+    from nest_graph.propose.placement_common import placement_obstacles
+
     placed = propose_geom.placed_at(coords)
     if placed is None:
         return False
-    if not placed.fully_inside(propose_geom.board_geom):
-        return False
-    return bool(propose_geom.passes_full_packed_collision(placed))
-
-
-def _packing_clear(
-    propose_geom: ProposeGeometry,
-    coords: tuple[float, float, float],
-) -> bool:
-    return emit_packing_clear(propose_geom, coords)
+    obs = placement_obstacles(
+        propose_geom.scene.void_geoms,
+        propose_geom.full_packed_geoms,
+    )
+    if not obs:
+        return True
+    return not placed.intersects_any(obs)
 
 
 def _full_motif_packing_clear(
@@ -245,7 +244,7 @@ def _full_motif_packing_clear(
     for gid, t_rel_m in pat.members:
         t_m = compose_transforms(t_anchor, t_rel_m)
         if int(gid) == int(group_id):
-            if not _packing_clear(propose_geom, t_m):
+            if not emit_packing_clear(propose_geom, t_m):
                 return False
             continue
         if part_by_group is not None and int(gid) in part_by_group:
@@ -293,7 +292,7 @@ def stamp_motif_leader_follower(
         if key in seen:
             return False
         seen.add(key)
-        if not _packing_clear(propose_geom, coords):
+        if not emit_packing_clear(propose_geom, coords):
             if skip_reasons is not None:
                 skip_reasons["collide"] = skip_reasons.get("collide", 0) + 1
             return False

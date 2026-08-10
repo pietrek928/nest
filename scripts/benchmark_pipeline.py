@@ -36,7 +36,6 @@ def _build_cfg(
             cfg.propose = cfg.propose.model_copy(update={
                 "void_island_score_boost": 0.0,
                 "void_attractor_rule_weight": 0.0,
-                "enable_gravity_compaction": False,
             })
         case ProposeAblation.VOID_BOOST_HIGH:
             cfg.propose = cfg.propose.model_copy(update={
@@ -131,16 +130,10 @@ def _build_cfg(
                 "enable_void_large_hijack": False,
                 "void_island_score_boost": 0.0,
                 "void_attractor_rule_weight": 0.0,
-                "enable_gravity_compaction": False,
             })
         case ProposeAblation.NO_VOID_RANK:
             cfg.propose = cfg.propose.model_copy(update={
                 "void_rank_pole_weight": 0.0,
-            })
-        case ProposeAblation.GRAVITY_VOID_POLE:
-            # Diagnose-only: gravity remains off in shipped; this preset enables it.
-            cfg.propose = cfg.propose.model_copy(update={
-                "enable_gravity_compaction": True,
             })
         case ProposeAblation.VOID_PSO:
             # OOS-3 gated: only enable when props_pole≈0 after OOS-1+4; off by default.

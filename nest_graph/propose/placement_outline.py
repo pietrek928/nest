@@ -22,14 +22,8 @@ def _geometry_polygon(geom: Geometry) -> Polygon:
 
 
 def standoff_gap(placed: Geometry, standoff: BaseGeometry) -> float:
-    ring_geom = outline_ring_geom(standoff)
-    if ring_geom is not None:
-        return placed.standoff_distance(ring_geom)
-    if isinstance(standoff, Polygon):
-        return placed.standoff_distance(Geometry.from_ring(
-            list(standoff.exterior.coords)[:-1],
-        ))
-    return float(_geometry_polygon(placed).distance(standoff))
+    """Alias of outline_standoff_distance for ring/outline targets."""
+    return outline_standoff_distance(placed, standoff)
 
 
 def _nest_outline_ring(outline: BaseGeometry):
@@ -84,12 +78,21 @@ def outline_ring_geom(
     return Geometry.from_rings(rings)
 
 
-def outline_standoff_distance(poly, outline: BaseGeometry) -> float:
+def outline_standoff_distance(
+    poly,
+    outline: BaseGeometry,
+    *,
+    propose_geom: Optional["ProposeGeometry"] = None,
+    ring: Optional[Geometry] = None,
+) -> float:
+    """Edge-to-edge standoff to the exterior outline ring (cached when available)."""
+    ring_geom = ring
+    if ring_geom is None:
+        ring_geom = outline_ring_geom(outline, propose_geom=propose_geom)
     if isinstance(poly, Geometry):
-        ring_geom = outline_ring_geom(outline)
         if ring_geom is not None:
             return poly.standoff_distance(ring_geom)
-        return standoff_gap(poly, _nest_outline_ring(outline))
+        return float(_geometry_polygon(poly).distance(_nest_outline_ring(outline)))
     return float(poly.distance(_nest_outline_ring(outline)))
 
 
@@ -103,9 +106,16 @@ def outline_kiss_ok(
     min_dist: float,
     *,
     scale: float = 2.0,
+    propose_geom: Optional["ProposeGeometry"] = None,
+    ring: Optional[Geometry] = None,
 ) -> bool:
     tol = outline_kiss_tolerance(min_dist, scale=scale)
-    err = abs(outline_standoff_distance(poly, outline) - min_dist)
+    err = abs(
+        outline_standoff_distance(
+            poly, outline, propose_geom=propose_geom, ring=ring,
+        )
+        - min_dist
+    )
     return err <= tol
 
 

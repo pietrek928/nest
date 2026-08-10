@@ -10,10 +10,14 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
-from nest_graph.propose.compaction import selection_pairwise_independent
-from nest_graph.propose.placement_common import as_geometry as _as_geometry, is_pose_clear
+from nest_graph.propose.placement_common import (
+    as_geometry as _as_geometry,
+    is_pose_clear,
+    selection_pairwise_independent,
+)
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.context import (
     _cluster_merge_gap,
@@ -344,6 +348,7 @@ def stamp_motif_at_anchor(
     sheet: Polygon,
     fixed: BaseGeometry,
     min_dist: float,
+    void_geoms: Sequence | None = None,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
     """Atomic peeled-motif stamp under Scene ``is_pose_clear``.
 
@@ -355,7 +360,9 @@ def stamp_motif_at_anchor(
     mapping = assign_peeled_to_pattern(pat, peeled_indices, group_ids)
     if mapping is None:
         return None
-    board_g = Geometry.from_shapely(sheet)
+    if void_geoms is None:
+        _, void_geoms = board_context_from_geometry(sheet)
+    voids = list(void_geoms) if void_geoms else []
     obs = _obstacle_geoms(fixed)
     part_geoms: dict[int, Geometry] = {}
     placed: list[tuple[int, np.ndarray, BaseGeometry]] = []
@@ -371,7 +378,7 @@ def stamp_motif_at_anchor(
         cand_g = part_geoms[gid].apply_transform(
             float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
         )
-        if not is_pose_clear(cand_g, board_g, obs, min_dist):
+        if not is_pose_clear(cand_g, voids, obs, min_dist):
             return None
         cand = transform_poly(part, cand_tr)
         placed.append((idx, cand_tr, cand))
@@ -392,6 +399,7 @@ def _motif_stamp_attempt(
     *,
     free_space=None,
     void_poly: Polygon | None = None,
+    void_geoms: Sequence | None = None,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
     peeled_gids = [int(group_ids[i]) for i in peeled]
     fitting = [p for p in patterns if pattern_fits_peeled(p, peeled_gids)]
@@ -442,6 +450,7 @@ def _motif_stamp_attempt(
                 sheet=sheet,
                 fixed=kept_union,
                 min_dist=min_dist,
+                void_geoms=void_geoms,
             )
             if stamped is not None:
                 return stamped
@@ -465,6 +474,7 @@ def cluster_repack_selection(
     free_space=None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
+    void_geoms = None
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
         sheet = ctx.sheet
@@ -479,6 +489,7 @@ def cluster_repack_selection(
         fixed_obstacles = (
             ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
         )
+        void_geoms = ctx.void_geoms
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
@@ -502,6 +513,10 @@ def cluster_repack_selection(
         or len(sel) < int(propose_cfg.cluster_repack_min_size)
     ):
         return out_polys, out_tr, sel, stats
+
+    if void_geoms is None:
+        _, void_geoms = board_context_from_geometry(sheet)
+    voids = list(void_geoms) if void_geoms else []
 
     peeled_info = bfs_peel_victim(
         sel,
@@ -567,6 +582,7 @@ def cluster_repack_selection(
         pole,
         free_space=free_space,
         void_poly=void_poly,
+        void_geoms=voids,
     )
     void_facing = any(_part_void_adj(out_polys[i], void_poly, min_dist) for i in victim)
     if stamped is not None:
@@ -607,7 +623,6 @@ def cluster_repack_selection(
     working_tr: dict[int, np.ndarray] = {}
     working_poly: dict[int, BaseGeometry] = {}
     placed_idxs: list[int] = []
-    board_g = Geometry.from_shapely(sheet)
     obs: list[Geometry] = []
     for p in locked + working_kept_geoms:
         og = _as_geometry(p)
@@ -653,7 +668,7 @@ def cluster_repack_selection(
             cand_g = part_g.apply_transform(
                 float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
             )
-            if not is_pose_clear(cand_g, board_g, obs, min_dist):
+            if not is_pose_clear(cand_g, voids, obs, min_dist):
                 continue
             cand = transform_poly(part, cand_tr)
             clear.append((c, cand, cand_tr, cand_g))
@@ -705,29 +720,55 @@ def _component_board_adj(
     min_dist: float,
 ) -> bool:
     from nest_graph.propose.placement_common import is_board_adj
+    from nest_graph.propose.placement_outline import outline_ring_geom
 
+    ring = outline_ring_geom(sheet)
     for i in global_idxs:
         poly = polys[i]
-        if poly is not None and not poly.is_empty and is_board_adj(poly, sheet, min_dist):
+        if poly is not None and not poly.is_empty and is_board_adj(
+            poly, sheet, min_dist, ring=ring,
+        ):
             return True
     return False
 
 
 def cluster_relocate_selection(
-    sheet: Polygon,
-    polys: list[BaseGeometry],
-    transforms: list,
-    group_ids: Sequence[int],
-    selected_indices: Sequence[int],
-    part_by_group: dict[int, Polygon],
-    min_dist: float,
-    propose_cfg: ProposeConfig,
+    sheet: Polygon | SelectionEditCtx,
+    polys: list[BaseGeometry] | None = None,
+    transforms: list | None = None,
+    group_ids: Sequence[int] | None = None,
+    selected_indices: Sequence[int] | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    min_dist: float | None = None,
+    propose_cfg: ProposeConfig | None = None,
     *,
     pole: Point | None = None,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
+    void_geoms: Sequence | None = None,
     max_steps: int = 24,
 ) -> tuple[list[BaseGeometry], list, dict]:
-    """Rigid-translate floating (non-board_adj) contact islands toward ``pole``."""
+    """Rigid-translate floating (non-board_adj) contact islands toward ``pole``.
+
+    Prefer ``SelectionEditCtx`` as the first argument; legacy kwargs remain.
+    """
+    if isinstance(sheet, SelectionEditCtx):
+        ctx = sheet
+        sheet = ctx.sheet
+        polys = ctx.polys
+        transforms = ctx.transforms
+        group_ids = ctx.group_ids
+        selected_indices = ctx.selected_indices
+        part_by_group = ctx.part_by_group
+        min_dist = ctx.min_dist
+        propose_cfg = ctx.propose_cfg
+        pole = ctx.pole if pole is None else pole
+        fixed_obstacles = (
+            ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
+        )
+        void_geoms = ctx.void_geoms if void_geoms is None else void_geoms
+    assert polys is not None and transforms is not None
+    assert group_ids is not None and selected_indices is not None
+    assert part_by_group is not None and min_dist is not None and propose_cfg is not None
     stats = {"attempted": 0, "accepted": 0, "moved": 0}
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
@@ -742,6 +783,10 @@ def cluster_relocate_selection(
     ):
         return out_polys, out_tr, stats
 
+    if void_geoms is None:
+        _, void_geoms = board_context_from_geometry(sheet)
+    voids = list(void_geoms) if void_geoms else []
+
     idxs = [i for i in sel if out_polys[i] is not None and not out_polys[i].is_empty]
     selected_local = [out_polys[i] for i in idxs]
     local_groups = cluster_packed_indices(selected_local, min_dist, sheet=sheet)
@@ -750,7 +795,6 @@ def cluster_relocate_selection(
         if g is not None and not g.is_empty
     ]
     step = max(0.5 * float(min_dist), 1e-4)
-    board_g = Geometry.from_shapely(sheet)
     part_geoms: dict[int, Geometry] = {}
 
     for local in local_groups:
@@ -800,7 +844,7 @@ def cluster_relocate_selection(
                 cand_g = part_geoms[gid].apply_transform(
                     float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
                 )
-                if not is_pose_clear(cand_g, board_g, obs, min_dist):
+                if not is_pose_clear(cand_g, voids, obs, min_dist):
                     ok = False
                     break
             if not ok:

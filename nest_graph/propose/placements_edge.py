@@ -12,6 +12,7 @@ from nest_graph.utils import get_shape_exteriors
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 from nest_graph.propose.placement_common import is_pose_clear
+from nest_graph.propose.placements_pattern import emit_packing_clear
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
     outline_ring_geom,
@@ -97,11 +98,13 @@ def _board_edge_snap_seeds(
         propose_geom=propose_geom,
     )
 
-    # Snap-then-batch: one full-guidance filter for board-edge snaps.
+    # Snap-then-packing filter: rim Touch must survive (guidance valid_at rejects it).
     if propositions and pt_push is not None:
-        raw = [p["coords"] for p in propositions]
-        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
-        propositions = [p for p in propositions if p["coords"] in valid]
+        _ = pt_push
+        propositions = [
+            p for p in propositions
+            if emit_packing_clear(propose_geom, p["coords"])
+        ]
 
     def _add_seed(
         coords: tuple[float, float, float],
@@ -272,7 +275,8 @@ def propose_placements_group_fit(
     anchor_pts = exterior_anchor_points(focal_shape, samples_per_edge)
     stratify_boundary = focal_shape if isinstance(focal_shape, Polygon) else sheet
     focal_ring_geom = outline_ring_geom(focal_shape)
-    base_obs = propose_geom.obstacle_geoms_for_batch()
+    base_obs = list(propose_geom.base_geoms)
+    voids = list(propose_geom.scene.void_geoms)
 
     for contact in anchor_pts:
         snap_contact, inward = inward_at_contact(focal_shape, contact)
@@ -294,7 +298,7 @@ def propose_placements_group_fit(
                 continue
             placed_geom = propose_geom.placed_at(coords)
             if not is_pose_clear(
-                placed_geom, propose_geom.board_geom, base_obs, min_dist,
+                placed_geom, voids, base_obs, min_dist,
             ):
                 continue
             err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
@@ -376,7 +380,9 @@ def _sheet_corner_seeds(
 
             for dx, dy in alignments:
                 placed = rotated.translate(dx, dy)
-                if not placed.fully_inside(propose_geom.board_geom):
+                if propose_geom.scene.void_geoms and placed.intersects_any(
+                    propose_geom.scene.void_geoms
+                ):
                     continue
                 border_dist = placed.standoff_distance(ring_geom)
                 if border_dist < min_dist - 1e-6:
@@ -389,11 +395,10 @@ def _sheet_corner_seeds(
                 })
 
     if propositions:
-        raw = [p["coords"] for p in propositions]
-        valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
-        propositions = [p for p in propositions if p["coords"] in valid]
-
-    propositions.sort(key=lambda x: x["cost"])
+        propositions = [
+            p for p in propositions
+            if emit_packing_clear(propose_geom, p["coords"])
+        ]
 
     seen: set[tuple[float, float, float]] = set()
     out: list[tuple[float, float, float]] = []
@@ -463,7 +468,9 @@ def propose_placements_sheet_edge(
             ]
             for dx, dy in alignments:
                 placed = rotated.translate(dx, dy)
-                if not placed.fully_inside(propose_geom.board_geom):
+                if propose_geom.scene.void_geoms and placed.intersects_any(
+                    propose_geom.scene.void_geoms
+                ):
                     continue
                 coords = (dx, dy, float(angle))
                 err = placement_contact_error(placed, sheet, min_dist, None)

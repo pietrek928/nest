@@ -1,4 +1,5 @@
 import math
+from typing import Sequence
 
 import numpy as np
 from shapely import MultiPolygon, Polygon, box
@@ -31,14 +32,15 @@ def is_board_adj(
     min_dist: float,
     *,
     gap: float | None = None,
+    ring: Geometry | None = None,
 ) -> bool:
     """Board-adjacent if standoff ≤ min_dist + 2*gap (edge-to-edge)."""
     if poly is None or (hasattr(poly, "is_empty") and poly.is_empty):
         return False
     if sheet is None or sheet.is_empty:
         return False
-    ring = outline_ring_geom(sheet)
-    if ring is None:
+    board_ring = ring if ring is not None else outline_ring_geom(sheet)
+    if board_ring is None:
         return False
     from nest_graph.propose.context import _cluster_merge_gap
 
@@ -49,37 +51,86 @@ def is_board_adj(
     if geom is None:
         return False
     try:
-        return float(geom.standoff_distance(ring)) <= float(min_dist) + 2.0 * g_gap + 1e-9
+        return float(geom.standoff_distance(board_ring)) <= float(min_dist) + 2.0 * g_gap + 1e-9
     except Exception:
         return False
 
 
+def placement_obstacles(voids, packed) -> list[Geometry]:
+    """Assemble voids + packed into one obstacle list (board membership + packing)."""
+    obs: list[Geometry] = []
+    if voids:
+        if isinstance(voids, Geometry):
+            obs.append(voids)
+        else:
+            for v in voids:
+                vg = as_geometry(v)
+                if vg is not None:
+                    obs.append(vg)
+    if packed is None:
+        return obs
+    if isinstance(packed, Geometry):
+        obs.append(packed)
+        return obs
+    for o in packed:
+        og = as_geometry(o)
+        if og is not None:
+            obs.append(og)
+    return obs
+
+
+def selection_pairwise_independent(
+    polys: Sequence[BaseGeometry],
+    selected_indices: Sequence[int],
+    min_dist: float = 0.0,
+    *,
+    require_clearance: bool = False,
+) -> bool:
+    """Cheap independence check on the selected subset only.
+
+    Matches ``make_polygon_graph`` / C++ packing intersects: hard overlap only
+    (EPA penetration depth > 1e-9). Zero-depth edge kisses are independent.
+    Pass ``require_clearance=True`` to also enforce pairwise ``min_dist``.
+    Uses Geometry intersects/distance (no Shapely intersects hotspot).
+    """
+    idxs = list(selected_indices)
+    geoms: list[Geometry | None] = []
+    for ia in idxs:
+        pa = polys[ia]
+        if pa is None or (hasattr(pa, "is_empty") and pa.is_empty):
+            geoms.append(None)
+        else:
+            geoms.append(as_geometry(pa))
+    for a in range(len(geoms)):
+        ga = geoms[a]
+        if ga is None:
+            continue
+        for b in range(a + 1, len(geoms)):
+            gb = geoms[b]
+            if gb is None:
+                continue
+            if ga.intersects(gb):
+                return False
+            if require_clearance and float(ga.distance(gb)) < float(min_dist):
+                return False
+    return True
+
+
 def is_pose_clear(
     candidate,
-    board,
-    obstacles,
+    voids,
+    packed,
     min_dist: float,
 ) -> bool:
-    """Clearance SoT: board fully_inside + StaticCollisionScene margin."""
+    """Clearance SoT: StaticCollisionScene / Penetrating vs voids+packed (no fully_inside)."""
     cand_g = as_geometry(candidate)
-    board_g = as_geometry(board)
-    if cand_g is None or board_g is None:
+    if cand_g is None:
         return False
-    if not cand_g.fully_inside(board_g):
-        return False
-    obs: list[Geometry] = []
-    if isinstance(obstacles, Geometry):
-        obs = [obstacles]
-    elif obstacles:
-        for o in obstacles:
-            og = as_geometry(o)
-            if og is not None:
-                obs.append(og)
+    obs = placement_obstacles(voids, packed)
     if not obs:
         return True
     md = float(min_dist)
     if md <= 0.0:
-        # Zero margin: packing intersect only.
         return clear_of_geoms(cand_g, obs, 0.0)
     scene = StaticCollisionScene.build(obs, aura=0.5)
     return bool(scene.is_valid_placement(cand_g, min_dist=md))

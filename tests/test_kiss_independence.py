@@ -3,7 +3,7 @@
 from shapely.geometry import box
 
 from nest_graph.geometry import Geometry, find_polygon_intersections
-from nest_graph.propose.compaction import selection_pairwise_independent
+from nest_graph.propose.placement_common import selection_pairwise_independent
 
 
 def test_edge_kiss_not_packing_collision():

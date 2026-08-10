@@ -524,7 +524,9 @@ def _placement_feedback(
         cached = feedback_cache[coords]
         return cached
     placed_geom = propose_geom.placed_at(coords)
-    if not placed_geom.fully_inside(propose_geom.board_geom):
+    if propose_geom.scene.void_geoms and placed_geom.intersects_any(
+        propose_geom.scene.void_geoms
+    ):
         return None
     g = propose_geom.placement_guidance(placed_geom, (coords[0], coords[1]), pt_push)
     if g.is_penetrating:

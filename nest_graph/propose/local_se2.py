@@ -6,12 +6,22 @@ from typing import Sequence
 import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import nearest_points
 
+from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, polish_se2_part
-from nest_graph.propose.compaction import selection_pairwise_independent
-from nest_graph.propose.placement_common import as_geometry, is_board_adj
-from nest_graph.propose.placement_outline import outline_ring_geom
+from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
+from nest_graph.propose.placement_common import (
+    as_geometry,
+    is_board_adj,
+    is_pose_clear,
+    selection_pairwise_independent,
+)
+from nest_graph.propose.placement_outline import (
+    inward_at_contact,
+    outline_ring_geom,
+    outline_standoff_distance,
+)
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.utils import transform_poly
@@ -69,8 +79,9 @@ def local_se2_selection(
 
     Prefer ``SelectionEditCtx`` as the first argument; legacy kwargs remain.
     Board_adj uses ±exterior tangent only. Floating parts attract toward
-    ``pole`` with ±45/±90 slides.
+    ``pole`` with ±45/±90 slides when ``enable_gravity_compaction`` is True.
     """
+    void_geoms = None
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
         sheet = ctx.sheet
@@ -88,6 +99,7 @@ def local_se2_selection(
         board_adj_indices = (
             ctx.board_adj_indices if board_adj_indices is None else board_adj_indices
         )
+        void_geoms = ctx.void_geoms
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
@@ -98,6 +110,8 @@ def local_se2_selection(
         "tangent_moves": 0,
         "se2_native_hits": 0,
         "se2_native_accepted": 0,
+        "pole_distance_delta": 0.0,
+        "theta_changed_count": 0,
     }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
@@ -114,6 +128,13 @@ def local_se2_selection(
         # Still allow board_adj tangent-only passes.
         pass
 
+    if void_geoms is None:
+        _, void_geoms = board_context_from_geometry(sheet)
+    voids = [
+        g for g in (as_geometry(v) for v in (void_geoms or ()))
+        if g is not None
+    ]
+
     locked = [
         g for g in (fixed_obstacles or ())
         if g is not None and not g.is_empty
@@ -122,17 +143,17 @@ def local_se2_selection(
 
     coarse_step = max(4.0 * float(min_dist), 1e-4)
     max_coarse = max(1, int(getattr(propose_cfg, "local_se2_max_coarse_steps", 8)))
-    board_g = Geometry.from_shapely(sheet)
     minx, miny, maxx, maxy = sheet.bounds
     sheet_diag = math.hypot(maxx - minx, maxy - miny)
 
+    board_ring = outline_ring_geom(sheet)
     board_set = set(int(i) for i in (board_adj_indices or ()))
     if not board_set:
         board_set = {
             i for i in sel
             if out_polys[i] is not None
             and not out_polys[i].is_empty
-            and is_board_adj(out_polys[i], sheet, min_dist)
+            and is_board_adj(out_polys[i], sheet, min_dist, ring=board_ring)
         }
 
     def _order_key(i: int) -> float:
@@ -153,7 +174,11 @@ def local_se2_selection(
         if part is None or poly is None or poly.is_empty:
             continue
         is_rim = idx in board_set
-        if not is_rim and (pole is None or pole.is_empty):
+        if not is_rim and (
+            not propose_cfg.enable_gravity_compaction
+            or pole is None
+            or pole.is_empty
+        ):
             continue
         stats["attempted"] += 1
 
@@ -163,6 +188,58 @@ def local_se2_selection(
                 continue
             dist0 = 0.0
             use_pole_metric = False
+            # Late kiss dock: snap to outline when standoff is off ideal.
+            ring = board_ring
+            kiss_err = abs(
+                outline_standoff_distance(poly, sheet, ring=ring) - float(min_dist)
+            ) if ring is not None else 0.0
+            if ring is not None and kiss_err > max(float(min_dist) * 0.5, 1e-4):
+                try:
+                    contact, _ = nearest_points(sheet.exterior, poly)
+                except Exception:
+                    contact = None
+                if contact is not None:
+                    snap_contact, inward = inward_at_contact(sheet, contact)
+                    if gid not in part_geoms:
+                        part_geoms[gid] = Geometry.from_shapely(part)
+                    snapped = snap_pose_to_ring(
+                        part_geoms[gid],
+                        ring,
+                        (float(snap_contact.x), float(snap_contact.y)),
+                        (float(inward[0]), float(inward[1])),
+                        float(tr[2]),
+                        float(min_dist),
+                        board=None,
+                    )
+                    if snapped is not None:
+                        sx, sy, sth = snapped
+                        snap_g = part_geoms[gid].apply_transform(sx, sy, sth)
+                        others0 = [
+                            out_polys[j]
+                            for j in sel
+                            if int(j) != int(idx)
+                            and out_polys[j] is not None
+                            and not out_polys[j].is_empty
+                        ]
+                        packed0 = [
+                            g for g in (
+                                as_geometry(p) for p in (list(locked) + others0)
+                            ) if g is not None
+                        ]
+                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)):
+                            snap_poly = transform_poly(part, (sx, sy, sth))
+                            prev_p, prev_t = out_polys[idx], out_tr[idx]
+                            out_polys[idx] = snap_poly
+                            out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
+                            if selection_pairwise_independent(out_polys, sel):
+                                poly = snap_poly
+                                tr = out_tr[idx]
+                                stats["accepted"] += 1
+                                stats["moved"] += 1
+                                stats["tangent_moves"] += 1
+                            else:
+                                out_polys[idx] = prev_p
+                                out_tr[idx] = prev_t
         else:
             cx, cy = float(poly.centroid.x), float(poly.centroid.y)
             dx, dy = float(pole.x) - cx, float(pole.y) - cy
@@ -178,9 +255,10 @@ def local_se2_selection(
             for j in sel
             if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
         ]
-        obs_geoms = [
+        packed = [
             g for g in (as_geometry(p) for p in (list(locked) + others)) if g is not None
         ]
+        obs_with_voids = [*voids, *packed]
         if gid not in part_geoms:
             part_geoms[gid] = Geometry.from_shapely(part)
         part_g = part_geoms[gid]
@@ -194,8 +272,8 @@ def local_se2_selection(
         polished = polish_se2_part(
             part_g,
             (float(tr[0]), float(tr[1]), float(tr[2])),
-            obs_geoms,
-            board_g,
+            obs_with_voids,
+            None,
             dirs,
             n_angles=n_angles,
             max_t=float(max_t),
@@ -227,5 +305,14 @@ def local_se2_selection(
         stats["se2_native_accepted"] += 1
         if is_rim:
             stats["tangent_moves"] += 1
+        elif use_pole_metric:
+            d1 = math.hypot(
+                float(cand.centroid.x) - float(pole.x),
+                float(cand.centroid.y) - float(pole.y),
+            )
+            stats["pole_distance_delta"] += d1 - dist0
+            dth = abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi)
+            if dth > 1e-9:
+                stats["theta_changed_count"] += 1
 
     return out_polys, out_tr, stats

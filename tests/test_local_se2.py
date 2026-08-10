@@ -8,7 +8,7 @@ from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry, polish_se2_part
-from nest_graph.propose.compaction import selection_pairwise_independent
+from nest_graph.propose.placement_common import selection_pairwise_independent
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.utils import transform_poly
 

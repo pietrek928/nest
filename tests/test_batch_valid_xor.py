@@ -5,8 +5,9 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import GuidanceConfig, batch_check_validity
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
+from nest_graph.propose.placement_common import is_pose_clear, placement_obstacles
+from nest_graph.propose.placements_pattern import emit_packing_clear
 from nest_graph.utils import transform_poly
 
 
@@ -48,36 +49,6 @@ def test_batch_valid_flags_false_matches_valid_at():
     assert xor == 0
 
 
-def test_void_only_batch_check_still_disagrees_with_valid_at():
-    """Graph-build void-only path must remain distinct from propose validity."""
-    geom, push, _part = _scene()
-    rng = np.random.default_rng(1)
-    transforms = [
-        (float(x), float(y), float(th))
-        for x, y, th in zip(
-            rng.uniform(1.5, 8.5, 48),
-            rng.uniform(1.5, 8.5, 48),
-            rng.uniform(0.0, 2.0 * np.pi, 48),
-            strict=True,
-        )
-    ]
-    cfg = geom._propose_guidance_cfg(push)
-    void_flags = batch_check_validity(
-        geom.part,
-        [(float(c[0]), float(c[1]), float(c[2])) for c in transforms],
-        geom.scene.void_geoms,
-        cfg,
-        geom._min_dist,
-        geom._epsilon_ratio,
-    )
-    xor = 0
-    for coords, vok in zip(transforms, void_flags, strict=True):
-        # Footprint-fail cases: void-only may still True while valid_at False.
-        if bool(vok) != bool(geom.valid_at(coords, push)):
-            xor += 1
-    assert xor > 0
-
-
 def test_guidance_cfg_reuse_matches_valid_at():
     geom, push, _ = _scene()
     cfg = geom._propose_guidance_cfg(push)
@@ -87,3 +58,29 @@ def test_guidance_cfg_reuse_matches_valid_at():
         geom, [coords], push, return_guidance=False, guidance_cfg=cfg,
     )
     assert flags == [geom.valid_at(coords, push)]
+
+
+def test_far_outside_rejected_via_voids():
+    geom, push, _ = _scene()
+    assert geom.scene.void_geoms
+    assert not emit_packing_clear(geom, (100.0, 100.0, 0.0))
+    placed = geom.placed_at((100.0, 100.0, 0.0))
+    assert placed is not None
+    assert not is_pose_clear(placed, geom.scene.void_geoms, [], 0.05)
+    assert not geom.valid_at((100.0, 100.0, 0.0), push)
+
+
+def test_interior_pose_valid_without_fully_inside():
+    geom, push, _ = _scene()
+    coords = (7.0, 7.0, 0.0)
+    assert emit_packing_clear(geom, coords)
+    assert geom.valid_at(coords, push)
+    placed = geom.placed_at(coords)
+    assert is_pose_clear(placed, geom.scene.void_geoms, geom.base_geoms, 0.05)
+
+
+def test_placement_obstacles_merges_voids_and_packed():
+    geom, _, _ = _scene()
+    obs = placement_obstacles(geom.scene.void_geoms, geom.base_geoms)
+    assert len(obs) >= len(geom.scene.void_geoms)
+    assert len(obs) >= len(geom.base_geoms)

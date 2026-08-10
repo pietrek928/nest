@@ -1,9 +1,8 @@
-"""Shared bag for post-pack selection editors (local_se2 / compaction / cluster_repack)."""
+"""Shared bag for post-pack selection editors (local_se2 / cluster_repack)."""
 
 from dataclasses import dataclass
 from typing import Sequence
 
-import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
@@ -24,5 +23,5 @@ class SelectionEditCtx:
     propose_cfg: ProposeConfig | None = None
     pole: Point | None = None
     fixed_obstacles: Sequence[BaseGeometry] | None = None
+    void_geoms: Sequence | None = None
     board_adj_indices: Sequence[int] | None = None
-    gravity: Point | None = None

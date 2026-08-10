@@ -1,251 +1,101 @@
-# Agent instructions (nest_graph)
+# Agent instructions (nest)
 
-## Python
+Standing rules for coding agents. Prefer this file over chat memory for repo conventions.
+Human docs: [README.md](README.md). Deeper domain archive (not always-on): [docs/agent-domain-notes.md](docs/agent-domain-notes.md).
 
-- **Do not use `from __future__ import …`** — not needed on this project’s Python (3.12+). Never add `__future__` imports (including `annotations`).
-- If you remove `__future__` imports that were added by mistake, do not reintroduce them.
-- Prefer normal type hints (`X | None`, quoted forward refs like `"BuildGraphConfig"` only when required).
-- Import only on file top unless u have a good reason
+## Commands
 
-## Native extensions
+```bash
+# Python deps / rebuild native after C++ edits
+uv pip install -e .
 
-- After C++ changes, rebuild: `uv pip install -e .` (native sources are in `tool.uv.cache-keys`) or `cmake --build build --target geometry elem_graph`.
-- C++ unit tests: `cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON` then `geometry_cpp_tests` / `elem_graph_cpp_tests`.
+# Or targeted native rebuild
+cmake --build build --target geometry elem_graph
 
-### C++ style
+# Python tests
+uv run pytest tests/ -q
 
-- **Do not add custom C++ namespaces** (no anonymous `namespace { … }`, no named helper namespaces like `elem_graph_test`). Keep helpers at file scope in `.cc` files or as `inline` functions in headers so duplicate logic stays visible.
-- **Namespace aliases are fine** for third-party APIs, e.g. `namespace nb = nanobind;` in bindings.
-- **Do not add `static` on functions** unless there is a concrete reason (e.g. required internal linkage to avoid a duplicate symbol). Prefer shared `inline` helpers in `internal/internal.h` for one-liners used in multiple translation units.
+# C++ tests (configure once with -DNEST_GRAPH_BUILD_TESTS=ON)
+cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
+cmake --build build --target geometry_cpp_tests elem_graph_cpp_tests
+```
 
-## Nesting / collisions
+Native sources are listed in `tool.uv.cache-keys`.
 
-- **Output** must be collision-free (independent set on the overlap graph). Transient overlaps during DFS search are OK; `refine_selection` and `finalize_selection` must not return overlapping sets to Python.
-- Do not add `NEST_DFS_MIN_COLLISIONS_*` or similar env vars; loose caps are internal C++ constants in `refine_dfs.cc`.
-- Default pipeline: `nest_by_graph` → `refine_selection` (loose then tight) → `finalize_selection` (repair, then optimal weighted MIS on small overlap components).
-- `make_polygon_graph` keeps all board-valid nodes and records overlaps as graph edges.
-- Board validity and propose guidance use one obstacle list (packed parts + sheet void holes) via `PlacementScene` / `evaluate_local_placement`. Outline config: `board_coords`; sheet = bbox outer + auto corner voids + optional `board_holes`.
+## Code style
 
-## Tests
+### Python
 
-- Python: `tests/` (integration, bindings, build loop).
-- C++: `nest_graph/geometry/tests/`, `nest_graph/elem_graph/tests/`.
+- Python 3.12+: **never** add `from __future__ import …` (including `annotations`).
+- Prefer `X | None`; quote forward refs only when required.
+- Imports at file top unless there is a concrete reason otherwise.
 
-## Git
+### C++
+
+- No custom namespaces (no anonymous `namespace {…}`, no helper namespaces). Helpers at file scope in `.cc` or `inline` in headers.
+- Namespace aliases for third-party APIs are fine (`namespace nb = nanobind;`).
+- Avoid `static` on functions unless needed for linkage; prefer shared `inline` helpers in `internal/internal.h`.
+
+### Git
 
 - Do not commit unless the user asks.
 
-## Glossary (propose / OOS)
+## Nesting invariants
 
-- **`border_focus`** — propose zone favoring sheet rim / outline kiss. **Not** post-refine gravity compaction (`enable_gravity_compaction`).
-- **`void_seek`** — OOS path when free area/part is large; may override packed-near-border.
-- **`packed_near_border`** — local packed layout hugs the rim; interacts with void override hysteresis.
-- **`valid_at` / guidance validity** — propose clearance on `ProposeGeometry`. **Never OR** with packing independence.
-- **`is_pose_clear`** — selection/polish clearance SoT (board `fully_inside` + Scene margin).
-- **`fully_inside`** — board containment SoT (prefer over any footprint alias).
-- **Packing collide** — `Geometry.intersects` / Penetrating ContactState only.
+- **Output** must be collision-free (independent set). Transient DFS overlaps OK; `refine_selection` / `finalize_selection` must not return overlaps to Python.
+- Default pipeline: `nest_by_graph` → `refine_selection` (loose then tight) → `finalize_selection`.
+- Do not add `NEST_DFS_MIN_COLLISIONS_*` env vars; caps live in `refine_dfs.cc`.
+- **Board membership** = locked void solids (pad complement + exterior slabs + sheet holes) ∪ packed parts — **not** `fully_inside` / `footprint_inside` (oracle/tests only).
+- One obstacle assembler: `placement_obstacles(voids, packed)`.
+- Clearance SoT (same obstacles, different margins):
+  - emit → `emit_packing_clear` (Penetrating, margin 0)
+  - selection/polish → `is_pose_clear` (Scene margin)
+  - guidance → `valid_at` / `PlacementScene.is_valid` (`min_dist+ε`)
+- Packing collide = `Geometry.intersects` / Penetrating only. Do not soft-filter in Python.
+- Contact: use `distance() <= threshold`, never `.buffer(gap).intersects()`. Cluster: `≤ 2·gap`. Board adj: standoff `≤ min_dist + 2·gap`.
 
-## OOS Void-Fill Execution Protocol
+## Propose / post-pack
 
-### 0. Proposer Telemetry (DO FIRST)
+- **`ProposeContext`** is propose-only (emit/rank). Do **not** widen it or import it from `build_graph` / `elem_graph`. Post-pack edits use **`SelectionEditCtx`**.
+- Emit order is static (not a registry). Poles → `pocket_fit` → `cluster_copy` precede sweepers. Funnel keys: `round(x,y,θ, 4)` = `build_graph._transform_row_key`.
+- Mid-pack rim: `board_edge` reserve before `side_pack` key claims; late kiss in `local_se2` (cached exterior ring).
+- **`enable_gravity_compaction`** gates `local_se2` floater pole SE(2) toward an explicit void pole (default on). Ban corner / min-x+y sheet gravity (`compact_selection` deleted). Distinct from propose `border_focus`.
+- `cluster_relocate` = rigid island ΔT (keep). `local_se2` = per-part SE(2).
 
-- Keys: `round(x,y,θ, 4)` — must match `build_graph._transform_row_key`.
-- Emit order: `pocket_fit` → `cluster_copy` → … → `raycast` → `selection_expand` → `history_expand` (`cluster_copy` before sweepers; expand proposers last).
-- Funnel: emit → pool → nest → refine per name; `void_leak` `prop_accept e/p/n/r`.
-- Gate: no zone/ranking OOS without `refine_by_proposer` visibility.
-
-### 1. OOS-1 Native Void Seek
-
-- Exterior large free (`area/part > late_border_void_override_ratio`) → `void_seek` even if `packed_near_border`.
-- Keep corridor / narrow mouth / `first_pass_border` exceptions.
-
-### 2. OOS-4 Void-Aware Ranking
-
-- Plumb `void_pole` (`pt_push` is NOT the pole under `void_seek` by default).
-- `pole_bonus = max(0, 1-dist/sheet_diag) * (part_area/sheet.area) * void_rank_pole_weight`
-- Not flat void MIS boost (tiny debris pathology). Validate area↑ + `refine_by_proposer`↑.
-
-### 3. Do Not Touch / Last Resort
-
-- Gravity off (evacuates void). PSO off unless `props_pole≈0` after 1+4.
-  **Gravity off** means post-refine gravity compaction (`enable_gravity_compaction=False`),
-  not propose `border_focus` guidance gravity.
-- P3: re-add nest-void idxs only if `graph.collisions`-clear vs refine.
-  Telemetry: `void_leak` `pin_candidates` / `pin_added` / `pin_blocked_collision` / `pin_ms`.
-- **B1 gate:** bind `greedy_weighted_mis` / fold pin into finalize with `locked_indices`
-  only if `pin_added≥1` **and** `pin_ms>30`. Post-hoc collision-clear append does not
-  need finalize locks.
-- **B2 blocked:** no void-aware nest/refine MIS / external scores until B0/B1 exhausted;
-  rim drop >2% = fail.
-
-## Performance & Geometry Strictness Rules
-
-1. **NO PYTHON FALLBACKS:** `polish_se2_part` and `StaticCollisionScene` are the sole sources of truth. Do not write Python grids or Shapely fallbacks if the C++ fails. Fix the C++ (contact-normal/tangent sliding, step size, or penetration limits).
-2. **GEOMETRY IS CANONICAL:** `nest_graph.geometry.Geometry` is the primary type for hot paths. `NestState` holds a lazy `native_geoms` cache. Do NOT loop `Geometry.from_shapely()` in propose emits, `_border_tightness_cost`, or coverage calculations.
-3. **KISS / FP:** Hard packing collision (graph / independence) iff C++ EPA penetration depth is meaningful (`nest_packing_penetration_eps_sq` ≈ 1e-12 ⇒ ~1e-6 depth; zero-depth / inconclusive EPA after GJK touch ⇒ miss). Clearance `min_dist` margins are separate. Python uses bare `Geometry.intersects` (aligned with the C++ filter). Do not soft-filter in Python. Boundary kiss is not Shapely-identical (Shapely DE-9IM counts touch as intersect).
-4. **MARGIN AS DISTANCE (contact):** Never use `.buffer(gap).intersects()` for cluster/board contact. Use `distance() <= threshold`.
-   - Cluster contact: `dist <= 2 * gap`.
-   - Board adjacency: `dist <= min_dist + 2 * gap`.
-   - Ribbon annuli / free-space morph close may still buffer (region construction, not contact graphs).
-5. **SEARCH HALOS:** Prefer raw ring samples + batch `valid_at` over `buffer(-min_dist)` seed erosion. Keep ribbon annuli for frontier focus.
-6. **OUT OF SCOPE:**
-   - Do not add Clipper2, libnest2d, or C++ Voronoi.
-   - Do not enable global gravity compaction (destroys hypotenuse / mid-pack voids).
-   - Propose `border_focus` guidance gravity is not compaction.
-
-## Geometry / hotpath research (answered)
-
-| Question | Answer |
-|----------|--------|
-| `from_shapely` hotspot after `native_geoms`? | No — ingest + NestState rebuild only; expect ≪1% wall. |
-| Share of `polish_se2_part` None? | ~70–80% mid-pack OK (jammed). 100% = bug. Free-space unit cases must move. |
-| Keep edge/geo `buffer(-min_dist)`? | **No** — raw ring + batch `valid_at`. |
-| Keep ribbon annuli? | **Yes** — frontier focus. |
-| Kiss-strict vs parts_final? | Needs C++ EPA packing filter (zero-depth kiss ≠ collision); then stay within ~±0.5–2% of post-kiss baseline. |
-| `outline_coverage` after probe reuse? | Samples + GJK vs `native_geoms`; not a boolean hotspot. |
-| Gravity compaction off? | **Yes** — propose `border_focus` ≠ global compaction. |
-
-### Geometry numerics & corner patches (C++ audit — resolved / action)
-
-| Question | Status / note |
-|----------|----------------|
-| Unify GJK/EPA/cast default eps with touch/packing? | **Resolved.** Separate Geometric vs Application tolerances. GJK internal ~1e-8; packing uses `NEST_PENETRATION_EPS_SQ` (1e-12); touch uses `nest_touch_eps_*`. |
-| One meaning of `intersect` near contact? | **Action.** Replace packing bools with `ContactState` (`Disjoint`, `Touch`, `Penetrating`, `Contained`). |
-| Delete `edge_mid_inside`? | **Partial.** EPA `{depth=0}` → `Touch`; solid overlaps often also get EPA depth 0 on line-string parts, so promote Touch→`Penetrating` via solid-centroid edge-mid witness (`contact_edge_mid_interior_witness`). Pure boundary kiss stays `Touch`. |
-| `kissed_pairs` if strict-interior contain? | **Delete** after contain witness is strict interior; until then Touch must not promote. |
-| EPA `{0,true}` / contain op_limit→true? | **Resolved.** Map to `Touch` / never `Penetrating`. |
-| 90° decomp vs kiss? | **Do not change angle.** Handle artificial verts via `ContactState` depth; CI tests must use decomp. |
-| Tests `polygon_from_quad` vs prod decomp? | **Action.** Packing/kiss fixtures via `decompose_complex_polygon`. |
-| Cast vs StaticCollisionScene in polish? | **Scene is authority.** On Scene reject: back off ~1e-6 along normal or `None`. |
-| Gradient threshold 24? | Keep for GJK vertex routing; unrelated to `snap_pose` axis 24. |
-| `known_overlap`? | **Delete.** |
-| Closed ring exact float eq? | **Action.** Closed if endpoint distance `< 1e-12`. |
-| Guide length floors vs touch eps? | Keep separate (guidance ≠ packing). |
-| Packing eps 1e-12? | Yes until E2E re-baseline. |
-| NestState live cache mutate? | **Rebuild-only.** No in-place `polys` mutate; invalidate only if mutation is introduced. |
-| `local_se2` coarse/fine? | **max_t only**; single cast path in C++ polish. |
-| Pocket `buffer(-min_dist)` vs SEARCH HALOS? | **Drop** pocket seed erosion; raw ring + `valid_at`. |
-
-### Logic duplications (consolidate — no new dual paths)
-
-| Question | Status / note |
-|----------|----------------|
-| Packing re-implements narrow-phase? | **Action.** `evaluate_narrow_phase`; packing must call it. |
-| Warm-index after `nA>nB`? | **Action.** Router un-swaps before return. |
-| `cached_narrow_phase_intersect`? | **Delete.** |
-| `polish_se2` double cast? | **Action.** One TOI/normal → tangent → Scene once. |
-| Clearance SoT? | **Action.** One `is_pose_clear` via `StaticCollisionScene`; guidance `valid_at` separate. Propose emit packing clear = `emit_packing_clear` (fully_inside + packed collide) — stage-split from Scene. |
-| Board adj twice? | **Action.** One `is_board_adj` (standoff); one `cluster_contact` (`2·gap`); delete `_contact_neighbors`. |
-| Standoff vs solid distance for board adj? | **Standoff** (edge-to-edge). |
-| `_as_geometry` copy-paste? | **Action.** Single helper in `placement_common.py`. |
-| `footprint_inside` vs `fully_inside`? | **Deprecate** `footprint_inside`; use `fully_inside`. |
-| Merge rim / obstacle / guide tangents? | **No.** Document normal sourcing only. |
-| side_pack zone whitelist in pipeline? | **Deleted.** Permission = `ZONE_PROPOSERS`; staging = `packed_n >= 2 or void_path`. |
-| Motif stamp propose vs repack? | **Keep both.** Propose `stamp_motif_leader_follower` (packing); repack `stamp_motif_at_anchor` (Scene atomic) + `pattern_fallback`. Share anchors + `dedupe_anchors`. |
-
-### Propose / void-fill review (answered)
-
-| Question | Answer |
-|----------|--------|
-| Repack stamp vs propose leader-follower? | **Keep both.** Different contracts (peeled atomic vs single-group emit). Share anchors + dedupe only. |
-| Unify densify iv/pole with props telem? | **Radius only** via `void_pole_near_radius`. Centroid vs xy stay different measures. |
-| Round-2 vs round-4 funnel break? | **No.** Funnel uses round-4 (`transform_row_key`). Cloud writes `proposer_keys`. |
-| Filter side_pack at emit? | **No.** Raw over-emit; packing filter at collect end is SoT. |
-| Zone policy location? | **Permission** = `ZONE_PROPOSERS`. **Staging** = `packed_n` / `void_path` XOR with `board_edge` lives in pipeline. |
-| Keep cloud in zone set? | **Yes**, densify-only emit, dual-gated by flag + `_proposer_enabled`. |
-| Native void densify accept? | **Same lex as hijack** (`void_yield_gain` → `void_pole_clear`). |
-| Does repack emit side_pack? | Pass `cascade_zone=zone` so void/border_gap staging matches main pipeline. |
-| Wall-fill on all hard zones? | **void_seek only.** `interior_pocket` cannot enable SIDE_PACK. |
-
-### Ranking / selection hybrid (answered)
-
-| Question | Answer |
-|----------|--------|
-| Dual-edge / contact_hybrid for propose? | **Yes** — C++ `batch_rank_local_placements`. |
-| Same hybrid for DFS/nest? | **Yes** — `batch_score_placed_contact_hybrid` + compose into scores; `nest_by_scores` + refine/finalize. |
-| Rewrite RBF kernels? | **No** — keep RBF formula; rewrite selection **pipeline** + MIS scored entry. |
-| Shapely hull in prod ranking? | **No** — C++ monotone chain; **yes in tests** as oracle. |
-| Cap clearance / harmonic edge_free? | **Yes**. |
-| Border boost with hybrid? | **Skip** when selection geom on; `selection_geom_weight` inherits its 24.0 magnitude. |
-| Can DFS reuse the signed propose score? | **No** — DFS sums scores; negative weights invert `score/(1+collisions)` ordering, block growth accepts, and kill 1→2 swaps. Selection uses non-negative `quality`. |
-| Geometry inside elem_graph? | **No** headers merge. Bound `Geometry` for hybrid/hull; floats into `nest_by_scores`. |
-| Void attractor with nest_by_scores? | **Skip** when selection geom on (avoid triple pull with island+hybrid). |
-
-### Propose / void-fill research (open)
-
-| Question | Why ask |
-|----------|---------|
-| Rim saturated (`e ≫ p ≈ 0`): shift budget from sheet-snap to interior colonization? | Structural mid-pack ceiling |
-| Densify replaces `arr` but unions pre-densify `proposer_keys` — intersect with final array? | Funnel accuracy |
-| Two sterile ladders (densify zones vs graph `sterile_pack`) — one predicate? | Consolidation candidate |
-| Weighted stratify: per-segment quotas (min 2) then cross-segment cost truncation can drop far-segment picks when Σquotas > top_n — allocate by largest remainder instead? | Anti-crowd fidelity; masked today by `far_segs` gate |
-| Repack-internal propose with `cascade_zone=zone` — net gain or churn during relocation? | New intentional surface; watch bench |
-| Densify clearance floor uses ranking clearance — rename or keep as yield heuristic? | Naming vs SoT |
-| Return natives from `make_polygon_graph`? | Avoid rebuild via transforms |
-| Native hull verts for bay difference? | More Shapely removal |
-| Document ranking ↔ guidance sweep? | Copy tax |
-| `selection_geom_weight` vs rule scale? | Mid-pack balance |
-| Export C++ tightness for first_pass/repack? | Kill G27 dual |
-
-Glossary: `side_pack` permitted by zone (incl. `cluster_edge`), staged by pack count / void; raw emit; `free_space_cloud` densify recovery with funnel keys.
-
-### Nanobind bindings (copy tax — action)
-
-| Question | Status / note |
-|----------|----------------|
-| Are list APIs zero-copy? | **No.** `vector<GeometryHolder>` + `solids_from_holders` deep-copies solids (often 2×); Scene.build / `cast_slide` often 3×. |
-| Single-Geometry queries? | **OK** — const ref → `.solid` (Scene, snap, distance pair board). |
-| `cast_slide` / polish obstacle pack? | **Action.** Stop re-packing active+obstacles every cast; reuse Scene / pointer span. |
-| `batch_evaluate_local_placement`? | **Action.** Reuse one polys buffer; do not recline obstacles per pose. |
-| Pairwise `intersects` / `min_distance`? | **Action.** Narrow path without owned 2-element vectors. |
-| `apply_transform` double clone + RNG? | **Action.** Single-pass SE2 clone; cheap/lazy holder RNG on transform returns. |
-| Pointer scene + `keep_alive`? | Later: only after span APIs; today move-into Scene is enough. |
-| Mid-loop `from_shapely` via bindings? | **Forbidden** on hot propose; ingest / NestState rebuild only. |
-| `elem_graph` bindings? | Low solid-copy risk; leave unless profiled. |
-
-### Research topics (before new stacks)
-
-Answered / locked:
-1. Geometric vs application eps — do not conflate.
-2. Decomp 90° stays; ContactState absorbs kiss pathology.
-3. Scene authority over cast for polish clearance.
-4. Native SE2; no Python grid; packing via `Penetrating` only.
-5. Cluster `2·gap`; board standoff `min_dist+2·gap`.
-6. Ribbon keep; drop seed erosion (edge/geo/pocket).
-
-Do next (patches) before new geometry stacks:
-1. **ContactState** end-to-end (kill bool packing + mid-nudge + kissed_pairs).
-2. **Unified narrow-phase router** (swap/warm/24 once).
-3. **polish_se2 single-cast + Scene backoff**.
-4. **Clearance / board-adj / as_geometry consolidation**.
-5. **Decomp-parity + nested/shallow units**.
-6. **Nanobind zero-copy** — pointer/span list APIs; Scene.build move; no cast/batch re-pack; pairwise without temp vectors.
-
-## Propose module map (post-flatten)
+### Module map (propose)
 
 | Module | Owns |
 |--------|------|
-| `propose/types.py` | `ProposeContext` / `PackedProposeExtras` / `PocketStats` + `make_propose_context`. `query_context.py` is a re-export shim only. |
-| `propose/pipeline.py` | `_collect_candidates` staged emit (`_collect_pocket_candidates` → `_collect_builder_candidates` / `_collect_explorer_candidates` → `_collect_cast_refine_candidates`), ranking handoff, `proposed_transforms_for_groups`. |
-| `propose/first_pass_border.py` | First-pass border stack: `first_pass_border_coords`, `border_saturation_transform_batch`, `guidance_border_refine`, `first_pass_interior_fill`, `sequential_border_augment`, `border_pack_graph`. |
-| `propose/void_selection.py` | Void-aware score boosts, P3 pin repair, `format_prop_accept` funnel line, free/pole counters. |
-| `propose/selection_compose.py` | Shared mid-pack compose + nest seed (`compose_and_nest_selection`); G22/G24 policy. |
-| `propose/context.py` | Zone classification, free-space analysis, `late_border_saturation_info`. |
-| `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / `compaction` / `cluster_repack`. |
+| `propose/types.py` | `ProposeContext`, extras, `make_propose_context` |
+| `propose/pipeline.py` | staged `_collect_candidates`, ranking handoff |
+| `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / repack / relocate |
+| `propose/post_pack.py` | repack → relocate → local_se2 runner |
+| `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
 
-`build_graph` keeps only graph/selection concerns (`make_polygon_graph`, rule sets,
-DFS refine, `_first_pass_layered_selection`) and re-exports the moved private names
-for `scripts/nesting_evaluator.py` and existing tests.
+`build_graph` owns graph/selection only; it may re-export moved names for evaluator/tests.
 
-**Emit order is static, not a registry.** `_collect_candidates(ctx, extras, mode=…)`
-selects only the stage order: `"cascade"` = snipers → builders → explorers,
-`"free"` = snipers → explorers → builders. Poles → `pocket_fit` → `cluster_copy`
-always precede any sweeper.
+## Hard bans
 
-## R8 cross-cutting decisions
+- No Python grids / Shapely fallbacks when C++ polish or Scene fails — fix the C++.
+- Hot paths: `nest_graph.geometry.Geometry` + `NestState.native_geoms`. Do not loop `Geometry.from_shapely()` in propose emit / tightness / coverage.
+- Prefer raw ring samples + batch `valid_at`; do not `buffer(-min_dist)` seed erosion. Ribbon annuli OK for frontier focus.
+- Do not add Clipper2, libnest2d, or C++ Voronoi.
+- Do not OR guidance `valid_at` with packing independence.
+- Void-fill last resorts: no corner gravity; PSO only if `props_pole≈0` after OOS-1+4. B2: no void-aware nest/refine MIS until B0/B1 exhausted; rim drop >2% = fail.
 
-| Topic | Decision / evidence |
-|-------|---------------------|
-| **r8-placement-query** | `ProposeContext` stays **propose-only**. It carries propose-shaped state (`ProposeGeometry`, `pt_push`, `border_focus_override`, `void_pole`, proposer enable/count sinks) that selection and graph paths never read; selection edits use `SelectionEditCtx` instead. Do not widen `ProposeContext` into a general placement-query object, and do not import it from `build_graph` / `elem_graph` paths. |
-| **r8-legacy-modules** | **Keep all three.** `placements_geo` is live (`raycasting` / `voronoi` are in `_CASCADE_EXPLORERS` and wired in `_collect_explorer_candidates`). `pose_diversity` is live (`apply_pose_nms` + `apply_conflict_degree_penalty` behind `use_pose_nms` / `use_conflict_degree_rank`, reported via `nms_kept` / `nms_dropped`). `feedback` is live (`ProposeFeedbackState` bumps `obstacle_nearest_k` on low proposal yield; covered by `tests/test_propose_place_classifier.py`). No quarantine needed. |
-| **r8-nanobind-propose** | Remaining propose-side list copy is the `list[Geometry]` obstacle pack rebuilt per candidate in `is_pose_clear` / `clear_of_geoms` and per-cast in `polish_se2_part`. It is a Python-list rebuild plus one `vector<GeometryHolder>` copy per call — **not** a `from_shapely` re-decomp, so it stays until the span/pointer list APIs in "Nanobind zero-copy" land. Do not add a second propose-side caching layer in Python to work around it. |
+## Glossary (confusion traps)
+
+| Term | Meaning |
+|------|---------|
+| `border_focus` | Propose rim/kiss zone — **not** post-refine gravity |
+| `void_seek` | Large free void path; may override `packed_near_border` |
+| `emit_packing_clear` | Emit packing SoT (Penetrating); allows rim Touch |
+| `is_pose_clear` | Selection/polish Scene clearance |
+| `valid_at` | Guidance clearance only |
+| `board_edge` reserve | Claims rim keys before `side_pack` / explorers |
+
+## Verify before finishing
+
+- Run the smallest relevant `pytest` for touched code.
+- After C++ edits: rebuild (`uv pip install -e .` or cmake targets above), then run matching C++ or binding tests.
+- Confirm selection outputs stay pairwise independent when changing pack/polish paths.

@@ -1,4 +1,4 @@
-"""Board sheet geometry: nest outline + padded outer void obstacles."""
+"""Board sheet geometry: nest outline + locked void obstacles (pad + exterior frame)."""
 
 import math
 
@@ -52,16 +52,38 @@ def _void_obstacle_parts(void: BaseGeometry, outline: Polygon) -> list[Polygon]:
 
 
 def board_void_obstacles(outline: Polygon, padding: float) -> list[Geometry]:
-    """Corner voids outside the nest outline but inside the padded outer box."""
-    if padding <= 0.0:
-        return []
+    """Locked exterior solids: pad_box\\outline plus four slabs beyond pad_box.
+
+    Slabs (not a holed huge ring) avoid decomp filling the nestable region.
+    The exterior frame closes escape outside the finite padded envelope so board
+    membership can rely on Penetrating/Scene vs voids (no fully_inside).
+    """
     minx, miny, maxx, maxy = outline.bounds
-    outer = box(minx - padding, miny - padding, maxx + padding, maxy + padding)
-    void = outer.difference(outline)
-    return [
-        Geometry.from_shapely(g)
-        for g in _void_obstacle_parts(void, outline)
-    ]
+    diag = math.hypot(maxx - minx, maxy - miny)
+    pad = max(float(padding), 0.0)
+    pad_box = box(minx - pad, miny - pad, maxx + pad, maxy + pad)
+    geoms: list[Geometry] = []
+    void = pad_box.difference(outline)
+    for g in _void_obstacle_parts(void, outline):
+        geoms.append(Geometry.from_shapely(g))
+    # Escape guard: four axis-aligned slabs outside the padded envelope.
+    extent = max(1000.0 * max(diag, 1e-6), 1e6)
+    cx = 0.5 * (minx + maxx)
+    cy = 0.5 * (miny + maxy)
+    hx0, hy0 = cx - extent, cy - extent
+    hx1, hy1 = cx + extent, cy + extent
+    p0, p1, p2, p3 = pad_box.bounds
+    slabs = (
+        box(hx0, hy0, p0, hy1),  # left
+        box(p2, hy0, hx1, hy1),  # right
+        box(p0, hy0, p2, p1),  # bottom
+        box(p0, p3, p2, hy1),  # top
+    )
+    for slab in slabs:
+        if slab.is_empty or float(slab.area) <= 0.0:
+            continue
+        geoms.append(Geometry.from_shapely(slab))
+    return geoms
 
 
 def board_sheet_from_outline(

@@ -565,10 +565,12 @@ def border_pack_graph(
     pack_tr: list[np.ndarray],
     *,
     board_geom: Geometry | None = None,
+    void_geoms: list[Geometry] | None = None,
     placed_geoms: list[Geometry] | None = None,
     bases: dict[int, Geometry] | None = None,
 ) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
-    if board_geom is not None:
+    del board_geom  # board membership via void_geoms
+    if void_geoms:
         kept_polys: list = []
         kept_gids: list[int] = []
         kept_tr: list[np.ndarray] = []
@@ -584,11 +586,12 @@ def border_pack_graph(
                 geom = as_geometry(poly)
                 if geom is None:
                     continue
-            if geom.fully_inside(board_geom):
-                kept_polys.append(poly)
-                kept_gids.append(gid)
-                kept_tr.append(tr)
-                kept_geoms.append(geom)
+            if geom.intersects_any(void_geoms):
+                continue
+            kept_polys.append(poly)
+            kept_gids.append(gid)
+            kept_tr.append(tr)
+            kept_geoms.append(geom)
         pack_polys, pack_gids, pack_tr = kept_polys, kept_gids, kept_tr
         placed_geoms = kept_geoms
     if placed_geoms is None:
@@ -720,7 +723,7 @@ def first_pass_interior_fill(
         added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
         for cost, gid, coords, shapely_placed, geom in candidates:
             blocker_geoms = geoms + [row[3] for row in added]
-            if not is_pose_clear(geom, board_geom, blocker_geoms, min_dist):
+            if not is_pose_clear(geom, voids, blocker_geoms, min_dist):
                 continue
             added.append((gid, coords, shapely_placed, geom))
             break
@@ -801,7 +804,7 @@ def sequential_border_augment(
         added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
         for cost, gid, coords, shapely_placed, geom in candidates:
             blocker_geoms = placed_geoms + [row[3] for row in added]
-            if not is_pose_clear(geom, board_geom, blocker_geoms, min_dist):
+            if not is_pose_clear(geom, voids, blocker_geoms, min_dist):
                 continue
             added.append((gid, coords, shapely_placed, geom))
         if not added:
@@ -848,7 +851,7 @@ def sequential_border_augment(
         pack_polys,
         pack_gids,
         pack_tr,
-        board_geom=board_geom,
+        void_geoms=voids,
         placed_geoms=placed_geoms,
         bases=bases,
     )

@@ -15,7 +15,7 @@ from nest_graph.propose.cluster_repack import (
     pattern_from_indices,
     select_void_adjacent_victim,
 )
-from nest_graph.propose.compaction import selection_pairwise_independent
+from nest_graph.propose.placement_common import selection_pairwise_independent
 from nest_graph.propose.context import FreeSpaceSnapshot, analyze_free_space
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.local_se2 import exterior_tangent_dirs, local_se2_selection

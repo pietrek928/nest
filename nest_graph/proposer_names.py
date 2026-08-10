@@ -131,6 +131,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.RAYCASTING,
         ProposerName.GUIDANCE_CAST_REFINE,
         ProposerName.SIDE_PACK,
+        ProposerName.BOARD_EDGE,
         ProposerName.CLUSTER_COPY,
         ProposerName.POCKET_FIT,
         ProposerName.FREE_SPACE_CLOUD,
