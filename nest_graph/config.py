@@ -141,6 +141,12 @@ class ProposeAblation(StrEnum):
     NO_SELECTION_GEOM = "no_selection_geom"
     NEST_BY_GRAPH_ONLY = "nest_by_graph_only"
     GREEDY_NEST_ONLY = "greedy_nest_only"
+    # Phase search ablations (NO_* = revert that phase's shipped defaults).
+    NO_SEARCH_BUDGET = "no_search_budget"
+    NO_MATE_SYNTH = "no_mate_synth"
+    NO_LEX_REFINE = "no_lex_refine"
+    NO_LNS_REBUILD = "no_lns_rebuild"
+    NO_INCUMBENT_LOOP = "no_incumbent_loop"
 
 
 def _env_int(key: str, default: int) -> int:
@@ -212,7 +218,7 @@ class SelectionConfig(BaseModel):
     rules_kept: int = 64
     improve_rules_elite_count: int = 16
     rule_score_penalty: float = 0.03
-    score_rules_latest_graph_only: bool = False
+    score_rules_latest_graph_only: bool = True
     score_rules_count_weight: float = 0.02
     score_rules_local_swap: bool = True
     select_mode: ScoreSelectMode = ScoreSelectMode.WEIGHTED_GREEDY
@@ -225,6 +231,19 @@ class SelectionConfig(BaseModel):
     dfs_finalize_repair_passes: int = 6
     dfs_finalize_max_component: int = 18
     dfs_mode: DfsMode = DfsMode.MERGED_LOOSE_TIGHT
+    # Phase 1 plateau budget taper (coverage+parts flat for K iters).
+    enable_plateau_budget_taper: bool = True
+    plateau_flat_iters: int = 3
+    plateau_cov_eps: float = 0.05
+    plateau_taper_improve_rounds: int = 1
+    plateau_taper_rules_kept: int = 16
+    plateau_drop_local_swap: bool = True
+    # Phase 3: lexicographic refine (count -> area -> score).
+    refine_lexicographic_area: bool = True
+    # Phase 4: diversified / adaptive refine.
+    refine_explore_shuffle: bool = True
+    plateau_beam_width: int = 8
+    plateau_max_stagnant_passes: int = 8
 
 
 class RulesConfig(BaseModel):
@@ -483,6 +502,8 @@ class ProposeConfig(BaseModel):
     """Anti-crowd sheet-side snap (XOR board_edge when packed; XOR group_fit under void)."""
     side_pack_top_n: int = 256
     side_pack_samples_per_edge: int = 16
+    use_history_expand: bool = True
+    """Emit history_expand proposer (mixer still may expand history unless rim-saturated)."""
     structured_jitter_border_scale: tuple[float, float, float] = (0.02, 0.02, 0.35)
     """Tight (x,y) and modest angle jitter for outline snap seeds only."""
     board_edge_guidance_refine: bool = True
@@ -569,6 +590,39 @@ class ProposeConfig(BaseModel):
     """Propose-time pole bonus under void_seek: (1-dist/diag)*(part_area/sheet.area)*weight (0 disables)."""
     enable_void_nest_pin: bool = True
     """After refine: re-add nest-void idxs missing from refine if graph.collisions-clear (P3)."""
+    # Phase 1 search budget reclaim (defaults off: mixer history/shuffle must survive propose dips).
+    prune_colliding_transforms: bool = False
+    """Drop expand_rest transforms that penetrate locked packed solids before graph build."""
+    rim_saturated_skip_emitters: bool = False
+    """When rim_progress >= threshold, skip side_pack / history_expand emit only (not mixer history)."""
+    rim_saturated_threshold: float = 0.9
+    # Carry-forward of last-iter board-valid graph poses (pool refinement).
+    enable_graph_valid_carry: bool = True
+    """Seed next-iter expand_rest from last make_polygon_graph board-valid transforms."""
+    graph_valid_carry_max: int = 512
+    """Hard cap on carried board-valid rows per group (replace-not-accumulate)."""
+    sterile_history_quota_boost: int = 128
+    """When propose is sterile, raise stratified_history_quota to at least this."""
+    pin_all_blocked_skip_after: int = 3
+    """Skip pin_nest_void_independent after this many consecutive all-blocked pin attempts."""
+    stop_elite_archive_when_pin_blocked: bool = True
+    """Do not re-archive void elites while pin is in consecutive all-blocked streak."""
+    # Phase 2 mated-pair / motif.
+    enable_mate_synth: bool = True
+    """Synthesize ClusterPattern mates from part geometry when contact patterns are sterile."""
+    motif_score_boost: float = 50.0
+    """MIS score boost for cluster_copy / motif_hole keys (0 disables; pocket_score_boost is separate)."""
+    cascade_min_motif_pocket_emit: int = 2
+    """Require at least this many motif/pocket emits before cascade sniper short-circuit."""
+    # Phase 3 rim-drop refine guard.
+    refine_rim_drop_reject: float = 0.02
+    """Reject refine result if outline/rim coverage drops by more than this absolute fraction."""
+    # Phase 4 LNS / Phase 5 incumbent.
+    enable_lns_rebuild: bool = True
+    """On plateau: spatial ruin-and-recreate at void frontier."""
+    lns_destroy_fraction: float = 0.25
+    enable_incumbent_loop: bool = True
+    """On plateau after LNS: prefer incumbent LNS over full pool re-solve (Phase 5)."""
     # Lean Void Cascade / diversity (defaults off until E2E gate; lean_void_combo enables).
     propose_cascade_short_circuit: bool = True
     """Hard skip explorers after snipers/builders fill reserve (void_seek / interior_pocket)."""
@@ -1007,7 +1061,7 @@ class BuildGraphConfig(BaseModel):
                 improve_rules_elite_count=_env_int("NEST_RULES_ELITE", 16),
                 rule_score_penalty=_env_float("NEST_RULE_SIZE_PENALTY", 0.03),
                 score_rules_latest_graph_only=_env_bool(
-                    "NEST_SCORE_RULES_LATEST_ONLY", False,
+                    "NEST_SCORE_RULES_LATEST_ONLY", True,
                 ),
                 score_rules_count_weight=_env_float(
                     "NEST_SCORE_RULES_COUNT_WEIGHT", 0.02,
@@ -1295,9 +1349,65 @@ def trim_history(
     selected: np.ndarray,
     history_max: int,
 ) -> np.ndarray:
-    if selected.shape[0] == 0:
-        return history
-    merged = np.unique(np.concatenate([selected, history], axis=0), axis=0)
-    if history_max > 0 and merged.shape[0] > history_max:
-        return merged[-history_max:, :]
-    return merged
+    """Recency-ordered history: newest selected first, then older rows; drop oldest.
+
+    Dedupes by round-4 key while keeping full float rows. Unlike ``np.unique``
+    tail truncation, this is not lexicographic in (x, y, θ).
+    """
+    empty = np.zeros((0, 3), dtype=np.float64)
+    hist = (
+        np.asarray(history, dtype=np.float64).reshape(-1, 3)
+        if history is not None and getattr(history, "size", 0)
+        else empty
+    )
+    sel = (
+        np.asarray(selected, dtype=np.float64).reshape(-1, 3)
+        if selected is not None and getattr(selected, "size", 0)
+        else empty
+    )
+    if sel.shape[0] == 0 and hist.shape[0] == 0:
+        return empty
+    # Newest first: selected (this iter) then prior history.
+    ordered = np.concatenate([sel, hist], axis=0) if hist.shape[0] else sel
+    claimed: set[tuple[float, float, float]] = set()
+    kept: list[np.ndarray] = []
+    for row in ordered:
+        key = _transform_row_key4(row)
+        if key in claimed:
+            continue
+        claimed.add(key)
+        kept.append(row)
+        if history_max > 0 and len(kept) >= int(history_max):
+            break
+    if not kept:
+        return empty
+    return np.asarray(kept, dtype=np.float64)
+
+
+def cap_graph_valid_carry(
+    transforms: np.ndarray,
+    max_keep: int,
+) -> np.ndarray:
+    """Replace-not-accumulate cap for board-valid carry rows (newest first)."""
+    empty = np.zeros((0, 3), dtype=np.float64)
+    arr = (
+        np.asarray(transforms, dtype=np.float64).reshape(-1, 3)
+        if transforms is not None and getattr(transforms, "size", 0)
+        else empty
+    )
+    if arr.shape[0] == 0:
+        return empty
+    cap = int(max_keep)
+    if cap <= 0:
+        return empty
+    claimed: set[tuple[float, float, float]] = set()
+    kept: list[np.ndarray] = []
+    for row in arr:
+        key = _transform_row_key4(row)
+        if key in claimed:
+            continue
+        claimed.add(key)
+        kept.append(row)
+        if len(kept) >= cap:
+            break
+    return np.asarray(kept, dtype=np.float64)

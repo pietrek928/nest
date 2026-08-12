@@ -38,7 +38,9 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("beam_width", &RefineSelectionOptions::beam_width)
         .def_rw("max_root_collisions", &RefineSelectionOptions::max_root_collisions)
         .def_rw("max_tries", &RefineSelectionOptions::max_tries)
-        .def_rw("min_collisions", &RefineSelectionOptions::min_collisions);
+        .def_rw("min_collisions", &RefineSelectionOptions::min_collisions)
+        .def_rw("node_areas", &RefineSelectionOptions::node_areas)
+        .def_rw("lexicographic_area", &RefineSelectionOptions::lexicographic_area);
 
     nb::class_<FinalizeSelectionOptions>(m, "FinalizeSelectionOptions")
         .def(nb::init<>())

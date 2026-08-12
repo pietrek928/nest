@@ -262,6 +262,23 @@ def compose_and_nest_selection(
         )
 
     refine_scores = list(scores)
+    # Refine-only non-negative void/coverage term (tie-break within lex count/area).
+    if (
+        free_info is not None
+        and free_info.kind == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * 0.25
+        if void_term > 0.0:
+            for i, poly in enumerate(polys):
+                if i >= len(refine_scores):
+                    break
+                try:
+                    if poly is not None and not poly.is_empty and free_poly.contains(poly.centroid):
+                        refine_scores[i] = float(refine_scores[i]) + void_term
+                except Exception:
+                    continue
     if (
         first_pass
         and should_use_border_focus(Polygon(), cfg.propose)

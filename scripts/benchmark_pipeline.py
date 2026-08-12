@@ -192,6 +192,43 @@ def _build_cfg(
                 "void_greedy_nest_seed": True,
                 "selection_geom_weight": 0.0,
             })
+        case ProposeAblation.NO_SEARCH_BUDGET:
+            cfg.selection = cfg.selection.model_copy(update={
+                "score_rules_latest_graph_only": False,
+                "enable_plateau_budget_taper": False,
+            })
+            cfg.propose = cfg.propose.model_copy(update={
+                "prune_colliding_transforms": False,
+                "rim_saturated_skip_emitters": False,
+                "pin_all_blocked_skip_after": 0,
+                "stop_elite_archive_when_pin_blocked": False,
+            })
+        case ProposeAblation.NO_MATE_SYNTH:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_mate_synth": False,
+                "motif_score_boost": 0.0,
+                "cascade_min_motif_pocket_emit": 0,
+            })
+        case ProposeAblation.NO_LEX_REFINE:
+            cfg.selection = cfg.selection.model_copy(update={
+                "refine_lexicographic_area": False,
+            })
+            cfg.propose = cfg.propose.model_copy(update={
+                "refine_rim_drop_reject": 0.0,
+            })
+        case ProposeAblation.NO_LNS_REBUILD:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_lns_rebuild": False,
+            })
+            cfg.selection = cfg.selection.model_copy(update={
+                "refine_explore_shuffle": False,
+                "plateau_beam_width": cfg.selection.dfs_refine_beam_width,
+                "plateau_max_stagnant_passes": cfg.selection.dfs_refine_max_stagnant_passes,
+            })
+        case ProposeAblation.NO_INCUMBENT_LOOP:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_incumbent_loop": False,
+            })
         case ProposeAblation.NO_PROPOSE:
             cfg.propose = ProposeConfig(
                 use_neighbor_slide=False,

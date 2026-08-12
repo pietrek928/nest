@@ -85,6 +85,191 @@ def extract_cluster_patterns(
     return patterns
 
 
+def _poly_ring_coords(poly: Polygon) -> list[tuple[float, float]]:
+    if poly is None or poly.is_empty:
+        return []
+    coords = list(poly.exterior.coords)
+    if len(coords) >= 2 and coords[0] == coords[-1]:
+        coords = coords[:-1]
+    return [(float(x), float(y)) for x, y in coords]
+
+
+def _longest_edge(coords: Sequence[tuple[float, float]]) -> tuple[int, int, float]:
+    """Return (i, j, length) for the longest exterior edge."""
+    n = len(coords)
+    best = (0, 1 % max(n, 1), 0.0)
+    for i in range(n):
+        j = (i + 1) % n
+        dx = coords[j][0] - coords[i][0]
+        dy = coords[j][1] - coords[i][1]
+        length = math.hypot(dx, dy)
+        if length > best[2]:
+            best = (i, j, length)
+    return best
+
+
+def _outward_normal_ccw(
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> tuple[float, float]:
+    """Unit outward normal for CCW edge a→b (right-hand side)."""
+    dx = b[0] - a[0]
+    dy = b[1] - a[1]
+    length = math.hypot(dx, dy)
+    if length <= 1e-12:
+        return (0.0, 0.0)
+    # Right normal of (dx, dy) is (dy, -dx).
+    return (dy / length, -dx / length)
+
+
+def triangle_mate_relative(
+    poly: Polygon,
+    *,
+    min_dist: float,
+) -> tuple[float, float, float] | None:
+    """180° mate about longest-edge midpoint, shifted by ``min_dist`` along outward normal.
+
+    Returns the mate pose relative to identity placement of ``poly``, or None if
+    the part is not a simple triangle.
+    """
+    coords = _poly_ring_coords(poly)
+    if len(coords) != 3:
+        return None
+    i, j, length = _longest_edge(coords)
+    if length <= 1e-12:
+        return None
+    a, b = coords[i], coords[j]
+    mid = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]))
+    nx, ny = _outward_normal_ccw(a, b)
+    # rotate-about-origin by π then translate by 2*mid ≡ rotate 180° about mid.
+    gap = max(float(min_dist), 0.0)
+    tx = 2.0 * mid[0] + gap * nx
+    ty = 2.0 * mid[1] + gap * ny
+    return (tx, ty, math.pi)
+
+
+def _pair_hull_area(
+    poly: Polygon,
+    mate_t: tuple[float, float, float],
+) -> float:
+    a = poly
+    b = transform_poly(poly, mate_t)
+    if a is None or b is None or a.is_empty or b.is_empty:
+        return float("inf")
+    try:
+        return float(unary_union([a, b]).convex_hull.area)
+    except Exception:
+        return float("inf")
+
+
+def _generic_mate_relative(
+    poly: Polygon,
+    *,
+    min_dist: float,
+    n_angles: int = 18,
+) -> tuple[float, float, float] | None:
+    """Search edge-aligned mates minimizing pair convex-hull area."""
+    coords = _poly_ring_coords(poly)
+    n = len(coords)
+    if n < 3:
+        return None
+    gap = max(float(min_dist), 0.0)
+    best_t: tuple[float, float, float] | None = None
+    best_area = float("inf")
+    angles = [math.pi]  # 180° mate is the primary candidate
+    if n_angles > 1:
+        step = (2.0 * math.pi) / float(n_angles)
+        angles.extend(i * step for i in range(n_angles) if abs(i * step - math.pi) > 1e-9)
+    for i in range(n):
+        j = (i + 1) % n
+        a, b = coords[i], coords[j]
+        edge_len = math.hypot(b[0] - a[0], b[1] - a[1])
+        if edge_len <= 1e-12:
+            continue
+        mid = (0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1]))
+        nx, ny = _outward_normal_ccw(a, b)
+        for ang in angles:
+            # Rotate about mid: R_mid = T(mid) R(ang) T(-mid).
+            # As rotate-about-0 then translate: t = mid - R(ang)@mid, then + gap*n.
+            c, s = math.cos(ang), math.sin(ang)
+            rx = c * mid[0] - s * mid[1]
+            ry = s * mid[0] + c * mid[1]
+            tx = mid[0] - rx + gap * nx
+            ty = mid[1] - ry + gap * ny
+            mate = (tx, ty, ang)
+            placed = transform_poly(poly, mate)
+            if placed is None or placed.is_empty:
+                continue
+            if poly.intersects(placed) and poly.distance(placed) < gap * 0.5:
+                # Still penetrating after gap push — skip.
+                if poly.intersection(placed).area > 1e-9:
+                    continue
+            area = _pair_hull_area(poly, mate)
+            if area < best_area:
+                best_area = area
+                best_t = mate
+    return best_t
+
+
+def synthesize_mate_patterns(
+    parts: Sequence[tuple[Polygon, int]],
+    *,
+    min_dist: float,
+    max_patterns: int = 2,
+) -> list[ClusterPattern]:
+    """Geometry-derived mated-pair patterns (shape-agnostic; triangles closed-form)."""
+    patterns: list[ClusterPattern] = []
+    seen_gids: set[int] = set()
+    for poly, gid in parts:
+        gid_i = int(gid)
+        if gid_i in seen_gids:
+            continue
+        seen_gids.add(gid_i)
+        if poly is None or poly.is_empty:
+            continue
+        mate = triangle_mate_relative(poly, min_dist=min_dist)
+        if mate is None:
+            mate = _generic_mate_relative(poly, min_dist=min_dist)
+        if mate is None:
+            continue
+        # Validate clearance: pair must not penetrate at identity+mate.
+        placed = transform_poly(poly, mate)
+        if placed is None or placed.is_empty:
+            continue
+        if poly.intersects(placed) and float(poly.intersection(placed).area) > 1e-8:
+            continue
+        patterns.append(
+            ClusterPattern(
+                members=(
+                    (gid_i, (0.0, 0.0, 0.0)),
+                    (gid_i, (float(mate[0]), float(mate[1]), float(mate[2]))),
+                ),
+                part_count=2,
+                ref_transform=(0.0, 0.0, 0.0),
+            )
+        )
+        if len(patterns) >= max(int(max_patterns), 1):
+            break
+    return patterns
+
+
+def merge_cluster_patterns(
+    contact: Sequence[ClusterPattern],
+    synthesized: Sequence[ClusterPattern],
+    *,
+    max_patterns: int,
+) -> list[ClusterPattern]:
+    """Prefer contact patterns; fill remaining slots with synthesized mates."""
+    out = list(contact)
+    if len(out) >= max(int(max_patterns), 1):
+        return out[: max(int(max_patterns), 1)]
+    for pat in synthesized:
+        out.append(pat)
+        if len(out) >= max(int(max_patterns), 1):
+            break
+    return out
+
+
 def free_pocket_anchors(
     sheet: Polygon,
     obstacle: BaseGeometry,

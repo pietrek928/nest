@@ -266,11 +266,13 @@ def apply_void_selection_boosts(
     hits = {
         "void_island": 0,
         "pocket_keys": 0,
+        "motif_keys": 0,
         "small_part": 0,
         "selection_geom": 0,
     }
     pole_w = float(cfg.propose.void_island_score_boost)
     pocket_w = float(getattr(cfg.propose, "pocket_score_boost", 0.0) or 0.0)
+    motif_w = float(getattr(cfg.propose, "motif_score_boost", 0.0) or 0.0)
     small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
     geom_w = float(getattr(cfg.propose, "selection_geom_weight", 0.0) or 0.0)
     if free_info.kind == "large_void" and pole_w > 0.0:
@@ -291,6 +293,25 @@ def apply_void_selection_boosts(
             scores,
             keys,
             weight=pocket_w,
+        )
+    if motif_w > 0.0 and propose_stats is not None:
+        motif_keys = propose_stats.get("motif_keys") or {}
+        if not motif_keys:
+            # Fallback: cluster_copy keys from densify/proposer telemetry.
+            densify = propose_stats.get("densify_stats") or {}
+            pk = propose_stats.get("proposer_keys") or densify.get("proposer_keys") or {}
+            cc = pk.get("cluster_copy") or densify.get("motif_keys") or set()
+            if cc:
+                # Keys lack group — apply to all groups via matching transform keys.
+                motif_keys = {
+                    int(gid): set(cc) for gid in set(int(g) for g in group_id)
+                }
+        hits["motif_keys"] = boost_keyed_proposal_scores(
+            group_id,
+            transform,
+            scores,
+            motif_keys,
+            weight=motif_w,
         )
     if free_info.kind == "large_void" and small_w > 0.0:
         hits["small_part"] = boost_small_part_scores(

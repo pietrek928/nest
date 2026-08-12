@@ -88,7 +88,9 @@ from nest_graph.propose.types import (
 )
 from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
+    merge_cluster_patterns,
     propose_placements_cluster_copy,
+    synthesize_mate_patterns,
 )
 from nest_graph.propose.placements_free_space_cloud import (
     propose_placements_free_space_cloud,
@@ -587,6 +589,8 @@ def _void_seek_densify(
     )
     accepted = False
     reason: str | None = None
+    old_iv = 0
+    new_iv = 0
     if use_void_yield:
         old_iv = _count_transforms_in_void(arr, yield_poly, part_poly)
         new_iv = _count_transforms_in_void(densify_arr, yield_poly, part_poly)
@@ -643,8 +647,13 @@ def _void_seek_densify(
         reason = "count_drop"
 
     void_path = void_hijack_from is not None or zone == "void_seek"
+    # Fire cloud when the pool is empty OR densify left zero in-void centroids
+    # (one rim survivor must not block void-seek cloud fallback).
+    need_cloud = arr.shape[0] == 0 or (
+        not accepted and old_iv == 0 and new_iv == 0
+    )
     if (
-        arr.shape[0] == 0
+        need_cloud
         and void_path
         and bool(getattr(propose_cfg, "use_free_space_cloud", True))
         and _proposer_enabled("free_space_cloud", densify_enabled)
@@ -1322,6 +1331,7 @@ def _collect_expand_candidates(
     if (
         seeds
         and _proposer_enabled("history_expand", ctx.enabled_proposers)
+        and bool(getattr(cfg, "use_history_expand", True))
     ):
         state.ext(
             "history_expand",
@@ -1358,7 +1368,9 @@ def _apply_cascade_budget(
             pt_push=ctx.pt_push,
             crash_counter=state.cascade_stats_out,
         )
-        if n_valid >= stop_n:
+        min_motif_pocket = int(getattr(cfg, "cascade_min_motif_pocket_emit", 0) or 0)
+        n_motif_pocket = len(pocket_reserve) + len(motif_reserve)
+        if n_valid >= stop_n and n_motif_pocket >= min_motif_pocket:
             state.skip_builders = True
             state.skip_explorers = True
             state.mark_skip("snipers", sorted(_CASCADE_BUILDERS | _CASCADE_EXPLORERS))
@@ -2517,6 +2529,21 @@ def _prepare_group_propose(
             min_members=propose_cfg.cluster_copy_min_members,
             sheet=sheet,
         )
+    if (
+        bool(getattr(propose_cfg, "enable_mate_synth", True))
+        and bool(getattr(propose_cfg, "use_cluster_copy", True))
+    ):
+        synth = synthesize_mate_patterns(
+            parts,
+            min_dist=min_dist,
+            max_patterns=int(propose_cfg.cluster_copy_max_patterns),
+        )
+        if synth:
+            cluster_patterns = merge_cluster_patterns(
+                cluster_patterns,
+                synth,
+                max_patterns=int(propose_cfg.cluster_copy_max_patterns),
+            )
     void_thr = float(propose_cfg.late_border_void_override_ratio)
     if void_thr <= 0.0:
         void_thr = 2.5
@@ -2606,6 +2633,7 @@ def proposed_transforms_for_groups(
     pocket_attempted = 0
     pocket_accepted = 0
     pocket_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
+    motif_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     densify_fired = 0
     densify_accepted = 0
     densify_reasons: list[str] = []
@@ -2918,6 +2946,8 @@ def proposed_transforms_for_groups(
             pocket_skips_all.append(str(sk))
         for pk in pocket_stats.get("pocket_keys") or []:
             pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
+        for key in group_proposer_keys.get("cluster_copy") or ():
+            motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(key))
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n
         for name, keys in group_proposer_keys.items():
@@ -3070,6 +3100,9 @@ def proposed_transforms_for_groups(
         densify_stats_out["pocket_skip"] = list(dict.fromkeys(pocket_skips_all))
         densify_stats_out["proposer_keys"] = {
             name: set(keys) for name, keys in proposer_keys_agg.items()
+        }
+        densify_stats_out["motif_keys"] = {
+            gid: set(keys) for gid, keys in motif_keys_by_group.items()
         }
         densify_stats_out["emitted_by_proposer"] = dict(emitted_by_proposer)
         densify_stats_out["pool_by_proposer"] = dict(pool_by_proposer)

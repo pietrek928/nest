@@ -1,6 +1,7 @@
 #include "graph/graph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <random>
 #include <stdexcept>
 #include <vector>
@@ -33,7 +34,9 @@ void update_best_independent(
     const std::vector<Tscore> &scores,
     std::vector<unsigned char> &best_selected,
     float &best_sum,
-    int &best_count
+    int &best_count,
+    float &best_area,
+    const RefineSelectionOptions &options
 ) {
     if (!selection_independent(g, selected)) {
         return;
@@ -41,16 +44,83 @@ void update_best_independent(
     const int n = static_cast<int>(g.size());
     const float sum = sum_selected_scores(scores.data(), selected.data(), n);
     int count = 0;
+    float area = 0.0f;
+    const bool use_area =
+        options.lexicographic_area
+        && options.node_areas.size() == static_cast<std::size_t>(n);
+    for (int i = 0; i < n; ++i) {
+        if (selected[static_cast<std::size_t>(i)]) {
+            count++;
+            if (use_area) {
+                area += options.node_areas[static_cast<std::size_t>(i)];
+            }
+        }
+    }
+    bool better = false;
+    if (count > best_count) {
+        better = true;
+    } else if (count == best_count) {
+        if (use_area && area > best_area + 1e-6f) {
+            better = true;
+        } else if (
+            (!use_area || std::fabs(area - best_area) <= 1e-6f)
+            && sum > best_sum + 1e-6f
+        ) {
+            better = true;
+        }
+    }
+    if (better) {
+        best_selected = selected;
+        best_sum = sum;
+        best_count = count;
+        best_area = area;
+    }
+}
+
+float selected_area_sum(
+    const std::vector<unsigned char> &selected,
+    const std::vector<float> &areas,
+    int n
+) {
+    if (areas.size() != static_cast<std::size_t>(n)) {
+        return 0.0f;
+    }
+    float area = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        if (selected[static_cast<std::size_t>(i)]) {
+            area += areas[static_cast<std::size_t>(i)];
+        }
+    }
+    return area;
+}
+
+int selected_count(const std::vector<unsigned char> &selected, int n) {
+    int count = 0;
     for (int i = 0; i < n; ++i) {
         if (selected[static_cast<std::size_t>(i)]) {
             count++;
         }
     }
-    if (count > best_count || (count == best_count && sum > best_sum + 1e-6f)) {
-        best_selected = selected;
-        best_sum = sum;
-        best_count = count;
+    return count;
+}
+
+bool refine_lex_better(
+    int new_count,
+    float new_area,
+    float new_sum,
+    int old_count,
+    float old_area,
+    float old_sum,
+    float min_delta,
+    bool use_area
+) {
+    if (new_count != old_count) {
+        return new_count > old_count;
     }
+    if (use_area && std::fabs(new_area - old_area) > 1e-6f) {
+        return new_area > old_area;
+    }
+    return new_sum > old_sum + min_delta;
 }
 
 void select_node(
@@ -161,7 +231,9 @@ void run_growth_pass(
     std::vector<int> &selected_collisions,
     std::vector<unsigned char> &best_selected,
     float &best_sum,
-    int &best_count
+    int &best_count,
+    float &best_area,
+    const RefineSelectionOptions &options
 ) {
     if (max_tries <= 0) {
         return;
@@ -191,7 +263,9 @@ void run_growth_pass(
                 tries = max_tries;
             }
         }
-        update_best_independent(g, selected, scores, best_selected, best_sum, best_count);
+        update_best_independent(
+            g, selected, scores, best_selected, best_sum, best_count, best_area,
+            options);
     } while (--tries);
 }
 
@@ -293,6 +367,8 @@ bool try_refine_root(
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options,
     float baseline_sum,
+    int baseline_count,
+    float baseline_area,
     std::vector<unsigned char> &selected,
     std::vector<unsigned char> &backup,
     std::vector<unsigned char> &best_selected,
@@ -302,6 +378,9 @@ bool try_refine_root(
 ) {
     const int n = static_cast<int>(g.size());
     const int beam = std::max(1, options.beam_width);
+    const bool use_area =
+        options.lexicographic_area
+        && options.node_areas.size() == static_cast<std::size_t>(n);
 
     backup = selected;
     float best_delta = -1e30f;
@@ -311,7 +390,14 @@ bool try_refine_root(
         selected_collisions.data(), n);
 
     const float new_sum = sum_selected_scores(scores.data(), best_selected.data(), n);
-    if (new_sum > baseline_sum + options.min_score_delta) {
+    const int new_count = selected_count(best_selected, n);
+    const float new_area = use_area
+        ? selected_area_sum(best_selected, options.node_areas, n)
+        : 0.0f;
+    if (refine_lex_better(
+            new_count, new_area, new_sum,
+            baseline_count, baseline_area, baseline_sum,
+            options.min_score_delta, use_area)) {
         selected = best_selected;
         recompute_selected_collisions(
             g.collisions, selected.data(), selected_collisions.data(), n);
@@ -337,6 +423,9 @@ std::vector<Tvertex> refine_selection_dfs(
     }
 
     const int n = static_cast<int>(g.size());
+    const bool use_area =
+        options.lexicographic_area
+        && options.node_areas.size() == static_cast<std::size_t>(n);
     std::vector<unsigned char> selected(n, 0);
     std::vector<unsigned char> backup(n, 0);
     std::vector<unsigned char> best_selected(n, 0);
@@ -355,12 +444,15 @@ std::vector<Tvertex> refine_selection_dfs(
     std::vector<unsigned char> best_independent(n, 0);
     float best_sum = -1e30f;
     int best_count = -1;
+    float best_area = -1e30f;
     update_best_independent(
-        g, selected, scores, best_independent, best_sum, best_count);
+        g, selected, scores, best_independent, best_sum, best_count, best_area,
+        options);
 
     run_growth_pass(
         g, scores, options.max_tries, options.min_collisions, selected,
-        selected_collisions, best_independent, best_sum, best_count);
+        selected_collisions, best_independent, best_sum, best_count, best_area,
+        options);
 
     float selected_sum =
         sum_selected_scores(scores.data(), selected.data(), n);
@@ -393,12 +485,18 @@ std::vector<Tvertex> refine_selection_dfs(
                 continue;
             }
             const float baseline_sum = selected_sum;
+            const int baseline_count = selected_count(selected, n);
+            const float baseline_area = use_area
+                ? selected_area_sum(selected, options.node_areas, n)
+                : 0.0f;
             if (try_refine_root(
-                    v, g, scores, options, baseline_sum, selected, backup,
-                    best_selected, mark, selected_collisions, selected_sum)) {
+                    v, g, scores, options, baseline_sum, baseline_count,
+                    baseline_area, selected, backup, best_selected, mark,
+                    selected_collisions, selected_sum)) {
                 pass_improved = true;
                 update_best_independent(
-                    g, selected, scores, best_independent, best_sum, best_count);
+                    g, selected, scores, best_independent, best_sum, best_count,
+                    best_area, options);
             }
             std::fill(mark.begin(), mark.end(), 0);
         }
@@ -411,12 +509,18 @@ std::vector<Tvertex> refine_selection_dfs(
                     continue;
                 }
                 const float baseline_sum = selected_sum;
+                const int baseline_count = selected_count(selected, n);
+                const float baseline_area = use_area
+                    ? selected_area_sum(selected, options.node_areas, n)
+                    : 0.0f;
                 if (try_refine_root(
-                        v, g, scores, options, baseline_sum, selected, backup,
-                        best_selected, mark, selected_collisions, selected_sum)) {
+                        v, g, scores, options, baseline_sum, baseline_count,
+                        baseline_area, selected, backup, best_selected, mark,
+                        selected_collisions, selected_sum)) {
                     pass_improved = true;
                     update_best_independent(
-                        g, selected, scores, best_independent, best_sum, best_count);
+                        g, selected, scores, best_independent, best_sum,
+                        best_count, best_area, options);
                 }
                 std::fill(mark.begin(), mark.end(), 0);
             }
@@ -436,7 +540,8 @@ std::vector<Tvertex> refine_selection_dfs(
         selected = best_independent;
     } else {
         update_best_independent(
-            g, selected, scores, best_independent, best_sum, best_count);
+            g, selected, scores, best_independent, best_sum, best_count,
+            best_area, options);
         if (best_count >= 0) {
             selected = best_independent;
         }

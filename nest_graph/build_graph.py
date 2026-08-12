@@ -15,6 +15,7 @@ from .config import (
     BuildGraphConfig,
     DfsMode,
     SelectionConfig,
+    cap_graph_valid_carry,
     dedupe_transforms,
     expand_structured_transforms,
     score_rules_options,
@@ -1208,6 +1209,89 @@ def void_elite_count(archive: dict[int, list[np.ndarray]] | None) -> int:
     return sum(len(v) for v in archive.values())
 
 
+@dataclass
+class PlateauTracker:
+    """Coverage + part-count stagnation detector for budget / search escalation."""
+
+    flat_iters: int = 3
+    cov_eps: float = 0.05
+    last_cov: float | None = None
+    last_parts: int | None = None
+    streak: int = 0
+    on_plateau: bool = False
+
+    def update(self, cov: float, parts: int) -> bool:
+        if self.last_cov is not None and self.last_parts is not None:
+            flat = (
+                abs(float(cov) - float(self.last_cov)) <= float(self.cov_eps)
+                and int(parts) == int(self.last_parts)
+            )
+            self.streak = self.streak + 1 if flat else 0
+        else:
+            self.streak = 0
+        self.last_cov = float(cov)
+        self.last_parts = int(parts)
+        self.on_plateau = self.streak >= max(int(self.flat_iters), 1)
+        return self.on_plateau
+
+
+def _selection_budget_for_iter(
+    sel: SelectionConfig,
+    *,
+    on_plateau: bool,
+) -> SelectionConfig:
+    """Phase 1: taper rule evolution on plateau. Phase 4: escalate beam on plateau."""
+    if not on_plateau:
+        return sel
+    updates: dict = {}
+    if bool(getattr(sel, "enable_plateau_budget_taper", True)):
+        updates["improve_rules_rounds"] = min(
+            int(sel.improve_rules_rounds),
+            max(int(getattr(sel, "plateau_taper_improve_rounds", 1)), 0),
+        )
+        updates["rules_kept"] = min(
+            int(sel.rules_kept),
+            max(int(getattr(sel, "plateau_taper_rules_kept", 16)), 1),
+        )
+        if bool(getattr(sel, "plateau_drop_local_swap", True)):
+            updates["score_rules_local_swap"] = False
+    plateau_beam = int(getattr(sel, "plateau_beam_width", 0) or 0)
+    plateau_stag = int(getattr(sel, "plateau_max_stagnant_passes", 0) or 0)
+    if plateau_beam > int(sel.dfs_refine_beam_width):
+        updates["dfs_refine_beam_width"] = plateau_beam
+    if plateau_stag > int(sel.dfs_refine_max_stagnant_passes):
+        updates["dfs_refine_max_stagnant_passes"] = plateau_stag
+    if not updates:
+        return sel
+    return sel.model_copy(update=updates)
+
+
+def _prune_transforms_vs_packed(
+    transforms: np.ndarray,
+    base: Geometry | None,
+    packed: Sequence[Geometry] | None,
+) -> np.ndarray:
+    """Drop expand_rest rows that penetrate locked packed solids."""
+    if (
+        transforms is None
+        or transforms.size == 0
+        or base is None
+        or not packed
+    ):
+        return transforms
+    keep: list[np.ndarray] = []
+    for row in np.asarray(transforms, dtype=np.float64).reshape(-1, 3):
+        placed = base.apply_transform(row)
+        if placed is None:
+            continue
+        if placed.intersects_any(list(packed)):
+            continue
+        keep.append(row)
+    if not keep:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.asarray(keep, dtype=np.float64).reshape(-1, 3)
+
+
 def _project_angles_to_allowed(
     transforms: np.ndarray,
     allowed: Sequence[float],
@@ -1226,6 +1310,29 @@ def _project_angles_to_allowed(
     nearest = np.argmin(np.abs(diffs), axis=1)
     out[:, 2] = allowed_mod[nearest]
     return out
+
+
+def _graph_valid_carry_by_group(
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    max_keep: int,
+) -> tuple[np.ndarray, ...]:
+    """Board-valid graph transforms per group (make_polygon_graph survivors)."""
+    buckets: list[list[np.ndarray]] = [[] for _ in range(max(int(ngroups), 1))]
+    for gid, t in zip(group_id, transform, strict=True):
+        g = int(gid)
+        if g < 0 or g >= len(buckets):
+            continue
+        buckets[g].append(np.asarray(t, dtype=np.float64).reshape(3))
+    out: list[np.ndarray] = []
+    for rows in buckets:
+        if not rows:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+            continue
+        stacked = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+        out.append(cap_graph_valid_carry(stacked, max_keep))
+    return tuple(out)
 
 
 def _build_transform_batch(
@@ -1247,7 +1354,10 @@ def _build_transform_batch(
     group_allowed_angles: Sequence[tuple[float, ...] | None] | tuple = (),
     void_elite_t: tuple[np.ndarray, ...] | None = None,
     keep_history_on_sterile: bool = False,
+    part_bases: dict[int, Geometry] | None = None,
+    graph_valid_carry: tuple[np.ndarray, ...] | None = None,
 ) -> tuple[np.ndarray, ...]:
+    del keep_history_on_sterile  # history always kept; sterile boosts hist_q instead
     sc = cfg.sampling
     scale = sc.transform_scale
     propose_by_group: dict[int, np.ndarray] = {}
@@ -1256,6 +1366,17 @@ def _build_transform_batch(
         nest_state is None
         or not nest_state.selected_indices
     )
+    rim_progress = float(
+        (propose_stats_out or {}).get("rim_progress", 0.0) or 0.0
+    )
+    rim_thr = float(getattr(cfg.propose, "rim_saturated_threshold", 0.9) or 0.9)
+    rim_sat = (
+        bool(getattr(cfg.propose, "rim_saturated_skip_emitters", False))
+        and rim_thr > 0.0
+        and rim_progress >= rim_thr
+        and not empty_sheet
+    )
+    full_packed_geoms = None
     if (
         board is not None
         and parts is not None
@@ -1267,6 +1388,13 @@ def _build_transform_batch(
         propose_cfg = (
             cfg.first_pass_propose_config() if first_pass else cfg.propose
         )
+        if rim_sat:
+            propose_cfg = propose_cfg.model_copy(update={
+                "use_side_pack": False,
+                "use_history_expand": False,
+            })
+            if propose_stats_out is not None:
+                propose_stats_out["rim_saturated_skip"] = True
         seeded = bool(nest_state is not None and nest_state.seed_count > 0)
         empty_border_only = (
             empty_sheet and cfg.propose.first_pass_empty_border_only
@@ -1282,7 +1410,6 @@ def _build_transform_batch(
         zones_used: list[str] = []
         pocket_keys_raw: dict[int, set[tuple[float, float, float]]] = {}
         densify_stats: dict = {}
-        full_packed_geoms = None
         if nest_state is not None and selected:
             native = nest_state.native_geoms
             full_packed_geoms = [
@@ -1343,6 +1470,30 @@ def _build_transform_batch(
             propose_stats_out.update(batch_stats)
             propose_stats_out["proposal_keys"] = proposal_keys
             propose_stats_out["pocket_keys"] = pocket_keys
+            densify = propose_stats_out.get("densify_stats") or densify_stats
+            motif_raw = (densify or {}).get("motif_keys") or {}
+            motif_keys: dict[int, set[tuple[float, float, float]]] = {}
+            for gid, raw in motif_raw.items():
+                if not raw:
+                    motif_keys[int(gid)] = set()
+                    continue
+                if group_allowed_angles and int(gid) < len(group_allowed_angles):
+                    allowed = group_allowed_angles[int(gid)]
+                    if allowed is not None and len(raw) > 0:
+                        raw_arr = np.asarray(list(raw), dtype=np.float64)
+                        proj = _project_angles_to_allowed(raw_arr, allowed)
+                        motif_keys[int(gid)] = {_transform_row_key(r) for r in proj}
+                    else:
+                        motif_keys[int(gid)] = {
+                            _transform_row_key(np.asarray(r, dtype=np.float64))
+                            for r in raw
+                        }
+                else:
+                    motif_keys[int(gid)] = {
+                        _transform_row_key(np.asarray(r, dtype=np.float64))
+                        for r in raw
+                    }
+            propose_stats_out["motif_keys"] = motif_keys
             propose_stats_out["zones_used"] = zones_used
             propose_stats_out["densify_stats"] = densify_stats
             propose_stats_out["proposed_by_group"] = {
@@ -1419,17 +1570,16 @@ def _build_transform_batch(
         allowed = None
         if group_allowed_angles and group_id < len(group_allowed_angles):
             allowed = group_allowed_angles[group_id]
-        # When proposers are sterile on a packed sheet, avoid flooding the graph with
-        # colliding history/jitter that only inflate score_rules cost.
+        # Sterile propose on a packed sheet: keep history/shuffle material so the
+        # pool does not collapse to the current selection when proposers dip.
         sterile_pack = (
             not empty_sheet
             and proposed.shape[0] == 0
             and not border_batch
         )
         expand_n = sc.selection_expand_n
-        if sterile_pack:
-            expand_n = max(1, expand_n // 2)
-        elif not empty_sheet:
+        shuffle_passes = int(sc.shuffle_passes)
+        if not empty_sheet:
             # Collect already emits selection_expand; keep mixer expand thin.
             expand_n = max(1, expand_n // 2)
         elite = (
@@ -1439,36 +1589,55 @@ def _build_transform_batch(
         )
         expand_parts: list[np.ndarray] = []
         hist_niche = np.zeros((0, 3), dtype=np.float64)
-        keep_hist = (not sterile_pack) or keep_history_on_sterile
-        if sterile_pack and not keep_hist:
-            n_random = min(max(sc.random_per_iter_when_proposed, 32), 64)
-            expand_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
-            if sel.shape[0] > 0:
-                expand_parts.extend(transform_selection(sel, max(expand_n, 1), rng))
-        else:
-            expand_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
+        expand_parts.append(rng.uniform(-1, 1, (n_random, 3)) * scale)
+        if hist.shape[0] > 0:
+            hist_niche = hist
+        carry = (
+            graph_valid_carry[group_id]
+            if (
+                graph_valid_carry is not None
+                and group_id < len(graph_valid_carry)
+                and bool(getattr(cfg.propose, "enable_graph_valid_carry", True))
+            )
+            else np.zeros((0, 3), dtype=np.float64)
+        )
+        if carry.shape[0] > 0:
+            # Last-iter board-valid survivors: hist niche first, remainder expand.
+            if hist_niche.shape[0] == 0:
+                hist_niche = carry
+            else:
+                hist_niche = np.concatenate([hist_niche, carry], axis=0)
+            expand_parts.append(carry)
+        if sel.shape[0] > 0:
+            expand_parts.extend(transform_selection(sel, expand_n, rng))
             if hist.shape[0] > 0:
-                hist_niche = hist
-            if sel.shape[0] > 0:
-                expand_parts.extend(transform_selection(sel, expand_n, rng))
-                if hist.shape[0] > 0:
-                    expand_parts.extend(transform_history(hist, sc.history_expand_n, rng))
-            if window.shape[0] > 0:
-                # Window elites fold into history niche; light expand into remainder.
-                if hist_niche.shape[0] == 0:
-                    hist_niche = window
-                else:
-                    hist_niche = np.concatenate([hist_niche, window], axis=0)
-                expand_parts.extend(transform_selection(window, expand_n, rng))
-            if sc.shuffle_passes > 0 and (
-                sel.shape[0] > 0 or hist.shape[0] > 0 or window.shape[0] > 0
-            ):
-                for _ in range(sc.shuffle_passes):
-                    expand_parts.append(
-                        transform_shuffle_mix(
-                            sel, hist, sc.shuffle_per_pass, rng, sc.shuffle_scale,
-                        )
+                expand_parts.extend(transform_history(hist, sc.history_expand_n, rng))
+        if window.shape[0] > 0:
+            # Window elites fold into history niche; light expand into remainder.
+            if hist_niche.shape[0] == 0:
+                hist_niche = window
+            else:
+                hist_niche = np.concatenate([hist_niche, window], axis=0)
+            expand_parts.extend(transform_selection(window, expand_n, rng))
+        if shuffle_passes > 0 and (
+            sel.shape[0] > 0
+            or hist.shape[0] > 0
+            or window.shape[0] > 0
+            or carry.shape[0] > 0
+        ):
+            for _ in range(shuffle_passes):
+                shuffle_base = hist
+                if carry.shape[0] > 0:
+                    shuffle_base = (
+                        np.concatenate([hist, carry], axis=0)
+                        if hist.shape[0]
+                        else carry
                     )
+                expand_parts.append(
+                    transform_shuffle_mix(
+                        sel, shuffle_base, sc.shuffle_per_pass, rng, sc.shuffle_scale,
+                    )
+                )
         if expand_parts:
             expand_rest = dedupe_transforms(np.concatenate(expand_parts))
         else:
@@ -1480,6 +1649,16 @@ def _build_transform_batch(
                 dedupe_transforms(np.concatenate([expand_rest, extra]))
                 if expand_rest.shape[0]
                 else extra
+            )
+        if (
+            bool(getattr(cfg.propose, "prune_colliding_transforms", False))
+            and full_packed_geoms
+            and part_bases is not None
+            and group_id in part_bases
+            and expand_rest.shape[0] > 0
+        ):
+            expand_rest = _prune_transforms_vs_packed(
+                expand_rest, part_bases[group_id], full_packed_geoms,
             )
         pin_budget = min(proposed.shape[0], max(cfg.propose.max_proposals, 1))
         proposal_pins = proposed[:pin_budget] if pin_budget > 0 else np.zeros((0, 3))
@@ -1495,6 +1674,16 @@ def _build_transform_batch(
             )
         elite_q = int(getattr(cfg.propose, "stratified_void_elite_quota", 15))
         hist_q = int(getattr(cfg.propose, "stratified_history_quota", 15))
+        if sterile_pack:
+            hist_boost = int(
+                getattr(cfg.propose, "sterile_history_quota_boost", 128) or 0
+            )
+            if hist_boost > 0:
+                hist_q = max(hist_q, hist_boost)
+        if propose_stats_out is not None and group_id == 0:
+            propose_stats_out["carry_n"] = int(carry.shape[0])
+            propose_stats_out["hist_niche_n"] = int(hist_niche.shape[0])
+            propose_stats_out["hist_q"] = int(hist_q)
         merged = subsample_transforms_stratified(
             selection=sel,
             proposals=proposal_pins,
@@ -1573,12 +1762,20 @@ def _refine_options(
     *,
     loose: bool,
     max_tries: int | None = None,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
 ) -> RefineSelectionOptions:
     opts = RefineSelectionOptions()
     opts.max_tries = sel.dfs_max_tries if max_tries is None else max_tries
     opts.max_passes = sel.dfs_refine_max_passes
     opts.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
     opts.beam_width = sel.dfs_refine_beam_width
+    opts.explore_shuffle = bool(getattr(sel, "refine_explore_shuffle", False))
+    if seed is not None:
+        opts.seed = int(seed) & 0xFFFFFFFF
+    opts.lexicographic_area = bool(getattr(sel, "refine_lexicographic_area", True))
+    if node_areas is not None and opts.lexicographic_area:
+        opts.node_areas = [float(a) for a in node_areas]
     if loose:
         opts.min_collisions = 2
         opts.max_root_collisions = 2
@@ -1595,24 +1792,44 @@ def _finalize_options(sel: SelectionConfig) -> FinalizeSelectionOptions:
     return opts
 
 
-def _loose_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
-    return _refine_options(sel, loose=True)
+def _loose_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    return _refine_options(sel, loose=True, node_areas=node_areas, seed=seed)
 
 
-def _tight_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
-    return _refine_options(sel, loose=False)
+def _tight_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    return _refine_options(sel, loose=False, node_areas=node_areas, seed=seed)
 
 
-def _strict_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
-    opts = _refine_options(sel, loose=False)
+def _strict_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    opts = _refine_options(sel, loose=False, node_areas=node_areas, seed=seed)
     opts.min_collisions = 0
     opts.max_root_collisions = 0
     return opts
 
 
-def _head_loose_refine_options(sel: SelectionConfig) -> RefineSelectionOptions:
+def _head_loose_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
     """HEAD-style score DFS: allow transient overlaps during search."""
-    return _refine_options(sel, loose=True)
+    return _refine_options(sel, loose=True, node_areas=node_areas, seed=seed)
 
 
 def selection_score_sum(scores: list[float], selected: list[int]) -> float:
@@ -1629,6 +1846,8 @@ def apply_dfs_refinement(
     dfs_max_tries: int | None = None,
     mode: DfsMode | str | None = None,
     selection: SelectionConfig | None = None,
+    node_areas: Sequence[float] | None = None,
+    refine_seed: int | None = None,
 ) -> tuple[list[int], list[int], float]:
     """Refine selection; return (pre_finalize, final, score_sum_final)."""
     sel = selection if selection is not None else SelectionConfig()
@@ -1636,6 +1855,8 @@ def apply_dfs_refinement(
     max_tries = dfs_max_tries if dfs_max_tries is not None else sel.dfs_max_tries
     mode = DfsMode(mode if mode is not None else sel.dfs_mode)
     finalize_opts = _finalize_options(sel)
+    areas = list(node_areas) if node_areas is not None else None
+    seed0 = refine_seed
 
     selected = list(selected)
     graph_sorted = sort_graph(graph, rule_set)
@@ -1644,6 +1865,11 @@ def apply_dfs_refinement(
 
     def _finalize() -> list[int]:
         return list(finalize_selection(graph, selected, scores, finalize_opts))
+
+    def _seed(pass_i: int) -> int | None:
+        if seed0 is None:
+            return None
+        return int(seed0) + int(pass_i) * 17
 
     if mode == DfsMode.NEST_ONLY:
         return selected, selected, selection_score_sum(scores, selected)
@@ -1687,41 +1913,42 @@ def apply_dfs_refinement(
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
     if mode == DfsMode.STRICT_NO_PRUNE:
-        strict = _strict_refine_options(sel)
-        for _ in range(passes):
+        for pass_i in range(passes):
+            strict = _strict_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
         pre_finalize = selected
         return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
 
     if mode == DfsMode.STRICT_PRUNE:
-        strict = _strict_refine_options(sel)
-        for _ in range(passes):
+        for pass_i in range(passes):
+            strict = _strict_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
         pre_finalize = selected
         final = prune_selection_to_independent_set(graph, selected, scores)
         return pre_finalize, final, selection_score_sum(scores, final)
 
-    loose = _loose_refine_options(sel)
-    tight = _tight_refine_options(sel)
-
     if mode == DfsMode.MERGED_SINGLE_PASS:
-        for _ in range(passes):
+        for pass_i in range(passes):
+            loose = _loose_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             pre_finalize = selected
             final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
     if mode == DfsMode.MERGED_LOOSE_FINALIZE_END:
-        for _ in range(passes):
+        for pass_i in range(passes):
+            loose = _loose_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         pre_finalize = selected
         final = _finalize()
         return pre_finalize, final, selection_score_sum(scores, final)
 
     if mode in (DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END, DfsMode.HIGH_PASS_LOOSE):
-        for _ in range(passes):
+        for pass_i in range(passes):
+            loose = _loose_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
+            tight = _tight_refine_options(sel, node_areas=areas, seed=_seed(pass_i + 1))
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             selected = list(refine_selection(graph, selected, scores, tight))
         pre_finalize = selected
@@ -1729,7 +1956,9 @@ def apply_dfs_refinement(
         return pre_finalize, final, selection_score_sum(scores, final)
 
     # merged_loose_tight: finalize after each outer pass
-    for _ in range(passes):
+    for pass_i in range(passes):
+        loose = _loose_refine_options(sel, node_areas=areas, seed=_seed(pass_i))
+        tight = _tight_refine_options(sel, node_areas=areas, seed=_seed(pass_i + 1))
         selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         selected = list(refine_selection(graph, selected, scores, tight))
     pre_finalize = selected
@@ -1797,8 +2026,17 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     propose_feedback = ProposeFeedbackState()
     had_void_override = False
     void_elite_by_group: dict[int, list[np.ndarray]] = {0: [], 1: []}
+    graph_valid_carry: tuple[np.ndarray, ...] = (
+        np.zeros((0, 3), dtype=np.float64),
+        np.zeros((0, 3), dtype=np.float64),
+    )
     board_area = p_sheet.area
     part_areas = (p1.area, p2.area)
+    plateau = PlateauTracker(
+        flat_iters=int(getattr(sel, "plateau_flat_iters", 3) or 3),
+        cov_eps=float(getattr(sel, "plateau_cov_eps", 0.05) or 0.05),
+    )
+    pin_all_blocked_streak = 0
     iters = tuple(range(out.n_iters))
     pbar = tqdm(
         iters,
@@ -1810,6 +2048,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
 
     for _it in pbar:
         propose_rules = _propose_rules_for_iter(cfg, rule_sets)
+        sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
+        # Phase 5: on sustained plateau, stop re-scoring rules and iterate LNS/incumbent.
+        if (
+            plateau.on_plateau
+            and bool(getattr(cfg.propose, "enable_incumbent_loop", True))
+            and plateau.streak >= plateau.flat_iters + 2
+        ):
+            sel_iter = sel_iter.model_copy(update={"improve_rules_rounds": 0})
         sat_info = _late_border_saturation_info(
             cfg, nest_state, p_sheet, had_void_override=had_void_override,
         )
@@ -1848,6 +2094,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_feedback=propose_feedback,
             void_elite_t=void_elite_t,
             keep_history_on_sterile=keep_hist_sterile,
+            part_bases=part_bases,
+            graph_valid_carry=graph_valid_carry,
         )
         first_pass = nest_state is None
         graph, polys, group_id, transform = make_polygon_graph(
@@ -1857,6 +2105,19 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=first_pass),
             user_holes=user_holes,
             extra_voids=nest_state_extra_voids(nest_state),
+        )
+        carry_max = int(getattr(cfg.propose, "graph_valid_carry_max", 512) or 512)
+        if bool(getattr(cfg.propose, "enable_graph_valid_carry", True)):
+            graph_valid_carry = _graph_valid_carry_by_group(
+                group_id, transform, ngroups=ngroups, max_keep=carry_max,
+            )
+        else:
+            graph_valid_carry = tuple(
+                np.zeros((0, 3), dtype=np.float64) for _ in range(ngroups)
+            )
+        propose_stats["graph_valid_n"] = int(len(transform))
+        propose_stats["carry_n_next"] = int(
+            sum(int(a.shape[0]) for a in graph_valid_carry)
         )
         prop_n = int(propose_stats.get("proposal_count", 0))
         proposal_keys = propose_stats.get("proposal_keys", {})
@@ -1925,31 +2186,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         selection=sel,
                     )
                 )
-            for round_idx in range(sel.improve_rules_rounds):
+            for round_idx in range(sel_iter.improve_rules_rounds):
                 rule_sets = improve_rules(
                     graphs,
                     rule_sets,
-                    sel.rules_kept,
+                    sel_iter.rules_kept,
                     p_sheet,
                     mutation_presets=cfg.rules.mutation_presets(),
-                    rule_score_penalty=sel.rule_score_penalty,
-                    elite_count=sel.improve_rules_elite_count,
+                    rule_score_penalty=sel_iter.rule_score_penalty,
+                    elite_count=sel_iter.improve_rules_elite_count,
                     seed=int(rng.integers(0, 2**31)) + round_idx,
-                    score_options=score_rules_options(sel),
+                    score_options=score_rules_options(sel_iter),
                     max_rules_per_set=cfg.rules.max_rules_per_set,
                 )
         else:
-            for round_idx in range(sel.improve_rules_rounds):
+            for round_idx in range(sel_iter.improve_rules_rounds):
                 rule_sets = improve_rules(
                     graphs,
                     rule_sets,
-                    sel.rules_kept,
+                    sel_iter.rules_kept,
                     p_sheet,
                     mutation_presets=cfg.rules.mutation_presets(),
-                    rule_score_penalty=sel.rule_score_penalty,
-                    elite_count=sel.improve_rules_elite_count,
+                    rule_score_penalty=sel_iter.rule_score_penalty,
+                    elite_count=sel_iter.improve_rules_elite_count,
                     seed=int(rng.integers(0, 2**31)) + round_idx,
-                    score_options=score_rules_options(sel),
+                    score_options=score_rules_options(sel_iter),
                     max_rules_per_set=cfg.rules.max_rules_per_set,
                 )
             active_rules = active_rule_set(rule_sets)
@@ -1996,7 +2257,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 part_areas=part_areas,
                 free_info=free_info,
                 cfg=cfg,
-                selection=sel,
+                selection=sel_iter,
                 first_pass=first_pass,
                 outline=p_sheet,
                 min_dist=min_dist,
@@ -2014,16 +2275,128 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             n_void_nest = composed.n_void_nest
             boost_hits = composed.boost_hits
             old_len = len(selected_nest)
+            node_areas = [
+                float(part_areas[int(g)]) if int(g) < len(part_areas) else 0.0
+                for g in group_id
+            ]
+            nest_before_refine = list(selected_nest)
+            rim_before = float(propose_stats.get("outline_cov", 0.0) or 0.0)
             _, selected_polys, _ = apply_dfs_refinement(
                 graph,
                 refine_rules,
                 list(selected_nest),
                 refine_scores,
-                selection=sel,
+                selection=sel_iter,
+                node_areas=node_areas,
+                refine_seed=int(rng.integers(0, 2**31)),
             )
+            rim_reject = float(getattr(cfg.propose, "refine_rim_drop_reject", 0.02) or 0.0)
+            if rim_reject > 0.0 and rim_before > 0.0:
+                try:
+                    from nest_graph.propose.context import outline_coverage_ratio
+                    placed_after = [polys[i] for i in selected_polys]
+                    rim_after = float(outline_coverage_ratio(
+                        placed_after,
+                        p_sheet,
+                        min_dist,
+                        pack_geoms=_native_geoms_from_transforms(
+                            [group_id[i] for i in selected_polys],
+                            [transform[i] for i in selected_polys],
+                            part_bases,
+                        ) if selected_polys else None,
+                    ))
+                except Exception:
+                    rim_after = rim_before
+                if rim_before - rim_after > rim_reject:
+                    selected_polys = list(nest_before_refine)
+                    propose_stats["refine_rejected"] = True
+                    propose_stats["rim_drop"] = float(rim_before - rim_after)
+                else:
+                    propose_stats["refine_rejected"] = False
+                    propose_stats["rim_drop"] = float(max(0.0, rim_before - rim_after))
+            else:
+                propose_stats["refine_rejected"] = False
+                propose_stats["rim_drop"] = 0.0
+            # Phase 4: spatial LNS on plateau (void-frontier destroy + repair from nest).
+            if (
+                bool(getattr(cfg.propose, "enable_lns_rebuild", True))
+                and plateau.on_plateau
+                and free_info is not None
+                and free_info.kind == "large_void"
+                and selected_polys
+            ):
+                from nest_graph.propose.lns_rebuild import (
+                    apply_lns_destroy,
+                    lns_accept,
+                    void_frontier_destroy_indices,
+                )
+                destroy = void_frontier_destroy_indices(
+                    polys,
+                    selected_polys,
+                    pole=free_info.target_pt,
+                    void_poly=free_poly,
+                    destroy_fraction=float(
+                        getattr(cfg.propose, "lns_destroy_fraction", 0.25) or 0.25
+                    ),
+                )
+                if destroy:
+                    kept = apply_lns_destroy(selected_polys, destroy)
+                    kept_set = set(kept)
+                    cand = [
+                        int(i) for i in selected_nest
+                        if int(i) not in kept_set
+                    ]
+                    cand.sort(
+                        key=lambda i: float(refine_scores[i]) if i < len(refine_scores) else 0.0,
+                        reverse=True,
+                    )
+                    for v in cand:
+                        if any(
+                            int(u) in kept_set
+                            for u in graph.collisions[v]
+                        ):
+                            continue
+                        if free_poly is not None and not _centroid_in_free(polys[v], free_poly):
+                            continue
+                        kept.append(v)
+                        kept_set.add(v)
+                    if selection_is_independent(graph, kept):
+                        def _sel_area(idxs: list[int]) -> float:
+                            return float(sum(
+                                part_areas[int(group_id[i])]
+                                for i in idxs
+                                if int(group_id[i]) < len(part_areas)
+                            ))
+                        old_c, new_c = len(selected_polys), len(kept)
+                        old_a, new_a = _sel_area(selected_polys), _sel_area(kept)
+                        temp = 0.03 if plateau.streak <= plateau.flat_iters + 2 else 0.0
+                        if lns_accept(
+                            old_count=old_c,
+                            old_area=old_a,
+                            old_cov=float(propose_stats.get("outline_cov", 0.0) or 0.0),
+                            new_count=new_c,
+                            new_area=new_a,
+                            new_cov=float(propose_stats.get("outline_cov", 0.0) or 0.0),
+                            temperature=temp,
+                            rng=rng,
+                        ):
+                            selected_polys = kept
+                            propose_stats["lns_accepted"] = True
+                            propose_stats["lns_destroyed"] = len(destroy)
+                        else:
+                            propose_stats["lns_accepted"] = False
+                            propose_stats["lns_destroyed"] = len(destroy)
+                    else:
+                        propose_stats["lns_accepted"] = False
             pin_stats: dict = {}
+            skip_pin = (
+                int(getattr(cfg.propose, "pin_all_blocked_skip_after", 3) or 0) > 0
+                and pin_all_blocked_streak
+                >= int(getattr(cfg.propose, "pin_all_blocked_skip_after", 3) or 0)
+            )
             if (
                 bool(getattr(cfg.propose, "enable_void_nest_pin", True))
+                and not skip_pin
                 and free_poly is not None
                 and not free_poly.is_empty
             ):
@@ -2042,8 +2415,25 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     "pin_added": 0,
                     "pin_blocked_collision": 0,
                     "pin_ms": 0.0,
+                    "pin_skipped_streak": int(skip_pin),
                 }
+            pin_cands = int(pin_stats.get("pin_candidates", 0))
+            pin_added = int(pin_stats.get("pin_added", 0))
+            if pin_cands > 0 and pin_added == 0:
+                pin_all_blocked_streak += 1
+            elif not skip_pin:
+                pin_all_blocked_streak = 0
             # Archive refine-rejected / pin-blocked void transforms for next-iter seeds.
+            archive_enabled = bool(
+                getattr(cfg.propose, "enable_void_elite_archive", True)
+            )
+            if (
+                archive_enabled
+                and bool(getattr(cfg.propose, "stop_elite_archive_when_pin_blocked", True))
+                and pin_cands > 0
+                and pin_added == 0
+            ):
+                archive_enabled = False
             void_elite_by_group = archive_void_elite_transforms(
                 selected_nest=selected_nest,
                 selected_refine=selected_polys,
@@ -2053,7 +2443,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 free_poly=free_poly,
                 scores=refine_scores,
                 max_keep=int(getattr(cfg.propose, "stratified_void_elite_quota", 15)),
-                enabled=bool(getattr(cfg.propose, "enable_void_elite_archive", True)),
+                enabled=archive_enabled,
             )
             n_void_refine = _count_selected_in_free(
                 polys, selected_polys, free_poly,
@@ -2118,7 +2508,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"nest={n_void_nest} refine={n_void_refine} delta={nest_refine_delta} "
                 f"border_only={bool(propose_stats.get('border_only', False))} "
                 f"outline_cov={outline_cov:.3f} sat_override={sat_override} "
-                f"rim={rim_progress:.3f} zones=[{zone_snip}] "
+                f"rim={rim_progress:.3f} plateau={int(plateau.on_plateau)} "
+                f"zones=[{zone_snip}] "
                 f"pocket={pf_em}/{pf_att} sel={pf_sel} valid={pf_surv}% "
                 f"key_boost={pocket_key_hits} island_boost={island_hits} "
                 f"small_boost={small_hits} "
@@ -2129,6 +2520,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"elite={elite_seeded}->{elite_next} "
                 f"cluster_copy={cc_e}/{cc_p} patterns={n_patterns} "
                 f"side_pack={sp_e}/{sp_p} cloud={fsc_e}/{fsc_p} "
+                f"carry={int(propose_stats.get('carry_n', 0))}/"
+                f"{int(propose_stats.get('carry_n_next', 0))} "
+                f"hist_q={int(propose_stats.get('hist_q', 0))} "
+                f"gvalid={int(propose_stats.get('graph_valid_n', 0))} "
                 f"densify={densify_a}/{densify_f}"
                 f"{f' reason={densify_reason}' if densify_reason else ''}"
                 f"{f' pocket_skip=[{skip_snip}]' if skip_snip else ''}"
@@ -2151,6 +2546,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "outline_cov": outline_cov,
                 "sat_override": bool(sat_override),
                 "rim_progress": rim_progress,
+                "on_plateau": bool(plateau.on_plateau),
+                "plateau_streak": int(plateau.streak),
+                "pin_all_blocked_streak": int(pin_all_blocked_streak),
+                "rim_saturated_skip": bool(propose_stats.get("rim_saturated_skip", False)),
                 "zones_used": list(zones),
                 "pocket_fit_emitted": pf_em,
                 "pocket_fit_attempts": pf_att,
@@ -2192,6 +2591,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "free_space_cloud_emitted": fsc_e,
                 "free_space_cloud_pool": fsc_p,
                 "cluster_patterns": n_patterns,
+                "carry_n": int(propose_stats.get("carry_n", 0)),
+                "carry_n_next": int(propose_stats.get("carry_n_next", 0)),
+                "hist_niche_n": int(propose_stats.get("hist_niche_n", 0)),
+                "hist_q": int(propose_stats.get("hist_q", 0)),
+                "graph_valid_n": int(propose_stats.get("graph_valid_n", 0)),
                 "keep_history_on_sterile": bool(
                     propose_stats.get("keep_history_on_sterile", False)
                 ),
@@ -2385,6 +2789,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
         )
+        plateau.update(cov, len(selected_polys))
+        if propose_stats.get("void_leak") is not None:
+            propose_stats["void_leak"]["on_plateau"] = bool(plateau.on_plateau)
+            propose_stats["void_leak"]["plateau_streak"] = int(plateau.streak)
+            propose_stats["void_leak"]["coverage"] = float(cov)
+            propose_stats["void_leak"]["parts"] = int(len(selected_polys))
         if out.progress:
             pbar.set_postfix(
                 parts=len(selected_polys),
@@ -2420,6 +2830,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         if relocate_accepted:
             # Replace history so trim_history cannot re-inject pre-relocate poses.
             history = selected_t
+            # Carry keeps last make_polygon_graph board-valid rows (incl. unselected
+            # swap material). Do not collapse to selected_t — local_se2 moves most
+            # iters and would erase the propose-dip stabilizer.
         else:
             if len(history[0]) and len(selected_t[0]):
                 history = (

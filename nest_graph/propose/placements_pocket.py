@@ -408,12 +408,21 @@ def propose_placements_pocket_fit(
     if not voids:
         skips.append("no_trapped")
     # Drop oversized open bays (hull-diff can dwarf the part); keep trapped voids.
+    # Large exterior-connected voids bypass the bay size filter (open-void channel).
     max_bay = part_area * 5.0
+    large_void = analysis is not None and analysis.kind == "large_void"
     n_bays_raw = len(bays)
-    bays = [p for p in bays if float(p.area) <= max_bay]
+    if large_void:
+        # Keep oversized bays so open voids can still seed pocket teleports.
+        pass
+    else:
+        bays = [p for p in bays if float(p.area) <= max_bay]
     if n_bays_raw > 0 and not bays:
         skips.append("hull_bays_oversized")
     pockets = [p for p in (voids + bays) if float(p.area) >= part_area * area_ratio]
+    if large_void and not voids and not pockets and analysis.target_poly is not None:
+        # no_trapped is expected for exterior-connected voids; route via open-void.
+        skips.append("large_void_no_trapped")
     pockets.sort(key=lambda p: float(p.area), reverse=True)
     pockets = pockets[:max_targets]
 

@@ -11,6 +11,7 @@ from shapely.ops import unary_union
 from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
+    PlateauTracker,
     _build_transform_batch,
     _count_graph_in_free,
     _count_props_in_free,
@@ -18,10 +19,12 @@ from nest_graph.build_graph import (
     _count_selected_by_proposer,
     _count_selected_in_free,
     _format_prop_accept,
+    _graph_valid_carry_by_group,
     _late_border_saturation_info,
     _make_initial_rule_sets,
     _native_geoms_from_transforms,
     _pin_nest_void_independent,
+    _selection_budget_for_iter,
     _void_pole_near_radius,
     _zones_have_void_hijack,
     active_rule_set,
@@ -569,9 +572,27 @@ class NestingPipelineEvaluator:
         last_proposal_yield = 0.0
         had_void_override = False
         void_elite_by_group: dict[int, list[np.ndarray]] = {}
+        graph_valid_carry: tuple[np.ndarray, ...] = tuple(
+            np.zeros((0, 3), dtype=np.float64) for _ in range(max(len(self.parts), 1))
+        )
+        plateau = PlateauTracker(
+            flat_iters=int(getattr(sel, "plateau_flat_iters", 3) or 3),
+            cov_eps=float(getattr(sel, "plateau_cov_eps", 0.05) or 0.05),
+        )
+        pin_all_blocked_streak = 0
+        part_bases_fixed = {
+            i: Geometry.from_shapely(p[0]) for i, p in enumerate(self.parts)
+        }
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
+            sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
+            if (
+                plateau.on_plateau
+                and bool(getattr(self.cfg.propose, "enable_incumbent_loop", True))
+                and plateau.streak >= plateau.flat_iters + 2
+            ):
+                sel_iter = sel_iter.model_copy(update={"improve_rules_rounds": 0})
             sat_info = _late_border_saturation_info(
                 self.cfg, nest_state, self.sheet,
                 had_void_override=had_void_override,
@@ -603,6 +624,8 @@ class NestingPipelineEvaluator:
                 propose_stats_out=propose_stats,
                 void_elite_t=void_elite_t,
                 keep_history_on_sterile=keep_hist_sterile,
+                part_bases=part_bases_fixed,
+                graph_valid_carry=graph_valid_carry,
             )
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
@@ -616,19 +639,34 @@ class NestingPipelineEvaluator:
                 user_holes=self.user_holes,
                 extra_voids=extra_voids,
             )
+            carry_max = int(
+                getattr(self.cfg.propose, "graph_valid_carry_max", 512) or 512
+            )
+            if bool(getattr(self.cfg.propose, "enable_graph_valid_carry", True)):
+                graph_valid_carry = _graph_valid_carry_by_group(
+                    group_id, transform, ngroups=ngroups, max_keep=carry_max,
+                )
+            else:
+                graph_valid_carry = tuple(
+                    np.zeros((0, 3), dtype=np.float64) for _ in range(ngroups)
+                )
+            propose_stats["graph_valid_n"] = int(len(transform))
+            propose_stats["carry_n_next"] = int(
+                sum(int(a.shape[0]) for a in graph_valid_carry)
+            )
 
             graphs = [graph]
-            for round_idx in range(sel.improve_rules_rounds):
+            for round_idx in range(sel_iter.improve_rules_rounds):
                 rule_sets = improve_rules(
                     graphs,
                     rule_sets,
-                    sel.rules_kept,
+                    sel_iter.rules_kept,
                     self.case.board,
                     mutation_presets=self.cfg.rules.mutation_presets(),
-                    rule_score_penalty=sel.rule_score_penalty,
-                    elite_count=sel.improve_rules_elite_count,
+                    rule_score_penalty=sel_iter.rule_score_penalty,
+                    elite_count=sel_iter.improve_rules_elite_count,
                     seed=int(rng.integers(0, 2**31)) + round_idx + 17 * iter_idx,
-                    score_options=score_rules_options(sel),
+                    score_options=score_rules_options(sel_iter),
                     max_rules_per_set=self.cfg.rules.max_rules_per_set,
                 )
 
@@ -650,9 +688,7 @@ class NestingPipelineEvaluator:
             if self.sheet is not None and not self.sheet.is_empty:
                 minx, miny, maxx, maxy = self.sheet.bounds
                 sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
-            part_bases = {
-                i: Geometry.from_shapely(p[0]) for i, p in enumerate(self.parts)
-            }
+            part_bases = part_bases_fixed
             candidate_geoms = _native_geoms_from_transforms(
                 group_id, transform, part_bases,
             )
@@ -674,7 +710,7 @@ class NestingPipelineEvaluator:
                 part_areas=part_areas,
                 free_info=free_info,
                 cfg=self.cfg,
-                selection=sel,
+                selection=sel_iter,
                 first_pass=first_pass,
                 outline=self.sheet,
                 min_dist=min_dist,
@@ -695,7 +731,12 @@ class NestingPipelineEvaluator:
                 refine_rules,
                 selected,
                 refine_scores,
-                selection=sel,
+                selection=sel_iter,
+                node_areas=[
+                    float(part_areas[int(g)]) if int(g) < len(part_areas) else 0.0
+                    for g in group_id
+                ],
+                refine_seed=int(rng.integers(0, 2**31)),
             )
             pin_stats: dict = {
                 "pin_candidates": 0,
@@ -703,8 +744,14 @@ class NestingPipelineEvaluator:
                 "pin_blocked_collision": 0,
                 "pin_ms": 0.0,
             }
+            skip_pin = (
+                int(getattr(self.cfg.propose, "pin_all_blocked_skip_after", 3) or 0) > 0
+                and pin_all_blocked_streak
+                >= int(getattr(self.cfg.propose, "pin_all_blocked_skip_after", 3) or 0)
+            )
             if (
                 bool(getattr(self.cfg.propose, "enable_void_nest_pin", True))
+                and not skip_pin
                 and free_poly is not None
                 and not free_poly.is_empty
             ):
@@ -717,6 +764,22 @@ class NestingPipelineEvaluator:
                     refine_scores,
                     stats_out=pin_stats,
                 )
+            pin_cands = int(pin_stats.get("pin_candidates", 0))
+            pin_added = int(pin_stats.get("pin_added", 0))
+            if pin_cands > 0 and pin_added == 0:
+                pin_all_blocked_streak += 1
+            elif not skip_pin:
+                pin_all_blocked_streak = 0
+            archive_enabled = bool(
+                getattr(self.cfg.propose, "enable_void_elite_archive", True)
+            )
+            if (
+                archive_enabled
+                and bool(getattr(self.cfg.propose, "stop_elite_archive_when_pin_blocked", True))
+                and pin_cands > 0
+                and pin_added == 0
+            ):
+                archive_enabled = False
             void_elite_by_group = archive_void_elite_transforms(
                 selected_nest=selected,
                 selected_refine=selected_polys,
@@ -726,7 +789,7 @@ class NestingPipelineEvaluator:
                 free_poly=free_poly,
                 scores=refine_scores,
                 max_keep=int(getattr(self.cfg.propose, "stratified_void_elite_quota", 15)),
-                enabled=bool(getattr(self.cfg.propose, "enable_void_elite_archive", True)),
+                enabled=archive_enabled,
             )
             n_void_refine = _count_selected_in_free(
                 polys, selected_polys, free_poly,
@@ -917,6 +980,10 @@ class NestingPipelineEvaluator:
                 )
                 cov = part_area / usable
             trajectory.append((t_elapsed, cov, len(seed_polys) + len(selected_polys)))
+            plateau.update(cov * 100.0, len(seed_polys) + len(selected_polys))
+            if isinstance(last_void_leak, dict):
+                last_void_leak["on_plateau"] = bool(plateau.on_plateau)
+                last_void_leak["plateau_streak"] = int(plateau.streak)
 
         time_s = time.perf_counter() - t0
         

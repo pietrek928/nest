@@ -47,6 +47,10 @@ struct RefineSelectionOptions {
     int max_root_collisions = 2;
     int max_tries = 0;
     int min_collisions = 0;
+    /** Optional per-node areas (same length as graph); empty disables area lex. */
+    std::vector<float> node_areas;
+    /** Prefer count, then area sum, then score sum when accepting refine results. */
+    bool lexicographic_area = false;
 };
 
 struct FinalizeSelectionOptions {
