@@ -146,6 +146,7 @@ class ProposeAblation(StrEnum):
     NO_MATE_SYNTH = "no_mate_synth"
     NO_LEX_REFINE = "no_lex_refine"
     NO_LNS_REBUILD = "no_lns_rebuild"
+    NO_BLOCK_REPLACE = "no_block_replace"
     NO_INCUMBENT_LOOP = "no_incumbent_loop"
     NO_PATTERN_PROPAGATE = "no_pattern_propagate"
     NO_MOTIF_SEQUENTIAL_ACCEPT = "no_motif_sequential_accept"
@@ -459,6 +460,8 @@ class ProposeConfig(BaseModel):
     guidance_use_tight_packing: bool = True
     guidance_use_corner_alignment: bool = True
     guidance_enable_grid: bool = False
+    void_densify_pole_gravity: bool = False
+    """Densify-only: tight merged guidance uses pole unit, not rim-band inward gravity."""
     guidance_diversity_dist_ratio: float = 2.5
     guidance_proposition_seed_count: int = 16
     guidance_cast_refine_top_k: int = 8
@@ -547,6 +550,7 @@ class ProposeConfig(BaseModel):
     void_island_score_boost: float = 64.0
     """EMS pole weight for continuous distance-to-pole DFS score boost (0 disables)."""
     void_attractor_rule_weight: float = 16.0
+    """Unused. PointPlaceRule nest_by_graph attractors were deleted; keep for ablation copy."""
     """Lighter PointPlaceRule weight for nest_by_graph void attractors (0 disables rules)."""
     attract_contact_weight: float = 8.0
     """NEAR kiss-pair score bonus; 0 skips pair join and geometric fill."""
@@ -650,8 +654,10 @@ class ProposeConfig(BaseModel):
     refine_rim_drop_reject: float = 0.02
     """Reject refine result if outline/rim coverage drops by more than this absolute fraction."""
     # Phase 4 LNS / Phase 5 incumbent.
+    enable_block_replace: bool = True
+    """Mid-pack: motif-cohort lock-swap via nest_by_scores (3a)."""
     enable_lns_rebuild: bool = True
-    """On plateau: spatial ruin-and-recreate at void frontier."""
+    """On plateau: contact-CC hole re-emit + nest_by_scores (3b)."""
     lns_destroy_fraction: float = 0.25
     enable_incumbent_loop: bool = True
     """On plateau after LNS: prefer incumbent LNS over full pool re-solve (Phase 5)."""
@@ -1206,12 +1212,15 @@ def _take_niche(
     quota: int,
     claimed: set[tuple[float, float, float]],
     rng: np.random.Generator,
+    *,
+    shuffle: bool = True,
 ) -> list[np.ndarray]:
     if quota <= 0 or rows is None or getattr(rows, "shape", (0,))[0] == 0:
         return []
     picked: list[np.ndarray] = []
     order = np.arange(rows.shape[0])
-    rng.shuffle(order)
+    if shuffle:
+        rng.shuffle(order)
     for i in order:
         row = rows[int(i)]
         key = _transform_row_key4(row)
@@ -1268,25 +1277,31 @@ def subsample_transforms_stratified(
 
     # Selection: keep all that fit (priority).
     sel_q = max_n
-    out_rows.extend(_take_niche(selection, sel_q, claimed, rng))
+    out_rows.extend(_take_niche(selection, sel_q, claimed, rng, shuffle=False))
     remain = max_n - len(out_rows)
     if remain <= 0:
         return np.asarray(out_rows[:max_n], dtype=np.float64)
 
-    out_rows.extend(_take_niche(proposals, min(prop_q, remain), claimed, rng))
+    out_rows.extend(
+        _take_niche(proposals, min(prop_q, remain), claimed, rng, shuffle=False)
+    )
     remain = max_n - len(out_rows)
     if remain <= 0:
         return np.asarray(out_rows[:max_n], dtype=np.float64)
 
-    out_rows.extend(_take_niche(void_elite, min(void_q, remain), claimed, rng))
+    out_rows.extend(
+        _take_niche(void_elite, min(void_q, remain), claimed, rng, shuffle=False)
+    )
     remain = max_n - len(out_rows)
     if remain <= 0:
         return np.asarray(out_rows[:max_n], dtype=np.float64)
 
-    out_rows.extend(_take_niche(history, min(hist_q, remain), claimed, rng))
+    out_rows.extend(
+        _take_niche(history, min(hist_q, remain), claimed, rng, shuffle=False)
+    )
     remain = max_n - len(out_rows)
     if remain > 0:
-        out_rows.extend(_take_niche(expand_rest, remain, claimed, rng))
+        out_rows.extend(_take_niche(expand_rest, remain, claimed, rng, shuffle=True))
 
     if not out_rows:
         return empty

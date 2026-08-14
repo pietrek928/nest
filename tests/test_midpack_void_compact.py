@@ -4,6 +4,7 @@ import numpy as np
 from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
+from nest_graph.propose.cluster_repack import cluster_relocate_selection
 from nest_graph.propose.context import analyze_free_space
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.propose.placement_common import (
@@ -97,3 +98,128 @@ def test_gravity_gate_on_moves_floater_toward_pole():
 
     cand_g = Geometry.from_shapely(out_p[0])
     assert is_pose_clear(cand_g, [], [], 0.25)
+
+
+def test_local_se2_uses_nearest_spine_pole():
+    sheet = box(0, 0, 24, 24)
+    part = box(0, 0, 1, 1)
+    tr0 = np.array([2.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0)]
+    near = Point(18.0, 2.5)
+    far = Point(2.5, 18.0)
+    cfg = ProposeConfig(
+        enable_local_se2=True,
+        enable_gravity_compaction=True,
+        local_se2_n_angles=4,
+    )
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[tr0.copy()],
+        group_ids=[0],
+        selected_indices=[0],
+        part_by_group={0: part},
+        min_dist=0.25,
+        propose_cfg=cfg,
+        pole=far,
+        poles=[near, far],
+        board_adj_indices=[],
+    )
+    d_near0 = float(polys[0].centroid.distance(near))
+    d_far0 = float(polys[0].centroid.distance(far))
+    out_p, _out_t, stats = local_se2_selection(ctx)
+    d_near1 = float(out_p[0].centroid.distance(near))
+    d_far1 = float(out_p[0].centroid.distance(far))
+    assert stats["attempted"] == 1
+    assert d_near1 < d_near0
+    assert (d_near0 - d_near1) > (d_far0 - d_far1)
+
+
+def test_local_se2_empty_poles_skips_pull():
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 1, 1)
+    tr0 = np.array([2.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0)]
+    cfg = ProposeConfig(
+        enable_local_se2=True,
+        enable_gravity_compaction=True,
+        local_se2_n_angles=4,
+    )
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[tr0.copy()],
+        group_ids=[0],
+        selected_indices=[0],
+        part_by_group={0: part},
+        min_dist=0.25,
+        propose_cfg=cfg,
+        pole=Point(15.0, 15.0),
+        poles=(),
+        board_adj_indices=[],
+    )
+    out_p, out_t, stats = local_se2_selection(ctx)
+    assert stats["attempted"] == 0
+    assert abs(out_t[0][0] - tr0[0]) < 1e-12
+    assert abs(out_t[0][1] - tr0[1]) < 1e-12
+    assert abs(out_p[0].centroid.distance(polys[0].centroid)) < 1e-9
+
+
+def test_cluster_relocate_uses_nearest_spine_pole():
+    sheet = box(0, 0, 24, 24)
+    part = box(0, 0, 1, 1)
+    trs = [
+        np.array([2.0, 2.0, 0.0]),
+        np.array([3.15, 2.0, 0.0]),
+    ]
+    polys = [transform_poly(part, t) for t in trs]
+    near = Point(16.0, 2.5)
+    far = Point(2.5, 16.0)
+    cfg = ProposeConfig(enable_cluster_relocate=True)
+    blob0 = polys[0].union(polys[1]).centroid
+    d_near0 = float(blob0.distance(near))
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[t.copy() for t in trs],
+        group_ids=[0, 0],
+        selected_indices=[0, 1],
+        part_by_group={0: part},
+        min_dist=0.2,
+        propose_cfg=cfg,
+        pole=far,
+        poles=[near, far],
+        board_adj_indices=[],
+    )
+    out_p, _out_t, stats = cluster_relocate_selection(ctx)
+    assert stats["attempted"] >= 1
+    blob1 = out_p[0].union(out_p[1]).centroid
+    assert float(blob1.distance(near)) < d_near0
+
+
+def test_cluster_relocate_empty_poles_skips_pull():
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 1, 1)
+    trs = [
+        np.array([2.0, 2.0, 0.0]),
+        np.array([3.15, 2.0, 0.0]),
+    ]
+    polys = [transform_poly(part, t) for t in trs]
+    cfg = ProposeConfig(enable_cluster_relocate=True)
+    ctx = SelectionEditCtx(
+        sheet=sheet,
+        polys=list(polys),
+        transforms=[t.copy() for t in trs],
+        group_ids=[0, 0],
+        selected_indices=[0, 1],
+        part_by_group={0: part},
+        min_dist=0.2,
+        propose_cfg=cfg,
+        pole=Point(15.0, 15.0),
+        poles=(),
+        board_adj_indices=[],
+    )
+    out_p, out_t, stats = cluster_relocate_selection(ctx)
+    assert stats["attempted"] == 0
+    assert abs(out_t[0][0] - trs[0][0]) < 1e-12
+    assert abs(out_p[0].centroid.distance(polys[0].centroid)) < 1e-9

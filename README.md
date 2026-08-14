@@ -214,18 +214,22 @@ tests/
 flowchart LR
   batch[Transform batch]
   mpg[make_polygon_graph]
-  rules[improve_rules]
-  nest[nest_by_graph]
-  dfs[DFS refine]
-  batch --> mpg --> rules --> nest --> dfs
+  compose[compose_and_nest_selection]
+  nest[nest_by_scores]
+  swap[3a cohort swap]
+  dfs[DFS refine unlocked]
+  fin[finalize_selection]
+  hole[3b hole re-nest]
+  batch --> mpg --> compose --> nest --> swap --> dfs --> fin --> hole
 ```
 
-1. Build a transform batch (random, history, propose seeds, shuffles).
-2. `make_polygon_graph` — keep all board-valid placements; add collision edges.
-3. Evolve placement rule sets on recent graphs.
-4. `nest_by_graph` — greedy rule-scored independent set.
-5. DFS passes to grow selection (collision-free); final selection is pruned to an independent set before render. See [docs/nest_config.md](docs/nest_config.md).
-6. Feed selected transforms into the next iteration.
+1. Build a transform batch (history, propose seeds, carry).
+2. `make_polygon_graph` — board-valid poses; collision (NO) plus attract (NEAR).
+3. `compose_and_nest_selection` — scores + motif pins; `nest_by_scores` (not `nest_by_graph`); mid-pack 3a cohort lock-swap.
+4. DFS refine (count then area then score). Locks are unset here; `finalize_selection` re-inserts clear locks.
+5. Plateau 3b: peel contact CC, re-emit `cluster_copy`+`pocket_fit`, `nest_by_scores` locked=kept. Stamp fallback on the same victim.
+6. Post-pack: cluster_repack / relocate / local_se2. Feed selected transforms into the next iteration.
+7. `nest_by_graph` remains for `score_rules` / tests only.
 
 ## Debugging
 

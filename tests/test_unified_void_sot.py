@@ -6,7 +6,7 @@ import numpy as np
 from shapely.geometry import Point, box
 
 from nest_graph.build_graph import archive_void_elite_transforms, void_elite_count
-from nest_graph.config import ProposeConfig
+from nest_graph.config import ProposeConfig, subsample_transforms_with_pinned
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import (
     _count_transforms_in_void,
@@ -95,6 +95,22 @@ def test_pole_near_count():
     )
     assert n == 1
     assert _count_transforms_in_void(arr, box(4, 4, 6, 6), part) == 1
+
+
+def test_pinned_union_keeps_half_mixer():
+    """Densify prefix + old mixer: never replace a larger pool with densify alone."""
+    rng = np.random.default_rng(0)
+    old = np.array([[float(i), 0.0, 0.0] for i in range(8)], dtype=np.float64)
+    densify = np.array([[100.0 + i, 1.0, 0.0] for i in range(3)], dtype=np.float64)
+    max_n = 8
+    half = max_n // 2
+    pinned = densify[: min(len(densify), half)]
+    out = subsample_transforms_with_pinned(old, pinned, max_n, rng)
+    assert out.shape[0] == max_n
+    assert out.shape[0] >= max(1, len(old) // 2)
+    keys = {(round(float(r[0]), 4), round(float(r[1]), 4)) for r in out}
+    for row in pinned:
+        assert (round(float(row[0]), 4), round(float(row[1]), 4)) in keys
 
 
 def test_void_pole_near_radius_shared():

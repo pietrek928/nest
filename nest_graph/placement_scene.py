@@ -136,7 +136,6 @@ def guidance_config_for_scene(
         if border_focus:
             cfg.use_gravity = True
             cfg.use_target_attractor = False
-            cfg.gravity_vector = (-1.0, -1.0)
             cfg.use_board_edge_cast = True
         else:
             cfg.use_target_attractor = True
@@ -238,9 +237,9 @@ def guidance_config_for_board_edge_anchor(
     ilen = math.hypot(ix, iy)
     if ilen > 1e-9:
         cfg.gravity_vector = (-ix / ilen, -iy / ilen)
+        cfg.use_gravity = True
     else:
-        cfg.gravity_vector = (-1.0, -1.0)
-    cfg.use_gravity = True
+        cfg.use_gravity = False
     cfg.use_target_attractor = True
     cfg.target_position = (float(anchor.x), float(anchor.y))
     cfg.target_angle_rad = target_angle_rad

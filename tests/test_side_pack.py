@@ -160,7 +160,22 @@ def _side_pack_ctx(
     return ctx, extras, counts, keys
 
 
-def test_cluster_edge_emits_side_pack():
+def test_void_with_group_fit_enabled_emits_group_fit_not_side_pack():
+    """Hijack union: group_fit runs on void; side_pack stays off."""
+    enabled = frozenset(ProposeConfig.proposers_for_place("void_seek") or ()) | {
+        "group_fit",
+    }
+    ctx, extras, counts, keys = _side_pack_ctx(
+        zone="void_seek", packed_n=3, enabled=enabled,
+    )
+    ctx.propose_cfg = ctx.propose_cfg.model_copy(update={"use_group_edge_seeds": True})
+    ctx.focal_shape = extras.packed_polys[0] if extras.packed_polys else ctx.base_shape
+    state = _CollectState(
+        proposer_counts=counts, proposer_keys=keys, cascade_stats_out={},
+    )
+    _collect_builder_candidates(ctx, extras, state, cascade_zone="void_seek")
+    assert counts.get("side_pack", 0) == 0
+    assert counts.get("group_fit", 0) > 0
     ctx, extras, counts, keys = _side_pack_ctx(zone="cluster_edge", packed_n=3)
     state = _CollectState(
         proposer_counts=counts, proposer_keys=keys, cascade_stats_out={},
@@ -169,14 +184,14 @@ def test_cluster_edge_emits_side_pack():
     assert counts.get("side_pack", 0) > 0
 
 
-def test_early_void_emits_side_pack():
-    """VOID_SEEK with packed_n < 2 still stages side_pack (no BOARD_EDGE/GROUP_FIT)."""
+def test_early_void_skips_side_pack():
+    """VOID_SEEK XOR: staging skips side_pack (permission table still lists it)."""
     ctx, extras, counts, keys = _side_pack_ctx(zone="void_seek", packed_n=1)
     state = _CollectState(
         proposer_counts=counts, proposer_keys=keys, cascade_stats_out={},
     )
     _collect_builder_candidates(ctx, extras, state, cascade_zone="void_seek")
-    assert counts.get("side_pack", 0) > 0
+    assert counts.get("side_pack", 0) == 0
 
 
 def test_side_pack_top_n_bounds_non_void_emit():
@@ -191,22 +206,14 @@ def test_side_pack_top_n_bounds_non_void_emit():
     assert counts.get("side_pack", 0) <= 8
 
 
-def test_wall_fill_void_seek_with_pocket_reserve():
+def test_wall_fill_void_seek_does_not_emit_side_pack():
+    """Void XOR: sniper short-circuit does not wall-fill side_pack."""
     ctx, extras, counts, keys = _side_pack_ctx(zone="void_seek", packed_n=3)
-    cascade = {"cascade_skipped_proposers": ["side_pack", "board_edge"]}
-    state = _CollectState(
-        proposer_counts=counts, proposer_keys=keys, cascade_stats_out=cascade,
+    out = _collect_candidates(
+        ctx, extras, mode="cascade", cascade_zone="void_seek",
     )
-    state.skip_builders = True
-    # Simulate nonempty pocket reserve path through _collect_candidates gate.
-    n0 = len(state.candidates)
-    _emit_side_pack(ctx, extras, state, cascade_zone="void_seek")
-    assert len(state.candidates) > n0
-    # Un-skip after growth (mirrors wall-fill in _collect_candidates).
-    cascade["cascade_skipped_proposers"] = [
-        n for n in cascade["cascade_skipped_proposers"] if n != "side_pack"
-    ]
-    assert "side_pack" not in cascade["cascade_skipped_proposers"]
+    del out
+    assert counts.get("side_pack", 0) == 0
 
 
 def test_interior_pocket_skip_does_not_wall_fill_side_pack():

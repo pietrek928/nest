@@ -22,6 +22,7 @@ class SelectionEditCtx:
     min_dist: float
     propose_cfg: ProposeConfig | None = None
     pole: Point | None = None
+    poles: Sequence[Point] | None = None
     fixed_obstacles: Sequence[BaseGeometry] | None = None
     void_geoms: Sequence | None = None
     board_adj_indices: Sequence[int] | None = None

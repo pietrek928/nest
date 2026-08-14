@@ -1,48 +1,9 @@
-"""Ruin-and-recreate (LNS) on plateau: spatial destroy at void frontier."""
+"""LNS accept helper. Void-kNN destroy was replaced by 3b contact-CC re-nest."""
 
 import math
 from typing import Sequence
 
 import numpy as np
-from shapely.geometry import Point
-from shapely.geometry.base import BaseGeometry
-
-
-def void_frontier_destroy_indices(
-    polys: Sequence[BaseGeometry],
-    selected: Sequence[int],
-    *,
-    pole: Point | None,
-    void_poly: BaseGeometry | None,
-    destroy_fraction: float = 0.25,
-    max_destroy: int = 12,
-) -> list[int]:
-    """Pick selected indices near the void frontier for spatial destroy."""
-    if not selected:
-        return []
-    frac = min(max(float(destroy_fraction), 0.05), 0.75)
-    n_destroy = max(1, min(int(round(len(selected) * frac)), int(max_destroy)))
-    scored: list[tuple[float, int]] = []
-    for idx in selected:
-        if idx < 0 or idx >= len(polys):
-            continue
-        poly = polys[idx]
-        if poly is None or getattr(poly, "is_empty", True):
-            continue
-        c = poly.centroid
-        dist = 0.0
-        if void_poly is not None and not getattr(void_poly, "is_empty", True):
-            try:
-                dist = float(poly.distance(void_poly))
-            except Exception:
-                dist = float("inf")
-        elif pole is not None and not pole.is_empty:
-            dist = float(math.hypot(c.x - pole.x, c.y - pole.y))
-        else:
-            dist = float(c.x + c.y)
-        scored.append((dist, int(idx)))
-    scored.sort(key=lambda x: x[0])
-    return [i for _d, i in scored[:n_destroy]]
 
 
 def apply_lns_destroy(
@@ -80,7 +41,6 @@ def lns_accept(
             return True
         if temperature <= 0.0:
             return False
-    # Mild regression under temperature.
     delta = (old_cov - new_cov) + 0.01 * (old_area - new_area)
     if delta <= 0.0:
         return True

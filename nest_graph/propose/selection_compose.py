@@ -12,10 +12,8 @@ from shapely.geometry.base import BaseGeometry
 
 from nest_graph.elem_graph import (
     PlacementRuleSet,
-    PointPlaceRule,
     SelectMode,
     SelectOptions,
-    Vec2,
     nest_by_scores,
 )
 from nest_graph.geometry import Geometry
@@ -24,11 +22,63 @@ from nest_graph.propose.void_selection import (
     apply_void_selection_boosts,
     boost_border_scores,
     count_selected_in_free,
+    transform_row_key,
     void_attractor_radius,
 )
+from nest_graph.propose.block_replace import (
+    _packing_independent,
+    _sel_area,
+    lex_count_area_better,
+)
 from nest_graph.propose.motif_lock import (
+    _key_index_map,
     sequential_accept_motif_cohorts,
 )
+
+def _map_incumbent_indices(
+    *,
+    group_id: Sequence[int],
+    transform: Sequence,
+    packed_group_id: Sequence[int] | None,
+    packed_transform: Sequence | None,
+    graph,
+) -> list[int]:
+    """Map last packed (gid, key) into this graph; empty if not packing-independent."""
+    if not packed_group_id or packed_transform is None:
+        return []
+    key_map = _key_index_map(group_id, transform)
+    idxs: list[int] = []
+    for gid, tr in zip(packed_group_id, packed_transform, strict=False):
+        ix = key_map.get((int(gid), transform_row_key(tr)))
+        if ix is not None:
+            idxs.append(int(ix))
+    if not idxs or not _packing_independent(idxs, graph):
+        return []
+    return idxs
+
+
+def _nest_with_locks(graph, scores: Sequence[float], locked: Sequence[int]) -> list[int]:
+    nest_opts = SelectOptions()
+    nest_opts.local_swap = False
+    if locked:
+        nest_opts.mode = SelectMode.greedy_score
+        nest_opts.locked_indices = [int(i) for i in locked]
+    return list(nest_by_scores(graph, scores, nest_opts)) if scores else []
+
+
+def _lex_pick_better(
+    *,
+    best: Sequence[int],
+    cand: Sequence[int],
+    group_id: Sequence[int],
+    part_areas: Sequence[float],
+) -> bool:
+    return lex_count_area_better(
+        old_count=len(best),
+        old_area=_sel_area(best, group_id, part_areas),
+        new_count=len(cand),
+        new_area=_sel_area(cand, group_id, part_areas),
+    )
 
 
 @dataclass
@@ -51,88 +101,10 @@ class ComposedSelection:
     n_void_nest: int = 0
 
 
-def _copy_rule_set(rule_set: PlacementRuleSet) -> PlacementRuleSet:
-    out = PlacementRuleSet()
-    for pr in rule_set.point_rules:
-        out.append_rule(pr)
-    for cr in rule_set.circle_rules:
-        out.append_rule(cr)
-    for pr in rule_set.point_angle_rules:
-        out.append_rule(pr)
-    for cr in rule_set.circle_angle_rules:
-        out.append_rule(cr)
-    return out
-
-
-def _truncate_rule_set(rule_set: PlacementRuleSet, max_rules: int) -> PlacementRuleSet:
-    if rule_set.size() <= max_rules:
-        return rule_set
-    weighted: list[tuple[float, object]] = []
-    for pr in rule_set.point_rules:
-        weighted.append((pr.w, pr))
-    for cr in rule_set.circle_rules:
-        weighted.append((cr.w, cr))
-    for pr in rule_set.point_angle_rules:
-        weighted.append((pr.w, pr))
-    for cr in rule_set.circle_angle_rules:
-        weighted.append((cr.w, cr))
-    weighted.sort(key=lambda item: abs(item[0]), reverse=True)
-    out = PlacementRuleSet()
-    for _, rule in weighted[:max_rules]:
-        out.append_rule(rule)
-    return out
-
-
 def active_rule_set(rule_sets: list[PlacementRuleSet]) -> PlacementRuleSet:
     if not rule_sets:
         return PlacementRuleSet()
     return rule_sets[0]
-
-
-def make_void_attractor_rule_set(
-    pole: Point,
-    *,
-    ngroups: int,
-    radius: float,
-    weight: float,
-) -> PlacementRuleSet:
-    """Strong PointPlaceRule attractors at the free-space pole for nest_by_graph."""
-    rs = PlacementRuleSet()
-    px, py = float(pole.x), float(pole.y)
-    r = max(float(radius), 1e-4)
-    w = float(weight)
-    for g in range(max(int(ngroups), 1)):
-        rs.append_rule(PointPlaceRule(pos=Vec2(x=px, y=py), r=r, w=w, group=g))
-    return rs
-
-
-def merge_void_attractor_into_rule_sets(
-    rule_sets: list[PlacementRuleSet],
-    attractor: PlacementRuleSet,
-    *,
-    nest_rule_sets_used: int,
-    max_rules_per_set: int,
-) -> list[PlacementRuleSet]:
-    """Prepend void attractors onto the rule sets used by nest_by_graph."""
-    if not rule_sets or attractor is None:
-        return rule_sets
-    n_touch = min(max(int(nest_rule_sets_used), 1), len(rule_sets))
-    out: list[PlacementRuleSet] = []
-    for i, rs in enumerate(rule_sets):
-        if i >= n_touch:
-            out.append(rs)
-            continue
-        merged = _copy_rule_set(attractor)
-        for pr in rs.point_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_rules:
-            merged.append_rule(cr)
-        for pr in rs.point_angle_rules:
-            merged.append_rule(pr)
-        for cr in rs.circle_angle_rules:
-            merged.append_rule(cr)
-        out.append(_truncate_rule_set(merged, max_rules_per_set))
-    return out
 
 
 def compose_and_nest_selection(
@@ -157,6 +129,8 @@ def compose_and_nest_selection(
     sheet_diag: float,
     propose_stats: dict | None,
     ngroups: int,
+    packed_group_id: Sequence[int] | None = None,
+    packed_transform: Sequence | None = None,
 ) -> ComposedSelection:
     """Apply void/geom boosts, pick nest seed, prepare refine_scores (G22/G24)."""
     from shapely.geometry import Polygon
@@ -203,9 +177,10 @@ def compose_and_nest_selection(
         )
 
     locked_motif: list[int] = []
+    lock_sets: list[list[int]] = []
+    void_geoms: list = []
     if bool(getattr(cfg.propose, "enable_motif_sequential_accept", False)):
         cohorts = (propose_stats or {}).get("motif_cohorts") or []
-        void_geoms: list = []
         try:
             from nest_graph.board import board_context_from_geometry
 
@@ -213,7 +188,7 @@ def compose_and_nest_selection(
             void_geoms = list(void_geoms or [])
         except Exception:
             void_geoms = []
-        locked_motif, seq_telem = sequential_accept_motif_cohorts(
+        _combined, seq_telem = sequential_accept_motif_cohorts(
             graph=graph,
             scores=scores,
             group_id=group_id,
@@ -229,18 +204,90 @@ def compose_and_nest_selection(
             ),
             rcl_top_k=10,
         )
+        del _combined
+        lock_sets = [list(s) for s in (seq_telem.get("motif_lock_sets") or [])][:4]
         boost_hits = dict(boost_hits)
         boost_hits["motif_sequential"] = int(seq_telem.get("motif_sequential_full", 0))
         if propose_stats is not None:
             propose_stats.update(seq_telem)
+
+    # Beam: unlocked + up to 4 Scene-clear lock-sets; lex count then area.
+    selected_nest = _nest_with_locks(graph, scores, [])
+    for lock in lock_sets:
+        cand = _nest_with_locks(graph, scores, lock)
+        if _lex_pick_better(
+            best=selected_nest,
+            cand=cand,
+            group_id=group_id,
+            part_areas=part_areas,
+        ):
+            selected_nest = cand
+            locked_motif = list(lock)
+
+    incumbent = _map_incumbent_indices(
+        group_id=group_id,
+        transform=transform,
+        packed_group_id=packed_group_id,
+        packed_transform=packed_transform,
+        graph=graph,
+    )
+    incumbent_hold = 0
+    if incumbent and not _lex_pick_better(
+        best=incumbent,
+        cand=selected_nest,
+        group_id=group_id,
+        part_areas=part_areas,
+    ):
+        # Void override: allow cand when it colonizes more free space and is
+        # not a collapse (count ≥ 0.9× incumbent).
+        void_override = False
+        if (
+            free_info is not None
+            and getattr(free_info, "kind", None) == "large_void"
+            and free_poly is not None
+            and not getattr(free_poly, "is_empty", True)
+            and len(incumbent) > 0
+            and len(selected_nest) >= int(0.9 * len(incumbent))
+        ):
+            void_cand = count_selected_in_free(polys, selected_nest, free_poly)
+            void_inc = count_selected_in_free(polys, incumbent, free_poly)
+            void_override = void_cand > void_inc
+        if not void_override:
+            selected_nest = list(incumbent)
+            locked_motif = []
+            incumbent_hold = 1
+    if propose_stats is not None:
+        propose_stats["incumbent_hold"] = int(incumbent_hold)
+        propose_stats["motif_locked"] = list(locked_motif)
+        propose_stats["motif_beam_sets"] = int(len(lock_sets))
+
+    if (
+        not first_pass
+        and bool(getattr(cfg.propose, "enable_block_replace", True))
+        and locked_motif
+    ):
+        from nest_graph.propose.block_replace import try_block_cohort_swap
+
+        void_geoms_swap = void_geoms
+        selected_nest, locked_motif, swap_telem = try_block_cohort_swap(
+            graph=graph,
+            scores=scores,
+            selected=selected_nest,
+            locked_motif=locked_motif,
+            cohorts=(propose_stats or {}).get("motif_cohorts") or [],
+            candidate_geoms=candidate_geoms,
+            void_geoms=void_geoms_swap,
+            group_id=group_id,
+            transform=transform,
+            part_areas=part_areas,
+            min_dist=float(min_dist),
+        )
+        boost_hits = dict(boost_hits)
+        boost_hits["block_cohort_accepted"] = int(swap_telem.get("block_cohort_accepted", 0))
+        if propose_stats is not None:
+            propose_stats.update(swap_telem)
             propose_stats["motif_locked"] = list(locked_motif)
 
-    nest_opts = SelectOptions()
-    nest_opts.local_swap = False
-    if locked_motif:
-        nest_opts.mode = SelectMode.greedy_score
-        nest_opts.locked_indices = [int(i) for i in locked_motif]
-    selected_nest = list(nest_by_scores(graph, scores, nest_opts)) if scores else []
 
     refine_scores = list(scores)
     # Refine-only non-negative void/coverage term (tie-break within lex count/area).

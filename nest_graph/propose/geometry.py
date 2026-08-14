@@ -1,5 +1,6 @@
 from typing import Sequence, Tuple
 
+import math
 import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -127,13 +128,66 @@ class ProposeGeometry:
         guidance_cfg: GuidanceConfig | None = None,
     ):
         if guidance_cfg is not None:
-            return self.scene.guidance(placed, xy, guidance_cfg)
-        cfg = self._propose_guidance_cfg(
-            push,
-            border_focus=border_focus,
-            target_angle_rad=target_angle_rad,
-        )
+            cfg = guidance_cfg
+        else:
+            cfg = self._propose_guidance_cfg(
+                push,
+                border_focus=border_focus,
+                target_angle_rad=target_angle_rad,
+            )
+        use_border = self._border_focus if border_focus is None else border_focus
+        if use_border:
+            self._apply_rim_gravity(cfg, xy)
         return self.scene.guidance(placed, xy, cfg)
+
+    def _maybe_rim_gravity(
+        self,
+        cfg: GuidanceConfig,
+        xy: Tuple[float, float],
+        *,
+        border_focus: bool | None = None,
+    ) -> None:
+        use_border = self._border_focus if border_focus is None else border_focus
+        if use_border:
+            self._apply_rim_gravity(cfg, xy)
+
+    def _cfg_with_rim_gravity(
+        self,
+        push: Point,
+        xy: Tuple[float, float],
+        *,
+        border_focus: bool | None = None,
+        target_angle_rad: float = 0.0,
+    ) -> GuidanceConfig:
+        cfg = self._propose_guidance_cfg(
+            push, border_focus=border_focus, target_angle_rad=target_angle_rad,
+        )
+        self._maybe_rim_gravity(cfg, xy, border_focus=border_focus)
+        return cfg
+
+    def _apply_rim_gravity(
+        self,
+        cfg: GuidanceConfig,
+        xy: Tuple[float, float],
+    ) -> None:
+        """Inward-normal rim gravity at seed xy; skip pull if no edge (no SW fallback)."""
+        from nest_graph.propose.placement_perimeter import edge_inward_at_point
+
+        sheet = self.sheet
+        if sheet is None or getattr(sheet, "is_empty", False):
+            cfg.use_gravity = False
+            return
+        info = edge_inward_at_point(sheet, Point(float(xy[0]), float(xy[1])))
+        if info is None:
+            cfg.use_gravity = False
+            return
+        _anchor, (ix, iy) = info
+        ilen = math.hypot(ix, iy)
+        if ilen <= 1e-9:
+            cfg.use_gravity = False
+            return
+        cfg.use_gravity = True
+        cfg.gravity_vector = (-ix / ilen, -iy / ilen)
 
     def passes_full_packed_collision(self, placed: Geometry) -> bool:
         if not self.full_packed_geoms:
@@ -151,7 +205,7 @@ class ProposeGeometry:
         push: Point,
         xy: Tuple[float, float],
     ) -> bool:
-        cfg = self._propose_guidance_cfg(push)
+        cfg = self._cfg_with_rim_gravity(push, xy)
         return self.scene.is_valid(
             placed, xy, self._min_dist, cfg, epsilon_ratio=self._epsilon_ratio,
         )
@@ -164,6 +218,7 @@ class ProposeGeometry:
         guidance_cfg: GuidanceConfig | None = None,
     ) -> bool:
         cfg = guidance_cfg if guidance_cfg is not None else self._propose_guidance_cfg(pt_push)
+        self._maybe_rim_gravity(cfg, (float(coords[0]), float(coords[1])))
         return self.scene.valid_at(
             coords, self._min_dist, cfg, epsilon_ratio=self._epsilon_ratio,
         )

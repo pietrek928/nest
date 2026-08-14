@@ -77,6 +77,26 @@ def test_stratified_subsample_preserves_niches():
     assert any(40.0 <= x < 50.0 for x in xs)
 
 
+def test_stratified_proposals_keep_prefix_order():
+    rng = np.random.default_rng(0)
+    sel = np.zeros((0, 3), dtype=np.float64)
+    props = np.array([[float(i), 0.0, 0.0] for i in range(8)], dtype=np.float64)
+    empty = np.zeros((0, 3), dtype=np.float64)
+    out = subsample_transforms_stratified(
+        selection=sel,
+        proposals=props,
+        void_elite=empty,
+        history=empty,
+        expand_rest=empty,
+        max_n=4,
+        rng=rng,
+        n_props=4,
+        n_void_elite=0,
+        n_hist=0,
+    )
+    assert [float(r[0]) for r in out] == [0.0, 1.0, 2.0, 3.0]
+
+
 def test_void_seek_zone_includes_expand_proposers():
     zone = ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
     assert ProposerName.SELECTION_EXPAND in zone

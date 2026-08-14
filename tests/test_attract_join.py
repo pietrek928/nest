@@ -39,6 +39,55 @@ def test_overlapping_solids_get_no_attract():
     assert pairs == []
 
 
+def test_group_fit_and_neighbor_slide_keys_attract():
+    g0 = _square(0.0, 0.0)
+    g1 = _square(1.1, 0.0)
+    k0 = transform_row_key((0.5, 0.5, 0.0))
+    k1 = transform_row_key((1.6, 0.5, 0.0))
+    stats = {
+        "sniper_keys": {
+            0: {k0},
+            1: {k1},
+        },
+        "proposer_keys": {
+            "group_fit": {k0},
+            "neighbor_slide": {k1},
+        },
+    }
+    pairs = join_attract_pairs(
+        stats,
+        [0, 1],
+        [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)],
+        [g0, g1],
+        min_dist=0.1,
+        contact_weight=8.0,
+        kiss_band_scale=20.0,
+        max_degree=8,
+    )
+    verts = {(i, j) for i, j, _w in pairs}
+    assert (0, 1) in verts
+
+
+def test_union_sniper_keys_includes_group_fit_not_board_edge():
+    from nest_graph.propose.pipeline import _union_sniper_keys
+
+    out: dict[int, set] = {}
+    _union_sniper_keys(
+        out,
+        0,
+        {
+            "group_fit": {(1.0, 2.0, 0.0)},
+            "neighbor_slide": {(3.0, 4.0, 0.0)},
+            "board_edge": {(9.0, 9.0, 0.0)},
+            "cluster_copy": {(5.0, 6.0, 0.0)},
+        },
+    )
+    assert (1.0, 2.0, 0.0) in out[0]
+    assert (3.0, 4.0, 0.0) in out[0]
+    assert (5.0, 6.0, 0.0) in out[0]
+    assert (9.0, 9.0, 0.0) not in out[0]
+
+
 def test_sniper_fill_skips_hist_and_board_edge_keys():
     g0 = _square(0.0, 0.0)
     g1 = _square(1.1, 0.0)
@@ -107,3 +156,31 @@ def test_zero_weight_skips_join():
         contact_weight=0.0,
     )
     assert pairs == []
+
+
+def test_make_polygon_graph_joins_sniper_from_propose_stats():
+    from shapely.geometry import Polygon
+
+    from nest_graph.build_graph import make_polygon_graph
+
+    sheet = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    part = box(0, 0, 1, 1)
+    t0 = (1.0, 1.0, 0.0)
+    t1 = (2.1, 1.0, 0.0)
+    stats = {
+        "sniper_keys": {
+            0: {transform_row_key(t0), transform_row_key(t1)},
+        },
+    }
+    graph, _polys, _gids, _trs = make_polygon_graph(
+        sheet,
+        [(part, [t0, t1])],
+        min_dist=0.05,
+        propose_stats=stats,
+        attract_contact_weight=8.0,
+        attract_kiss_band_scale=20.0,
+        attract_max_degree=8,
+    )
+    n_edges = sum(len(row) for row in graph.attract) // 2
+    assert n_edges >= 1
+    assert stats["attract_edges"] >= 1

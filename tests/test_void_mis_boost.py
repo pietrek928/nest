@@ -5,18 +5,14 @@ from shapely.geometry import Point, box
 
 from nest_graph.build_graph import (
     _boost_void_island_scores,
-    _make_void_attractor_rule_set,
-    _merge_void_attractor_into_rule_sets,
 )
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import PlacementRuleSet, PointPlaceRule, Vec2
 from nest_graph.utils import transform_poly
 
 
 def test_gravity_compaction_enabled_by_default():
     assert ProposeConfig().enable_gravity_compaction is True
     assert ProposeConfig().void_island_score_boost == 64.0
-    assert ProposeConfig().void_attractor_rule_weight == 16.0
     assert ProposeConfig().enable_void_large_hijack is True
     assert ProposeConfig().pocket_score_boost == 50.0
     assert ProposeConfig().small_part_void_score_boost == 40.0
@@ -90,27 +86,3 @@ def test_boost_void_island_zero_weight_noop():
     n = _boost_void_island_scores(polys, scores, free, weight=0.0)
     assert n == 0
     assert scores[0] == 1.0
-
-
-def test_void_attractor_rule_set_has_point_per_group():
-    pole = Point(0.4, 0.3)
-    rs = _make_void_attractor_rule_set(pole, ngroups=2, radius=0.1, weight=16.0)
-    assert len(rs.point_rules) == 2
-    assert all(abs(pr.w - 16.0) < 1e-9 for pr in rs.point_rules)
-
-
-def test_merge_void_attractor_prepends():
-    base = PlacementRuleSet()
-    base.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=0))
-    attractor = _make_void_attractor_rule_set(
-        Point(1, 1), ngroups=1, radius=0.2, weight=16.0,
-    )
-    merged = _merge_void_attractor_into_rule_sets(
-        [base],
-        attractor,
-        nest_rule_sets_used=1,
-        max_rules_per_set=24,
-    )
-    assert len(merged) == 1
-    assert len(merged[0].point_rules) >= 2
-    assert merged[0].point_rules[0].w == 16.0

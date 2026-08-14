@@ -24,7 +24,13 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry
-from nest_graph.config import ProposeConfig, RankingMode, dedupe_transforms, floor_void_seek_budgets
+from nest_graph.config import (
+    ProposeConfig,
+    RankingMode,
+    dedupe_transforms,
+    floor_void_seek_budgets,
+    subsample_transforms_with_pinned,
+)
 from nest_graph.geometry import Geometry
 from nest_graph.proposer_names import (
     BATCH_FOLLOW_PROPOSERS,
@@ -61,7 +67,6 @@ from nest_graph.propose.context import (
     PlaceZoneInfo,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags, filter_candidates_batch
-from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.propose.placements_edge import (
     propose_placements_group_fit,
     propose_placements_ribbon_free,
@@ -119,7 +124,11 @@ from nest_graph.propose.pose_diversity import (
     apply_conflict_degree_penalty,
     apply_pose_nms,
 )
-from nest_graph.propose.void_selection import transform_row_key, void_pole_near_radius
+from nest_graph.propose.void_selection import (
+    transform_row_key,
+    void_pole_near_radius,
+    xy_in_free,
+)
 
 _LOG = logging.getLogger(__name__)
 _proposal_key = transform_row_key
@@ -143,6 +152,23 @@ _CASCADE_BUILDERS = frozenset({
     "sheet_corners",
     "sheet_edge",
 })
+_SNIPER_PROPOSER_NAMES = (
+    "cluster_copy",
+    "pocket_fit",
+    "group_fit",
+    "neighbor_slide",
+)
+
+
+def _union_sniper_keys(
+    sniper_keys_by_group: dict[int, set],
+    group_id: int,
+    proposer_keys: dict,
+) -> None:
+    bucket = sniper_keys_by_group.setdefault(int(group_id), set())
+    for name in _SNIPER_PROPOSER_NAMES:
+        bucket.update(proposer_keys.get(name) or ())
+
 
 
 def _fast_packed_crowd_ref(packed_transforms: Sequence | None) -> Point | None:
@@ -192,9 +218,6 @@ def _emit_side_pack(
     if crowd is None and pole is not None and not getattr(pole, "is_empty", True):
         crowd = pole
     cap = int(top_n) if top_n is not None else int(getattr(cfg, "side_pack_top_n", 16) or 16)
-    # Void / densify: over-emit so packing filter still leaves survivors.
-    if cascade_zone == "void_seek":
-        cap = max(cap, max(int(cfg.max_proposals) // 2, 16))
     cap = max(1, min(cap, max(int(ctx.pool), 1)))
     state.ext(
         "side_pack",
@@ -506,6 +529,8 @@ def _void_seek_densify(
             propose_cfg.cascade_explorer_budget_scale
         ),
     })
+    # void_densify_pole_gravity stays False on densify: enabling regressed void_fill
+    # (44/0.436 vs best 51/0.492). Flag + merged skip remain for tests / future gate.
     densify_cfg = apply_proposer_pool_scales(
         densify_cfg, propose_cfg.place_proposer_pool_scales,
     )
@@ -598,6 +623,20 @@ def _void_seek_densify(
     reason: str | None = None
     old_iv = 0
     new_iv = 0
+    old_pn = 0
+    new_pn = 0
+    max_n = max(int(densify_cfg.max_proposals), 1)
+    pin_rng = np.random.default_rng(0)
+
+    def _pin_prefix(old: np.ndarray, extra: np.ndarray) -> np.ndarray:
+        if extra.shape[0] == 0:
+            return old
+        half = max_n // 2
+        if half <= 0:
+            return old
+        pinned = extra[: min(int(extra.shape[0]), half)]
+        return subsample_transforms_with_pinned(old, pinned, max_n, pin_rng)
+
     if use_void_yield:
         old_iv = _count_transforms_in_void(arr, yield_poly, part_poly)
         new_iv = _count_transforms_in_void(densify_arr, yield_poly, part_poly)
@@ -627,38 +666,53 @@ def _void_seek_densify(
             if use_pole else 0
         )
         if new_iv > old_iv:
+            telem["void_yield_tag"] = "void_yield_gain"
+        elif use_pole and new_pn > old_pn:
+            telem["void_yield_tag"] = "void_pole_clear"
+        else:
+            telem["void_yield_tag"] = "void_yield_drop"
+        if densify_arr.shape[0] > 0:
+            n_old = int(arr.shape[0])
+            arr = _pin_prefix(arr, densify_arr)
             accepted = True
-            reason = "void_yield_gain"
-            arr = densify_arr[: densify_cfg.max_proposals]
+            reason = "void_yield_union"
             zone_label = f"{zone}→void_seek"
-        elif (
-            old_iv == 0
-            and new_iv == 0
-            and use_pole
-            and new_pn > old_pn
-        ):
-            accepted = True
-            reason = "void_pole_clear"
-            arr = densify_arr[: densify_cfg.max_proposals]
-            zone_label = f"{zone}→void_seek"
+            telem["union_old_n"] = n_old
+            telem["union_new_n"] = int(arr.shape[0])
         else:
             reason = "void_yield_drop"
-    elif densify_arr.shape[0] > arr.shape[0] or (
-        arr.shape[0] == 0 and densify_arr.shape[0] > 0
-    ):
+    elif densify_arr.shape[0] > 0:
+        n_old = int(arr.shape[0])
+        arr = _pin_prefix(arr, densify_arr)
         accepted = True
-        reason = "count_gain"
-        arr = densify_arr[: densify_cfg.max_proposals]
+        reason = "void_yield_union"
         zone_label = f"{zone}→void_seek"
+        telem["union_old_n"] = n_old
+        telem["union_new_n"] = int(arr.shape[0])
     else:
         reason = "count_drop"
 
     void_path = void_hijack_from is not None or zone == "void_seek"
-    # Fire cloud when the pool is empty OR densify left zero in-void centroids
-    # (one rim survivor must not block void-seek cloud fallback).
-    need_cloud = arr.shape[0] == 0 or (
-        not accepted and old_iv == 0 and new_iv == 0
+    # Cloud when densify empty, drop-tagged, or densify xy never hits free_poly
+    # (centroid iv can rise while props telem stays 0 — xy vs centroid mismatch).
+    densify_xy_in = 0
+    if (
+        densify_arr.shape[0] > 0
+        and yield_poly is not None
+        and not yield_poly.is_empty
+    ):
+        for row in densify_arr:
+            if xy_in_free(float(row[0]), float(row[1]), yield_poly):
+                densify_xy_in += 1
+                break
+    need_cloud = densify_arr.shape[0] == 0 or (
+        use_void_yield
+        and (
+            telem.get("void_yield_tag") == "void_yield_drop"
+            or densify_xy_in == 0
+        )
     )
+    densify_pinned = bool(accepted) and reason == "void_yield_union"
     if (
         need_cloud
         and void_path
@@ -685,8 +739,15 @@ def _void_seek_densify(
         )
         if cloud:
             accepted = True
-            reason = "free_space_cloud"
-            arr = propositions_to_ndarray(cloud)[: densify_cfg.max_proposals]
+            # Keep void_yield_union when densify already pinned; cloud is separate telem.
+            if not densify_pinned:
+                reason = "free_space_cloud"
+            cloud_arr = propositions_to_ndarray(cloud)
+            arr = (
+                _pin_prefix(arr, cloud_arr)
+                if arr.shape[0] > 0
+                else cloud_arr[:max_n]
+            )
             zone_label = f"{zone}→void_seek"
             cloud_keys = {_proposal_key(c) for c in cloud}
             telem["proposer_keys"]["free_space_cloud"] = cloud_keys
@@ -1030,16 +1091,17 @@ def _collect_builder_candidates(
     border_focus = ctx.border_focus
     packed_n = _packed_count(extras)
     void_path = cascade_zone == "void_seek"
-    # Staging: mid-pack or void → side_pack; board_edge may co-exist via reserve.
-    use_side = bool(getattr(cfg, "use_side_pack", True)) and (
-        packed_n >= 2 or void_path
+    # Staging: mid-pack → side_pack; void XOR: group_fit not side_pack.
+    use_side = (
+        bool(getattr(cfg, "use_side_pack", True))
+        and packed_n >= 2
+        and not void_path
     )
     use_board = bool(cfg.use_board_edge_seeds)
 
     # Void path: side_pack XOR group_fit. Non-void: group_fit when enabled.
     run_group_fit = (
-        (not void_path)
-        and _proposer_enabled("group_fit", ctx.enabled_proposers)
+        _proposer_enabled("group_fit", ctx.enabled_proposers)
         and cfg.use_group_edge_seeds
         and ctx.focal_shape is not None
         and not ctx.focal_shape.is_empty
@@ -1476,23 +1538,7 @@ def _collect_candidates(
         if _emit_board_edge_reserve(ctx, extras, state, reserve_only=True):
             state.board_edge_reserved = True
 
-    # Wall-fill: void_seek sniper short-circuit still emits side_pack.
-    if state.skip_builders and cascade_zone == "void_seek":
-        n0 = len(state.candidates)
-        if bool(getattr(ctx.propose_cfg, "use_side_pack", True)):
-            _emit_side_pack(ctx, extras, state, cascade_zone=cascade_zone)
-        if (
-            len(state.candidates) > n0
-            and state.cascade_stats_out is not None
-        ):
-            skipped = list(
-                state.cascade_stats_out.get("cascade_skipped_proposers") or []
-            )
-            keep = {"side_pack", "board_edge"}
-            if keep.intersection(skipped):
-                state.cascade_stats_out["cascade_skipped_proposers"] = [
-                    n for n in skipped if n not in keep
-                ]
+    # Void XOR: sniper short-circuit must not wall-fill with side_pack.
 
     if mode == "cascade":
         _collect_builder_candidates(ctx, extras, state, cascade_zone=cascade_zone)
@@ -2720,6 +2766,9 @@ def proposed_transforms_for_groups(
     densify_fired = 0
     densify_accepted = 0
     densify_reasons: list[str] = []
+    densify_stats_union_old: int | None = None
+    densify_stats_union_new: int | None = None
+    densify_stats_yield_tag: str | None = None
     pocket_skips_all: list[str] = []
     cascade_agg: dict = {
         "cascade_stopped_after": "none",
@@ -2942,12 +2991,26 @@ def proposed_transforms_for_groups(
             else:
                 annulus = bool(zone_info is not None and zone_info.is_annulus)
                 enabled = ProposeConfig.proposers_for_place(zone, annulus=annulus)
+        if void_hijack_from is not None:
+            cfg = cfg.model_copy(update={"use_group_edge_seeds": True})
+            if enabled is not None:
+                enabled = frozenset(
+                    (p.value if isinstance(p, ProposerName) else str(p))
+                    for p in enabled
+                ) | {"group_fit"}
 
         if zone_info is not None and zone_info.is_corridor and primary_target is not None:
             push = primary_target
         elif zone == "void_seek" and primary_target is not None:
             # OOS-4: void_pole is not the packed-centroid push; attract to polylabel.
             push = primary_target
+        elif (
+            zone == "inter_cluster"
+            and zone_info is not None
+            and zone_info.gap_midpoint is not None
+        ):
+            # Corridor seal: closest-island midpoint, not packed-centroid / SW.
+            push = zone_info.gap_midpoint
         void_pole = (
             primary_target
             if zone == "void_seek" and primary_target is not None
@@ -3042,12 +3105,7 @@ def proposed_transforms_for_groups(
             total_counts[name] = total_counts.get(name, 0) + n
         for name, keys in group_proposer_keys.items():
             proposer_keys_agg.setdefault(name, set()).update(keys)
-        sniper_keys_by_group.setdefault(int(group_id), set()).update(
-            group_proposer_keys.get("cluster_copy") or ()
-        )
-        sniper_keys_by_group.setdefault(int(group_id), set()).update(
-            group_proposer_keys.get("pocket_fit") or ()
-        )
+        _union_sniper_keys(sniper_keys_by_group, group_id, group_proposer_keys)
         if group_cascade.get("cascade_stopped_after") not in (None, "none"):
             cascade_agg["cascade_stopped_after"] = group_cascade.get(
                 "cascade_stopped_after"
@@ -3143,11 +3201,8 @@ def proposed_transforms_for_groups(
                 total_counts[name] = total_counts.get(name, 0) + int(n)
             for name, keys in densify_telem["proposer_keys"].items():
                 proposer_keys_agg.setdefault(name, set()).update(keys)
-            sniper_keys_by_group.setdefault(int(group_id), set()).update(
-                densify_telem["proposer_keys"].get("cluster_copy") or ()
-            )
-            sniper_keys_by_group.setdefault(int(group_id), set()).update(
-                densify_telem["proposer_keys"].get("pocket_fit") or ()
+            _union_sniper_keys(
+                sniper_keys_by_group, group_id, densify_telem["proposer_keys"],
             )
             for name, n in densify_telem["emitted_by_proposer"].items():
                 emitted_by_proposer[name] = max(
@@ -3173,6 +3228,10 @@ def proposed_transforms_for_groups(
                 motif_skip_agg[str(mk)] = motif_skip_agg.get(str(mk), 0) + int(mv)
             for cohort in densify_telem.get("motif_cohorts") or []:
                 motif_cohorts_agg.append(cohort)
+            if densify_telem.get("union_old_n") is not None:
+                densify_stats_union_old = int(densify_telem["union_old_n"])
+                densify_stats_union_new = int(densify_telem.get("union_new_n") or 0)
+                densify_stats_yield_tag = densify_telem.get("void_yield_tag")
         if (
             zones_used_out is not None
             and propose_cfg.place_profiles_enabled
@@ -3235,6 +3294,9 @@ def proposed_transforms_for_groups(
             gid: set(keys) for gid, keys in sniper_keys_by_group.items()
         }
         densify_stats_out["batch_pack_pairs"] = []
+        densify_stats_out["union_old_n"] = densify_stats_union_old
+        densify_stats_out["union_new_n"] = densify_stats_union_new
+        densify_stats_out["void_yield_tag"] = densify_stats_yield_tag
 
     # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
     if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:

@@ -24,6 +24,7 @@ from nest_graph.propose.placement_outline import (
 )
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
 from nest_graph.propose.selection_edit import SelectionEditCtx
+from nest_graph.propose.void_topology import preferred_spine_pole
 from nest_graph.utils import transform_poly
 
 
@@ -72,14 +73,16 @@ def local_se2_selection(
     propose_cfg: ProposeConfig | None = None,
     *,
     pole: Point | None = None,
+    poles: Sequence[Point] | None = None,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     board_adj_indices: Sequence[int] | None = None,
 ) -> tuple[list[BaseGeometry], list, dict]:
     """Slide/rotate selected parts via native polish_se2_part.
 
     Prefer ``SelectionEditCtx`` as the first argument; legacy kwargs remain.
-    Board_adj uses ±exterior tangent only. Floating parts attract toward
-    ``pole`` with ±45/±90 slides when ``enable_gravity_compaction`` is True.
+    Board_adj uses ±exterior tangent only. Floating parts attract toward the
+    nearest spine pole with ±45/±90 slides when ``enable_gravity_compaction``
+    is True. Empty ``poles`` skips pole pull (no SW/corner fallback).
     """
     void_geoms = None
     if isinstance(sheet, SelectionEditCtx):
@@ -93,6 +96,7 @@ def local_se2_selection(
         min_dist = ctx.min_dist
         propose_cfg = ctx.propose_cfg
         pole = ctx.pole if pole is None else pole
+        poles = ctx.poles if poles is None else poles
         fixed_obstacles = (
             ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
         )
@@ -156,11 +160,18 @@ def local_se2_selection(
             and is_board_adj(out_polys[i], sheet, min_dist, ring=board_ring)
         }
 
+    def _floater_pole(poly: BaseGeometry) -> Point | None:
+        if poly is None or poly.is_empty:
+            return None
+        c = poly.centroid
+        return preferred_spine_pole(float(c.x), float(c.y), poles, fallback=pole)
+
     def _order_key(i: int) -> float:
         if out_polys[i] is None or out_polys[i].is_empty:
             return -1.0
-        if pole is not None and not pole.is_empty:
-            return float(out_polys[i].centroid.distance(pole))
+        p = _floater_pole(out_polys[i])
+        if p is not None:
+            return float(out_polys[i].centroid.distance(p))
         return 0.0
 
     order = sorted(sel, key=_order_key, reverse=True)
@@ -174,10 +185,10 @@ def local_se2_selection(
         if part is None or poly is None or poly.is_empty:
             continue
         is_rim = idx in board_set
+        pull_pole = None if is_rim else _floater_pole(poly)
         if not is_rim and (
             not propose_cfg.enable_gravity_compaction
-            or pole is None
-            or pole.is_empty
+            or pull_pole is None
         ):
             continue
         stats["attempted"] += 1
@@ -242,7 +253,7 @@ def local_se2_selection(
                                 out_tr[idx] = prev_t
         else:
             cx, cy = float(poly.centroid.x), float(poly.centroid.y)
-            dx, dy = float(pole.x) - cx, float(pole.y) - cy
+            dx, dy = float(pull_pole.x) - cx, float(pull_pole.y) - cy
             dist0 = math.hypot(dx, dy)
             if dist0 < 1e-9:
                 continue
@@ -279,7 +290,7 @@ def local_se2_selection(
             max_t=float(max_t),
             min_dist=float(min_dist),
             mode="pole" if use_pole_metric else "slide",
-            pole=(float(pole.x), float(pole.y)) if use_pole_metric else None,
+            pole=(float(pull_pole.x), float(pull_pole.y)) if use_pole_metric else None,
         )
         if polished is None:
             continue
@@ -307,8 +318,8 @@ def local_se2_selection(
             stats["tangent_moves"] += 1
         elif use_pole_metric:
             d1 = math.hypot(
-                float(cand.centroid.x) - float(pole.x),
-                float(cand.centroid.y) - float(pole.y),
+                float(cand.centroid.x) - float(pull_pole.x),
+                float(cand.centroid.y) - float(pull_pole.y),
             )
             stats["pole_distance_delta"] += d1 - dist0
             dth = abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi)

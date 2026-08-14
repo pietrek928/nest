@@ -566,6 +566,8 @@ class NestingPipelineEvaluator:
         next_gids = list(seed_gids)
         next_tr = list(seed_tr)
         next_sel = list(range(len(seed_polys)))
+        prev_packed_gid: list[int] = []
+        prev_packed_tr: list = []
         trajectory: list[tuple[float, float, int]] = []
         last_void_leak: dict = {
             "free_kind": "",
@@ -643,6 +645,10 @@ class NestingPipelineEvaluator:
                 epsilon_ratio=self.cfg.propose.placement_clearance_epsilon_ratio,
                 user_holes=self.user_holes,
                 extra_voids=extra_voids,
+                propose_stats=propose_stats,
+                attract_contact_weight=float(self.cfg.propose.attract_contact_weight),
+                attract_kiss_band_scale=float(self.cfg.propose.attract_kiss_band_scale),
+                attract_max_degree=int(self.cfg.propose.attract_max_degree),
             )
             carry_max = int(
                 getattr(self.cfg.propose, "graph_valid_carry_max", 512) or 512
@@ -723,6 +729,8 @@ class NestingPipelineEvaluator:
                 sheet_diag=sheet_diag,
                 propose_stats=propose_stats,
                 ngroups=len(self.parts),
+                packed_group_id=prev_packed_gid or None,
+                packed_transform=prev_packed_tr or None,
             )
             scores = composed.scores
             refine_scores = composed.refine_scores
@@ -989,6 +997,8 @@ class NestingPipelineEvaluator:
             placed_tr = [
                 np.asarray(transform[i], dtype=np.float64) for i in selected_polys
             ]
+            prev_packed_gid = [int(group_id[i]) for i in selected_polys]
+            prev_packed_tr = list(placed_tr)
             next_polys = list(seed_polys) + placed_new
             next_gids = list(seed_gids) + placed_gids
             next_tr = list(seed_tr) + placed_tr
@@ -1181,6 +1191,8 @@ class NestingPipelineEvaluator:
             "group_id": next_gids,
             "transform": np.asarray(next_tr) if next_tr else np.zeros((0, 3)),
             "graph": graph,
+            "attract_edges": int(last_void_leak.get("attract_edges", 0) or 0),
+            "void_leak": dict(last_void_leak),
         }
 
         return NestingMetrics(

@@ -73,6 +73,8 @@ from nest_graph.propose.placements_selection_expand import (
 )
 from nest_graph.propose.void_topology import (
     iterative_multi_poles,
+    nearest_spine_pole,
+    preferred_spine_pole,
     topology_pocket_poles,
 )
 from nest_graph.propose.pose_diversity import apply_pose_nms
@@ -159,6 +161,8 @@ __all__ = [
     "propose_placements_history_expand",
     "extract_cluster_patterns",
     "iterative_multi_poles",
+    "nearest_spine_pole",
+    "preferred_spine_pole",
     "topology_pocket_poles",
     "apply_pose_nms",
     "propose_push_point",

@@ -93,6 +93,73 @@ def iterative_multi_poles(
     return poles
 
 
+def nearest_spine_pole(
+    x: float,
+    y: float,
+    poles: Sequence[Point] | None,
+    fallback: Point | None = None,
+) -> Point | None:
+    """Nearest non-empty spine pole to ``(x, y)``. Empty ``poles`` skips pull."""
+    candidates = [
+        p for p in (poles or ())
+        if p is not None and not getattr(p, "is_empty", True)
+    ]
+    if not candidates:
+        if poles is not None:
+            return None
+        if fallback is not None and not getattr(fallback, "is_empty", True):
+            return fallback
+        return None
+    best = candidates[0]
+    best_d = (float(best.x) - x) ** 2 + (float(best.y) - y) ** 2
+    for p in candidates[1:]:
+        d = (float(p.x) - x) ** 2 + (float(p.y) - y) ** 2
+        if d < best_d:
+            best = p
+            best_d = d
+    return best
+
+
+def preferred_spine_pole(
+    x: float,
+    y: float,
+    poles: Sequence[Point] | None,
+    fallback: Point | None = None,
+    *,
+    clear_ratio: float = 1.5,
+) -> Point | None:
+    """Nearest spine pole only when clearly closer than the primary; else primary.
+
+    Secondary-lobe pull must beat the first polylabel by ``clear_ratio`` so
+    floaters do not scatter along the surrogate spine.
+    """
+    nearest = nearest_spine_pole(x, y, poles, fallback=fallback)
+    if poles is not None and nearest is None:
+        return None
+    primary = None
+    for p in (poles or ()):
+        if p is not None and not getattr(p, "is_empty", True):
+            primary = p
+            break
+    if primary is None:
+        primary = (
+            fallback
+            if fallback is not None and not getattr(fallback, "is_empty", True)
+            else None
+        )
+    if nearest is None:
+        return primary
+    if primary is None or nearest is primary:
+        return nearest
+    dn = math.hypot(float(nearest.x) - x, float(nearest.y) - y)
+    dp = math.hypot(float(primary.x) - x, float(primary.y) - y)
+    if dp <= 1e-12:
+        return primary
+    if dn * float(clear_ratio) < dp:
+        return nearest
+    return primary
+
+
 def multi_pole_seed_coords(
     void_poly: Polygon,
     *,

@@ -25,6 +25,7 @@ def run_post_pack_passes(
     propose_cfg: ProposeConfig,
     *,
     pole: Point | None = None,
+    poles: Sequence[Point] | None = None,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     void_geoms: Sequence | None = None,
     board_adj_indices: Sequence[int] | None = None,
@@ -34,6 +35,7 @@ def run_post_pack_passes(
     void_poly=None,
     pt_push: Point | None = None,
     free_space=None,
+    victim_indices: Sequence[int] | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity)."""
     stats: dict = {
@@ -54,6 +56,7 @@ def run_post_pack_passes(
         min_dist=min_dist,
         propose_cfg=propose_cfg,
         pole=pole,
+        poles=poles,
         fixed_obstacles=fixed_obstacles,
         void_geoms=void_geoms,
         board_adj_indices=board_adj_indices,
@@ -64,6 +67,7 @@ def run_post_pack_passes(
             void_poly=void_poly,
             pt_push=pt_push if pt_push is not None else pole,
             free_space=free_space,
+            victim_indices=victim_indices,
         )
         ctx.polys = out_polys
         ctx.transforms = out_tr

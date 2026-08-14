@@ -56,6 +56,7 @@ def _build_cfg(
                 "use_free_space_cloud": False,
             })
         case ProposeAblation.NO_GREEDY_NEST:
+            # Alias of shipped: void_greedy_nest_seed was removed.
             pass
         case ProposeAblation.NO_CONTACT_ATTRACT:
             cfg.propose = cfg.propose.model_copy(update={
@@ -224,6 +225,10 @@ def _build_cfg(
                 "refine_explore_shuffle": False,
                 "plateau_beam_width": cfg.selection.dfs_refine_beam_width,
                 "plateau_max_stagnant_passes": cfg.selection.dfs_refine_max_stagnant_passes,
+            })
+        case ProposeAblation.NO_BLOCK_REPLACE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_block_replace": False,
             })
         case ProposeAblation.NO_INCUMBENT_LOOP:
             cfg.propose = cfg.propose.model_copy(update={

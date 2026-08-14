@@ -38,12 +38,11 @@ def test_count_transforms_in_void_centroid():
     _ = sheet
 
 
-def test_void_yield_accepts_smaller_pool_with_more_in_void():
-    """Densify with fewer total transforms but more in-void should accept under hijack."""
+def test_void_yield_union_keeps_mixer_and_densify():
+    """Densify prepends into the mixer; it must not replace a larger pool."""
     sheet = box(0, 0, 50, 50)
     small = box(0, 0, 2.0, 2.0)
     part = box(0, 0, 3, 3)
-    # Rim pack leaving a large SE free region.
     rim = [
         transform_poly(small, (float(x), float(y), 0.0))
         for x in (1, 24, 47)
@@ -69,7 +68,7 @@ def test_void_yield_accepts_smaller_pool_with_more_in_void():
     densify_stats: dict = {}
     counts: dict[str, int] = {}
     zones: list[str] = []
-    proposed_transforms_for_groups(
+    out = proposed_transforms_for_groups(
         sheet,
         [(part, 0)],
         rim,
@@ -81,17 +80,24 @@ def test_void_yield_accepts_smaller_pool_with_more_in_void():
         densify_stats_out=densify_stats,
     )
     assert any("void_seek" in z for z in zones)
-    # When densify fires under hijack, reason should be void_yield_* or count_*.
     if densify_stats.get("fired", 0) >= 1:
         reason = densify_stats.get("densify_reason")
         assert reason in {
-            "void_yield_gain",
+            "void_yield_union",
             "void_yield_drop",
-            "count_gain",
+            "free_space_cloud",
             "count_drop",
             None,
         }
         assert "densify_reasons" in densify_stats
+        if reason == "void_yield_union":
+            old_n = densify_stats.get("union_old_n")
+            new_n = densify_stats.get("union_new_n")
+            arr = out.get(0)
+            assert arr is not None and arr.shape[0] > 0
+            if old_n is not None and int(old_n) > 0:
+                assert int(new_n or 0) >= max(1, int(old_n) // 2)
+                assert arr.shape[0] >= max(1, int(old_n) // 2)
 
 
 def test_open_void_relaxed_medial_emits_attempted():

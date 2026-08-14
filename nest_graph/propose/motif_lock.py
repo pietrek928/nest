@@ -86,8 +86,10 @@ def sequential_accept_motif_cohorts(
         "motif_sequential_partial": 0,
         "motif_sequential_rcl": 0,
         "motif_sequential_clear_fail": 0,
+        "motif_lock_sets": [],
+        "motif_beam_sets": 0,
     }
-    if not cohorts or max_accept <= 0:
+    if not cohorts:
         return [], telem
     key_map = _key_index_map(group_id, transform)
     pole_xy: tuple[float, float] | None = None
@@ -114,14 +116,15 @@ def sequential_accept_motif_cohorts(
     telem["motif_sequential_rcl"] = len(rcl)
 
     voids = [g for g in (void_geoms or []) if g is not None]
-    growing_packed: list = [g for g in (packed_geoms or []) if g is not None]
+    base_packed: list = [g for g in (packed_geoms or []) if g is not None]
+    growing_packed: list = list(base_packed)
+    beam_cap = 4
 
     locked: list[int] = []
     locked_set: set[int] = set()
+    lock_sets: list[list[int]] = []
     accepted = 0
     for cohort in rcl:
-        if accepted >= int(max_accept):
-            break
         members = cohort.get("member_keys") or []
         idxs: list[int] = []
         missing = 0
@@ -146,21 +149,47 @@ def sequential_accept_motif_cohorts(
             telem["motif_sequential_partial"] = int(
                 telem.get("motif_sequential_partial", 0)
             ) + 1
+        collisions = getattr(graph, "collisions", None)
+        if collisions is not None:
+            intra = False
+            for i in idxs:
+                if any(int(u) in idxs and int(u) != i for u in collisions[i]):
+                    intra = True
+                    break
+            if intra:
+                continue
+        # Beam lock-sets: Scene-clear vs board packed only (independent alternatives).
+        if len(lock_sets) < beam_cap:
+            trial_ind = list(base_packed)
+            clear_ind = True
+            for i in idxs:
+                if candidate_geoms is None or i >= len(candidate_geoms):
+                    clear_ind = False
+                    break
+                geom = candidate_geoms[i]
+                cg = as_geometry(geom) if not isinstance(geom, Geometry) else geom
+                if cg is None or not is_pose_clear(
+                    cg, voids, trial_ind, float(min_dist),
+                ):
+                    clear_ind = False
+                    break
+                trial_ind.append(cg)
+            if clear_ind:
+                lock_sets.append(list(idxs))
+
+        if accepted >= int(max_accept):
+            continue
         if any(i in locked_set for i in idxs):
             continue
-        collisions = getattr(graph, "collisions", None)
         if collisions is not None:
             blocked = False
             for i in idxs:
                 if any(int(u) in locked_set for u in collisions[i]):
                     blocked = True
                     break
-                if any(int(u) in idxs and int(u) != i for u in collisions[i]):
-                    blocked = True
-                    break
             if blocked:
                 continue
-        # Growing Scene clear among present members.
+        # Growing Scene clear among present members (combined lock telem / tests).
         trial_packed = list(growing_packed)
         clear_ok = True
         member_geoms: list[Geometry] = []
@@ -186,4 +215,6 @@ def sequential_accept_motif_cohorts(
         growing_packed.extend(member_geoms)
         accepted += 1
         telem["motif_sequential_full"] += 1
+    telem["motif_lock_sets"] = lock_sets
+    telem["motif_beam_sets"] = len(lock_sets)
     return locked, telem

@@ -1,26 +1,6 @@
-"""Tests for LNS ruin-and-recreate helpers."""
+"""LNS accept helper (3b uses strict lex; void-kNN destroy deleted)."""
 
-from shapely.geometry import Point, Polygon
-
-from nest_graph.propose.lns_rebuild import (
-    apply_lns_destroy,
-    lns_accept,
-    void_frontier_destroy_indices,
-)
-
-
-def test_void_frontier_destroy_prefers_near_void():
-    void = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
-    polys = [
-        Polygon([(0.1, 0.1), (0.3, 0.1), (0.3, 0.3), (0.1, 0.3)]),  # near void
-        Polygon([(5, 5), (5.2, 5), (5.2, 5.2), (5, 5.2)]),  # far
-        Polygon([(0.2, 0.2), (0.4, 0.2), (0.4, 0.4), (0.2, 0.4)]),  # near
-    ]
-    idxs = void_frontier_destroy_indices(
-        polys, [0, 1, 2], pole=Point(0.5, 0.5), void_poly=void, destroy_fraction=0.5,
-    )
-    assert 1 not in idxs or idxs[0] != 1
-    assert idxs[0] in (0, 2)
+from nest_graph.propose.lns_rebuild import apply_lns_destroy, lns_accept
 
 
 def test_lns_accept_prefers_more_parts():

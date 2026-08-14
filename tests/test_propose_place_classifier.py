@@ -76,6 +76,29 @@ def test_classify_two_clusters_inter_cluster():
     assert zone == "inter_cluster"
 
 
+def test_classify_two_clusters_primary_target_is_midpoint():
+    board = Polygon([(0, 0), (16, 0), (16, 16), (0, 16)])
+    rect = Polygon([(0, 0), (1.2, 0), (1.2, 1.2), (0, 1.2)])
+    t1 = transform_poly(rect, (5.0, 5.0, 0.0))
+    t2 = transform_poly(rect, (11.0, 11.0, 0.0))
+    placed = [t1, t2]
+    info = classify_propose_zone_info(
+        board,
+        unary_union(placed),
+        rect,
+        min_dist=0.05,
+        propose_cfg=ProposeConfig(),
+        selected_polys=placed,
+    )
+    assert info.zone == "inter_cluster"
+    assert info.gap_midpoint is not None
+    mid = Point(
+        0.5 * (t1.centroid.x + t2.centroid.x),
+        0.5 * (t1.centroid.y + t2.centroid.y),
+    )
+    assert info.gap_midpoint.distance(mid) < 1e-6
+
+
 def test_classify_void_seek_real_hole():
     outline = Polygon([(0, 0), (12, 0), (12, 12), (0, 12)])
     hole = ((5, 5), (7, 5), (7, 7), (5, 7), (5, 5))

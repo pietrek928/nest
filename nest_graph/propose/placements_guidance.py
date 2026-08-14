@@ -21,7 +21,8 @@ from nest_graph.propose.placements_edge import (
     propose_placements_board_edge as propose_placements_board_edge_snaps,
     sample_placement_points_ribbon,
 )
-from nest_graph.propose.context import placement_contact_error
+from nest_graph.propose.context import part_extents, placement_contact_error
+from nest_graph.propose.placement_perimeter import edge_inward_at_point
 
 
 class GuidanceMoveType(StrEnum):
@@ -109,7 +110,37 @@ def _merged_guidance_propositions(
         },
     )
     tight_cfg.use_target_attractor = False
-    tight_cfg.use_gravity = True
+    prefer_pole = bool(
+        getattr(propose_geom._propose_cfg, "void_densify_pole_gravity", False)
+    )
+    _, part_max = part_extents(propose_geom.part_poly)
+    band = max(4.0 * float(propose_geom._min_dist), float(part_max))
+    rim_band = False
+    sheet = propose_geom.sheet
+    if (
+        not prefer_pole
+        and sheet is not None
+        and not getattr(sheet, "is_empty", False)
+    ):
+        info = edge_inward_at_point(sheet, Point(float(xy[0]), float(xy[1])))
+        if info is not None:
+            anchor, _inw = info
+            dist = math.hypot(
+                float(xy[0]) - float(anchor.x),
+                float(xy[1]) - float(anchor.y),
+            )
+            rim_band = dist <= band
+    if rim_band:
+        propose_geom._apply_rim_gravity(tight_cfg, xy)
+    else:
+        dx = float(pt_push.x) - float(xy[0])
+        dy = float(pt_push.y) - float(xy[1])
+        nlen = math.hypot(dx, dy)
+        if nlen > 1e-9:
+            tight_cfg.use_gravity = True
+            tight_cfg.gravity_vector = (dx / nlen, dy / nlen)
+        else:
+            tight_cfg.use_gravity = False
 
     g_tight = propose_geom.placement_guidance(
         placed, xy, pt_push, guidance_cfg=tight_cfg,

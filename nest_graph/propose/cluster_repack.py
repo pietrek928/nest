@@ -19,6 +19,7 @@ from nest_graph.propose.placement_common import (
     selection_pairwise_independent,
 )
 from nest_graph.propose.selection_edit import SelectionEditCtx
+from nest_graph.propose.void_topology import preferred_spine_pole
 from nest_graph.propose.context import (
     _cluster_merge_gap,
     cluster_contact_components,
@@ -463,6 +464,7 @@ def cluster_repack_selection(
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     pt_push: Point | None = None,
     free_space=None,
+    victim_indices: Sequence[int] | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
     void_geoms = None
@@ -509,16 +511,21 @@ def cluster_repack_selection(
         _, void_geoms = board_context_from_geometry(sheet)
     voids = list(void_geoms) if void_geoms else []
 
-    peeled_info = bfs_peel_victim(
-        sel,
-        out_polys,
-        min_dist=min_dist,
-        sheet=sheet,
-        pole=pole,
-        void_poly=void_poly,
-        min_size=int(propose_cfg.cluster_repack_min_size),
-        max_size=int(propose_cfg.cluster_repack_max_size),
-    )
+    if victim_indices:
+        victim = [int(i) for i in victim_indices]
+        board_adj = _component_board_adj(victim, out_polys, sheet, min_dist)
+        peeled_info = (victim, board_adj) if len(victim) >= int(propose_cfg.cluster_repack_min_size) else None
+    else:
+        peeled_info = bfs_peel_victim(
+            sel,
+            out_polys,
+            min_dist=min_dist,
+            sheet=sheet,
+            pole=pole,
+            void_poly=void_poly,
+            min_size=int(propose_cfg.cluster_repack_min_size),
+            max_size=int(propose_cfg.cluster_repack_max_size),
+        )
     if not peeled_info:
         return out_polys, out_tr, sel, stats
 
@@ -744,13 +751,15 @@ def cluster_relocate_selection(
     propose_cfg: ProposeConfig | None = None,
     *,
     pole: Point | None = None,
+    poles: Sequence[Point] | None = None,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     void_geoms: Sequence | None = None,
     max_steps: int = 24,
 ) -> tuple[list[BaseGeometry], list, dict]:
-    """Rigid-translate floating (non-board_adj) contact islands toward ``pole``.
+    """Rigid-translate floating (non-board_adj) contact islands toward nearest pole.
 
     Prefer ``SelectionEditCtx`` as the first argument; legacy kwargs remain.
+    Empty ``poles`` skips pole pull (no SW/corner fallback).
     """
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
@@ -763,6 +772,7 @@ def cluster_relocate_selection(
         min_dist = ctx.min_dist
         propose_cfg = ctx.propose_cfg
         pole = ctx.pole if pole is None else pole
+        poles = ctx.poles if poles is None else poles
         fixed_obstacles = (
             ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
         )
@@ -776,12 +786,18 @@ def cluster_relocate_selection(
     sel = [int(i) for i in selected_indices]
     if (
         not propose_cfg.enable_cluster_relocate
-        or pole is None
-        or pole.is_empty
         or sheet is None
         or sheet.is_empty
         or len(sel) < 2
     ):
+        return out_polys, out_tr, stats
+    if poles is not None:
+        has_pull = any(
+            p is not None and not getattr(p, "is_empty", True) for p in poles
+        )
+    else:
+        has_pull = pole is not None and not pole.is_empty
+    if not has_pull:
         return out_polys, out_tr, stats
 
     if void_geoms is None:
@@ -808,9 +824,12 @@ def cluster_relocate_selection(
         blob = unary_union(members) if len(members) > 1 else members[0]
         if blob is None or blob.is_empty:
             continue
-        stats["attempted"] += 1
         cx, cy = float(blob.centroid.x), float(blob.centroid.y)
-        dx, dy = float(pole.x) - cx, float(pole.y) - cy
+        pull = preferred_spine_pole(cx, cy, poles, fallback=pole)
+        if pull is None:
+            continue
+        stats["attempted"] += 1
+        dx, dy = float(pull.x) - cx, float(pull.y) - cy
         dist = math.hypot(dx, dy)
         if dist < 1e-9:
             continue

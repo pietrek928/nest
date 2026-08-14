@@ -98,9 +98,9 @@ Last split from root AGENTS.md: 2026-08-10.
 | Unify densify iv/pole with props telem? | **Radius only** via `void_pole_near_radius`. |
 | Round-2 vs round-4 funnel break? | **No.** Funnel uses round-4. |
 | Filter side_pack at emit? | **No.** Raw over-emit; packing filter at collect end is SoT. |
-| Zone policy location? | **Permission** = `ZONE_PROPOSERS`. **Staging** = `packed_n` / void. |
+| Zone policy location? | **Permission** = `ZONE_PROPOSERS`. **Staging** = `packed_n` / void / `use_*` flags. Void path: `side_pack` XOR `group_fit` at staging (`use_side=False` on void; hijack unions `group_fit` into `enabled`). `GROUP_FIT` stays out of `ZONE_PROPOSERS[VOID_SEEK]`. |
 | Keep cloud in zone set? | **Yes**, densify-only emit. |
-| Native void densify accept? | **Same lex as hijack** (`void_yield_gain` → `void_pole_clear`). |
+| Native void densify accept? | **Union** via `subsample_transforms_with_pinned` (pinned densify/cloud prefix, rest = old `arr`, cap `max_proposals`). Reason `void_yield_union` when densify pinned; cloud may also pin when densify empty, `void_yield_drop`, or densify xy∉free (keep union reason if densify already pinned). Telem tags `void_yield_gain` / `void_pole_clear` / `void_yield_drop`. |
 | Does repack emit side_pack? | Pass `cascade_zone=zone`. |
 | Wall-fill on all hard zones? | **void_seek only.** |
 
@@ -123,7 +123,7 @@ Last split from root AGENTS.md: 2026-08-10.
 | Question | Why ask |
 |----------|---------|
 | Rim saturated (`e ≫ p ≈ 0`): shift budget from sheet-snap to interior colonization? | Structural mid-pack ceiling |
-| Densify replaces `arr` but unions pre-densify `proposer_keys` — intersect with final array? | Funnel accuracy |
+| Densify unions into propose pool (pinned prefix); intersect densify `proposer_keys` with final array? | Funnel accuracy |
 | Two sterile ladders (densify zones vs graph `sterile_pack`) — one predicate? | Consolidation candidate |
 | Weighted stratify: largest-remainder vs min-2 quotas when Σquotas > top_n? | Anti-crowd fidelity |
 | Repack-internal propose with `cascade_zone=zone` — net gain or churn? | Watch bench |
@@ -236,7 +236,7 @@ Pre-MIS full-motif lock via C++ `nest_by_scores(..., locked_indices=)` (Scene-cl
 
 | Q | Verdict | Implementation constraint |
 |---|---------|---------------------------|
-| Q16 Sequential vs MIS boost | Worth when rim-tuned MWIS clips void motifs | Pre-MIS **lock**; MWIS expands around fixed set |
+| Q16 Sequential vs MIS boost | Worth when rim-tuned MWIS clips void motifs | Pre-MIS **lock** during `nest_by_scores`; MWIS expands around the fixed set. Post-nest trial-eject of a pin is **Q56**, not a Q16 repeal. Do not trial-eject inside nest or DFS. |
 | Q17 Missing followers | **Skip invent**; accept present ≥2 | No invent/hypergraph; emit records packing-clear same-group keys only; graph-pruned remainder → `motif_sequential_partial` |
 | Q18 Batch Scene vs growing | **Growing `is_pose_clear`** | \(P_k\) vs obstacles ∪ prior members; not batch Scene for full motif |
 | Q19 Timing | **Before nest/MIS** | Not after-nest/before-refine |
@@ -244,10 +244,78 @@ Pre-MIS full-motif lock via C++ `nest_by_scores(..., locked_indices=)` (Scene-cl
 | Q21 Hoist vs packing batch | **Hoist enough** | No C++ packing-margin-0 batch yet |
 | Q22 Compactness on peels | Soft rank only | Sort peels by compactness; no hard min drop |
 | Q23 Native vs Shapely hull | Hygiene/speed | `_pair_hull_area` → `convex_hull_area_of` |
-| Q24 LNS recreate | Prefer emitted motif_keys | Archive stamp only if sterile after destroy |
+| Q24 LNS recreate | Re-emit into the opened hole (Q57) | Leftover `motif_keys` from the pre-peel pool were emitted while the victim was an obstacle and cannot occupy the hole. Archive stamp iff re-emit is sterile (`block_hole_emit_in_hull==0`). |
 | Q25 Scene dry-run scope | Motif reserve only | Do not thin general pool |
 | Q26 Ownership | Pre-MIS sequential owns force-in | Pin = single-node; repack = orphaned leaders |
 | Q27 Escalate Track D | large_void plateau | Δcov &lt;1% ×5 large_void iters AND `cluster_copy` r&gt;0 (≠ `PlateauTracker`) |
 | Q28 Ablation | `no_motif_sequential_accept` | Keep archive/lattice/boost; disable sequential only |
 
 **Rejected as Track A primary:** prefer-motif union after unconstrained nest; OS-thread portfolio exchanging proposals (serial archives already island-lite).
+
+---
+
+## Graph roles, gravity, nest SoT, block replace (Q29–Q60 — locked)
+
+Net-only GO 2026-08-14. Nodes stay board-valid poses of catalog groups. **YES** = Scene-clear motif pins during `nest_by_scores`. **NO** = Penetrating collisions. **NEAR** = pairwise kiss, lexicographically under count/area. No identity-XOR, no compound MWIS nodes (Q2), no corner / min-x+y gravity.
+
+### Sniper / attract (Q29–Q35)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q29 Restrict NEAR to sniper fill | **Yes.** Union `cluster_copy`, `pocket_fit`, `group_fit`, `neighbor_slide` into `sniper_keys`. | Exclude `board_edge`, `side_pack`, explorers, mixer, hist/jitter. `border_pack_graph` attract=`[]`. No dummy packed vertices. No mid-pack `batch_pack`. Motif `member_keys`: consecutive pairs, not an extra all-pairs clique. |
+| Q30 Attract vs count/area | **Attract cannot beat count/area.** | Tie-break / F only. 3a/3b accept has no attract term. No attract in nest greedy or DFS `path_delta`. Production nest `local_swap=False`. |
+| Q31 pocket vs packed | **Not attract.** | Packed is not a graph vertex. Candidate↔obstacle only. |
+| Q32 Mid-pack `batch_pack` | **No.** | Pairs stay empty-sheet / in-pool records only. |
+| Q33 Evaluator join | **Same `make_polygon_graph` formula.** | Pass `propose_stats` + attract knobs. No second join. |
+| Q34 `border_pack_graph` attract | **Stay `[]`.** | Packed set is already an IS. |
+| Q35 Mixer in sniper? | **Never.** | hist/jitter/expand are near-duplicates. |
+
+### Gravity field (Q36–Q44)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q36 Multi-pole vs SW | **Spine-pole surrogate + rim inward normal. Kill SW.** | Tight pass gravity = unit(`pt_push − xy`) (off dropped parts). `border_focus` gravity = inward normal at seed xy. Floaters = `preferred_spine_pole` (nearest only when clearly closer than the first polylabel; raw nearest scattered the pack). Empty poles → skip pole pull, no corner/SW fallback. |
+| Q37 Inter-cluster | **Override push to closest-island midpoint.** | Corridor seal, not Jostle L↔R. `gap_midpoint` is the push; obstacle/focal `primary_target` stays the free polylabel so large-void nearest-k is not stolen. |
+| Q38–Q44 folded | Nearest pole per floater; post-motif `local_se2` again; rim tangent XOR pole | Kiss-hold veto / ray-cross skip are later; not this slice. |
+
+### Nest SoT / extensions (Q45–Q55, folded)
+
+Four kiss signals stay split (graph attract, `selection_geom`, `local_se2` kiss, outline boost). Unary void-island boost stays; dead `void_attractor_rule_weight` PointPlaceRules die. Production DFS locks stay **unset** (`_refine_options` must not assign `locked_indices`; finalize `insert_clear_locks` re-inserts). First-pass vs mid-pack SelectOptions stay split. No C++ SoA flags, `locked_groups`, directed attract, attract-degree in greedy, or nest `local_swap`. Partner keys only if sniper fill misses. Same-gid near-dup skip in join (not identity-XOR).
+
+### Block replace (Q56–Q60)
+
+Python set operators wrapping `nest_by_scores`. No hypervertices. One ruin stack: 3a ejection → 3b contact-CC re-emit → stamp fallback on the **same** victim.
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q56 Trial-eject Q16 pins | **Yes** (ejection chain, Glover 1996). Depth 1. | After nest, mid-pack only. Only cohort B that collides with A. `nest_by_scores(locked=(sel \ A) ∪ B)`. `motif_locked = (old \ A) ∪ B`. Cap 1 accept/iter. Skip `first_pass`. |
+| Q57 Hole fill | **Re-emit + `nest_by_scores` locked=kept.** | True ruin-and-recreate (Shaw 1998). Stamp fallback on the same victim. Do not restore greedy leftover of `selected_nest`. |
+| Q58 Victim unit | **3a = motif cohort; 3b = contact CC size 3–6.** | Drop void-kNN destroy. “Nearest CC to void pole” is a choice among CCs, not vertex-kNN. |
+| Q59 Rim islands | **No.** | Skip `board_adj`. Outer-to-inner frame. |
+| Q60 C++ cliques vs Python | **Python + existing `nest_by_scores`.** | No `locked_groups`, no compound nodes. |
+
+**Flags:** `enable_block_replace` → 3a. `enable_lns_rebuild` → 3b. `enable_cluster_repack` → stamp. `NO_BLOCK_REPLACE` turns 3a off only. Neither ablation revives void-kNN leftover.
+
+**Rejected unless a Q reopens:** identity-XOR; compound MWIS nodes; `ProposeContext` in `build_graph` / `elem_graph`; `proposer_id` on vertices; corner gravity; attract-ranked DFS; nest `local_swap=True` as default; dummy obstacle vertices; Touch as NO.
+
+---
+
+## Hollow nest / graph search (addressed)
+
+Live hollow-rim packs swung coverage when densify **replaced** the propose pool, mix shuffled prefixes, pole-gravity walked rim seeds into the hole, and `nest_by_scores` rebuilt with no incumbent hold. Fix was stable **pool + nest**, staged A–E — no compound MWIS nodes, no attract on mixer, no DFS `locked_indices`, no `local_swap`.
+
+| | |
+|--|--|
+| **Verdict** | Keep densify/cloud as a pinned prefix union; void-stage XOR `side_pack`/`group_fit`; tight-pass rim gravity only inside a part-scale band; prefix-stable mix with one `n_props` cut; sequential RCL beam (≤4 Scene-clear lock-sets + unlocked) then incumbent lex-hold; refine restore vs `nest_before_refine` on rim drop **or** not lex-better. |
+| **Evidence** | Demo 2-iter: densify `void_yield_union`, `side_pack=0/0` on void, `mix_props` at void_seek floor, `rim_skip=1` at `rim≥0.9`, `sel_kept` = last packed, `incumbent_hold=1` prevents iter-2 collapse. `void_fill` seed 0 stays ≥0.9× shipped 44/0.494 with `independent_ok`. |
+| **Constraint** | Reuse `subsample_transforms_with_pinned`, `transform_row_key` / `_key_index_map`, `lex_count_area_better` / `_sel_area` / `_packing_independent`, `_apply_rim_gravity` + `part_extents`, `sequential_accept_motif_cohorts` (extend, no second pole-RCL). Permission stays `ZONE_PROPOSERS`; void XOR is staging only. No new prepend/key/gravity helpers; no `group_fit` in `ZONE_PROPOSERS[VOID_SEEK]`. |
+
+### Void colonization pull (follow-up)
+
+Post hollow-nest stability left `nest=0` / rim freeze. Colonization recovery:
+
+| | |
+|--|--|
+| **Verdict** | Cloud when densify is empty, `void_yield_drop`, or densify xy∉free; densify reason stays `void_yield_union` when densify pinned. `void_densify_pole_gravity` flag skips rim-band in `_merged_guidance_propositions` (densify enable rolled back — void_fill miss). Incumbent hold overridden on `large_void` when cand has more free centroids and count ≥0.9× incumbent. |
+| **Evidence** | 4-iter smoke: `nest=14–24`, `incumbent_hold=0`, coverage ends 54.6% / 65 parts (no sterile rim lock). `void_fill` seed 0 stays near shipped floor with `independent_ok`. |
+| **Constraint** | One hold gate beside existing lex; no second gravity helper; do not enable densify pole-gravity by default until re-gated. D/E (explorer budget / 3b) not needed once nest>0. |

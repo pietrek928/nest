@@ -978,6 +978,7 @@ class PlaceZoneInfo:
     n_clusters: int = 0
     outline_coverage: float = 0.0
     primary_target: Point | None = None
+    gap_midpoint: Point | None = None
     is_annulus: bool = False
     is_corridor: bool = False
 
@@ -1096,6 +1097,7 @@ def classify_propose_zone_info(
         # Closest cluster-pair midpoint (not global free polylabel) so a giant empty
         # free region cannot sample far from both islands.
         best_half: float | None = None
+        best_mid: Point | None = None
         for i in range(len(sig_clusters)):
             for j in range(i + 1, len(sig_clusters)):
                 ci = sig_clusters[i]
@@ -1114,6 +1116,7 @@ def classify_propose_zone_info(
                     continue
                 if best_half is None or half < best_half:
                     best_half = half
+                    best_mid = mid
         if best_half is not None and best_half <= prox:
             return PlaceZoneInfo(
                 zone="inter_cluster",
@@ -1121,6 +1124,7 @@ def classify_propose_zone_info(
                 n_clusters=len(sig_clusters),
                 outline_coverage=coverage,
                 primary_target=primary_target,
+                gap_midpoint=best_mid,
             )
 
     packed_union = unary_union(placed)

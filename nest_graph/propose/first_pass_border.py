@@ -701,6 +701,8 @@ def join_attract_pairs(
 
     pairs = _cap_attract_degree(weights, n, int(max_degree))
     propose_stats["attract_edges"] = len(pairs)
+    # Partner-key persist is skipped: sniper_keys already unions group_fit /
+    # neighbor_slide, and geometric fill edges those survivors (Q29/Q35).
     return pairs
 
 
