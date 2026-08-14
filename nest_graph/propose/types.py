@@ -22,6 +22,7 @@ class PocketStats:
     tags: list = field(default_factory=list)
     attempts: int = 0
     skip_reasons: dict = field(default_factory=dict)
+    motif_cohorts: list = field(default_factory=list)
 
 
 @dataclass

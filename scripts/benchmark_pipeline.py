@@ -56,8 +56,10 @@ def _build_cfg(
                 "use_free_space_cloud": False,
             })
         case ProposeAblation.NO_GREEDY_NEST:
+            pass
+        case ProposeAblation.NO_CONTACT_ATTRACT:
             cfg.propose = cfg.propose.model_copy(update={
-                "void_greedy_nest_seed": False,
+                "attract_contact_weight": 0.0,
             })
         case ProposeAblation.NO_POCKET_FIT:
             cfg.propose = cfg.propose.model_copy(update={
@@ -185,11 +187,9 @@ def _build_cfg(
         case ProposeAblation.NEST_BY_GRAPH_ONLY:
             cfg.propose = cfg.propose.model_copy(update={
                 "selection_geom_weight": 0.0,
-                "void_greedy_nest_seed": False,
             })
         case ProposeAblation.GREEDY_NEST_ONLY:
             cfg.propose = cfg.propose.model_copy(update={
-                "void_greedy_nest_seed": True,
                 "selection_geom_weight": 0.0,
             })
         case ProposeAblation.NO_SEARCH_BUDGET:
@@ -228,6 +228,18 @@ def _build_cfg(
         case ProposeAblation.NO_INCUMBENT_LOOP:
             cfg.propose = cfg.propose.model_copy(update={
                 "enable_incumbent_loop": False,
+            })
+        case ProposeAblation.NO_PATTERN_PROPAGATE:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_accepted_pattern_archive": False,
+                "enable_motif_lattice": False,
+                "enable_motif_mirror_anchors": True,
+                "enable_motif_sequential_accept": False,
+                "motif_score_boost": 0.0,
+            })
+        case ProposeAblation.NO_MOTIF_SEQUENTIAL_ACCEPT:
+            cfg.propose = cfg.propose.model_copy(update={
+                "enable_motif_sequential_accept": False,
             })
         case ProposeAblation.NO_PROPOSE:
             cfg.propose = ProposeConfig(

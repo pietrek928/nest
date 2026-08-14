@@ -29,7 +29,7 @@ def test_late_sat_defaults():
     assert p.late_border_void_release_ratio == 1.5
     assert p.late_border_hull_threshold == 0.4
     assert p.void_attractor_rule_weight == 16.0
-    assert p.void_greedy_nest_seed is True
+    assert p.attract_contact_weight == 8.0
 
 
 def test_large_void_overrides_late_sat():

@@ -13,10 +13,10 @@ from shapely.geometry.base import BaseGeometry
 from nest_graph.elem_graph import (
     PlacementRuleSet,
     PointPlaceRule,
+    SelectMode,
+    SelectOptions,
     Vec2,
-    nest_by_graph,
     nest_by_scores,
-    score_elems,
 )
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import should_use_border_focus
@@ -25,6 +25,9 @@ from nest_graph.propose.void_selection import (
     boost_border_scores,
     count_selected_in_free,
     void_attractor_radius,
+)
+from nest_graph.propose.motif_lock import (
+    sequential_accept_motif_cohorts,
 )
 
 
@@ -132,26 +135,6 @@ def merge_void_attractor_into_rule_sets(
     return out
 
 
-def _greedy_independent_set_ordered(graph, order: list[int]) -> list[int]:
-    kept: list[int] = []
-    kept_set: set[int] = set()
-    for v in order:
-        if any(u in kept_set for u in graph.collisions[v]):
-            continue
-        kept.append(v)
-        kept_set.add(v)
-    return kept
-
-
-def nest_seed_from_boosted_scores(graph, scores: Sequence[float]) -> list[int]:
-    """Score-descending greedy MIS so Python void boost reaches the nest seed."""
-    n = min(len(scores), len(graph.collisions))
-    if n <= 0:
-        return []
-    order = sorted(range(n), key=lambda i: float(scores[i]), reverse=True)
-    return _greedy_independent_set_ordered(graph, order)
-
-
 def compose_and_nest_selection(
     *,
     graph,
@@ -183,37 +166,11 @@ def compose_and_nest_selection(
     refine_rules = active_rules
     scores = list(scores)
     sel = selection
-    attr_w = float(cfg.propose.void_attractor_rule_weight)
-    pole_w = float(cfg.propose.void_island_score_boost)
-    pocket_w = float(cfg.propose.pocket_score_boost)
-    small_w = float(cfg.propose.small_part_void_score_boost)
     geom_w = float(getattr(cfg.propose, "selection_geom_weight", 0.0) or 0.0)
     void_r = void_attractor_radius(
         min_dist, sheet_diag, cfg.rules.place_rule_radius,
     )
-    use_nest_by_scores = geom_w > 0.0 and bool(scores)
-
-    # G24: skip void attractor rules when nest_by_scores + geom are on
-    if (
-        not use_nest_by_scores
-        and free_info.kind == "large_void"
-        and free_info.target_pt is not None
-        and attr_w > 0.0
-    ):
-        attractor = make_void_attractor_rule_set(
-            free_info.target_pt,
-            ngroups=ngroups,
-            radius=void_r,
-            weight=attr_w,
-        )
-        nest_rules = merge_void_attractor_into_rule_sets(
-            rule_sets,
-            attractor,
-            nest_rule_sets_used=sel.nest_rule_sets_used,
-            max_rules_per_set=cfg.rules.max_rules_per_set,
-        )
-        refine_rules = active_rule_set(nest_rules)
-        scores = list(score_elems(graph, refine_rules))
+    use_nest_by_scores = bool(scores)
 
     geom_stats: dict = {}
     boost_hits = apply_void_selection_boosts(
@@ -245,21 +202,45 @@ def compose_and_nest_selection(
             f"selection scores length {len(scores)} != graph size {n_graph}"
         )
 
-    use_greedy_nest = (
-        bool(cfg.propose.void_greedy_nest_seed)
-        and free_info.kind == "large_void"
-        and scores
-        and (pole_w > 0.0 or pocket_w > 0.0 or small_w > 0.0)
-        and not use_nest_by_scores
-    )
-    if use_nest_by_scores:
-        selected_nest = list(nest_by_scores(graph, scores))
-    elif use_greedy_nest:
-        selected_nest = nest_seed_from_boosted_scores(graph, scores)
-    else:
-        selected_nest = list(
-            nest_by_graph(graph, nest_rules[: sel.nest_rule_sets_used])[0]
+    locked_motif: list[int] = []
+    if bool(getattr(cfg.propose, "enable_motif_sequential_accept", False)):
+        cohorts = (propose_stats or {}).get("motif_cohorts") or []
+        void_geoms: list = []
+        try:
+            from nest_graph.board import board_context_from_geometry
+
+            _sheet, void_geoms = board_context_from_geometry(outline)
+            void_geoms = list(void_geoms or [])
+        except Exception:
+            void_geoms = []
+        locked_motif, seq_telem = sequential_accept_motif_cohorts(
+            graph=graph,
+            scores=scores,
+            group_id=group_id,
+            transform=transform,
+            cohorts=cohorts,
+            candidate_geoms=candidate_geoms,
+            void_geoms=void_geoms,
+            packed_geoms=packed_geoms,
+            min_dist=float(min_dist),
+            pole=getattr(free_info, "target_pt", None),
+            max_accept=int(
+                getattr(cfg.propose, "motif_sequential_accept_max", 3) or 3
+            ),
+            rcl_top_k=10,
         )
+        boost_hits = dict(boost_hits)
+        boost_hits["motif_sequential"] = int(seq_telem.get("motif_sequential_full", 0))
+        if propose_stats is not None:
+            propose_stats.update(seq_telem)
+            propose_stats["motif_locked"] = list(locked_motif)
+
+    nest_opts = SelectOptions()
+    nest_opts.local_swap = False
+    if locked_motif:
+        nest_opts.mode = SelectMode.greedy_score
+        nest_opts.locked_indices = [int(i) for i in locked_motif]
+    selected_nest = list(nest_by_scores(graph, scores, nest_opts)) if scores else []
 
     refine_scores = list(scores)
     # Refine-only non-negative void/coverage term (tie-break within lex count/area).

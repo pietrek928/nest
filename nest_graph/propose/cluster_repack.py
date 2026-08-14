@@ -30,6 +30,8 @@ from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placements_pattern import (
     ClusterPattern,
+    _cluster_compactness,
+    cluster_pattern_from_indices,
     dedupe_anchors,
     free_pocket_anchors,
     void_seek_motif_anchors,
@@ -37,7 +39,17 @@ from nest_graph.propose.placements_pattern import (
 from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
 from nest_graph.propose.pipeline import propose_coords_with_strategy
 from nest_graph.propose.ranking import score_placement_tightness
-from nest_graph.utils import compose_transforms, relative_transform, transform_poly
+from nest_graph.utils import compose_transforms, transform_poly
+
+
+def pattern_from_indices(
+    indices: Sequence[int],
+    polys: Sequence[BaseGeometry],
+    group_ids: Sequence[int],
+    transforms: Sequence,
+) -> ClusterPattern | None:
+    """Compat alias — shared builder lives in placements_pattern."""
+    return cluster_pattern_from_indices(indices, polys, group_ids, transforms)
 
 
 def _obstacle_geoms(shape) -> list[Geometry]:
@@ -247,37 +259,6 @@ def _selection_area(
     return total
 
 
-def pattern_from_indices(
-    indices: Sequence[int],
-    polys: Sequence[BaseGeometry],
-    group_ids: Sequence[int],
-    transforms: Sequence,
-) -> ClusterPattern | None:
-    """Build a ClusterPattern from a contact-connected index set."""
-    idxs = [int(i) for i in indices]
-    if len(idxs) < 2:
-        return None
-    ref_i = max(idxs, key=lambda i: float(polys[i].area))
-    ref_t = (
-        float(transforms[ref_i][0]),
-        float(transforms[ref_i][1]),
-        float(transforms[ref_i][2]),
-    )
-    members: list[tuple[int, tuple[float, float, float]]] = []
-    for i in idxs:
-        t = (
-            float(transforms[i][0]),
-            float(transforms[i][1]),
-            float(transforms[i][2]),
-        )
-        members.append((int(group_ids[i]), relative_transform(ref_t, t)))
-    return ClusterPattern(
-        members=tuple(members),
-        part_count=len(members),
-        ref_transform=ref_t,
-    )
-
-
 def pattern_fits_peeled(pat: ClusterPattern, peeled_gids: Sequence[int]) -> bool:
     need = Counter(gid for gid, _ in pat.members)
     have = Counter(int(g) for g in peeled_gids)
@@ -294,13 +275,17 @@ def extract_capped_subpatterns(
     sheet: Polygon | None = None,
     max_patterns: int = 4,
 ) -> list[ClusterPattern]:
-    """Contact BFS submotifs with part_count ≤ max_members from placed pack."""
+    """Contact BFS submotifs with part_count ≤ max_members from placed pack.
+
+    Ranked by hull compactness then part_count (sort-only; no hard min filter).
+    """
     if max_members < 2 or len(placed) < 2:
         return []
     n = min(len(placed), len(group_ids), len(transforms))
     groups = cluster_packed_indices(list(placed[:n]), min_dist, sheet=sheet)
     gap = _cluster_merge_gap(list(placed[:n]), min_dist, sheet)
     out: list[ClusterPattern] = []
+    scored: list[tuple[float, int, ClusterPattern]] = []
     for idxs in groups:
         if len(idxs) < 2:
             continue
@@ -310,12 +295,14 @@ def extract_capped_subpatterns(
         peel = _priority_bfs_peel(seed, adj, placed, None, max_members)
         if len(peel) < 2:
             continue
-        pat = pattern_from_indices(peel, placed, group_ids, transforms)
-        if pat is not None:
-            out.append(pat)
-        if len(out) >= max_patterns:
-            break
-    out.sort(key=lambda p: p.part_count, reverse=True)
+        pat = cluster_pattern_from_indices(peel, placed, group_ids, transforms)
+        if pat is None:
+            continue
+        compact = _cluster_compactness(placed, peel)
+        scored.append((compact, int(pat.part_count), pat))
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    for _c, _n, pat in scored[:max_patterns]:
+        out.append(pat)
     return out
 
 
@@ -438,9 +425,13 @@ def _motif_stamp_attempt(
                 anchors.append(coords)
 
     unique_anchors = dedupe_anchors(anchors)
-
+    max_tries = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 10) * 2, 8)
+    tries = 0
     for pat in fitting:
         for anchor in unique_anchors:
+            if tries >= max_tries:
+                return None
+            tries += 1
             stamped = stamp_motif_at_anchor(
                 pat,
                 anchor,
@@ -570,22 +561,29 @@ def cluster_repack_selection(
             )
         )
 
-    stamped = _motif_stamp_attempt(
-        patterns,
-        victim,
-        group_ids,
-        part_by_group,
-        sheet,
-        kept_union,
-        min_dist,
-        propose_cfg,
-        pole,
-        free_space=free_space,
-        void_poly=void_poly,
-        void_geoms=voids,
-    )
     void_facing = any(_part_void_adj(out_polys[i], void_poly, min_dist) for i in victim)
-    if stamped is not None:
+    stamped = None
+    max_stamp_rounds = max(int(getattr(propose_cfg, "cluster_copy_max_patterns", 2) or 2), 1)
+    remaining = list(patterns)
+    for _round in range(max_stamp_rounds):
+        if not remaining:
+            break
+        stamped = _motif_stamp_attempt(
+            remaining,
+            victim,
+            group_ids,
+            part_by_group,
+            sheet,
+            kept_union,
+            min_dist,
+            propose_cfg,
+            pole,
+            free_space=free_space,
+            void_poly=void_poly,
+            void_geoms=voids,
+        )
+        if stamped is None:
+            break
         trial_polys = list(out_polys)
         trial_tr = list(out_tr)
         placed_idxs = [idx for idx, _, _ in stamped]
@@ -605,6 +603,9 @@ def cluster_repack_selection(
             stats["placed"] = len(placed_idxs)
             stats["motif_accepted"] = 1
             return trial_polys, trial_tr, new_sel, stats
+        # Multi-try: drop the leading pattern and continue with remaining.
+        remaining = remaining[1:] if remaining else []
+        stamped = None
 
     # Per-part ranked fallback.
     stats["pattern_fallback"] = 1

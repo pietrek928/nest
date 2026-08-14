@@ -37,7 +37,12 @@ from nest_graph.build_graph import (
     void_elite_tuple_from_archive,
 )
 from nest_graph.config import BuildGraphConfig, score_rules_options
-from nest_graph.elem_graph import score_elems, selection_is_independent
+from nest_graph.elem_graph import (
+    FinalizeSelectionOptions,
+    finalize_selection,
+    score_elems,
+    selection_is_independent,
+)
 from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.placement_scene import placement_clearance_epsilon
 from nest_graph.propose import (
@@ -737,7 +742,9 @@ class NestingPipelineEvaluator:
                     for g in group_id
                 ],
                 refine_seed=int(rng.integers(0, 2**31)),
+                locked_indices=list(propose_stats.get("motif_locked") or []),
             )
+            propose_stats["motif_sequential_repin"] = 0
             pin_stats: dict = {
                 "pin_candidates": 0,
                 "pin_added": 0,
@@ -857,6 +864,16 @@ class NestingPipelineEvaluator:
                     or {}
                 ),
                 "prop_accept": prop_accept,
+                "motif_sequential_full": int(
+                    propose_stats.get("motif_sequential_full", 0) or 0
+                ),
+                "motif_sequential_repin": int(
+                    propose_stats.get("motif_sequential_repin", 0) or 0
+                ),
+                "motif_sequential_partial": int(
+                    propose_stats.get("motif_sequential_partial", 0) or 0
+                ),
+                "motif_cohorts_n": len(propose_stats.get("motif_cohorts") or []),
                 "pin_candidates": int(pin_stats.get("pin_candidates", 0)),
                 "pin_added": int(pin_stats.get("pin_added", 0)),
                 "pin_blocked_collision": int(pin_stats.get("pin_blocked_collision", 0)),
@@ -874,6 +891,21 @@ class NestingPipelineEvaluator:
                 ),
                 "keep_history_on_sterile": bool(
                     propose_stats.get("keep_history_on_sterile", False)
+                ),
+                "attract_edges": int(
+                    (propose_stats.get("void_leak") or {}).get("attract_edges")
+                    or propose_stats.get("attract_edges")
+                    or 0
+                ),
+                "attract_pairs_selected": int(
+                    (propose_stats.get("void_leak") or {}).get(
+                        "attract_pairs_selected", 0
+                    )
+                    or 0
+                ),
+                "attract_bonus": float(
+                    (propose_stats.get("void_leak") or {}).get("attract_bonus", 0.0)
+                    or 0.0
                 ),
             }
             prop_n = int(propose_stats.get("proposal_count", 0))

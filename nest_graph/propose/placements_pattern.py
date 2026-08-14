@@ -33,6 +33,57 @@ class ClusterPattern:
     ref_transform: tuple[float, float, float]
 
 
+@dataclass
+class ArchivedPattern:
+    """Cross-iter accepted motif with TTL (void-elite twin; relatives only)."""
+
+    pattern: ClusterPattern
+    accept_count: int = 1
+    ttl_remaining: int = 4
+
+
+def _cluster_compactness(
+    placed: Sequence[BaseGeometry],
+    idxs: Sequence[int],
+) -> float:
+    """sum(member areas) / convex_hull_area; prefer native Geometry hull."""
+    areas = 0.0
+    geoms = []
+    for i in idxs:
+        p = placed[i]
+        if p is None or getattr(p, "is_empty", False):
+            continue
+        areas += float(p.area)
+        try:
+            from nest_graph.geometry import Geometry
+
+            if isinstance(p, Geometry):
+                geoms.append(p)
+            else:
+                geoms.append(Geometry.from_shapely(p))
+        except Exception:
+            pass
+    if areas <= 1e-18:
+        return 0.0
+    hull = 0.0
+    if len(geoms) >= 1:
+        try:
+            from nest_graph.geometry import convex_hull_area_of
+
+            hull = float(convex_hull_area_of(geoms))
+        except Exception:
+            hull = 0.0
+    if hull <= 1e-18:
+        try:
+            union = unary_union([placed[i] for i in idxs if placed[i] is not None])
+            hull = float(union.convex_hull.area) if union is not None else 0.0
+        except Exception:
+            return 0.0
+    if hull <= 1e-18:
+        return 0.0
+    return float(areas) / float(hull)
+
+
 def extract_cluster_patterns(
     placed: Sequence[BaseGeometry],
     group_ids: Sequence[int],
@@ -42,8 +93,12 @@ def extract_cluster_patterns(
     max_patterns: int = 2,
     min_members: int = 2,
     sheet: Polygon | None = None,
+    min_compactness: float = 0.0,
 ) -> list[ClusterPattern]:
-    """Build rigid motifs from contact-connected packed clusters."""
+    """Build rigid motifs from contact-connected packed clusters.
+
+    Ranked by hull compactness (sum areas / hull area), then total area.
+    """
     if len(placed) < min_members:
         return []
     n = min(len(placed), len(group_ids), len(transforms))
@@ -51,37 +106,23 @@ def extract_cluster_patterns(
         return []
 
     index_groups = cluster_packed_indices(list(placed[:n]), min_dist, sheet=sheet)
-    scored: list[tuple[float, list[int]]] = []
+    scored: list[tuple[float, float, list[int]]] = []
+    min_c = float(min_compactness)
     for idxs in index_groups:
         if len(idxs) < min_members:
             continue
         area = sum(float(placed[i].area) for i in idxs)
-        scored.append((area, idxs))
-    scored.sort(key=lambda x: x[0], reverse=True)
+        compact = _cluster_compactness(placed, idxs)
+        if min_c > 0.0 and compact < min_c:
+            continue
+        scored.append((compact, area, idxs))
+    scored.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
     patterns: list[ClusterPattern] = []
-    for _area, idxs in scored[:max_patterns]:
-        ref_i = max(idxs, key=lambda i: float(placed[i].area))
-        ref_t = (
-            float(transforms[ref_i][0]),
-            float(transforms[ref_i][1]),
-            float(transforms[ref_i][2]),
-        )
-        members: list[tuple[int, tuple[float, float, float]]] = []
-        for i in idxs:
-            t = (
-                float(transforms[i][0]),
-                float(transforms[i][1]),
-                float(transforms[i][2]),
-            )
-            members.append((int(group_ids[i]), relative_transform(ref_t, t)))
-        patterns.append(
-            ClusterPattern(
-                members=tuple(members),
-                part_count=len(members),
-                ref_transform=ref_t,
-            )
-        )
+    for _c, _area, idxs in scored[:max_patterns]:
+        pat = cluster_pattern_from_indices(idxs, placed, group_ids, transforms)
+        if pat is not None:
+            patterns.append(pat)
     return patterns
 
 
@@ -157,9 +198,47 @@ def _pair_hull_area(
     if a is None or b is None or a.is_empty or b.is_empty:
         return float("inf")
     try:
-        return float(unary_union([a, b]).convex_hull.area)
+        from nest_graph.geometry import Geometry, convex_hull_area_of
+
+        ga = a if isinstance(a, Geometry) else Geometry.from_shapely(a)
+        gb = b if isinstance(b, Geometry) else Geometry.from_shapely(b)
+        return float(convex_hull_area_of([ga, gb]))
     except Exception:
-        return float("inf")
+        try:
+            return float(unary_union([a, b]).convex_hull.area)
+        except Exception:
+            return float("inf")
+
+
+def cluster_pattern_from_indices(
+    indices: Sequence[int],
+    polys: Sequence[BaseGeometry],
+    group_ids: Sequence[int],
+    transforms: Sequence,
+) -> ClusterPattern | None:
+    """Build a ClusterPattern from a contact-connected index set (shared builder)."""
+    idxs = [int(i) for i in indices]
+    if len(idxs) < 2:
+        return None
+    ref_i = max(idxs, key=lambda i: float(polys[i].area))
+    ref_t = (
+        float(transforms[ref_i][0]),
+        float(transforms[ref_i][1]),
+        float(transforms[ref_i][2]),
+    )
+    members: list[tuple[int, tuple[float, float, float]]] = []
+    for i in idxs:
+        t = (
+            float(transforms[i][0]),
+            float(transforms[i][1]),
+            float(transforms[i][2]),
+        )
+        members.append((int(group_ids[i]), relative_transform(ref_t, t)))
+    return ClusterPattern(
+        members=tuple(members),
+        part_count=len(members),
+        ref_transform=ref_t,
+    )
 
 
 def _generic_mate_relative(
@@ -253,21 +332,133 @@ def synthesize_mate_patterns(
     return patterns
 
 
+def _pattern_signature(pat: ClusterPattern) -> tuple:
+    """Dedupe key: sorted (gid, rounded relative SE2)."""
+    members = tuple(
+        sorted(
+            (
+                int(gid),
+                round(float(t[0]), 3),
+                round(float(t[1]), 3),
+                round(float(t[2]), 3),
+            )
+            for gid, t in pat.members
+        )
+    )
+    return (int(pat.part_count), members)
+
+
 def merge_cluster_patterns(
     contact: Sequence[ClusterPattern],
     synthesized: Sequence[ClusterPattern],
     *,
     max_patterns: int,
+    archived: Sequence[ClusterPattern] = (),
 ) -> list[ClusterPattern]:
-    """Prefer contact patterns; fill remaining slots with synthesized mates."""
-    out = list(contact)
-    if len(out) >= max(int(max_patterns), 1):
-        return out[: max(int(max_patterns), 1)]
-    for pat in synthesized:
-        out.append(pat)
-        if len(out) >= max(int(max_patterns), 1):
-            break
+    """Prefer contact → accepted archive → synthesized mates (one prefer path)."""
+    cap = max(int(max_patterns), 1)
+    out: list[ClusterPattern] = []
+    seen: set[tuple] = set()
+
+    def _add(seq: Sequence[ClusterPattern]) -> None:
+        for pat in seq:
+            if len(out) >= cap:
+                return
+            sig = _pattern_signature(pat)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            out.append(pat)
+
+    _add(contact)
+    _add(archived)
+    _add(synthesized)
     return out
+
+
+def accepted_patterns_from_archive(
+    archive: Sequence[ArchivedPattern] | None,
+) -> list[ClusterPattern]:
+    """Patterns still alive (ttl > 0), highest accept_count first."""
+    if not archive:
+        return []
+    alive = [e for e in archive if int(e.ttl_remaining) > 0]
+    alive.sort(key=lambda e: (int(e.accept_count), int(e.pattern.part_count)), reverse=True)
+    return [e.pattern for e in alive]
+
+
+def archive_accepted_patterns(
+    archive: list[ArchivedPattern] | None,
+    patterns: Sequence[ClusterPattern],
+    *,
+    ttl: int = 4,
+    max_keep: int = 4,
+    enabled: bool = True,
+) -> list[ArchivedPattern]:
+    """Upsert accepted motifs; bump accept_count and reset TTL (void-elite twin)."""
+    if not enabled:
+        return list(archive or [])
+    out = list(archive or [])
+    ttl_i = max(int(ttl), 1)
+    for pat in patterns:
+        sig = _pattern_signature(pat)
+        found = False
+        for entry in out:
+            if _pattern_signature(entry.pattern) == sig:
+                entry.accept_count = int(entry.accept_count) + 1
+                entry.ttl_remaining = ttl_i
+                entry.pattern = pat
+                found = True
+                break
+        if not found:
+            out.append(
+                ArchivedPattern(pattern=pat, accept_count=1, ttl_remaining=ttl_i)
+            )
+    out.sort(key=lambda e: (int(e.accept_count), int(e.pattern.part_count)), reverse=True)
+    return out[: max(int(max_keep), 1)]
+
+
+def age_accepted_pattern_archive(
+    archive: list[ArchivedPattern] | None,
+) -> list[ArchivedPattern]:
+    """Decrement TTL once per iter without successful re-application; drop at 0."""
+    if not archive:
+        return []
+    next_arch: list[ArchivedPattern] = []
+    for entry in archive:
+        ttl = int(entry.ttl_remaining) - 1
+        if ttl <= 0:
+            continue
+        next_arch.append(
+            ArchivedPattern(
+                pattern=entry.pattern,
+                accept_count=int(entry.accept_count),
+                ttl_remaining=ttl,
+            )
+        )
+    return next_arch
+
+
+def motif_lattice_offsets(
+    pattern: ClusterPattern,
+) -> list[tuple[float, float]]:
+    """Δxy lattice steps from same-group relatives / mate offsets (ignore identity)."""
+    offsets: list[tuple[float, float]] = []
+    seen: set[tuple[float, float]] = set()
+    for _gid, t_rel in pattern.members:
+        dx, dy = float(t_rel[0]), float(t_rel[1])
+        if abs(dx) < 1e-6 and abs(dy) < 1e-6:
+            continue
+        key = (round(dx, 3), round(dy, 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        offsets.append((dx, dy))
+        nkey = (round(-dx, 3), round(-dy, 3))
+        if nkey not in seen:
+            seen.add(nkey)
+            offsets.append((-dx, -dy))
+    return offsets
 
 
 def free_pocket_anchors(
@@ -358,13 +549,17 @@ def void_seek_motif_anchors(
     free_space=None,
     void_pole: Point | None = None,
     patterns: Sequence[ClusterPattern] = (),
+    lattice_stats_out: dict | None = None,
 ) -> list[tuple[float, float, float]]:
     """Unified anchor priority for void_seek motif stamps (§4).
 
-    topology / void_pole → topology_pocket scan → free_pocket → mirror last.
+    topology / void_pole → topology_pocket → free_pocket → ΔT lattice (pole-sort)
+    → optional AABB mirrors last.
     """
     anchors: list[tuple[float, float, float]] = []
     n_seed = int(propose_cfg.cluster_copy_anchor_seeds)
+    lattice_added = 0
+    lattice_kept = 0
 
     if free_space is not None and getattr(free_space, "topology_poles", None):
         anchors.extend(list(free_space.topology_poles))
@@ -392,8 +587,50 @@ def void_seek_motif_anchors(
 
     anchors.extend(free_pocket_anchors(sheet, base_shape, min_dist, n_seed))
 
-    for pat in patterns:
-        anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
+    if bool(getattr(propose_cfg, "enable_motif_lattice", True)) and patterns:
+        depth = max(int(getattr(propose_cfg, "motif_lattice_depth", 3) or 0), 0)
+        top_k = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 0), 0)
+        pole_xy: tuple[float, float] | None = None
+        if void_pole is not None and not getattr(void_pole, "is_empty", True):
+            pole_xy = (float(void_pole.x), float(void_pole.y))
+        lattice: list[tuple[float, float, float]] = []
+        base_for_lattice = list(anchors)
+        if not base_for_lattice:
+            for pat in patterns:
+                base_for_lattice.append(pat.ref_transform)
+        for pat in patterns:
+            offsets = motif_lattice_offsets(pat)
+            if not offsets or depth <= 0:
+                continue
+            for ax, ay, aa in base_for_lattice:
+                for dx, dy in offsets:
+                    for k in range(1, depth + 1):
+                        lattice.append(
+                            (float(ax) + k * dx, float(ay) + k * dy, float(aa))
+                        )
+        lattice_added = len(lattice)
+        if lattice and top_k > 0:
+            if pole_xy is not None:
+                px, py = pole_xy
+
+                def _dist(a: tuple[float, float, float]) -> float:
+                    return (float(a[0]) - px) ** 2 + (float(a[1]) - py) ** 2
+
+                lattice.sort(key=_dist)
+            lattice = lattice[:top_k]
+            lattice_kept = len(lattice)
+            anchors.extend(lattice)
+        elif lattice:
+            lattice_kept = len(lattice)
+            anchors.extend(lattice)
+
+    if bool(getattr(propose_cfg, "enable_motif_mirror_anchors", False)):
+        for pat in patterns:
+            anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
+
+    if lattice_stats_out is not None:
+        lattice_stats_out["lattice_anchors_added"] = int(lattice_added)
+        lattice_stats_out["lattice_anchors_kept"] = int(lattice_kept)
 
     return _dedupe_anchors(anchors)
 
@@ -401,6 +638,8 @@ def void_seek_motif_anchors(
 def emit_packing_clear(
     propose_geom: ProposeGeometry,
     coords: tuple[float, float, float],
+    *,
+    obstacles: Sequence | None = None,
 ) -> bool:
     """Propose-emit packing SoT: Penetrating vs voids+packed (margin 0, not Scene)."""
     from nest_graph.propose.placement_common import placement_obstacles
@@ -408,13 +647,15 @@ def emit_packing_clear(
     placed = propose_geom.placed_at(coords)
     if placed is None:
         return False
-    obs = placement_obstacles(
-        propose_geom.scene.void_geoms,
-        propose_geom.full_packed_geoms,
-    )
+    obs = obstacles
+    if obs is None:
+        obs = placement_obstacles(
+            propose_geom.scene.void_geoms,
+            propose_geom.full_packed_geoms,
+        )
     if not obs:
         return True
-    return not placed.intersects_any(obs)
+    return not placed.intersects_any(list(obs))
 
 
 def _full_motif_packing_clear(
@@ -424,12 +665,14 @@ def _full_motif_packing_clear(
     shape_to_place: Polygon,
     propose_geom: ProposeGeometry,
     part_by_group: dict[int, Polygon] | None,
+    *,
+    obstacles: Sequence | None = None,
 ) -> bool:
     """True if every motif member is packing-clear at ``t_anchor``."""
     for gid, t_rel_m in pat.members:
         t_m = compose_transforms(t_anchor, t_rel_m)
         if int(gid) == int(group_id):
-            if not emit_packing_clear(propose_geom, t_m):
+            if not emit_packing_clear(propose_geom, t_m, obstacles=obstacles):
                 return False
             continue
         if part_by_group is not None and int(gid) in part_by_group:
@@ -445,6 +688,10 @@ def _full_motif_packing_clear(
     return True
 
 
+def _motif_abs_key(coords: tuple[float, float, float]) -> tuple[float, float, float]:
+    return (round(float(coords[0]), 4), round(float(coords[1]), 4), round(float(coords[2]), 4))
+
+
 def stamp_motif_leader_follower(
     patterns: Sequence[ClusterPattern],
     group_id: int,
@@ -455,6 +702,7 @@ def stamp_motif_leader_follower(
     top_n: int = 16,
     part_by_group: dict[int, Polygon] | None = None,
     skip_reasons: dict[str, int] | None = None,
+    cohorts_out: list | None = None,
 ) -> list[tuple[float, float, float]]:
     """Propose-side motif stamp: full-motif packing clear, else same-group leader only.
 
@@ -469,6 +717,12 @@ def stamp_motif_leader_follower(
             )
         return []
 
+    from nest_graph.propose.placement_common import placement_obstacles
+
+    obs = placement_obstacles(
+        propose_geom.scene.void_geoms,
+        propose_geom.full_packed_geoms,
+    )
     seen: set[tuple[float, float, float]] = set()
     out: list[tuple[float, float, float]] = []
 
@@ -477,7 +731,7 @@ def stamp_motif_leader_follower(
         if key in seen:
             return False
         seen.add(key)
-        if not emit_packing_clear(propose_geom, coords):
+        if not emit_packing_clear(propose_geom, coords, obstacles=obs):
             if skip_reasons is not None:
                 skip_reasons["collide"] = skip_reasons.get("collide", 0) + 1
             return False
@@ -491,15 +745,53 @@ def stamp_motif_leader_follower(
                 skip_reasons["no_rels"] = skip_reasons.get("no_rels", 0) + 1
             continue
         for t_anchor in anchors:
+            full_clear = _full_motif_packing_clear(
+                pat,
+                t_anchor,
+                group_id,
+                shape_to_place,
+                propose_geom,
+                part_by_group,
+                obstacles=obs,
+            )
+            if full_clear:
+                # Emit every same-group member under this anchor; cohort = emitted keys only
+                # (Q17: lock requires in-graph followers — do not record unemitted abs keys).
+                emitted_members: list[tuple[int, tuple[float, float, float]]] = []
+                leader_key = None
+                for t_rel in rels:
+                    coords = compose_transforms(t_anchor, t_rel)
+                    if _maybe_add(coords):
+                        key = _motif_abs_key(coords)
+                        emitted_members.append((int(group_id), key))
+                        if leader_key is None:
+                            leader_key = key
+                if (
+                    cohorts_out is not None
+                    and leader_key is not None
+                    and len(emitted_members) >= 2
+                ):
+                    cohorts_out.append({
+                        "leader_key": leader_key,
+                        "leader_gid": int(group_id),
+                        "member_keys": emitted_members,
+                        "pattern_sig": _pattern_signature(pat),
+                        "anchor": (
+                            float(t_anchor[0]),
+                            float(t_anchor[1]),
+                            float(t_anchor[2]),
+                        ),
+                    })
+                if emitted_members and skip_reasons is not None:
+                    skip_reasons["full_motif_clear"] = (
+                        skip_reasons.get("full_motif_clear", 0) + 1
+                    )
+                if len(out) >= top_n:
+                    return out
+                continue
+            # Leader-follower fallback: same-group member only.
             for t_rel in rels:
                 coords = compose_transforms(t_anchor, t_rel)
-                if _full_motif_packing_clear(
-                    pat, t_anchor, group_id, shape_to_place, propose_geom, part_by_group,
-                ):
-                    if _maybe_add(coords) and len(out) >= top_n:
-                        return out
-                    continue
-                # Leader-follower fallback: same-group member only.
                 if _maybe_add(coords):
                     if skip_reasons is not None:
                         skip_reasons["fallback_leader"] = (
@@ -528,6 +820,7 @@ def propose_placements_cluster_copy(
     free_space=None,
     void_pole: Point | None = None,
     skip_reasons: dict[str, int] | None = None,
+    cohorts_out: list | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Emit absolute transforms for group_id via shared leader-follower stamp."""
     if not patterns or sheet.is_empty:
@@ -543,6 +836,7 @@ def propose_placements_cluster_copy(
     if pole is None and pt_push is not None and not pt_push.is_empty:
         pole = pt_push
 
+    lattice_stats: dict = {}
     anchors = void_seek_motif_anchors(
         sheet,
         base_shape,
@@ -551,7 +845,15 @@ def propose_placements_cluster_copy(
         free_space=free_space,
         void_pole=pole,
         patterns=patterns,
+        lattice_stats_out=lattice_stats,
     )
+    if skip_reasons is not None:
+        skip_reasons["lattice_anchors_added"] = int(
+            lattice_stats.get("lattice_anchors_added", 0)
+        )
+        skip_reasons["lattice_anchors_kept"] = int(
+            lattice_stats.get("lattice_anchors_kept", 0)
+        )
     return stamp_motif_leader_follower(
         patterns,
         group_id,
@@ -560,4 +862,5 @@ def propose_placements_cluster_copy(
         anchors=anchors,
         top_n=top_n,
         skip_reasons=skip_reasons,
+        cohorts_out=cohorts_out,
     )

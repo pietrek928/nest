@@ -59,6 +59,7 @@ from nest_graph.propose.placements_pso import (
 from nest_graph.propose.placements_pocket import propose_placements_pocket_fit
 from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
+    merge_cluster_patterns,
     propose_placements_cluster_copy,
     stamp_motif_leader_follower,
     void_seek_motif_anchors,

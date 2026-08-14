@@ -147,6 +147,9 @@ class ProposeAblation(StrEnum):
     NO_LEX_REFINE = "no_lex_refine"
     NO_LNS_REBUILD = "no_lns_rebuild"
     NO_INCUMBENT_LOOP = "no_incumbent_loop"
+    NO_PATTERN_PROPAGATE = "no_pattern_propagate"
+    NO_MOTIF_SEQUENTIAL_ACCEPT = "no_motif_sequential_accept"
+    NO_CONTACT_ATTRACT = "no_contact_attract"
 
 
 def _env_int(key: str, default: int) -> int:
@@ -545,8 +548,12 @@ class ProposeConfig(BaseModel):
     """EMS pole weight for continuous distance-to-pole DFS score boost (0 disables)."""
     void_attractor_rule_weight: float = 16.0
     """Lighter PointPlaceRule weight for nest_by_graph void attractors (0 disables rules)."""
-    void_greedy_nest_seed: bool = True
-    """When large_void + any selection boost: nest seed = score-ordered greedy MIS."""
+    attract_contact_weight: float = 8.0
+    """NEAR kiss-pair score bonus; 0 skips pair join and geometric fill."""
+    attract_kiss_band_scale: float = 2.0
+    """Kiss band = scale * min_dist for attract weight falloff."""
+    attract_max_degree: int = 8
+    """Per-vertex cap on strongest attract neighbours."""
     enable_void_large_hijack: bool = True
     """Mode A: force void_seek + polylabel seeds when largest free / part_area > late_border_void_override_ratio."""
     pocket_score_boost: float = 50.0
@@ -614,6 +621,31 @@ class ProposeConfig(BaseModel):
     """MIS score boost for cluster_copy / motif_hole keys (0 disables; pocket_score_boost is separate)."""
     cascade_min_motif_pocket_emit: int = 2
     """Require at least this many motif/pocket emits before cascade sniper short-circuit."""
+    # Pattern propagation (archive + pole-first lattice).
+    enable_accepted_pattern_archive: bool = True
+    """Cross-iter archive of refine/repack-accepted ClusterPatterns (void-elite twin)."""
+    accepted_pattern_ttl: int = 4
+    """Iters without successful re-application before aging out an archived pattern."""
+    accepted_pattern_max: int = 4
+    """Hard cap on archived patterns (replace-not-unbounded-merge)."""
+    motif_min_compactness: float = 0.35
+    """Minimum sum(areas)/convex_hull_area to keep a contact pattern (0 disables)."""
+    enable_motif_lattice: bool = True
+    """Append ±k·ΔT lattice offsets inside void_seek_motif_anchors."""
+    motif_lattice_depth: int = 3
+    motif_lattice_top_k: int = 10
+    """After pole-distance sort, keep at most this many motif anchors."""
+    enable_motif_mirror_anchors: bool = False
+    """AABB sheet mirrors of ref_transform (default off once lattice ships)."""
+    enable_motif_sequential_accept: bool = True
+    """Pre-MIS full-motif lock via growing is_pose_clear + nest_by_scores locked_indices."""
+    motif_sequential_accept_max: int = 3
+    enable_motif_scene_dry_run: bool = False
+    """Track D: Scene-filter cluster_copy motif_reserve after packing emit (Q25)."""
+    large_void_motif_plateau_iters: int = 5
+    """Q27: consecutive large_void flat iters before Track D."""
+    large_void_motif_plateau_cov_eps: float = 1.0
+    """Q27: |Δcov| threshold in coverage percentage points."""
     # Phase 3 rim-drop refine guard.
     refine_rim_drop_reject: float = 0.02
     """Reject refine result if outline/rim coverage drops by more than this absolute fraction."""

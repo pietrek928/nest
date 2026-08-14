@@ -15,11 +15,19 @@ inline void append_elem_at(
     g.elems.push_back(ElemPlace{Vec2f({x, y}), 0.0f});
     g.coords.push_back(Circle2f(Vec2f({x, y}), r_sq));
     g.collisions.emplace_back();
+    g.attract.emplace_back();
 }
 
 inline void add_collision_pair(ElemGraph &g, int i, int j) {
     g.collisions[static_cast<std::size_t>(i)].push_back(j);
     g.collisions[static_cast<std::size_t>(j)].push_back(i);
+}
+
+inline void add_attract_pair(ElemGraph &g, int i, int j, float w) {
+    g.attract[static_cast<std::size_t>(i)].push_back(
+        AttractEdge{static_cast<Tvertex>(j), w});
+    g.attract[static_cast<std::size_t>(j)].push_back(
+        AttractEdge{static_cast<Tvertex>(i), w});
 }
 
 inline ElemGraph star_graph(int spokes) {

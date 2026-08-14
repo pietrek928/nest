@@ -11,6 +11,10 @@
 constexpr int kDefaultMinCollisionsLoose = 2;
 constexpr int kDefaultMinCollisionsTight = 1;
 
+bool vertex_is_locked(const unsigned char *locked, Tvertex v) {
+    return locked != nullptr && locked[static_cast<std::size_t>(v)] != 0;
+}
+
 bool selection_independent(
     const ElemGraph &g, const std::vector<unsigned char> &selected
 ) {
@@ -42,7 +46,7 @@ void update_best_independent(
         return;
     }
     const int n = static_cast<int>(g.size());
-    const float sum = sum_selected_scores(scores.data(), selected.data(), n);
+    const float sum = sum_selected_objective(g, scores.data(), selected.data(), n);
     int count = 0;
     float area = 0.0f;
     const bool use_area =
@@ -183,7 +187,8 @@ bool increase_path_dfs(
     int *mark,
     unsigned char *selected,
     int *selected_collisions,
-    int n
+    int n,
+    const unsigned char *locked
 ) {
     mark[node]++;
     mark_collisions(node, collisions, mark, n);
@@ -196,6 +201,11 @@ bool increase_path_dfs(
         if (!vertex_in_graph(v, n) || !selected[v]) {
             continue;
         }
+        if (vertex_is_locked(locked, v)) {
+            unmark_collisions(node, collisions, mark, n);
+            unselect_node(node, collisions, selected, selected_collisions, n);
+            return false;
+        }
         unselect_node(v, collisions, selected, selected_collisions, n);
         bool path_found = false;
         for (Tvertex v2 : collisions[v]) {
@@ -204,7 +214,8 @@ bool increase_path_dfs(
             }
             if (!mark[v2] && !selected[v2] && selected_collisions[v2] <= 1) {
                 if (increase_path_dfs(
-                        v2, collisions, mark, selected, selected_collisions, n)) {
+                        v2, collisions, mark, selected, selected_collisions, n,
+                        locked)) {
                     path_found = true;
                     break;
                 }
@@ -233,7 +244,8 @@ void run_growth_pass(
     float &best_sum,
     int &best_count,
     float &best_area,
-    const RefineSelectionOptions &options
+    const RefineSelectionOptions &options,
+    const unsigned char *locked
 ) {
     if (max_tries <= 0) {
         return;
@@ -259,7 +271,7 @@ void run_growth_pass(
             }
             if (increase_path_dfs(
                     v, &g.collisions[0], mark.data(), selected.data(),
-                    selected_collisions.data(), n)) {
+                    selected_collisions.data(), n, locked)) {
                 tries = max_tries;
             }
         }
@@ -271,19 +283,22 @@ void run_growth_pass(
 
 float score_path_dfs(
     Tvertex node,
-    const std::vector<Tvertex> *collisions,
+    const ElemGraph &g,
     const Tscore *scores,
     float path_delta,
     int depth,
     int max_depth,
     int beam_width,
     float &best_delta,
+    int &best_count,
     std::vector<unsigned char> &best_selected,
     unsigned char *selected,
     int *mark,
     int *selected_collisions,
-    int n
+    int n,
+    const unsigned char *locked
 ) {
+    const std::vector<Tvertex> *collisions = &g.collisions[0];
     if (depth > max_depth || mark[node]) {
         return best_delta;
     }
@@ -306,9 +321,19 @@ float score_path_dfs(
                 }
             }
         }
-        if (independent && path_delta > best_delta) {
-            best_delta = path_delta;
-            best_selected.assign(selected, selected + n);
+        if (independent) {
+            int count = 0;
+            for (int i = 0; i < n; ++i) {
+                if (selected[i]) {
+                    count++;
+                }
+            }
+            if (count > best_count
+                || (count == best_count && path_delta > best_delta)) {
+                best_count = count;
+                best_delta = path_delta;
+                best_selected.assign(selected, selected + n);
+            }
         }
         unmark_collisions(node, collisions, mark, n);
         unselect_node(node, collisions, selected, selected_collisions, n);
@@ -327,6 +352,9 @@ float score_path_dfs(
         [scores](Tvertex a, Tvertex b) { return scores[a] < scores[b]; });
 
     for (Tvertex v : conflicts) {
+        if (vertex_is_locked(locked, v)) {
+            continue;
+        }
         unselect_node(v, collisions, selected, selected_collisions, n);
         const float delta_after_remove = path_delta - scores[v];
 
@@ -346,9 +374,10 @@ float score_path_dfs(
             beam_width, static_cast<int>(candidates.size()));
         for (int ci = 0; ci < limit; ++ci) {
             score_path_dfs(
-                candidates[static_cast<std::size_t>(ci)], collisions, scores,
+                candidates[static_cast<std::size_t>(ci)], g, scores,
                 delta_after_remove, depth + 1, max_depth, beam_width, best_delta,
-                best_selected, selected, mark, selected_collisions, n);
+                best_count, best_selected, selected, mark, selected_collisions,
+                n, locked);
         }
 
         select_node(v, collisions, selected, selected_collisions, n);
@@ -374,7 +403,8 @@ bool try_refine_root(
     std::vector<unsigned char> &best_selected,
     std::vector<int> &mark,
     std::vector<int> &selected_collisions,
-    float &selected_sum
+    float &selected_sum,
+    const unsigned char *locked
 ) {
     const int n = static_cast<int>(g.size());
     const int beam = std::max(1, options.beam_width);
@@ -384,10 +414,11 @@ bool try_refine_root(
 
     backup = selected;
     float best_delta = -1e30f;
+    int best_count = -1;
     score_path_dfs(
-        v, &g.collisions[0], scores.data(), 0.0f, 0, options.max_depth, beam,
-        best_delta, best_selected, selected.data(), mark.data(),
-        selected_collisions.data(), n);
+        v, g, scores.data(), 0.0f, 0, options.max_depth, beam,
+        best_delta, best_count, best_selected, selected.data(), mark.data(),
+        selected_collisions.data(), n, locked);
 
     const float new_sum = sum_selected_scores(scores.data(), best_selected.data(), n);
     const int new_count = selected_count(best_selected, n);
@@ -433,9 +464,44 @@ std::vector<Tvertex> refine_selection_dfs(
     std::vector<int> selected_collisions(n, 0);
     std::vector<Tvertex> nodes(n);
 
+    std::vector<unsigned char> is_locked(static_cast<std::size_t>(n), 0);
+    for (Tvertex vi : options.locked_indices) {
+        if (!vertex_in_graph(vi, n) || is_locked[static_cast<std::size_t>(vi)]) {
+            continue;
+        }
+        bool hits_earlier = false;
+        for (Tvertex u : g.collisions[static_cast<std::size_t>(vi)]) {
+            if (vertex_in_graph(u, n) && is_locked[static_cast<std::size_t>(u)]) {
+                hits_earlier = true;
+                break;
+            }
+        }
+        if (hits_earlier) {
+            continue;
+        }
+        is_locked[static_cast<std::size_t>(vi)] = 1;
+    }
+
     for (Tvertex v : selected_nodes) {
         if (vertex_in_graph(v, n)) {
             selected[v] = 1;
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        if (is_locked[static_cast<std::size_t>(i)]) {
+            selected[static_cast<std::size_t>(i)] = 1;
+        }
+    }
+    for (int i = 0; i < n; ++i) {
+        if (!selected[static_cast<std::size_t>(i)]
+            || is_locked[static_cast<std::size_t>(i)]) {
+            continue;
+        }
+        for (Tvertex u : g.collisions[static_cast<std::size_t>(i)]) {
+            if (vertex_in_graph(u, n) && is_locked[static_cast<std::size_t>(u)]) {
+                selected[static_cast<std::size_t>(i)] = 0;
+                break;
+            }
         }
     }
     recompute_selected_collisions(
@@ -452,7 +518,7 @@ std::vector<Tvertex> refine_selection_dfs(
     run_growth_pass(
         g, scores, options.max_tries, options.min_collisions, selected,
         selected_collisions, best_independent, best_sum, best_count, best_area,
-        options);
+        options, is_locked.data());
 
     float selected_sum =
         sum_selected_scores(scores.data(), selected.data(), n);
@@ -492,7 +558,7 @@ std::vector<Tvertex> refine_selection_dfs(
             if (try_refine_root(
                     v, g, scores, options, baseline_sum, baseline_count,
                     baseline_area, selected, backup, best_selected, mark,
-                    selected_collisions, selected_sum)) {
+                    selected_collisions, selected_sum, is_locked.data())) {
                 pass_improved = true;
                 update_best_independent(
                     g, selected, scores, best_independent, best_sum, best_count,
@@ -516,7 +582,7 @@ std::vector<Tvertex> refine_selection_dfs(
                 if (try_refine_root(
                         v, g, scores, options, baseline_sum, baseline_count,
                         baseline_area, selected, backup, best_selected, mark,
-                        selected_collisions, selected_sum)) {
+                        selected_collisions, selected_sum, is_locked.data())) {
                     pass_improved = true;
                     update_best_independent(
                         g, selected, scores, best_independent, best_sum,

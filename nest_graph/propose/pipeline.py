@@ -61,6 +61,7 @@ from nest_graph.propose.context import (
     PlaceZoneInfo,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags, filter_candidates_batch
+from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.propose.placements_edge import (
     propose_placements_group_fit,
     propose_placements_ribbon_free,
@@ -96,6 +97,7 @@ from nest_graph.propose.placements_free_space_cloud import (
     propose_placements_free_space_cloud,
 )
 from nest_graph.propose.placements_pocket import (
+    TAG_MOTIF_HOLE,
     propose_placements_pocket_fit,
 )
 from nest_graph.propose.placements_pso import propose_placements_point_cloud
@@ -419,6 +421,8 @@ def _void_seek_densify(
         "pocket_attempted": 0,
         "pocket_accepted": 0,
         "pocket_keys": [],
+        "motif_hole_keys": [],
+        "motif_skip": {},
         "pocket_skips": [],
     }
     hijack_densify = (
@@ -575,6 +579,9 @@ def _void_seek_densify(
     telem["pocket_attempted"] = int(densify_pocket.get("attempted", 0))
     telem["pocket_accepted"] = int(densify_pocket.get("selected", 0))
     telem["pocket_keys"] = list(densify_pocket.get("pocket_keys") or [])
+    telem["motif_hole_keys"] = list(densify_pocket.get("motif_hole_keys") or [])
+    telem["motif_skip"] = dict(densify_pocket.get("motif_skip") or {})
+    telem["motif_cohorts"] = list(densify_pocket.get("motif_cohorts") or [])
     telem["pocket_skips"] = [str(sk) for sk in (densify_pocket.get("pocket_skip") or [])]
 
     densify_arr = propositions_to_ndarray(densify_coords)
@@ -951,6 +958,8 @@ def _collect_pocket_candidates(
         and cfg.use_cluster_copy
         and extras.cluster_patterns
     ):
+        motif_skips: dict[str, int] = {}
+        motif_cohorts: list = []
         motif_coords = propose_placements_cluster_copy(
             extras.cluster_patterns,
             group_id,
@@ -963,8 +972,39 @@ def _collect_pocket_candidates(
             propose_cfg=cfg,
             top_n=ctx.pool,
             free_space=extras.free_space,
+            void_pole=extras.void_pole if extras.void_pole is not None else ctx.void_pole,
+            skip_reasons=motif_skips,
+            cohorts_out=motif_cohorts,
         )
+        # Track D / Q25: Scene dry-run motif reserve only (after packing emit, before claim).
+        if motif_coords and bool(getattr(cfg, "enable_motif_scene_dry_run", False)):
+            from nest_graph.propose.placement_common import as_geometry, is_pose_clear
+
+            voids = list(getattr(ctx.propose_geom.scene, "void_geoms", None) or [])
+            packed = list(getattr(ctx.propose_geom, "full_packed_geoms", None) or [])
+            kept_motif: list[tuple[float, float, float]] = []
+            dropped = 0
+            for coords in motif_coords:
+                placed = ctx.propose_geom.placed_at(coords)
+                cg = as_geometry(placed) if placed is not None else None
+                if cg is not None and is_pose_clear(
+                    cg, voids, packed, float(ctx.min_dist),
+                ):
+                    kept_motif.append(coords)
+                else:
+                    dropped += 1
+            if dropped:
+                motif_skips["scene_dry_run"] = (
+                    motif_skips.get("scene_dry_run", 0) + dropped
+                )
+            motif_coords = kept_motif
         state.ext("cluster_copy", motif_coords)
+        if extras.pocket_stats is not None:
+            for k, v in motif_skips.items():
+                extras.pocket_stats.skip_reasons[f"motif_{k}"] = (
+                    extras.pocket_stats.skip_reasons.get(f"motif_{k}", 0) + int(v)
+                )
+            extras.pocket_stats.motif_cohorts.extend(motif_cohorts)
 
     return list(pocket_coords), list(motif_coords)
 
@@ -2018,9 +2058,13 @@ def propose_coords_with_strategy(
         selected = 0
         by_tag: dict[str, int] = {}
         pocket_keys: list[tuple[float, float, float]] = []
+        motif_hole_keys: list[tuple[float, float, float]] = []
         for coords, tag in zip(pocket_reserve, pocket_tags):
             key = _proposal_key(coords)
-            pocket_keys.append(key)
+            if str(tag) == TAG_MOTIF_HOLE:
+                motif_hole_keys.append(key)
+            else:
+                pocket_keys.append(key)
             if key in final_keys:
                 selected += 1
                 by_tag[tag] = by_tag.get(tag, 0) + 1
@@ -2037,7 +2081,15 @@ def propose_coords_with_strategy(
         pocket_stats_out["by_tag"] = by_tag
         pocket_stats_out["tags"] = list(pocket_tags)
         pocket_stats_out["pocket_keys"] = pocket_keys
+        pocket_stats_out["motif_hole_keys"] = motif_hole_keys
         pocket_stats_out["pocket_skip"] = list(dict.fromkeys(pocket_skips))
+        motif_skip = {
+            str(k): int(v)
+            for k, v in pocket_stats.skip_reasons.items()
+            if str(k).startswith("motif_")
+        }
+        pocket_stats_out["motif_skip"] = motif_skip
+        pocket_stats_out["motif_cohorts"] = list(pocket_stats.motif_cohorts)
         pocket_stats_out["pool_by_proposer"] = pool_by_proposer
         pocket_stats_out["emitted_by_proposer"] = {
             n: len(ks) for n, ks in local_proposer_keys.items()
@@ -2266,6 +2318,7 @@ def augment_batch_pack_proposals(
     propose_cfg: ProposeConfig,
     *,
     min_dist: float,
+    pairs_out: list | None = None,
 ) -> dict[int, list[tuple[float, float, float]]]:
     """Pack groups sequentially; return extra (x, y, angle) seeds per group."""
     if not propose_cfg.use_batch_pack:
@@ -2319,6 +2372,15 @@ def augment_batch_pack_proposals(
     extra: dict[int, list[tuple[float, float, float]]] = {gid: [] for gid in group_ids}
     per_gid_cap = max(1, propose_cfg.batch_pack_max_pairs // len(group_ids))
     gid_counts = {gid: 0 for gid in group_ids}
+
+    if pairs_out is not None:
+        for coords_a, coords_b, _score, anchor_gid, follow_gid in all_pairs:
+            pairs_out.append((
+                tuple(float(x) for x in coords_a),
+                tuple(float(x) for x in coords_b),
+                int(anchor_gid),
+                int(follow_gid),
+            ))
 
     for coords_a, coords_b, _score, anchor_gid, follow_gid in all_pairs:
         if gid_counts[anchor_gid] < per_gid_cap:
@@ -2401,6 +2463,7 @@ def collect_propose_batch_for_nest(
     user_holes: tuple = (),
     seeded: bool = False,
     full_packed_geoms: Sequence[Geometry] | None = None,
+    archived_patterns: Sequence | None = None,
 ) -> tuple[dict[int, np.ndarray], dict]:
     """Propose slice of nest transform-batch (proposals + densify/pocket stats).
 
@@ -2430,6 +2493,7 @@ def collect_propose_batch_for_nest(
         pocket_keys_out=pocket_keys_raw,
         densify_stats_out=densify_stats,
         full_packed_geoms=full_packed_geoms,
+        archived_patterns=archived_patterns,
     )
     stats = {
         "proposal_count": sum(arr.shape[0] for arr in propose_by_group.values()),
@@ -2454,6 +2518,8 @@ def collect_propose_batch_for_nest(
         "conflict_penalty_applied": int(
             densify_stats.get("conflict_penalty_applied", 0)
         ),
+        "batch_pack_pairs": list(densify_stats.get("batch_pack_pairs") or []),
+        "sniper_keys": dict(densify_stats.get("sniper_keys") or {}),
     }
     return propose_by_group, stats
 
@@ -2471,6 +2537,7 @@ def _prepare_group_propose(
     packed_group_ids: Sequence[int] | None = None,
     packed_transforms: Sequence | None = None,
     full_packed_geoms: Sequence[Geometry] | None = None,
+    archived_patterns: Sequence | None = None,
 ) -> tuple:
     """Shared pre-loop setup for ``proposed_transforms_for_groups`` (behavior-neutral)."""
     sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
@@ -2528,7 +2595,18 @@ def _prepare_group_propose(
             max_patterns=propose_cfg.cluster_copy_max_patterns,
             min_members=propose_cfg.cluster_copy_min_members,
             sheet=sheet,
+            min_compactness=float(
+                getattr(propose_cfg, "motif_min_compactness", 0.0) or 0.0
+            ),
         )
+    archived: list = []
+    if (
+        bool(getattr(propose_cfg, "enable_accepted_pattern_archive", True))
+        and bool(getattr(propose_cfg, "use_cluster_copy", True))
+        and archived_patterns
+    ):
+        archived = list(archived_patterns)
+    synth: list = []
     if (
         bool(getattr(propose_cfg, "enable_mate_synth", True))
         and bool(getattr(propose_cfg, "use_cluster_copy", True))
@@ -2538,12 +2616,13 @@ def _prepare_group_propose(
             min_dist=min_dist,
             max_patterns=int(propose_cfg.cluster_copy_max_patterns),
         )
-        if synth:
-            cluster_patterns = merge_cluster_patterns(
-                cluster_patterns,
-                synth,
-                max_patterns=int(propose_cfg.cluster_copy_max_patterns),
-            )
+    if archived or synth:
+        cluster_patterns = merge_cluster_patterns(
+            cluster_patterns,
+            synth,
+            max_patterns=int(propose_cfg.cluster_copy_max_patterns),
+            archived=archived,
+        )
     void_thr = float(propose_cfg.late_border_void_override_ratio)
     if void_thr <= 0.0:
         void_thr = 2.5
@@ -2594,6 +2673,7 @@ def proposed_transforms_for_groups(
     pocket_keys_out: dict[int, set[tuple[float, float, float]]] | None = None,
     densify_stats_out: dict | None = None,
     full_packed_geoms: Sequence[Geometry] | None = None,
+    archived_patterns: Sequence | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -2625,6 +2705,7 @@ def proposed_transforms_for_groups(
         packed_group_ids=packed_group_ids,
         packed_transforms=packed_transforms,
         full_packed_geoms=full_packed_geoms,
+        archived_patterns=archived_patterns,
     )
     densify_stats_patterns = len(cluster_patterns)
     out: dict[int, np.ndarray] = {}
@@ -2634,6 +2715,8 @@ def proposed_transforms_for_groups(
     pocket_accepted = 0
     pocket_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     motif_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
+    motif_skip_agg: dict[str, int] = {}
+    motif_cohorts_agg: list = []
     densify_fired = 0
     densify_accepted = 0
     densify_reasons: list[str] = []
@@ -2644,6 +2727,7 @@ def proposed_transforms_for_groups(
     }
     diversity_agg: dict = {}
     proposer_keys_agg: dict[str, set[tuple[float, float, float]]] = {}
+    sniper_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     emitted_by_proposer: dict[str, int] = {}
     pool_by_proposer: dict[str, int] = {}
     pocket_by_tag: dict[str, int] = {}
@@ -2944,14 +3028,26 @@ def proposed_transforms_for_groups(
         pocket_accepted += int(pocket_stats.get("selected", 0))
         for sk in pocket_stats.get("pocket_skip") or []:
             pocket_skips_all.append(str(sk))
+        for mk, mv in (pocket_stats.get("motif_skip") or {}).items():
+            motif_skip_agg[str(mk)] = motif_skip_agg.get(str(mk), 0) + int(mv)
+        for cohort in pocket_stats.get("motif_cohorts") or []:
+            motif_cohorts_agg.append(cohort)
         for pk in pocket_stats.get("pocket_keys") or []:
             pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
+        for hk in pocket_stats.get("motif_hole_keys") or []:
+            motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(hk))
         for key in group_proposer_keys.get("cluster_copy") or ():
             motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(key))
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n
         for name, keys in group_proposer_keys.items():
             proposer_keys_agg.setdefault(name, set()).update(keys)
+        sniper_keys_by_group.setdefault(int(group_id), set()).update(
+            group_proposer_keys.get("cluster_copy") or ()
+        )
+        sniper_keys_by_group.setdefault(int(group_id), set()).update(
+            group_proposer_keys.get("pocket_fit") or ()
+        )
         if group_cascade.get("cascade_stopped_after") not in (None, "none"):
             cascade_agg["cascade_stopped_after"] = group_cascade.get(
                 "cascade_stopped_after"
@@ -3047,6 +3143,12 @@ def proposed_transforms_for_groups(
                 total_counts[name] = total_counts.get(name, 0) + int(n)
             for name, keys in densify_telem["proposer_keys"].items():
                 proposer_keys_agg.setdefault(name, set()).update(keys)
+            sniper_keys_by_group.setdefault(int(group_id), set()).update(
+                densify_telem["proposer_keys"].get("cluster_copy") or ()
+            )
+            sniper_keys_by_group.setdefault(int(group_id), set()).update(
+                densify_telem["proposer_keys"].get("pocket_fit") or ()
+            )
             for name, n in densify_telem["emitted_by_proposer"].items():
                 emitted_by_proposer[name] = max(
                     int(emitted_by_proposer.get(name, 0)), int(n),
@@ -3062,7 +3164,15 @@ def proposed_transforms_for_groups(
             pocket_accepted += int(densify_telem["pocket_accepted"])
             for pk in densify_telem["pocket_keys"]:
                 pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
+            for hk in densify_telem.get("motif_hole_keys") or []:
+                motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(hk))
+            for key in densify_telem.get("proposer_keys", {}).get("cluster_copy") or ():
+                motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(key))
             pocket_skips_all.extend(densify_telem["pocket_skips"])
+            for mk, mv in (densify_telem.get("motif_skip") or {}).items():
+                motif_skip_agg[str(mk)] = motif_skip_agg.get(str(mk), 0) + int(mv)
+            for cohort in densify_telem.get("motif_cohorts") or []:
+                motif_cohorts_agg.append(cohort)
         if (
             zones_used_out is not None
             and propose_cfg.place_profiles_enabled
@@ -3104,6 +3214,8 @@ def proposed_transforms_for_groups(
         densify_stats_out["motif_keys"] = {
             gid: set(keys) for gid, keys in motif_keys_by_group.items()
         }
+        densify_stats_out["motif_skip"] = dict(motif_skip_agg)
+        densify_stats_out["motif_cohorts"] = list(motif_cohorts_agg)
         densify_stats_out["emitted_by_proposer"] = dict(emitted_by_proposer)
         densify_stats_out["pool_by_proposer"] = dict(pool_by_proposer)
         densify_stats_out["pocket_by_tag"] = dict(pocket_by_tag)
@@ -3119,9 +3231,14 @@ def proposed_transforms_for_groups(
             diversity_agg.get("conflict_penalty_applied", 0)
         )
         densify_stats_out["cluster_patterns"] = int(densify_stats_patterns)
+        densify_stats_out["sniper_keys"] = {
+            gid: set(keys) for gid, keys in sniper_keys_by_group.items()
+        }
+        densify_stats_out["batch_pack_pairs"] = []
 
     # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
     if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:
+        batch_pairs: list = []
         batch_extra = augment_batch_pack_proposals(
             board,
             parts,
@@ -3129,6 +3246,7 @@ def proposed_transforms_for_groups(
             out,
             propose_cfg,
             min_dist=min_dist,
+            pairs_out=batch_pairs,
         )
         for gid, extra in batch_extra.items():
             if not extra:
@@ -3137,5 +3255,14 @@ def proposed_transforms_for_groups(
                 [out.get(gid, np.zeros((0, 3))), propositions_to_ndarray(extra)],
             )
             out[gid] = dedupe_transforms(merged)
+        if densify_stats_out is not None:
+            densify_stats_out["batch_pack_pairs"] = list(batch_pairs)
+            pk = densify_stats_out.setdefault("proposer_keys", {})
+            bp_keys = set(pk.get("batch_pack") or ())
+            for rec in batch_pairs:
+                bp_keys.add(transform_row_key(rec[0]))
+                bp_keys.add(transform_row_key(rec[1]))
+            pk["batch_pack"] = bp_keys
+            proposer_keys_agg.setdefault("batch_pack", set()).update(bp_keys)
 
     return out

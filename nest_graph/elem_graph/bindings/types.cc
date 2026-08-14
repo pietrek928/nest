@@ -25,7 +25,8 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def(nb::init<>())
         .def_rw("mode", &SelectOptions::mode)
         .def_rw("local_swap", &SelectOptions::local_swap)
-        .def_rw("aggregation", &SelectOptions::aggregation);
+        .def_rw("aggregation", &SelectOptions::aggregation)
+        .def_rw("locked_indices", &SelectOptions::locked_indices);
 
     nb::class_<RefineSelectionOptions>(m, "RefineSelectionOptions")
         .def(nb::init<>())
@@ -40,12 +41,14 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("max_tries", &RefineSelectionOptions::max_tries)
         .def_rw("min_collisions", &RefineSelectionOptions::min_collisions)
         .def_rw("node_areas", &RefineSelectionOptions::node_areas)
-        .def_rw("lexicographic_area", &RefineSelectionOptions::lexicographic_area);
+        .def_rw("lexicographic_area", &RefineSelectionOptions::lexicographic_area)
+        .def_rw("locked_indices", &RefineSelectionOptions::locked_indices);
 
     nb::class_<FinalizeSelectionOptions>(m, "FinalizeSelectionOptions")
         .def(nb::init<>())
         .def_rw("repair_passes", &FinalizeSelectionOptions::repair_passes)
-        .def_rw("max_exact_component_size", &FinalizeSelectionOptions::max_exact_component_size);
+        .def_rw("max_exact_component_size", &FinalizeSelectionOptions::max_exact_component_size)
+        .def_rw("locked_indices", &FinalizeSelectionOptions::locked_indices);
 
     nb::class_<Vec2f>(m, "Vec2")
         .def(nb::init<float, float>(), nb::arg("x"), nb::arg("y"))
@@ -242,12 +245,18 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("selection_score_only", &ScoreRulesOptions::selection_score_only)
         .def_rw("select", &ScoreRulesOptions::select);
 
+    nb::class_<AttractEdge>(m, "AttractEdge")
+        .def(nb::init<>())
+        .def_rw("target", &AttractEdge::target)
+        .def_rw("w", &AttractEdge::w);
+
     nb::class_<ElemGraph>(m, "ElemGraph")
         .def(nb::init<>())
         .def_rw("group_id", &ElemGraph::group_id)
         .def_rw("elems", &ElemGraph::elems)
         .def_rw("coords", &ElemGraph::coords)
         .def_rw("collisions", &ElemGraph::collisions)
+        .def_rw("attract", &ElemGraph::attract)
         .def(
             "push_elem",
             [](ElemGraph &g, int group_id, const ElemPlace &ep, const Circle2f &circle) {
@@ -255,6 +264,7 @@ void bind_elem_graph_types(nb::module_ &m) {
                 g.elems.push_back(ep);
                 g.coords.push_back(circle);
                 g.collisions.emplace_back();
+                g.attract.emplace_back();
             },
             nb::arg("group_id"),
             nb::arg("elem"),
@@ -266,6 +276,7 @@ void bind_elem_graph_types(nb::module_ &m) {
                 g.elems.push_back(ElemPlace{pos, 0.0f});
                 g.coords.push_back(circle);
                 g.collisions.emplace_back();
+                g.attract.emplace_back();
             },
             nb::arg("group_id"),
             nb::arg("pos"),
@@ -278,6 +289,7 @@ void bind_elem_graph_types(nb::module_ &m) {
                 g.elems.push_back(ElemPlace{Vec2f({x, y}), a});
                 g.coords.push_back(Circle2f(Vec2f({cx, cy}), r_sq));
                 g.collisions.emplace_back();
+                g.attract.emplace_back();
             },
             nb::arg("group_id"),
             nb::arg("x"),
@@ -303,12 +315,36 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("i"),
             nb::arg("j"))
         .def(
+            "add_attract",
+            [](ElemGraph &g, int i, int j, float w) {
+                if (i == j || w <= 0.0f) {
+                    return;
+                }
+                const int n = static_cast<int>(g.size());
+                if (i < 0 || j < 0 || i >= n || j >= n) {
+                    return;
+                }
+                for (Tvertex c : g.collisions[static_cast<std::size_t>(i)]) {
+                    if (c == j) {
+                        return;
+                    }
+                }
+                g.attract[static_cast<std::size_t>(i)].push_back(
+                    AttractEdge{static_cast<Tvertex>(j), w});
+                g.attract[static_cast<std::size_t>(j)].push_back(
+                    AttractEdge{static_cast<Tvertex>(i), w});
+            },
+            nb::arg("i"),
+            nb::arg("j"),
+            nb::arg("w"))
+        .def(
             "reserve_elems",
             [](ElemGraph &g, std::size_t n) {
                 g.group_id.reserve(n);
                 g.elems.reserve(n);
                 g.coords.reserve(n);
                 g.collisions.reserve(n);
+                g.attract.reserve(n);
             },
             nb::arg("n"));
 }

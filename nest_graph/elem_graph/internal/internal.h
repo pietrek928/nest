@@ -40,3 +40,68 @@ void recompute_selected_collisions(
 
 float sum_selected_scores_vec(
     const std::vector<Tscore> &elem_scores, const std::vector<Tvertex> &selected);
+
+inline float attract_to_mask(
+    const ElemGraph &g,
+    int n,
+    Tvertex u,
+    const unsigned char *selected,
+    Tvertex except = -1
+) {
+    if (static_cast<int>(g.attract.size()) != n) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (const AttractEdge &e : g.attract[static_cast<std::size_t>(u)]) {
+        if (!vertex_in_graph(e.target, n) || e.target == except) {
+            continue;
+        }
+        if (selected[static_cast<std::size_t>(e.target)]) {
+            sum += e.w;
+        }
+    }
+    return sum;
+}
+
+inline float attract_weight_uv(const ElemGraph &g, int n, Tvertex u, Tvertex v) {
+    if (static_cast<int>(g.attract.size()) != n) {
+        return 0.0f;
+    }
+    for (const AttractEdge &e : g.attract[static_cast<std::size_t>(u)]) {
+        if (e.target == v) {
+            return e.w;
+        }
+    }
+    return 0.0f;
+}
+
+inline float selected_attract_pairs(
+    const ElemGraph &g, const unsigned char *selected, int n
+) {
+    if (static_cast<int>(g.attract.size()) != n) {
+        return 0.0f;
+    }
+    float pair = 0.0f;
+    for (int i = 0; i < n; ++i) {
+        if (!selected[i]) {
+            continue;
+        }
+        for (const AttractEdge &e : g.attract[static_cast<std::size_t>(i)]) {
+            if (e.target > i && vertex_in_graph(e.target, n)
+                && selected[static_cast<std::size_t>(e.target)]) {
+                pair += e.w;
+            }
+        }
+    }
+    return pair;
+}
+
+inline float sum_selected_objective(
+    const ElemGraph &g,
+    const Tscore *scores,
+    const unsigned char *selected,
+    int n
+) {
+    return sum_selected_scores(scores, selected, n)
+        + selected_attract_pairs(g, selected, n);
+}

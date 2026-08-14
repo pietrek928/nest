@@ -177,3 +177,77 @@ Do next (patches) before new geometry stacks:
 | **r8-placement-query** | `ProposeContext` stays propose-only; selection edits use `SelectionEditCtx`. |
 | **r8-legacy-modules** | Keep `placements_geo`, `pose_diversity`, `feedback` — all live. |
 | **r8-nanobind-propose** | Propose-side list rebuild in clear/polish stays until span APIs; no second Python cache. |
+
+---
+
+## Pattern propagation (net-only agent Q&A — locked verdicts)
+
+Surgical motif archive + pole-first ΔT lattice inside `void_seek_motif_anchors`. No BLF/GRASP outer rewrite. Relatives only in archive (not carry/elite/hist).
+
+### Architecture and merge
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q1 Archive vs re-extract | **Archive with accept_count + TTL** (Memetic/GA building blocks; Gomez & Oliveira 2006). Re-extract alone forgets patterns destroyed by local swap. | On refine/repack accept: upsert and **reset TTL**. Unused for N iters → age out. Mirror void_elite APIs (`archive_accepted_patterns`). |
+| Q2 Compound MWIS nodes? | **No.** Leader emit in MWIS; atomic follower attach in repack/`stamp_motif_at_anchor`. Compound nodes → hypergraph density (Burke et al. 2010). | Keep `stamp_motif_leader_follower`. Never add compound graph nodes. |
+| Q3 Lattice in anchors without widening ProposeContext? | **Yes.** Δxy is a property of `ClusterPattern` + base anchors. | Only extend `void_seek_motif_anchors`. Respect ProposeContext fence. |
+
+### Geometry and clearance
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q4 Does `emit_packing_clear` predict Scene `is_pose_clear`? | **Mostly**; float/graze edges can disagree. | Keep graceful degrade: full motif → subset/leader on Scene fail. Do not abort entire teleport for one clipped follower. |
+| Q5 Contact ≤2·gap over-merge? | **Require hull compactness.** | Sort/filter by `sum(part_areas) / convex_hull_area(cluster)` via native hull. Archive/emit only high-compactness motifs. |
+
+### Search policy and telemetry
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q6 Period-flood vs pole-first? | **Pole-first.** Full flood → candidate explosion / MWIS choke. | Generate ±k·ΔT, **sort by distance to void_pole**, truncate `top_k≈10`. |
+| Q7 Does `motif_score_boost` move refine? | **Yes if it hits C++ MWIS weights**, not only Python pool ranking. | Route keys into `motif_keys` → `motif_score_boost`; XOR `TAG_MOTIF_HOLE` out of `pocket_keys`. |
+
+### BLF / GRASP (rewrite rejected)
+
+| Q | Verdict |
+|---|---------|
+| Q8 BLF vs lattice+archive on triangle sheet? | **BLF loses.** AABB gravity drives acute corners and wastes hypotenuse (Hopper & Turton 2001). ΔT lattice + MWIS + pole attractor = void gravity without AABB pathology. |
+| Q9 What does GRASP add? | Construction RCL only — LS already LNS/repack/se2. **Phase 2b GRASP-lite** only if Gate 2 fails: sequential full-motif accept before MIS (`enable_motif_sequential_accept`). |
+
+### Duplication / offload (Q10–Q15)
+
+| Q | Verdict |
+|---|---------|
+| Q10 Second merge path? | **No** — one `merge_cluster_patterns` prefer: contact → archive → synth. |
+| Q11 Densify-specific lattice? | **No** — lattice only in `void_seek_motif_anchors`; densify `cluster_copy` keys fold into `motif_keys`. |
+| Q12 Relatives in carry/elite? | **No** — abs SE2 stay in hist/void_elite/carry; archive stores relatives + TTL only. |
+| Q13 Unify packing vs Scene stamp SoT? | **No** — intentional split (`emit_packing_clear` vs `is_pose_clear`). |
+| Q14 New C++ for lattice/TTL? | **No** — Python policy. Packing batch-clear only if stamp wall-time bites (twin of `batch_check_validity`). |
+| Q15 Ablation switch? | `NO_PATTERN_PROPAGATE` disables archive, lattice, motif MIS boost; re-enables AABB mirrors. |
+
+### Live telemetry keys
+
+- `motif_telem`: `full_motif_clear`, `fallback_leader`, `lattice_anchors_*`, `motif_key_boost_hits`, `motif_refine_hits`, `accepted_patterns_*`
+- void_leak: `motif_boost=` next to `key_boost=`
+- Track A: `motif_cohorts`, `motif_sequential_full`, `motif_sequential_skipped_missing`
+
+### Deferred polish (net-only Q16–Q28 — locked)
+
+Pre-MIS full-motif lock via C++ `nest_by_scores(..., locked_indices=)` (Scene-clear cohorts). Identity-XOR on `group_id` is rejected. Attract (`NEAR`) is a score-tier bonus, not a clearance SoT. Cohorts at emit. Growing `is_pose_clear`. No union-first / OS-thread portfolio as primary.
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q16 Sequential vs MIS boost | Worth when rim-tuned MWIS clips void motifs | Pre-MIS **lock**; MWIS expands around fixed set |
+| Q17 Missing followers | **Skip invent**; accept present ≥2 | No invent/hypergraph; emit records packing-clear same-group keys only; graph-pruned remainder → `motif_sequential_partial` |
+| Q18 Batch Scene vs growing | **Growing `is_pose_clear`** | \(P_k\) vs obstacles ∪ prior members; not batch Scene for full motif |
+| Q19 Timing | **Before nest/MIS** | Not after-nest/before-refine |
+| Q20 Cap | RCL / pole top-k | Cap 2–3 from top 10 by `void_pole`; v1 may be deterministic |
+| Q21 Hoist vs packing batch | **Hoist enough** | No C++ packing-margin-0 batch yet |
+| Q22 Compactness on peels | Soft rank only | Sort peels by compactness; no hard min drop |
+| Q23 Native vs Shapely hull | Hygiene/speed | `_pair_hull_area` → `convex_hull_area_of` |
+| Q24 LNS recreate | Prefer emitted motif_keys | Archive stamp only if sterile after destroy |
+| Q25 Scene dry-run scope | Motif reserve only | Do not thin general pool |
+| Q26 Ownership | Pre-MIS sequential owns force-in | Pin = single-node; repack = orphaned leaders |
+| Q27 Escalate Track D | large_void plateau | Δcov &lt;1% ×5 large_void iters AND `cluster_copy` r&gt;0 (≠ `PlateauTracker`) |
+| Q28 Ablation | `no_motif_sequential_accept` | Keep archive/lattice/boost; disable sequential only |
+
+**Rejected as Track A primary:** prefer-motif union after unconstrained nest; OS-thread portfolio exchanging proposals (serial archives already island-lite).

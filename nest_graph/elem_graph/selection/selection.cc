@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "graph/graph_index.h"
+#include "internal/internal.h"
 #include "scoring/scoring.h"
 
 void sort_collision_lists_by_score(
@@ -15,6 +16,87 @@ void sort_collision_lists_by_score(
     sort_collisions(collisions, scores.data(), false);
 }
 
+void rebuild_marked_from_selected(
+    const std::vector<std::vector<Tvertex>> &collisions,
+    int n,
+    const std::vector<bool> &is_selected,
+    std::vector<bool> &marked
+) {
+    marked.assign(static_cast<std::size_t>(n), false);
+    for (Tvertex v = 0; v < static_cast<Tvertex>(n); ++v) {
+        if (!is_selected[static_cast<std::size_t>(v)]) {
+            continue;
+        }
+        marked[static_cast<std::size_t>(v)] = true;
+        for (Tvertex c : collisions[static_cast<std::size_t>(v)]) {
+            if (vertex_in_graph(c, n)) {
+                marked[static_cast<std::size_t>(c)] = true;
+            }
+        }
+    }
+}
+
+bool collides_with(
+    const std::vector<std::vector<Tvertex>> &collisions,
+    Tvertex u,
+    Tvertex v
+) {
+    if (u == v) {
+        return true;
+    }
+    for (Tvertex c : collisions[static_cast<std::size_t>(u)]) {
+        if (c == v) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool node_independent_of_selected_except(
+    const std::vector<std::vector<Tvertex>> &collisions,
+    int n,
+    Tvertex u,
+    const std::vector<bool> &is_selected,
+    Tvertex except
+) {
+    for (Tvertex c : collisions[static_cast<std::size_t>(u)]) {
+        if (!vertex_in_graph(c, n) || c == except) {
+            continue;
+        }
+        if (is_selected[static_cast<std::size_t>(c)]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void install_locked_indices(
+    const std::vector<std::vector<Tvertex>> &collisions,
+    int n,
+    const std::vector<Tvertex> &locked_indices,
+    std::vector<bool> &marked,
+    std::vector<Tvertex> &selected,
+    std::vector<bool> &is_locked
+) {
+    is_locked.assign(static_cast<std::size_t>(n), false);
+    for (Tvertex vi : locked_indices) {
+        if (!vertex_in_graph(vi, n)) {
+            continue;
+        }
+        if (marked[static_cast<std::size_t>(vi)]) {
+            continue;
+        }
+        selected.push_back(vi);
+        is_locked[static_cast<std::size_t>(vi)] = true;
+        marked[static_cast<std::size_t>(vi)] = true;
+        for (Tvertex j : collisions[static_cast<std::size_t>(vi)]) {
+            if (vertex_in_graph(j, n)) {
+                marked[static_cast<std::size_t>(j)] = true;
+            }
+        }
+    }
+}
+
 void select_elems_greedy(
     const std::vector<std::vector<Tvertex>> &collisions,
     int n,
@@ -22,15 +104,18 @@ void select_elems_greedy(
     std::vector<bool> &marked,
     std::vector<Tvertex> &selected,
     std::vector<Tvertex> &order_buf,
-    SelectMode mode
+    SelectMode mode,
+    const std::vector<Tvertex> &locked_indices,
+    std::vector<bool> &is_locked
 ) {
-    marked.resize(n);
-    std::fill(marked.begin(), marked.end(), false);
+    marked.assign(static_cast<std::size_t>(n), false);
     selected.clear();
+    install_locked_indices(
+        collisions, n, locked_indices, marked, selected, is_locked);
 
-    order_buf.resize(n);
+    order_buf.resize(static_cast<std::size_t>(n));
     for (Tvertex i = 0; i < static_cast<Tvertex>(n); i++) {
-        order_buf[i] = i;
+        order_buf[static_cast<std::size_t>(i)] = i;
     }
 
     if (mode == SelectMode::WeightedGreedy) {
@@ -48,30 +133,66 @@ void select_elems_greedy(
     }
 
     for (Tvertex i : order_buf) {
-        if (marked[i]) {
+        if (marked[static_cast<std::size_t>(i)]) {
             continue;
         }
-        marked[i] = true;
+        marked[static_cast<std::size_t>(i)] = true;
         selected.push_back(i);
-        for (Tvertex j : collisions[i]) {
-            if (j >= 0 && j < static_cast<Tvertex>(n)) {
-                marked[j] = true;
+        for (Tvertex j : collisions[static_cast<std::size_t>(i)]) {
+            if (vertex_in_graph(j, n)) {
+                marked[static_cast<std::size_t>(j)] = true;
             }
         }
     }
 }
 
+float attract_to_selected(
+    const ElemGraph &g,
+    int n,
+    Tvertex u,
+    const std::vector<bool> &is_selected,
+    Tvertex except
+) {
+    if (static_cast<int>(g.attract.size()) != n) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (const AttractEdge &e : g.attract[static_cast<std::size_t>(u)]) {
+        if (!vertex_in_graph(e.target, n) || e.target == except) {
+            continue;
+        }
+        if (is_selected[static_cast<std::size_t>(e.target)]) {
+            sum += e.w;
+        }
+    }
+    return sum;
+}
+
+float attract_pair_weight(const ElemGraph &g, int n, Tvertex u, Tvertex v) {
+    if (static_cast<int>(g.attract.size()) != n) {
+        return 0.0f;
+    }
+    for (const AttractEdge &e : g.attract[static_cast<std::size_t>(u)]) {
+        if (e.target == v) {
+            return e.w;
+        }
+    }
+    return 0.0f;
+}
+
 void select_elems_local_swap(
+    const ElemGraph &g,
     const std::vector<std::vector<Tvertex>> &collisions,
     int n,
     const std::vector<Tscore> &scores,
     std::vector<bool> &marked,
-    std::vector<Tvertex> &selected
+    std::vector<Tvertex> &selected,
+    const std::vector<bool> &is_locked
 ) {
-    std::vector<bool> is_selected(n, false);
+    std::vector<bool> is_selected(static_cast<std::size_t>(n), false);
     for (Tvertex v : selected) {
-        if (v >= 0 && v < static_cast<Tvertex>(n)) {
-            is_selected[v] = true;
+        if (vertex_in_graph(v, n)) {
+            is_selected[static_cast<std::size_t>(v)] = true;
         }
     }
 
@@ -79,55 +200,40 @@ void select_elems_local_swap(
     while (improved) {
         improved = false;
         for (Tvertex u = 0; u < static_cast<Tvertex>(n); ++u) {
-            if (is_selected[u] || marked[u]) {
+            if (is_selected[static_cast<std::size_t>(u)]) {
                 continue;
             }
             Tvertex blocker = -1;
             int n_blockers = 0;
-            for (Tvertex j : collisions[u]) {
-                if (j >= 0 && j < static_cast<Tvertex>(n) && is_selected[j]) {
+            for (Tvertex j : collisions[static_cast<std::size_t>(u)]) {
+                if (vertex_in_graph(j, n) && is_selected[static_cast<std::size_t>(j)]) {
                     blocker = j;
                     n_blockers++;
+                    if (n_blockers > 1) {
+                        break;
+                    }
                 }
             }
             if (n_blockers != 1 || blocker < 0) {
                 continue;
             }
-            if (scores[u] <= scores[blocker]) {
+            if (is_locked[static_cast<std::size_t>(blocker)]) {
                 continue;
             }
-            bool independent = true;
-            for (Tvertex j = 0; j < static_cast<Tvertex>(n); ++j) {
-                if (!is_selected[j] || j == blocker) {
-                    continue;
-                }
-                for (Tvertex c : collisions[u]) {
-                    if (c == j) {
-                        independent = false;
-                        break;
-                    }
-                }
-                if (!independent) {
-                    break;
-                }
-            }
-            if (!independent) {
+            const float gain =
+                (scores[static_cast<std::size_t>(u)]
+                 + attract_to_selected(g, n, u, is_selected, blocker))
+                - (scores[static_cast<std::size_t>(blocker)]
+                   + attract_to_selected(g, n, blocker, is_selected, blocker));
+            if (gain <= 0.0f) {
                 continue;
             }
-            is_selected[blocker] = false;
-            marked[blocker] = false;
-            for (Tvertex c : collisions[blocker]) {
-                if (c >= 0 && c < static_cast<Tvertex>(n) && c != u) {
-                    marked[c] = false;
-                }
+            if (!node_independent_of_selected_except(
+                    collisions, n, u, is_selected, blocker)) {
+                continue;
             }
-            is_selected[u] = true;
-            marked[u] = true;
-            for (Tvertex c : collisions[u]) {
-                if (c >= 0 && c < static_cast<Tvertex>(n)) {
-                    marked[c] = true;
-                }
-            }
+            is_selected[static_cast<std::size_t>(blocker)] = false;
+            is_selected[static_cast<std::size_t>(u)] = true;
             auto it = std::find(selected.begin(), selected.end(), blocker);
             if (it != selected.end()) {
                 *it = u;
@@ -135,6 +241,7 @@ void select_elems_local_swap(
             improved = true;
         }
     }
+    rebuild_marked_from_selected(collisions, n, is_selected, marked);
 }
 
 bool nodes_independent(
@@ -143,49 +250,24 @@ bool nodes_independent(
     Tvertex a,
     Tvertex b
 ) {
-    if (a == b) {
-        return false;
-    }
-    for (Tvertex c : collisions[a]) {
-        if (c == b) {
-            return false;
-        }
-    }
     (void)n;
-    return true;
-}
-
-bool node_independent_of_set(
-    const std::vector<std::vector<Tvertex>> &collisions,
-    int n,
-    Tvertex u,
-    const std::vector<bool> &is_selected
-) {
-    for (Tvertex j = 0; j < static_cast<Tvertex>(n); ++j) {
-        if (!is_selected[j]) {
-            continue;
-        }
-        for (Tvertex c : collisions[u]) {
-            if (c == j) {
-                return false;
-            }
-        }
-    }
-    return true;
+    return !collides_with(collisions, a, b);
 }
 
 void select_elems_two_swap(
+    const ElemGraph &g,
     const std::vector<std::vector<Tvertex>> &collisions,
     int n,
     const std::vector<Tscore> &scores,
     std::vector<bool> &marked,
     std::vector<Tvertex> &selected,
-    int max_tries
+    int max_tries,
+    const std::vector<bool> &is_locked
 ) {
-    std::vector<bool> is_selected(n, false);
+    std::vector<bool> is_selected(static_cast<std::size_t>(n), false);
     for (Tvertex v : selected) {
-        if (v >= 0 && v < static_cast<Tvertex>(n)) {
-            is_selected[v] = true;
+        if (vertex_in_graph(v, n)) {
+            is_selected[static_cast<std::size_t>(v)] = true;
         }
     }
 
@@ -201,22 +283,20 @@ void select_elems_two_swap(
             [&](Tvertex a, Tvertex b) { return scores[a] < scores[b]; });
 
         for (Tvertex blocker : sel_copy) {
+            if (vertex_in_graph(blocker, n)
+                && is_locked[static_cast<std::size_t>(blocker)]) {
+                continue;
+            }
             std::vector<Tvertex> candidates;
             for (Tvertex u = 0; u < static_cast<Tvertex>(n); ++u) {
-                if (is_selected[u] || marked[u]) {
+                if (is_selected[static_cast<std::size_t>(u)]) {
                     continue;
                 }
-                bool blocks = false;
-                for (Tvertex c : collisions[u]) {
-                    if (c == blocker) {
-                        blocks = true;
-                        break;
-                    }
-                }
-                if (!blocks) {
+                if (!collides_with(collisions, u, blocker)) {
                     continue;
                 }
-                if (!node_independent_of_set(collisions, n, u, is_selected)) {
+                if (!node_independent_of_selected_except(
+                        collisions, n, u, is_selected, blocker)) {
                     continue;
                 }
                 candidates.push_back(u);
@@ -233,37 +313,25 @@ void select_elems_two_swap(
                         continue;
                     }
                     const float gain =
-                        scores[u] + scores[v] - scores[blocker];
+                        scores[static_cast<std::size_t>(u)]
+                        + scores[static_cast<std::size_t>(v)]
+                        - scores[static_cast<std::size_t>(blocker)]
+                        + attract_to_selected(g, n, u, is_selected, blocker)
+                        + attract_to_selected(g, n, v, is_selected, blocker)
+                        + attract_pair_weight(g, n, u, v)
+                        - attract_to_selected(g, n, blocker, is_selected, blocker);
                     if (gain <= 0.0f) {
                         continue;
                     }
 
-                    is_selected[blocker] = false;
-                    marked[blocker] = false;
-                    for (Tvertex c : collisions[blocker]) {
-                        if (c >= 0 && c < static_cast<Tvertex>(n)) {
-                            marked[c] = false;
-                        }
-                    }
+                    is_selected[static_cast<std::size_t>(blocker)] = false;
                     auto it = std::find(selected.begin(), selected.end(), blocker);
                     if (it != selected.end()) {
                         selected.erase(it);
                     }
 
-                    is_selected[u] = true;
-                    is_selected[v] = true;
-                    marked[u] = true;
-                    marked[v] = true;
-                    for (Tvertex c : collisions[u]) {
-                        if (c >= 0 && c < static_cast<Tvertex>(n)) {
-                            marked[c] = true;
-                        }
-                    }
-                    for (Tvertex c : collisions[v]) {
-                        if (c >= 0 && c < static_cast<Tvertex>(n)) {
-                            marked[c] = true;
-                        }
-                    }
+                    is_selected[static_cast<std::size_t>(u)] = true;
+                    is_selected[static_cast<std::size_t>(v)] = true;
                     selected.push_back(u);
                     selected.push_back(v);
                     improved = true;
@@ -278,6 +346,7 @@ void select_elems_two_swap(
             }
         }
     }
+    rebuild_marked_from_selected(collisions, n, is_selected, marked);
 }
 
 void select_elems(
@@ -296,12 +365,16 @@ void select_elems(
     std::vector<std::vector<Tvertex>> sorted_collisions;
     sort_collision_lists_by_score(g, scores, sorted_collisions);
     const int n = static_cast<int>(g.size());
+    std::vector<bool> is_locked;
 
     select_elems_greedy(
-        sorted_collisions, n, scores, marked, selected, order_buf, options.mode);
+        sorted_collisions, n, scores, marked, selected, order_buf, options.mode,
+        options.locked_indices, is_locked);
     if (options.local_swap) {
-        select_elems_local_swap(sorted_collisions, n, scores, marked, selected);
-        select_elems_two_swap(sorted_collisions, n, scores, marked, selected, 64);
+        select_elems_local_swap(
+            g, sorted_collisions, n, scores, marked, selected, is_locked);
+        select_elems_two_swap(
+            g, sorted_collisions, n, scores, marked, selected, 64, is_locked);
     }
 }
 

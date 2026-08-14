@@ -139,10 +139,16 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "greedy_weighted_mis",
-        &greedy_weighted_mis,
+        [](const std::vector<Tvertex> &verts,
+           const std::vector<Tscore> &scores,
+           const ElemGraph &g,
+           const std::vector<Tvertex> &locked) {
+            return ::greedy_weighted_mis(verts, scores, g, locked);
+        },
         nb::arg("verts"),
         nb::arg("scores"),
-        nb::arg("g"));
+        nb::arg("g"),
+        nb::arg("locked_indices") = std::vector<Tvertex>{});
 
     m.def(
         "selection_is_independent",

@@ -16,11 +16,17 @@ typedef struct ElemGroup {
     float priority;
 } ElemGroup;
 
+typedef struct AttractEdge {
+    Tvertex target;
+    float w;
+} AttractEdge;
+
 typedef struct ElemGraph {
     std::vector<Tvertex> group_id;
     std::vector<ElemPlace> elems;
     std::vector<Circle2f> coords;
     std::vector<std::vector<Tvertex>> collisions;
+    std::vector<std::vector<AttractEdge>> attract;
 
     auto size() const { return group_id.size(); }
 } ElemGraph;
@@ -32,6 +38,7 @@ struct SelectOptions {
     SelectMode mode = SelectMode::WeightedGreedy;
     bool local_swap = true;
     ScoreAggregation aggregation = ScoreAggregation::Sum;
+    std::vector<Tvertex> locked_indices;
 };
 
 struct RefineSelectionOptions {
@@ -51,11 +58,13 @@ struct RefineSelectionOptions {
     std::vector<float> node_areas;
     /** Prefer count, then area sum, then score sum when accepting refine results. */
     bool lexicographic_area = false;
+    std::vector<Tvertex> locked_indices;
 };
 
 struct FinalizeSelectionOptions {
     int repair_passes = 8;
     int max_exact_component_size = 18;
+    std::vector<Tvertex> locked_indices;
 };
 
 struct FinalizeSelectionStats {
@@ -137,7 +146,9 @@ std::vector<Tvertex> finalize_selection(
 std::vector<int> greedy_weighted_mis(
     const std::vector<Tvertex> &verts,
     const std::vector<Tscore> &scores,
-    const ElemGraph &g);
+    const ElemGraph &g,
+    const std::vector<Tvertex> &locked_indices = {},
+    const unsigned char *kept_outside = nullptr);
 
 bool selection_is_independent(
     const ElemGraph &g, const std::vector<Tvertex> &selected_nodes);

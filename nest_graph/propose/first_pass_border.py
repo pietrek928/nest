@@ -6,6 +6,7 @@ proposer stack), and pack tightness uses ``ranking.pack_tightness_cost``.
 """
 
 import math
+from typing import Sequence
 
 import numpy as np
 from shapely import Polygon, unary_union
@@ -20,12 +21,10 @@ from nest_graph.board import (
 )
 from nest_graph.config import BuildGraphConfig, RankingMode, dedupe_transforms
 from nest_graph.elem_graph import (
-    Circle,
     ElemGraph,
-    Vec2,
     selection_is_independent,
 )
-from nest_graph.geometry import Geometry, GuidanceConfig, find_polygon_intersections
+from nest_graph.geometry import Geometry, GuidanceConfig, find_polygon_intersections, find_polygon_distances
 from nest_graph.placement_scene import (
     PlacementScene,
     guidance_config_for_board_edge_anchor,
@@ -34,6 +33,7 @@ from nest_graph.placement_scene import (
     placement_scene_for_part,
     proposition_translation,
 )
+from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.propose.context import border_focal_for_propose, propose_push_point
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import (
@@ -559,6 +559,151 @@ def guidance_border_refine(
     return polys, gids, trs
 
 
+def build_elem_graph(
+    gids: Sequence[int],
+    geoms: Sequence[Geometry],
+    angles: Sequence[float],
+    attract_pairs: Sequence[tuple[int, int, float]] | None = None,
+) -> ElemGraph:
+    """Single SoA writer: vertices at real θ, packing collisions, optional attract."""
+    graph = ElemGraph()
+    n = len(geoms)
+    graph.reserve_elems(n)
+    for gid, geom, ang in zip(gids, geoms, angles, strict=True):
+        cx, cy = geom.center()
+        r = float(geom.radius())
+        graph.append_elem_at(int(gid), cx, cy, float(ang), cx, cy, r * r)
+    hits = find_polygon_intersections(list(geoms))
+    for i, j in hits:
+        graph.add_collision(i, j)
+    for item in attract_pairs or ():
+        graph.add_attract(int(item[0]), int(item[1]), float(item[2]))
+    return graph
+
+
+def kiss_attract_weight(
+    distance: float,
+    min_dist: float,
+    contact_weight: float,
+    kiss_band_scale: float,
+) -> float:
+    """Single NEAR-edge formula: peak at min_dist, falloff over kiss band."""
+    if contact_weight <= 0.0 or min_dist <= 0.0:
+        return 0.0
+    band = float(kiss_band_scale) * float(min_dist)
+    if band <= 0.0:
+        return 0.0
+    return float(contact_weight) * max(
+        0.0, 1.0 - abs(float(distance) - float(min_dist)) / band
+    )
+
+
+def _cap_attract_degree(
+    weights: dict[tuple[int, int], float],
+    n: int,
+    max_degree: int,
+) -> list[tuple[int, int, float]]:
+    if max_degree <= 0 or not weights:
+        return [(i, j, w) for (i, j), w in weights.items()]
+    nbrs: list[list[tuple[float, int]]] = [[] for _ in range(n)]
+    for (i, j), w in weights.items():
+        nbrs[i].append((w, j))
+        nbrs[j].append((w, i))
+    keep: dict[tuple[int, int], float] = {}
+    for i, row in enumerate(nbrs):
+        row.sort(key=lambda t: t[0], reverse=True)
+        for w, j in row[:max_degree]:
+            a, b = (i, j) if i < j else (j, i)
+            prev = keep.get((a, b), 0.0)
+            if w > prev:
+                keep[(a, b)] = w
+    return [(a, b, w) for (a, b), w in keep.items()]
+
+
+def join_attract_pairs(
+    propose_stats: dict | None,
+    gids: Sequence[int],
+    transforms: Sequence,
+    geoms: Sequence[Geometry],
+    *,
+    min_dist: float,
+    contact_weight: float = 8.0,
+    kiss_band_scale: float = 2.0,
+    max_degree: int = 8,
+) -> list[tuple[int, int, float]]:
+    """Map proposer pair records + sniper fill onto surviving vertex ids."""
+    if (
+        propose_stats is None
+        or contact_weight <= 0.0
+        or not gids
+        or len(gids) != len(transforms)
+        or len(gids) != len(geoms)
+    ):
+        return []
+    n = len(gids)
+    key_to_verts: dict[tuple[int, tuple[float, float, float]], list[int]] = {}
+    for i, (gid, tr) in enumerate(zip(gids, transforms, strict=True)):
+        key_to_verts.setdefault((int(gid), transform_row_key(tr)), []).append(i)
+
+    weights: dict[tuple[int, int], float] = {}
+
+    def _add(i: int, j: int, w: float) -> None:
+        if i == j or w <= 0.0:
+            return
+        if geoms[i].intersects(geoms[j]):
+            return
+        a, b = (i, j) if i < j else (j, i)
+        prev = weights.get((a, b), 0.0)
+        if w > prev:
+            weights[(a, b)] = w
+
+    densify = propose_stats.get("densify_stats") or {}
+    raw_pairs = (
+        propose_stats.get("batch_pack_pairs")
+        or densify.get("batch_pack_pairs")
+        or ()
+    )
+    for rec in raw_pairs:
+        if rec is None or len(rec) < 4:
+            continue
+        coords_a, coords_b, gid_a, gid_b = rec[0], rec[1], int(rec[2]), int(rec[3])
+        ka = (int(gid_a), transform_row_key(coords_a))
+        kb = (int(gid_b), transform_row_key(coords_b))
+        for i in key_to_verts.get(ka, ()):
+            for j in key_to_verts.get(kb, ()):
+                d = float(geoms[i].distance(geoms[j]))
+                _add(i, j, kiss_attract_weight(
+                    d, min_dist, contact_weight, kiss_band_scale,
+                ))
+
+    sniper_keys = propose_stats.get("sniper_keys") or densify.get("sniper_keys") or {}
+    sniper_verts: list[int] = []
+    for i, (gid, tr) in enumerate(zip(gids, transforms, strict=True)):
+        key = transform_row_key(tr)
+        gid_keys = sniper_keys.get(int(gid)) or sniper_keys.get(gid) or set()
+        if key in gid_keys:
+            sniper_verts.append(i)
+    if len(sniper_verts) >= 2:
+        band = float(kiss_band_scale) * float(min_dist)
+        slice_geoms = [geoms[i] for i in sniper_verts]
+        results = find_polygon_distances(
+            slice_geoms, aura=0.0, distance_margin=band,
+        )
+        for r in results:
+            if r.intersect:
+                continue
+            ia = sniper_verts[int(r.polyA_idx)]
+            ib = sniper_verts[int(r.polyB_idx)]
+            d = math.sqrt(float(r.distance_sq))
+            _add(ia, ib, kiss_attract_weight(
+                d, min_dist, contact_weight, kiss_band_scale,
+            ))
+
+    pairs = _cap_attract_degree(weights, n, int(max_degree))
+    propose_stats["attract_edges"] = len(pairs)
+    return pairs
+
+
 def border_pack_graph(
     pack_polys: list,
     pack_gids: list[int],
@@ -602,22 +747,24 @@ def border_pack_graph(
             ]
         else:
             placed_geoms = []
-            for p in pack_polys:
+            kept_polys: list = []
+            kept_gids: list[int] = []
+            kept_tr: list[np.ndarray] = []
+            for p, gid, tr in zip(pack_polys, pack_gids, pack_tr, strict=True):
                 g = as_geometry(p)
-                if g is not None:
-                    placed_geoms.append(g)
-    graph = ElemGraph()
-    graph.reserve_elems(len(placed_geoms))
-    for n, geom in enumerate(placed_geoms):
-        cx, cy = geom.center()
-        graph.append_elem(
-            pack_gids[n],
-            Vec2(x=cx, y=cy),
-            Circle.from_center_radius(cx, cy, geom.radius()),
-        )
-    hits = find_polygon_intersections(placed_geoms)
-    for i, j in hits:
-        graph.add_collision(i, j)
+                if g is None:
+                    continue
+                placed_geoms.append(g)
+                kept_polys.append(p)
+                kept_gids.append(gid)
+                kept_tr.append(tr)
+            pack_polys, pack_gids, pack_tr = kept_polys, kept_gids, kept_tr
+    angles = [
+        float(np.asarray(tr, dtype=np.float64).reshape(-1)[2])
+        if np.asarray(tr).size > 2 else 0.0
+        for tr in pack_tr
+    ]
+    graph = build_elem_graph(pack_gids, placed_geoms, angles, attract_pairs=[])
     selected_out = list(range(len(pack_polys)))
     assert selection_is_independent(graph, selected_out)
     return graph, pack_polys, pack_gids, pack_tr, selected_out
