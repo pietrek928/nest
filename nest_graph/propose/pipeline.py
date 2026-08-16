@@ -2900,7 +2900,7 @@ def proposed_transforms_for_groups(
                                 is_annulus=False,
                                 is_corridor=False,
                             )
-                    # Q97: soft override — Sheet/interior_pocket under large_void only.
+                    # Q97: soft override — Sheet/interior_pocket under large_void.
                     if (
                         getattr(propose_cfg, "enable_void_large_hijack", True)
                         and free_analysis.kind == "large_void"
@@ -2921,12 +2921,26 @@ def proposed_transforms_for_groups(
                             is_corridor=False,
                         )
                     elif (
-                        free_analysis.kind == "large_void"
+                        getattr(propose_cfg, "enable_void_large_hijack", True)
+                        and free_analysis.kind == "large_void"
                         and free_analysis.target_pt is not None
                         and str(force_zone)
                         in ("cluster_edge", "empty_border", "border_gap")
                     ):
+                        # DgS: Rim force reclaim matches Sheet (void_hijack_from + zone).
                         void_hijack_over_mcts += 1
+                        void_hijack_from = str(force_zone)
+                        zone = "void_seek"
+                        primary_target = free_analysis.target_pt
+                        zone_info = PlaceZoneInfo(
+                            zone="void_seek",
+                            free_ratio=zone_info.free_ratio,
+                            n_clusters=zone_info.n_clusters,
+                            outline_coverage=zone_info.outline_coverage,
+                            primary_target=primary_target,
+                            is_annulus=False,
+                            is_corridor=False,
+                        )
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
             if zone == "void_seek":

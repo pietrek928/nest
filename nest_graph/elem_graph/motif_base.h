@@ -88,7 +88,10 @@ public:
         return static_cast<int32_t>(motifs_.size() - 1);
     }
 
-    /** Decrement TTL; drop records with ttl_remaining <= 0 that were TTL-tracked. */
+    /**
+     * Decrement TTL; drop expired TTL-tracked records.
+     * Q113: if accept_count > 0, floor ttl_remaining at 1 (protect proven motifs).
+     */
     int32_t age(int32_t step = 1) {
         int32_t dropped = 0;
         std::vector<MotifRecord> kept;
@@ -97,14 +100,54 @@ public:
             if (m.ttl_remaining > 0) {
                 m.ttl_remaining -= step;
                 if (m.ttl_remaining <= 0) {
-                    ++dropped;
-                    continue;
+                    if (m.accept_count > 0) {
+                        m.ttl_remaining = 1;
+                    } else {
+                        ++dropped;
+                        continue;
+                    }
                 }
             }
             kept.push_back(m);
         }
         motifs_.swap(kept);
         return dropped;
+    }
+
+    /** Index of find_exact match, or -1 (Q116 nest Motif credit). */
+    int32_t find_exact_id(
+        int32_t gid_a,
+        int32_t gid_b,
+        Se2 relative,
+        float area_a = 1.f,
+        float area_b = 1.f
+    ) const {
+        MotifRecord probe;
+        probe.gid_a = gid_a;
+        probe.gid_b = gid_b;
+        probe.relative = relative;
+        probe.area_a = area_a;
+        probe.area_b = area_b;
+        const auto key = motif_key(probe);
+        for (std::size_t i = 0; i < motifs_.size(); ++i) {
+            if (motif_key(motifs_[i]) == key) {
+                return static_cast<int32_t>(i);
+            }
+        }
+        return -1;
+    }
+
+    /** Instant accept_count++ and optional TTL reset (Q116). */
+    bool credit_accept(int32_t id, int32_t ttl = 0) {
+        if (id < 0 || id >= static_cast<int32_t>(motifs_.size())) {
+            return false;
+        }
+        MotifRecord &m = motifs_[static_cast<std::size_t>(id)];
+        m.accept_count += 1;
+        if (ttl > 0) {
+            m.ttl_remaining = ttl;
+        }
+        return true;
     }
 
     /** Truncate to max_keep by accept_count then gci (Q92). Alive TTL preferred. */

@@ -648,7 +648,7 @@ class ProposeConfig(BaseModel):
     enable_motif_sequential_accept: bool = True
     """Pre-MIS full-motif lock via growing is_pose_clear + nest_by_scores locked_indices."""
     motif_sequential_accept_max: int = 3
-    enable_motif_scene_dry_run: bool = False
+    enable_motif_scene_dry_run: bool = True
     """Track D: Scene-filter cluster_copy motif_reserve after packing emit (Q25)."""
     large_void_motif_plateau_iters: int = 5
     """Q27: consecutive large_void flat iters before Track D."""

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from nest_graph.decision.mcts import MctsAgent
+from nest_graph.decision.niche_archive import MacroNicheArchive
 from nest_graph.decision.slave_pack import cheap_expand_slave
 from nest_graph.decision.types import BoardSnapshot
 from nest_graph.elem_graph import DecisionArena, MotifBase
@@ -14,6 +15,7 @@ from nest_graph.elem_graph import DecisionArena, MotifBase
 class MacroMctsRunner:
     arena: DecisionArena = field(default_factory=DecisionArena)
     motif_base: MotifBase = field(default_factory=MotifBase)
+    niche_archive: MacroNicheArchive = field(default_factory=MacroNicheArchive)
     snapshots: dict[int, BoardSnapshot] = field(default_factory=dict)
     agent: MctsAgent | None = None
     execute_fn: Callable[..., BoardSnapshot] | None = None
@@ -43,7 +45,7 @@ class MacroMctsRunner:
             )
             if action is None:
                 break
-            if not self.arena.may_expand(leaf):
+            if not self.agent.may_expand_node(leaf):
                 # Descend UCB child instead
                 self.agent.backprop(leaf, float(parent_snap.coverage))
                 continue

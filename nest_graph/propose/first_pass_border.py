@@ -6,7 +6,7 @@ proposer stack), and pack tightness uses ``ranking.pack_tightness_cost``.
 """
 
 import math
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 from shapely import Polygon, unary_union
@@ -705,6 +705,38 @@ def join_attract_pairs(
             _add(ia, ib, kiss_attract_weight(
                 d, min_dist, contact_weight, kiss_band_scale,
             ))
+
+    # M0: Motif/cohort abs keys → soft attract (same _add / kiss weight).
+    cohorts = propose_stats.get("motif_cohorts") or densify.get("motif_cohorts") or ()
+    for cohort in cohorts:
+        if not isinstance(cohort, Mapping):
+            continue
+        members = list(cohort.get("member_keys") or ())
+        verts: list[int] = []
+        for item in members:
+            if item is None or len(item) < 2:
+                continue
+            gid_m, key_m = int(item[0]), item[1]
+            if isinstance(key_m, tuple) and len(key_m) >= 3:
+                tr_key = (
+                    float(key_m[0]),
+                    float(key_m[1]),
+                    float(key_m[2]),
+                )
+            else:
+                continue
+            for vi in key_to_verts.get((gid_m, transform_row_key(tr_key)), ()):
+                verts.append(vi)
+        for ia in range(len(verts)):
+            for ib in range(ia + 1, len(verts)):
+                d = float(geoms[verts[ia]].distance(geoms[verts[ib]]))
+                _add(
+                    verts[ia],
+                    verts[ib],
+                    kiss_attract_weight(
+                        d, min_dist, contact_weight, kiss_band_scale,
+                    ),
+                )
 
     pairs = _cap_attract_degree(weights, n, int(max_degree))
     propose_stats["attract_edges"] = len(pairs)

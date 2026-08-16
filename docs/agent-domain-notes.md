@@ -339,8 +339,10 @@ Two-tier only: Python Macro-MCTS over C++ PoseGraph. Clean break from ElemGraph 
 
 | Phase | Runs | Skips |
 |-------|------|-------|
-| Expand | `for_place` propose; freeze `improve_rules`; MotifBase→`cluster_copy`; greedy nest `local_swap=False`; 3a | DFS refine, finalize polish, 3b, `local_se2` |
-| Best leaf (final iter) | DFS + finalize + 3b + post_pack/`local_se2` | — |
+| Expand | `for_place` propose; freeze `improve_rules`; MotifBase→`cluster_copy`; greedy nest; 3a; **`dfs_passes=1` finalize_end refine** | 3b, `local_se2`/post_pack |
+| Best leaf (final iter) | shipped DFS + finalize growth + 3b + post_pack/`local_se2` | — |
+
+Polish budgets: `polish_budget_mid()` / `polish_budget_last()` in `heavy_polish.py`. `dual_nest_for` stays Q105 (last leaf **or** large_void).
 
 ### Locked table
 
@@ -354,7 +356,7 @@ Two-tier only: Python Macro-MCTS over C++ PoseGraph. Clean break from ElemGraph 
 | Q66 | YES finalize NEAR | Sniper keys; not greedy obj |
 | Q67 | YES motif pins | Locks pre-nest for motifs; DFS refine unset |
 | Q68 | YES count→area | MCTS owns coverage reward |
-| Q69 | YES cheap expand | Nest+motif+3a in expand; refine/3b/se2 on best leaf |
+| Q69 | YES cheap expand | Nest+motif+3a + low-`dfs_passes` refine mid; full DFS+3b/se2 on best leaf |
 | Q70 | YES | Force `for_place` via `mcts_zone` |
 | Q71 | YES | Unplaced ∩ allowlist |
 | Q72 | YES | Skip `improve_rules` on expand |
@@ -399,7 +401,7 @@ Unify letters N0→U5: MotifBase cross-iter library; retire Python `ArchivedPatt
 | Q104 | Motif → `void_seek` | PLACE_MOTIF forces `void_seek` (rigid pairs need free space). |
 | Q105 | Dual = heavy OR large_void | Hybrid of Q96 strict + void basins: `dual_nest` True when heavy leaf **or** `free_info.kind == large_void`. |
 
-Gate scrap (unify): void_fill area ≥ **0.570**, time **&lt; 170s**, `independent_ok`. (Raised from 0.555 under Q69 / E0.)
+Gate scrap (unify): void_fill area ≥ **0.585**, time **&lt; 170s**, `independent_ok`. (Raised from 0.570 under Path D / G1.)
 
 ### Gate scrap (void_fill seed0 shipped)
 
@@ -407,5 +409,40 @@ Gate scrap (unify): void_fill area ≥ **0.570**, time **&lt; 170s**, `independe
 |-----|-------|------|------|-------|
 | Baseline (pre-R0) | 48 | 0.490 | 62.95s | True |
 | U3 cutover | 50 | 0.498 | 73.89s | True |
+| G0 (pre Path D) | 43 | 0.508 | 159.05s | True |
+| Path D + V1/P1/M1/T1/R1 (live) | 44 | 0.537 | ~60–87s | True |
 
-Pass: ≥0.9× quality, ≤1.5× time, `independent_ok`. Telem: `propose_stats["mcts"]` (`pw_expand`, `expand_ms`, `from_shapely_count`, `motif_hit`, `nfp_lite_ok`, `related_warm`).
+G1 floor raised to **0.585** in fixtures; live seed0 still miss on `area_coverage` (hollow-rim / `graph_to_nest` with `void_nest≈0`). Continue miss-loop on colonization (colonize telem + mid 3b shipped; void score deepen shipped).
+
+### Path D locks (Q107–Q128 — shipped with raise-gate)
+
+| Q | Verdict |
+|---|----------|
+| Q107 | `n_sims=K=4` multi-sim cheap_pack after cache warm |
+| Q108 | `leaf_reward` raises void λ under `large_void` |
+| Q111/114 | Motif Scene dry-run sticky when patterns/library present |
+| Q118 | Void-centroid `0.75×` + void_seek 1.25; island inv-sq pole decay |
+| Q128 | Soft-cap `attract_max_degree` to 3 when graph ≫ nest |
+
+### Open research (Q106–Q129 — residual)
+
+| Q | Question | Why ask |
+|---|----------|---------|
+| Q106 | Soft `force_zone`: Rim Q97 full reclaim (shipped) vs densify-floor-only (Q126)? | Validate scrap |
+| Q109 | Motif PLACE vs Void: keep Q104 `void_seek` alias? | Action fidelity |
+| Q110 | Unlock `rule_id` presets after U3, or stay Q102=`0`? | Branching |
+| Q112 | Motif→`join_attract_pairs` net density or noise (Q30)? | Soft MIS |
+| Q113 | Adaptive inject prune via compactness / accept_count? | **Locked:** TTL miss-streak; accept=0→delete/ttl=-1; accept>0 floor TTL=1 |
+| Q115 | `find_nearest` at stamp time vs inject-only warm? | Pattern match |
+| Q116 | `find_exact` / accept_count bump on nest Motif hit? | **Locked:** credit on nest Motif survival + ContactGRG; `credit_accept` |
+| Q117 | Incumbent outline_cov ε (S0) enough, or tighten further? | Cov oscillation |
+| Q119 | Mid DFS every iter vs every-K after time miss? | Budget |
+| Q120 | Keep nest_void_term / void_override / refine_ms on void_leak? | Telem SoT |
+| Q121 | `compose_nest_kwargs` — any Uh-only paste that must stay? | Drift |
+| Q122 | void_refine_hold in restore — void_fill scrap impact? | Polish parity |
+| Q123 | Delete unused optimize_polygons / score_transforms / ribbon? | Dead weight |
+| Q124 | Raise mid `dfs_passes` before mid post_pack on time miss? | Iteration budget |
+| Q125 | Soft Motif gids (shipped) vs prefer_motif_id only? | no_rels |
+| Q126 | Rim Q97 zone flip vs densify-floor-only? | Preference vs geometry |
+| Q127 | Keep `refine_ms` on void_leak permanently? | Stage SoT |
+| Q129 | Keep `mcts_heavy` alias or telem `dfs_passes` only? | Telem SoT |

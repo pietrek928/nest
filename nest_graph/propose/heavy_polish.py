@@ -1,10 +1,75 @@
-"""Best-leaf polish helpers: one refine-restore gate (rim OR lex), freeze rules."""
+"""One polish path: DFS refine + restore, budgeted by dfs_passes/mode."""
 
+import time
+from dataclasses import dataclass
+from typing import Any, Sequence
 
-from typing import Sequence
-
+from nest_graph.config import DfsMode, SelectionConfig
 from nest_graph.propose.block_replace import _sel_area, lex_count_area_better
 from nest_graph.propose.context import outline_coverage_ratio
+from nest_graph.propose.void_selection import count_selected_in_free
+
+
+@dataclass(frozen=True, slots=True)
+class PolishBudget:
+    """Iteration budgets for one polish pass (mid vs last)."""
+
+    dfs_passes: int
+    dfs_mode: DfsMode
+    dfs_max_tries: int | None
+    run_3b: bool
+    run_post_pack: bool
+    freeze_improve_rules: bool
+
+    @property
+    def mcts_heavy(self) -> int:
+        """Telem alias: last-leaf post stages on."""
+        return int(bool(self.run_post_pack))
+
+
+def polish_budget_mid(sel: SelectionConfig | None = None) -> PolishBudget:
+    """Cheap expand / mid-iter: one finalize_end DFS pass; no 3b/se2."""
+    tries = None
+    if sel is not None:
+        tries = min(int(sel.dfs_max_tries), 2)
+    return PolishBudget(
+        dfs_passes=1,
+        dfs_mode=DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END,
+        dfs_max_tries=tries,
+        run_3b=False,
+        run_post_pack=False,
+        freeze_improve_rules=True,
+    )
+
+
+def polish_budget_last(sel: SelectionConfig | None = None) -> PolishBudget:
+    """Last iter / Uh / always_heavy: shipped DFS + post stages allowed."""
+    passes = 3
+    tries = None
+    mode = DfsMode.MERGED_LOOSE_TIGHT
+    if sel is not None:
+        passes = int(sel.dfs_passes)
+        tries = int(sel.dfs_max_tries)
+        mode = DfsMode(sel.dfs_mode)
+    return PolishBudget(
+        dfs_passes=passes,
+        dfs_mode=mode,
+        dfs_max_tries=tries,
+        run_3b=True,
+        run_post_pack=True,
+        freeze_improve_rules=False,
+    )
+
+
+def polish_budget_for_iter(
+    *,
+    is_last_leaf: bool,
+    sel: SelectionConfig | None = None,
+) -> PolishBudget:
+    """Schedule: mid → mid budget; last leaf → last budget."""
+    if is_last_leaf:
+        return polish_budget_last(sel)
+    return polish_budget_mid(sel)
 
 
 def freeze_improve_rules(sel_iter, *, freeze: bool):
@@ -16,14 +81,14 @@ def freeze_improve_rules(sel_iter, *, freeze: bool):
 
 def should_freeze_improve_rules(
     *,
-    do_heavy_polish: bool,
+    freeze_cheap_expand: bool,
     on_plateau: bool,
     plateau_streak: int,
     flat_iters: int,
     enable_incumbent_loop: bool,
 ) -> tuple[bool, str]:
-    """OR of Q72 cheap-expand freeze and sustained-plateau freeze. Returns (freeze, reason)."""
-    if not do_heavy_polish:
+    """OR of Q72 cheap-expand freeze and sustained-plateau freeze."""
+    if freeze_cheap_expand:
         return True, "mcts_expand"
     if (
         on_plateau
@@ -67,7 +132,7 @@ def run_improve_rules_rounds(
 
 def apply_refine_with_restore(
     *,
-    do_heavy_polish: bool,
+    budget: PolishBudget,
     apply_dfs_fn,
     graph,
     refine_rules,
@@ -88,31 +153,54 @@ def apply_refine_with_restore(
     rim_reject: float,
     propose_stats: dict,
     native_geoms_from_transforms_fn,
+    free_info: Any | None = None,
+    free_poly: Any | None = None,
 ) -> list[int]:
     """
-    DFS refine (heavy only) then **one** restore if rim-drop OR not lex-better.
-
-    Both predicates feed a single rewind to ``selected_nest`` (nest_before_refine).
+    DFS refine (always when budget.dfs_passes > 0) then **one** restore if
+    rim-drop OR not lex-better OR void shed without lex win (U1).
     """
     nest_before_refine = list(selected_nest)
-    if not do_heavy_polish:
-        # Cheap expand: no DFS — skip restore predicates (selected == nest).
+    propose_stats["dfs_passes"] = int(budget.dfs_passes)
+    propose_stats["dfs_mode"] = str(
+        budget.dfs_mode.value
+        if hasattr(budget.dfs_mode, "value")
+        else budget.dfs_mode
+    )
+    propose_stats["mcts_heavy"] = int(budget.mcts_heavy)
+    propose_stats["run_post_pack"] = int(bool(budget.run_post_pack))
+    propose_stats["run_3b"] = int(bool(budget.run_3b))
+
+    if int(budget.dfs_passes) <= 0:
         propose_stats["refine_rejected"] = False
         propose_stats["rim_drop"] = 0.0
+        propose_stats["refine_ms"] = 0.0
+        propose_stats["void_refine_hold"] = 0
         return list(selected_nest)
 
+    dfs_kwargs: dict = {
+        "selection": sel_iter,
+        "node_areas": node_areas,
+        "refine_seed": int(refine_seed),
+        "locked_indices": list(locked_indices),
+        "dfs_passes": int(budget.dfs_passes),
+        "mode": budget.dfs_mode,
+    }
+    if budget.dfs_max_tries is not None:
+        dfs_kwargs["dfs_max_tries"] = int(budget.dfs_max_tries)
+
+    t0 = time.perf_counter()
     _, selected_polys, _ = apply_dfs_fn(
         graph,
         refine_rules,
         list(selected_nest),
         refine_scores,
-        selection=sel_iter,
-        node_areas=node_areas,
-        refine_seed=int(refine_seed),
-        locked_indices=list(locked_indices),
+        **dfs_kwargs,
     )
+    propose_stats["refine_ms"] = (time.perf_counter() - t0) * 1000.0
 
     restore_refine = False
+    void_refine_hold = 0
     rim_drop = 0.0
     if rim_reject > 0.0 and rim_before > 0.0:
         try:
@@ -133,13 +221,27 @@ def apply_refine_with_restore(
         if rim_before - rim_after > rim_reject:
             restore_refine = True
 
-    if not lex_count_area_better(
+    refine_lex_better = lex_count_area_better(
         old_count=len(nest_before_refine),
         old_area=_sel_area(nest_before_refine, group_id, part_areas),
         new_count=len(selected_polys),
         new_area=_sel_area(selected_polys, group_id, part_areas),
-    ):
+    )
+    if not refine_lex_better:
         restore_refine = True
+
+    # U1: void shed without lex win → same restore OR.
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        nv_nest = count_selected_in_free(polys, nest_before_refine, free_poly)
+        nv_ref = count_selected_in_free(polys, selected_polys, free_poly)
+        if nv_ref < nv_nest and not refine_lex_better:
+            restore_refine = True
+            void_refine_hold = 1
 
     if restore_refine:
         selected_polys = list(nest_before_refine)
@@ -147,4 +249,5 @@ def apply_refine_with_restore(
     else:
         propose_stats["refine_rejected"] = False
     propose_stats["rim_drop"] = float(rim_drop)
+    propose_stats["void_refine_hold"] = int(void_refine_hold)
     return list(selected_polys)

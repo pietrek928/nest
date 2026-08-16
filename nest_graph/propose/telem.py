@@ -80,8 +80,18 @@ def format_void_leak_line(
         f"rim_skip={int(propose_stats.get('rim_skip', 0))} "
         f"sel_kept={int(propose_stats.get('sel_kept', 0))} "
         f"incumbent_hold={int(propose_stats.get('incumbent_hold', 0))} "
+        f"incumbent_mapped={int(propose_stats.get('incumbent_mapped', 0))} "
+        f"void_override={int(propose_stats.get('void_override', 0))} "
+        f"colonize={int(propose_stats.get('colonize_pinned', 0))}/"
+        f"{int(propose_stats.get('colonize_blocked', 0))} "
+        f"nest_void_term_hits={int(propose_stats.get('nest_void_term_hits', 0))} "
+        f"void_refine_hold={int(propose_stats.get('void_refine_hold', 0))} "
+        f"dfs_passes={int(propose_stats.get('dfs_passes', 0))} "
+        f"dfs_mode={propose_stats.get('dfs_mode', '-')} "
+        f"refine_ms={float(propose_stats.get('refine_ms', 0.0) or 0.0):.1f} "
         f"densify={densify_a}/{densify_f}"
         f"{reason}{pocket}"
+        f"{_motif_skip_snip(propose_stats, n_patterns)}"
         f" cascade={densify.get('cascade_stopped_after', 'none')}"
         f" nms={int(densify.get('nms_kept', 0))}/{int(densify.get('nms_dropped', 0))}"
         f" attract={attract_edges}/{attract_pairs_selected}"
@@ -91,6 +101,35 @@ def format_void_leak_line(
         f"{int(propose_stats.get('block_hole_emit_in_hull', 0))}"
         f"{prop}"
     )
+
+
+def _motif_skip_snip(propose_stats: Mapping[str, Any], n_patterns: int) -> str:
+    """Named motif skip keys when patterns>0 (T1/M0)."""
+    if int(n_patterns) <= 0:
+        return ""
+    skip = propose_stats.get("pocket_skip") or propose_stats.get("motif_skip") or {}
+    if not isinstance(skip, Mapping):
+        densify = propose_stats.get("densify_stats") or {}
+        skip = densify.get("pocket_skip_map") or {}
+    if not isinstance(skip, Mapping):
+        return ""
+    keys = (
+        "no_rels",
+        "collide",
+        "motif_collide",
+        "leader_fail",
+        "no_anchors",
+        "fallback_leader",
+        "full_motif_clear",
+    )
+    parts = []
+    for k in keys:
+        v = int(skip.get(k, 0) or skip.get(f"motif_{k}", 0) or 0)
+        if v > 0:
+            parts.append(f"{k}={v}")
+    if not parts:
+        return ""
+    return f" motif_skip=[{','.join(parts)}]"
 
 
 def build_void_leak_dict(
@@ -167,6 +206,13 @@ def build_void_leak_dict(
         "rim_skip": int(propose_stats.get("rim_skip", 0)),
         "sel_kept": int(propose_stats.get("sel_kept", 0)),
         "incumbent_hold": int(propose_stats.get("incumbent_hold", 0)),
+        "incumbent_mapped": int(propose_stats.get("incumbent_mapped", 0)),
+        "void_override": int(propose_stats.get("void_override", 0)),
+        "nest_void_term_hits": int(propose_stats.get("nest_void_term_hits", 0)),
+        "void_refine_hold": int(propose_stats.get("void_refine_hold", 0)),
+        "dfs_passes": int(propose_stats.get("dfs_passes", 0)),
+        "dfs_mode": str(propose_stats.get("dfs_mode", "")),
+        "refine_ms": float(propose_stats.get("refine_ms", 0.0) or 0.0),
         "zones_used": list(zones),
         "pocket_fit_emitted": pf_em,
         "pocket_fit_attempts": pf_att,

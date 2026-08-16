@@ -17,11 +17,13 @@ from nest_graph.elem_graph import (
     nest_by_scores,
 )
 from nest_graph.geometry import Geometry
-from nest_graph.propose.context import should_use_border_focus
+from nest_graph.propose.context import outline_coverage_ratio, should_use_border_focus
 from nest_graph.propose.void_selection import (
     apply_void_centroid_score_term,
     apply_void_selection_boosts,
     boost_border_scores,
+    colonize_void_onto_base,
+    count_graph_in_free,
     count_selected_in_free,
     transform_row_key,
     void_attractor_radius,
@@ -42,11 +44,71 @@ from shapely.geometry import Polygon
 import math
 
 
-def dual_nest_for(free_info: Any, *, do_heavy: bool) -> bool:
-    """Q105: dual lex when heavy leaf OR large_void basin."""
-    if bool(do_heavy):
+def dual_nest_for(free_info: Any, *, last_leaf: bool = False, do_heavy: bool | None = None) -> bool:
+    """Q105: dual lex when last leaf OR large_void basin."""
+    if do_heavy is not None:
+        last_leaf = bool(do_heavy)
+    if bool(last_leaf):
         return True
     return free_info is not None and getattr(free_info, "kind", None) == "large_void"
+
+
+def compose_nest_kwargs(
+    *,
+    graph,
+    rule_sets: list,
+    active_rules,
+    scores: list[float],
+    polys: list,
+    group_id: Sequence[int],
+    transform: Sequence,
+    candidate_geoms: list | None,
+    packed_geoms: list,
+    part_areas: Sequence[float],
+    free_info,
+    cfg,
+    selection,
+    first_pass: bool,
+    outline: BaseGeometry,
+    min_dist: float,
+    sheet_area: float,
+    sheet_diag: float,
+    propose_stats: dict | None,
+    ngroups: int,
+    packed_group_id: Sequence[int] | None = None,
+    packed_transform: Sequence | None = None,
+    last_leaf: bool = False,
+    void_geoms: Sequence | None = None,
+    locked_seed: Sequence[int] | None = None,
+) -> dict:
+    """One kwargs dict for ``compose_and_nest_selection`` (Uh + mid + evaluator)."""
+    return {
+        "graph": graph,
+        "rule_sets": rule_sets,
+        "active_rules": active_rules,
+        "scores": scores,
+        "polys": polys,
+        "group_id": group_id,
+        "transform": transform,
+        "candidate_geoms": candidate_geoms,
+        "packed_geoms": packed_geoms,
+        "part_areas": part_areas,
+        "free_info": free_info,
+        "cfg": cfg,
+        "selection": selection,
+        "first_pass": first_pass,
+        "outline": outline,
+        "min_dist": min_dist,
+        "sheet_area": sheet_area,
+        "sheet_diag": sheet_diag,
+        "propose_stats": propose_stats,
+        "ngroups": ngroups,
+        "packed_group_id": packed_group_id,
+        "packed_transform": packed_transform,
+        "dual_nest": dual_nest_for(free_info, last_leaf=last_leaf),
+        "void_geoms": void_geoms,
+        "locked_seed": locked_seed,
+    }
 
 
 def kiss_lock_subset(
@@ -271,7 +333,12 @@ def compose_and_nest_selection(
         propose_stats["geom_share"] = geom_stats.get("geom_share", 0.0)
 
     # L1: void-centroid term on nest scores before MIS (refine shares same helper).
-    void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * 0.25
+    # Q118 miss-loop: deepen to 2.0× island boost under large_void (was 0.75).
+    void_scale = 2.0
+    mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
+    if mcts_zone == "void_seek":
+        void_scale = 2.5
+    void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * void_scale
     nest_void_hits = apply_void_centroid_score_term(
         polys,
         scores,
@@ -376,6 +443,33 @@ def compose_and_nest_selection(
         graph=graph,
     )
     incumbent_hold = 0
+    void_override_flag = 0
+    if propose_stats is not None:
+        propose_stats["incumbent_mapped"] = int(len(incumbent))
+    # Colonize unused void graph onto MIS cand whenever large_void has capacity
+    # (not only inside hold — lex-better rim packs otherwise skip the hole).
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        void_cand0 = count_selected_in_free(polys, selected_nest, free_poly)
+        n_void_graph = count_graph_in_free(polys, free_poly)
+        if n_void_graph > void_cand0:
+            colonize_stats: dict = {}
+            colonized = colonize_void_onto_base(
+                graph,
+                selected_nest,
+                polys,
+                free_poly,
+                scores,
+                stats_out=colonize_stats,
+            )
+            if propose_stats is not None:
+                propose_stats.update(colonize_stats)
+            if len(colonized) > len(selected_nest):
+                selected_nest = colonized
     if incumbent and not _lex_pick_better(
         best=incumbent,
         cand=selected_nest,
@@ -383,7 +477,7 @@ def compose_and_nest_selection(
         part_areas=part_areas,
     ):
         # Void override: allow cand when it colonizes more free space and is
-        # not a collapse (count ≥ 0.9× incumbent).
+        # not a collapse (count ≥ 0.9× incumbent). S0: refuse outline cov drop.
         void_override = False
         if (
             free_info is not None
@@ -396,12 +490,31 @@ def compose_and_nest_selection(
             void_cand = count_selected_in_free(polys, selected_nest, free_poly)
             void_inc = count_selected_in_free(polys, incumbent, free_poly)
             void_override = void_cand > void_inc
+            if void_override:
+                try:
+                    cov_cand = float(outline_coverage_ratio(
+                        [polys[i] for i in selected_nest if 0 <= int(i) < len(polys)],
+                        outline,
+                        float(min_dist),
+                    ))
+                    cov_inc = float(outline_coverage_ratio(
+                        [polys[i] for i in incumbent if 0 <= int(i) < len(polys)],
+                        outline,
+                        float(min_dist),
+                    ))
+                    if cov_cand + 1e-9 < cov_inc - 0.02:
+                        void_override = False
+                except Exception:
+                    pass
+        if void_override:
+            void_override_flag = 1
         if not void_override:
             selected_nest = list(incumbent)
             locked_motif = []
             incumbent_hold = 1
     if propose_stats is not None:
         propose_stats["incumbent_hold"] = int(incumbent_hold)
+        propose_stats["void_override"] = int(void_override_flag)
         propose_stats["motif_locked"] = list(locked_motif)
         propose_stats["motif_beam_sets"] = int(len(lock_sets))
         propose_stats["uh_beam_unlocked"] = int(beam_unlocked)

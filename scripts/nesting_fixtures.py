@@ -598,11 +598,12 @@ def make_demo_triangle_corner_cluster(
         groups=((rect, 0), (tri, 1)),
         group_counts=counts,
         seed_placements=tuple(seeds),
-        iters=4,
+        iters=6,
         floors=NestFloors(
             parts_final=len(seeds) + 8,
-            # E0 raise-gate under Q69: scrap area ≥ 0.570.
-            area_coverage=max(seed_cov + 0.08, 0.570),
+            # E0 raise-gate under Q69 / G1: scrap area ≥ 0.585.
+            area_coverage=max(seed_cov + 0.08, 0.585),
+            time_s=170.0,
             # Void shrinks but need not vanish in a short mid-pack run.
             largest_free_over_part=60.0,
         ),

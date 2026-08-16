@@ -75,7 +75,9 @@ def apply_void_centroid_score_term(
         if i >= len(scores):
             break
         try:
-            if poly is not None and not poly.is_empty and free_poly.contains(poly.centroid):
+            if poly is not None and not poly.is_empty and (
+                free_poly.contains(poly.centroid) or free_poly.intersects(poly.centroid)
+            ):
                 scores[i] = float(scores[i]) + float(void_term)
                 hits += 1
         except Exception:
@@ -147,7 +149,9 @@ def boost_void_island_scores(
             continue
         if pole is not None:
             dist = float(c.distance(pole))
-            factor = max(0.0, 1.0 - dist / diag)
+            # Q118: inverse-square decay (steeper than linear) toward void pole.
+            norm = max(dist / diag, 0.0)
+            factor = 1.0 / (1.0 + norm * norm)
         else:
             factor = 1.0
         scores[i] = float(sc) + float(weight) * factor
@@ -311,7 +315,7 @@ def apply_void_selection_boosts(
     # Soft nest scale on large_void (decision + evaluator share this SoT).
     mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
     if free_info is not None and getattr(free_info, "kind", None) == "large_void" and pole_w > 0.0:
-        scale = 1.25 if mcts_zone == "void_seek" else 1.1
+        scale = 1.5 if mcts_zone == "void_seek" else 1.25
         pole_w = float(pole_w) * scale
         if propose_stats is not None:
             propose_stats["void_island_soft_scale"] = float(scale)
@@ -496,6 +500,57 @@ def format_prop_accept(
             f"n{int(nest.get(name, 0))}/r{int(refine.get(name, 0))}"
         )
     return " ".join(parts)
+
+
+def colonize_void_onto_base(
+    graph,
+    base: Sequence[int],
+    polys: list,
+    free_poly: BaseGeometry | None,
+    scores: list[float] | None = None,
+    *,
+    stats_out: dict | None = None,
+) -> list[int]:
+    """Pin free-centroid graph nodes onto ``base`` if collision-clear.
+
+    Same collision walk as ``pin_nest_void_independent`` (one SoT). Used at the
+    incumbent hold site when ``large_void`` still has unused void graph capacity.
+    """
+    t0 = time.perf_counter()
+    out = list(base)
+    out_set = set(int(i) for i in out)
+    collisions = getattr(graph, "collisions", None)
+    if collisions is None or free_poly is None or getattr(free_poly, "is_empty", True):
+        if stats_out is not None:
+            stats_out["colonize_candidates"] = 0
+            stats_out["colonize_pinned"] = 0
+            stats_out["colonize_blocked"] = 0
+            stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
+        return out
+    candidates = [
+        i
+        for i in range(len(collisions))
+        if i not in out_set
+        and i < len(polys)
+        and centroid_in_free(polys[i], free_poly)
+    ]
+    pinned = 0
+    blocked = 0
+    if scores is not None and len(scores) >= len(collisions):
+        candidates.sort(key=lambda v: float(scores[v]), reverse=True)
+    for v in candidates:
+        if any(int(u) in out_set for u in collisions[v]):
+            blocked += 1
+            continue
+        out.append(v)
+        out_set.add(v)
+        pinned += 1
+    if stats_out is not None:
+        stats_out["colonize_candidates"] = len(candidates)
+        stats_out["colonize_pinned"] = pinned
+        stats_out["colonize_blocked"] = blocked
+        stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
+    return out
 
 
 def pin_nest_void_independent(

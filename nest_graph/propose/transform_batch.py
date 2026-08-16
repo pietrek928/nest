@@ -429,14 +429,31 @@ def build_transform_batch(
             if densify_hit
             else max(int(cfg.propose.max_proposals), 1)
         )
-        # D1: soft mcts_part_gid mix boost (no hard filter).
+        # P1: DG / Motif soft steer — raise mix floors under void_seek or Motif gids.
+        mcts_zone = str((propose_stats_out or {}).get("mcts_zone") or "")
+        motif_gids_pre = (propose_stats_out or {}).get("mcts_motif_gids") or []
+        if mcts_zone == "void_seek" or motif_gids_pre:
+            floor_props = int(ProposeConfig.void_seek_budget_floors()[1])
+            n_props = max(n_props, int(floor_props * 1.25) + 8)
+            if propose_stats_out is not None and group_id == 0:
+                propose_stats_out["dg_mix_boost"] = 1
+        # D1: soft mcts_part_gid / Motif-pair mix boost (no hard filter).
         prefer_gid = int((propose_stats_out or {}).get("mcts_part_gid", -1))
+        motif_gids = motif_gids_pre
+        motif_set = {int(g) for g in motif_gids}
         if prefer_gid >= 0 and int(group_id) == prefer_gid:
             n_props = max(n_props, int(n_props * 1.35) + 4)
             expand_n = max(expand_n, expand_n + 2)
             if propose_stats_out is not None:
                 propose_stats_out["mcts_part_gid_boost"] = int(
                     propose_stats_out.get("mcts_part_gid_boost", 0)
+                ) + 1
+        elif int(group_id) in motif_set:
+            n_props = max(n_props, int(n_props * 1.25) + 2)
+            expand_n = max(expand_n, expand_n + 1)
+            if propose_stats_out is not None:
+                propose_stats_out["mcts_motif_gid_boost"] = int(
+                    propose_stats_out.get("mcts_motif_gid_boost", 0)
                 ) + 1
         proposal_pins = (
             proposed if proposed.shape[0] > 0 else np.zeros((0, 3), dtype=np.float64)
@@ -454,11 +471,16 @@ def build_transform_batch(
         elite_q = int(getattr(cfg.propose, "stratified_void_elite_quota", 15))
         hist_q = int(getattr(cfg.propose, "stratified_history_quota", 15))
         if sterile_pack:
-            hist_boost = int(
-                getattr(cfg.propose, "sterile_history_quota_boost", 128) or 0
+            cut_boost = bool(
+                propose_stats_out is not None
+                and propose_stats_out.get("cut_sterile_hist_boost")
             )
-            if hist_boost > 0:
-                hist_q = max(hist_q, hist_boost)
+            if not cut_boost:
+                hist_boost = int(
+                    getattr(cfg.propose, "sterile_history_quota_boost", 128) or 0
+                )
+                if hist_boost > 0:
+                    hist_q = max(hist_q, hist_boost)
         if propose_stats_out is not None and group_id == 0:
             propose_stats_out["carry_n"] = int(carry.shape[0])
             propose_stats_out["hist_niche_n"] = int(hist_niche.shape[0])

@@ -95,6 +95,15 @@ void bind_elem_graph_decision(nb::module_ &m) {
         .def("list_for_inject", &MotifBase::list_for_inject, nb::arg("max_keep") = 4)
         .def("size", &MotifBase::size)
         .def("at", nb::overload_cast<int32_t>(&MotifBase::at), nb::arg("id"))
+        .def("credit_accept", &MotifBase::credit_accept, nb::arg("id"), nb::arg("ttl") = 0)
+        .def(
+            "find_exact_id",
+            &MotifBase::find_exact_id,
+            nb::arg("gid_a"),
+            nb::arg("gid_b"),
+            nb::arg("relative"),
+            nb::arg("area_a") = 1.f,
+            nb::arg("area_b") = 1.f)
         .def("moving_median_compactness", &MotifBase::moving_median_compactness)
         .def(
             "find_exact",

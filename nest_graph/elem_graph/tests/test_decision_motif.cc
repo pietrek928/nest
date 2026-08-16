@@ -90,11 +90,18 @@ TEST_CASE("MotifBase TTL age and list_for_inject", "[motif_base]") {
     m.compactness = 0.9f;
     m.area_a = 2.f;
     m.area_b = 1.f;
+    // Upsert sets accept_count=1 → Q113 floors TTL at 1 instead of deleting.
     REQUIRE(base.upsert(m, 0.f, 2) == 0);
     REQUIRE(base.at(0).ttl_remaining == 2);
     REQUIRE(base.list_for_inject(4).size() == 1);
     REQUIRE(base.age(1) == 0);
     REQUIRE(base.at(0).ttl_remaining == 1);
+    REQUIRE(base.age(1) == 0);  // floored, not dropped
+    REQUIRE(base.size() == 1);
+    REQUIRE(base.at(0).ttl_remaining == 1);
+    // Unproven (accept_count forced 0) still drops.
+    base.at(0).accept_count = 0;
+    base.at(0).ttl_remaining = 1;
     REQUIRE(base.age(1) == 1);
     REQUIRE(base.size() == 0);
 }

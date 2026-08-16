@@ -18,7 +18,7 @@ from nest_graph.propose.heavy_polish import (
 def prep_selection_freeze(
     sel_iter,
     *,
-    do_heavy_polish: bool,
+    freeze_cheap_expand: bool,
     on_plateau: bool,
     plateau_streak: int,
     flat_iters: int,
@@ -26,7 +26,7 @@ def prep_selection_freeze(
 ):
     """One freeze gate for cheap expand / plateau; returns (sel_iter, reason)."""
     freeze, reason = should_freeze_improve_rules(
-        do_heavy_polish=do_heavy_polish,
+        freeze_cheap_expand=freeze_cheap_expand,
         on_plateau=on_plateau,
         plateau_streak=plateau_streak,
         flat_iters=flat_iters,
@@ -204,7 +204,7 @@ def record_mcts_expand(
     agent = runner.agent
     if agent is None:
         return int(parent_id)
-    if runner.arena.may_expand(parent_id):
+    if agent.may_expand_node(parent_id):
         child_id = agent.expand(parent_id, action, reward)
         mcts_telem["pw_expand"] = int(mcts_telem["pw_expand"]) + 1
     else:
@@ -212,7 +212,9 @@ def record_mcts_expand(
         agent.backprop(parent_id, reward)
     child_snap.arena_node_id = int(child_id)
     runner.snapshots[int(child_id)] = child_snap
-    agent.remember_related(child_snap)
+    # Q138: positive-only related warm (skip hollow-miss snaps).
+    hollow = bool(propose_stats.get("hollow_miss", False))
+    agent.remember_related(child_snap, allow=not hollow)
 
     packed_gids = child_snap.packed_gids
     packed_tf = child_snap.packed_transforms
@@ -271,6 +273,77 @@ def make_execute_fn(
     return execute_fn
 
 
+def run_mcts_multi_sim(
+    runner: Any,
+    parent_snap: BoardSnapshot,
+    *,
+    n_sims: int,
+    parent_id: int,
+    execute_fn: Callable[..., BoardSnapshot] | None,
+    mcts_telem: dict,
+) -> tuple[Any | None, int]:
+    """Q107: K cheap expands; return (tip MacroAction, tip leaf id).
+
+    Populates arena/AMAF so the following outer ``pick_expand_action`` is informed.
+    Tip action is from the final ``select_leaf`` (UCB), not a leftover last expand.
+    """
+    from nest_graph.decision.slave_pack import cheap_expand_slave
+
+    agent = runner.agent
+    tip_leaf = int(parent_id)
+    tip_action = None
+    if agent is None or int(n_sims) <= 0 or agent.expand_frozen:
+        mcts_telem["multi_sim"] = 0
+        return None, tip_leaf
+    for _ in range(max(int(n_sims), 1)):
+        leaf = int(agent.select_leaf())
+        tip_leaf = leaf
+        leaf_snap = runner.snapshots.get(leaf) or parent_snap
+        if not leaf_snap.remaining_gids:
+            agent.backprop(leaf, float(leaf_snap.coverage))
+            continue
+        action = agent.pick_expand_action(
+            leaf_snap.remaining_gids,
+            rule_ids=(0,),
+            parent_id=leaf,
+            snapshot=leaf_snap,
+        )
+        if action is None:
+            break
+        tip_action = action
+        if not agent.may_expand_node(leaf):
+            agent.backprop(leaf, float(leaf_snap.coverage))
+            continue
+        result = cheap_expand_slave(
+            leaf_snap,
+            action,
+            motif_base=runner.motif_base,
+            execute_fn=execute_fn,
+            telem=agent.telem,
+        )
+        child = agent.expand(leaf, action, result.reward)
+        result.snapshot.arena_node_id = int(child)
+        runner.snapshots[int(child)] = result.snapshot
+        mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1
+        tip_leaf = int(child)
+        tip_action = action
+    # Prefer deepest best_child tip when expandable leaf unavailable
+    if tip_action is None:
+        tip_leaf = int(agent.deepest_best_child())
+        tip_snap = runner.snapshots.get(tip_leaf) or parent_snap
+        if tip_snap.remaining_gids:
+            tip_action = agent.pick_expand_action(
+                tip_snap.remaining_gids,
+                rule_ids=(0,),
+                parent_id=tip_leaf,
+                snapshot=tip_snap,
+            )
+    mcts_telem["multi_sim"] = int(n_sims)
+    mcts_telem["expand_ms"] = float(agent.telem.get("expand_ms", 0.0) or 0.0)
+    mcts_telem["tip_leaf"] = int(tip_leaf)
+    return tip_action, int(tip_leaf)
+
+
 def run_pack_stages(
     *,
     rim_only: bool = False,
@@ -284,8 +357,8 @@ def run_pack_stages(
 ) -> dict:
     """One pack body for loop + execute_fn (Ub).
 
-    ``rim_only``: kiss nest (+ optional Uh). ``heavy``: DFS/3b/se2 polish.
-    Call sites pass named callables so build_graph keeps ownership of state.
+    ``rim_only``: kiss nest (+ optional Uh). ``heavy``: last-leaf post_pack/3b.
+    Refine runs whenever ``refine_fn`` is set (mid or last budget).
     """
     telem = {
         "execute_wired": 1,
@@ -312,7 +385,7 @@ def run_pack_stages(
     if compose_fn is not None:
         compose_fn()
         telem["compose_ran"] = 1
-    if heavy and refine_fn is not None:
+    if refine_fn is not None:
         refine_fn()
         telem["refine_ran"] = 1
     if heavy and post_pack_fn is not None:
@@ -323,16 +396,18 @@ def run_pack_stages(
 
 def run_pack_body(
     *,
-    do_heavy_polish: bool,
+    do_heavy_polish: bool | None = None,
+    run_post_pack: bool | None = None,
     run_improve_fn: Callable[..., Any],
     compose_fn: Callable[..., Any] | None = None,
     refine_fn: Callable[..., Any] | None = None,
     post_pack_fn: Callable[..., Any] | None = None,
 ) -> dict:
     """Backward-compatible wrapper → ``run_pack_stages`` (Ub)."""
+    heavy = bool(run_post_pack) if run_post_pack is not None else bool(do_heavy_polish)
     return run_pack_stages(
         rim_only=False,
-        heavy=bool(do_heavy_polish),
+        heavy=heavy,
         run_improve_fn=run_improve_fn,
         compose_fn=compose_fn,
         refine_fn=refine_fn,
