@@ -49,6 +49,7 @@ from .propose import (
     proposed_transforms_for_groups,
     border_edge_transforms_for_group,
 )
+from .propose.feedback import ProposeFeedbackState
 from .propose.pipeline import allow_void_repack, collect_propose_batch_for_nest
 from .propose.post_pack import run_post_pack_passes
 from .propose.pattern_archive import (
