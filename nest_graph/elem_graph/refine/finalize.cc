@@ -31,7 +31,7 @@ float mask_weight(const std::vector<Tscore> &w, int mask) {
 }
 
 float mask_objective(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &verts,
     const std::vector<Tscore> &w,
     int mask,
@@ -62,7 +62,7 @@ float mask_objective(
 std::vector<int> brute_force_weighted_mis(
     const std::vector<Tvertex> &verts,
     const std::vector<Tscore> &scores,
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &locked_indices,
     const unsigned char *kept_outside = nullptr
 ) {
@@ -152,7 +152,7 @@ std::vector<int> brute_force_weighted_mis(
 std::vector<int> greedy_weighted_mis(
     const std::vector<Tvertex> &verts,
     const std::vector<Tscore> &scores,
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &locked_indices,
     const unsigned char *kept_outside
 ) {
@@ -198,7 +198,7 @@ std::vector<int> greedy_weighted_mis(
 }
 
 void build_overlap_components(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected,
     std::vector<std::vector<Tvertex>> &components
 ) {
@@ -230,7 +230,7 @@ void build_overlap_components(
 }
 
 std::vector<unsigned char> selected_to_mask(
-    const ElemGraph &g, const std::vector<Tvertex> &selected
+    const PoseGraph &g, const std::vector<Tvertex> &selected
 ) {
     const int n = static_cast<int>(g.size());
     std::vector<unsigned char> mask(static_cast<std::size_t>(n), 0);
@@ -253,7 +253,7 @@ std::vector<Tvertex> mask_to_list(const std::vector<unsigned char> &mask) {
 }
 
 bool selection_is_independent_mask(
-    const ElemGraph &g, const std::vector<unsigned char> &selected
+    const PoseGraph &g, const std::vector<unsigned char> &selected
 ) {
     const int n = static_cast<int>(g.size());
     for (int v = 0; v < n; ++v) {
@@ -270,13 +270,13 @@ bool selection_is_independent_mask(
 }
 
 bool selection_is_independent(
-    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes
+    const PoseGraph &g, const std::vector<Tvertex> &selected_nodes
 ) {
     return selection_is_independent_mask(g, selected_to_mask(g, selected_nodes));
 }
 
 void insert_clear_locks(
-    const ElemGraph &g,
+    const PoseGraph &g,
     std::vector<unsigned char> &selected,
     const std::vector<Tvertex> &locked_indices
 ) {
@@ -300,7 +300,7 @@ void insert_clear_locks(
 }
 
 std::vector<Tvertex> finalize_selection(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const FinalizeSelectionOptions &options,

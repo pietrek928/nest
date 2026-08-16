@@ -2,11 +2,11 @@ import time
 
 import pytest
 
-from nest_graph.elem_graph import Circle, ElemGraph, Vec2
+from nest_graph.elem_graph import Circle, PoseGraph, Vec2
 
 
 def test_append_elem_many_fast():
-    graph = ElemGraph()
+    graph = PoseGraph()
     t0 = time.perf_counter()
     for i in range(200):
         graph.append_elem(i % 2, Vec2(x=float(i), y=float(i)), Circle.from_center_radius(i, i, 1.0))
@@ -18,7 +18,7 @@ def test_append_elem_many_fast():
 
 
 def test_add_collision_pair_symmetric():
-    graph = ElemGraph()
+    graph = PoseGraph()
     for i in range(3):
         graph.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 1.0))
     graph.add_collision(0, 1)
@@ -30,7 +30,7 @@ def test_add_collision_pair_symmetric():
 
 
 def test_reserve_elems_then_append():
-    graph = ElemGraph()
+    graph = PoseGraph()
     graph.reserve_elems(4)
     for i in range(4):
         graph.append_elem(i, Vec2(x=i, y=i), Circle.from_center_radius(i, i, 0.5))

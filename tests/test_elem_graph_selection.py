@@ -6,7 +6,7 @@ import pytest
 from nest_graph.config import BuildGraphConfig, _make_select_options
 from nest_graph.elem_graph import (
     Circle,
-    ElemGraph,
+    PoseGraph,
     PlacementRuleSet,
     RefineSelectionOptions,
     ScoreAggregation,
@@ -22,14 +22,14 @@ from nest_graph.elem_graph import (
 from nest_graph.build_graph import make_polygon_graph, _rule_region
 
 
-def _append_elem(g: ElemGraph, group_id: int, x: float, y: float, radius: float = 0.5):
+def _append_elem(g: PoseGraph, group_id: int, x: float, y: float, radius: float = 0.5):
     c = Circle.from_center_radius(x, y, radius)
     g.append_elem_at(group_id, x, y, 0.0, c.center.x, c.center.y, c.r_sq)
 
 
 def _path_graph_scores():
     """Nodes 0 - 1 - 2; pick two non-adjacent high-score ends."""
-    g = ElemGraph()
+    g = PoseGraph()
     for i in range(3):
         _append_elem(g, 0, float(i), 0.0)
     g.add_collision_pair(0, 1)
@@ -39,7 +39,7 @@ def _path_graph_scores():
 
 
 def test_compute_score_peak_at_rule_center():
-    g = ElemGraph()
+    g = PoseGraph()
     _append_elem(g, 0, 0.5, 0.5, 0.1)
     _append_elem(g, 0, 2.0, 2.0, 0.1)
     rules = PlacementRuleSet()
@@ -50,7 +50,7 @@ def test_compute_score_peak_at_rule_center():
 
 def test_angle_score_separable_via_elems():
     """Wrong angle should not zero out position contribution (separable kernel)."""
-    g = ElemGraph()
+    g = PoseGraph()
     _append_elem(g, 0, 0.5, 0.5, 0.1)
     _append_elem(g, 0, 0.5, 0.5, 0.1)
     g.elems[0].a = 0.0

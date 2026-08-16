@@ -4,7 +4,7 @@
 
 #include "scoring/scoring.h"
 
-std::vector<std::vector<Tvertex>> get_elems_by_group(const ElemGraph &g) {
+std::vector<std::vector<Tvertex>> get_elems_by_group(const PoseGraph &g) {
     std::vector<std::vector<Tvertex>> elems_by_group;
     for (Tvertex i = 0; i < static_cast<Tvertex>(g.group_id.size()); i++) {
         Tvertex group = g.group_id[i];
@@ -34,8 +34,8 @@ void sort_collisions(
     }
 }
 
-ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse) {
-    ElemGraph r = g;
+PoseGraph sort_graph(const PoseGraph &g, const PlacementRuleSet &rules, bool reverse) {
+    PoseGraph r = g;
     std::vector<Tscore> scores;
     const auto elems_by_group = get_elems_by_group(g);
 

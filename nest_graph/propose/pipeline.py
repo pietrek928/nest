@@ -64,6 +64,7 @@ from nest_graph.propose.context import (
     should_use_border_focus,
     simplify_obstacle_union,
     void_pole_seed_coords,
+    void_ratio_threshold,
     PlaceZoneInfo,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags, filter_candidates_batch
@@ -631,7 +632,9 @@ def _void_seek_densify(
     def _pin_prefix(old: np.ndarray, extra: np.ndarray) -> np.ndarray:
         if extra.shape[0] == 0:
             return old
-        half = max_n // 2
+        # P1: densify pin budget — keep more void densify under void_seek.
+        pin_frac = 2 if (zone == "void_seek" or void_hijack_from is not None) else 1
+        half = max(1, (max_n * (1 + pin_frac)) // (2 + pin_frac))
         if half <= 0:
             return old
         pinned = extra[: min(int(extra.shape[0]), half)]
@@ -705,6 +708,10 @@ def _void_seek_densify(
             if xy_in_free(float(row[0]), float(row[1]), yield_poly):
                 densify_xy_in += 1
                 break
+    telem["densify_xy_in"] = int(densify_xy_in)
+    telem["props_empty"] = int(arr.shape[0] == 0)
+    telem["densify_empty"] = int(densify_arr.shape[0] == 0)
+    # L3: cloud only when densify empty / drop / xy∉free (props_empty after L1/L2 path).
     need_cloud = densify_arr.shape[0] == 0 or (
         use_void_yield
         and (
@@ -1451,12 +1458,17 @@ def _apply_cascade_budget(
     pocket_reserve: Sequence[tuple[float, float, float]],
     motif_reserve: Sequence[tuple[float, float, float]],
 ) -> None:
-    """Lean Void Cascade: sniper short-circuit / explorer budget scale."""
+    """Void-soft cascade: void_seek keeps full explorers; other zones soft-scale."""
     cfg = ctx.propose_cfg
     if not _cascade_active(cfg, cascade_zone):
         return
     hard_zone = bool(cascade_zone) and cascade_zone in _CASCADE_HARD_ZONES
     if hard_zone:
+        # void_seek density SoT: free order + full explorer budget (S1 0.555).
+        if cascade_zone == "void_seek":
+            if state.cascade_stats_out is not None:
+                state.cascade_stats_out["cascade_stopped_after"] = "void_free"
+            return
         sniper_seeds: list[tuple[float, float, float]] = []
         sniper_seeds.extend(pocket_reserve)
         sniper_seeds.extend(motif_reserve)
@@ -1473,9 +1485,11 @@ def _apply_cascade_budget(
         min_motif_pocket = int(getattr(cfg, "cascade_min_motif_pocket_emit", 0) or 0)
         n_motif_pocket = len(pocket_reserve) + len(motif_reserve)
         if n_valid >= stop_n and n_motif_pocket >= min_motif_pocket:
-            state.skip_builders = True
-            state.skip_explorers = True
-            state.mark_skip("snipers", sorted(_CASCADE_BUILDERS | _CASCADE_EXPLORERS))
+            scale = float(getattr(cfg, "cascade_explorer_budget_scale", 0.35) or 0.35)
+            state.explorer_scale = min(max(scale, 0.05), 1.0)
+            if state.cascade_stats_out is not None:
+                state.cascade_stats_out["cascade_stopped_after"] = "snipers_scaled"
+            return
         return
     if cascade_zone not in ("empty_border", None, ""):
         scale = float(getattr(cfg, "cascade_explorer_budget_scale", 0.35) or 0.35)
@@ -1501,10 +1515,14 @@ def _collect_candidates(
     ``"cascade"`` = snipers → builders → explorers (void / short-circuit zones),
     ``"free"`` = snipers → explorers → builders (default packed / border walk).
     Defaults to whichever the cascade config implies for ``cascade_zone``.
+    ``void_seek`` always uses free order (explorers before builders) when cascade is on.
     """
     cascade_on = _cascade_active(ctx.propose_cfg, cascade_zone)
     if mode is None:
-        mode = "cascade" if cascade_on else "free"
+        if cascade_zone == "void_seek":
+            mode = "free"
+        else:
+            mode = "cascade" if cascade_on else "free"
     state = _CollectState(
         proposer_counts=ctx.proposer_counts,
         proposer_keys=proposer_keys,
@@ -1542,7 +1560,8 @@ def _collect_candidates(
 
     if mode == "cascade":
         _collect_builder_candidates(ctx, extras, state, cascade_zone=cascade_zone)
-        # Builder-stage short-circuit: pool already full of snipers+builders.
+        # Builder-stage soft-scale: do not hard-skip explorers on void_seek (free mode).
+        # On other hard zones, scale explorers instead of zeroing them.
         hard_zone = bool(cascade_zone) and cascade_zone in _CASCADE_HARD_ZONES
         if (
             cascade_on
@@ -1550,8 +1569,15 @@ def _collect_candidates(
             and not state.skip_explorers
             and len(state.candidates) >= max(int(ctx.propose_cfg.candidate_pool), 1)
         ):
-            state.skip_explorers = True
-            state.mark_skip("builders", sorted(_CASCADE_EXPLORERS))
+            scale = float(
+                getattr(ctx.propose_cfg, "cascade_explorer_budget_scale", 0.35) or 0.35
+            )
+            state.explorer_scale = min(
+                state.explorer_scale,
+                min(max(scale, 0.05), 1.0),
+            )
+            if state.cascade_stats_out is not None:
+                state.cascade_stats_out["cascade_stopped_after"] = "builders_scaled"
         _collect_explorer_candidates(ctx, extras, state)
     else:
         _collect_explorer_candidates(ctx, extras, state)
@@ -2510,6 +2536,7 @@ def collect_propose_batch_for_nest(
     seeded: bool = False,
     full_packed_geoms: Sequence[Geometry] | None = None,
     archived_patterns: Sequence | None = None,
+    force_zone: str | None = None,
 ) -> tuple[dict[int, np.ndarray], dict]:
     """Propose slice of nest transform-batch (proposals + densify/pocket stats).
 
@@ -2540,6 +2567,7 @@ def collect_propose_batch_for_nest(
         densify_stats_out=densify_stats,
         full_packed_geoms=full_packed_geoms,
         archived_patterns=archived_patterns,
+        force_zone=force_zone,
     )
     stats = {
         "proposal_count": sum(arr.shape[0] for arr in propose_by_group.values()),
@@ -2669,9 +2697,7 @@ def _prepare_group_propose(
             max_patterns=int(propose_cfg.cluster_copy_max_patterns),
             archived=archived,
         )
-    void_thr = float(propose_cfg.late_border_void_override_ratio)
-    if void_thr <= 0.0:
-        void_thr = 2.5
+    void_thr = void_ratio_threshold(propose_cfg)
     free_snap = None
     if placed:
         mean_area = float(np.mean([float(p.area) for p, _ in parts])) if parts else 1.0
@@ -2720,6 +2746,7 @@ def proposed_transforms_for_groups(
     densify_stats_out: dict | None = None,
     full_packed_geoms: Sequence[Geometry] | None = None,
     archived_patterns: Sequence | None = None,
+    force_zone: str | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -2780,6 +2807,7 @@ def proposed_transforms_for_groups(
     emitted_by_proposer: dict[str, int] = {}
     pool_by_proposer: dict[str, int] = {}
     pocket_by_tag: dict[str, int] = {}
+    void_hijack_over_mcts = 0
     for part_idx, (part_poly, group_id) in enumerate(parts):
         zone: str | None = None
         zone_info = None
@@ -2831,6 +2859,7 @@ def proposed_transforms_for_groups(
                     and free_analysis.kind == "large_void"
                     and free_analysis.target_pt is not None
                     and not (zone_info.is_corridor or zone_info.is_annulus)
+                    and not force_zone
                 ):
                     void_hijack_from = zone
                     zone = "void_seek"
@@ -2844,6 +2873,60 @@ def proposed_transforms_for_groups(
                         is_annulus=False,
                         is_corridor=False,
                     )
+                # Q70: Macro-MCTS forces ProposeConfig.for_place(zone); densify stays
+                # on void_seek via for_place (Q74) — do not strip proposers here.
+                if force_zone:
+                    zone = str(force_zone)
+                    zone_info = PlaceZoneInfo(
+                        zone=zone,
+                        free_ratio=zone_info.free_ratio if zone_info is not None else 1.0,
+                        n_clusters=zone_info.n_clusters if zone_info is not None else 1,
+                        outline_coverage=(
+                            zone_info.outline_coverage if zone_info is not None else 0.0
+                        ),
+                        primary_target=primary_target,
+                        is_annulus=False,
+                        is_corridor=False,
+                    )
+                    if zone == "void_seek" and free_analysis is not None:
+                        if free_analysis.target_pt is not None:
+                            primary_target = free_analysis.target_pt
+                            zone_info = PlaceZoneInfo(
+                                zone="void_seek",
+                                free_ratio=zone_info.free_ratio,
+                                n_clusters=zone_info.n_clusters,
+                                outline_coverage=zone_info.outline_coverage,
+                                primary_target=primary_target,
+                                is_annulus=False,
+                                is_corridor=False,
+                            )
+                    # Q97: soft override — Sheet/interior_pocket under large_void only.
+                    if (
+                        getattr(propose_cfg, "enable_void_large_hijack", True)
+                        and free_analysis.kind == "large_void"
+                        and free_analysis.target_pt is not None
+                        and str(force_zone) == "interior_pocket"
+                    ):
+                        void_hijack_over_mcts += 1
+                        void_hijack_from = str(force_zone)
+                        zone = "void_seek"
+                        primary_target = free_analysis.target_pt
+                        zone_info = PlaceZoneInfo(
+                            zone="void_seek",
+                            free_ratio=zone_info.free_ratio,
+                            n_clusters=zone_info.n_clusters,
+                            outline_coverage=zone_info.outline_coverage,
+                            primary_target=primary_target,
+                            is_annulus=False,
+                            is_corridor=False,
+                        )
+                    elif (
+                        free_analysis.kind == "large_void"
+                        and free_analysis.target_pt is not None
+                        and str(force_zone)
+                        in ("cluster_edge", "empty_border", "border_gap")
+                    ):
+                        void_hijack_over_mcts += 1
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
             if zone == "void_seek":
@@ -3155,6 +3238,9 @@ def proposed_transforms_for_groups(
         free_ratio = zone_info.free_ratio if zone_info is not None else 1.0
         sterile_zones = ("cluster_edge", "border_gap", "interior_pocket")
         densify_count_floor = max(4, int(cfg.max_proposals) // 3)
+        # D1: soft densify floor when Macro-MCTS steers void_seek / Motif.
+        if str(force_zone or "") == "void_seek" or zone == "void_seek":
+            densify_count_floor = max(densify_count_floor, max(8, int(cfg.max_proposals) // 2))
         floor_ratio = float(getattr(propose_cfg, "densify_clearance_floor_ratio", 1.0))
         group_pocket_emitted = int(pocket_stats.get("emitted", 0))
         arr, zone_label, fired, accepted, densify_reason, densify_telem = (
@@ -3262,6 +3348,7 @@ def proposed_transforms_for_groups(
         densify_stats_out.clear()
         densify_stats_out["fired"] = densify_fired
         densify_stats_out["accepted"] = densify_accepted
+        densify_stats_out["void_hijack_over_mcts"] = int(void_hijack_over_mcts)
         densify_stats_out["densify_reason"] = (
             densify_reasons[-1] if densify_reasons else None
         )

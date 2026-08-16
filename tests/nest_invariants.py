@@ -5,12 +5,12 @@ from typing import Sequence
 import numpy as np
 from shapely.geometry.base import BaseGeometry
 
-from nest_graph.elem_graph import ElemGraph
+from nest_graph.elem_graph import PoseGraph
 from nest_graph.geometry import Geometry, find_polygon_intersections_bipartite
 from nest_graph.utils import transform_poly
 
 
-def assert_selected_graph_independent(graph: ElemGraph, selected: Sequence[int]) -> None:
+def assert_selected_graph_independent(graph: PoseGraph, selected: Sequence[int]) -> None:
     sel = set(selected)
     n = len(graph.group_id)
     for v in sel:
@@ -38,7 +38,7 @@ def assert_selected_geometry_disjoint(
 
 
 def assert_selected_non_overlapping(
-    graph: ElemGraph,
+    graph: PoseGraph,
     polys: Sequence[BaseGeometry],
     selected: Sequence[int],
     *,

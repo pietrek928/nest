@@ -12,14 +12,14 @@ Tscore compute_score(const PointAngleRule &p, const Vec2f &v, float a);
 Tscore compute_score(const CircleAngleRule &p, const Circle2f &circle, float a);
 
 void compute_scores(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<std::vector<Tvertex>> &elems_by_group,
     std::vector<Tscore> &scores_out,
     const PlacementRuleSet &rules,
     ScoreAggregation aggregation);
 
 std::vector<Tscore> score_elems(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const PlacementRuleSet &rules,
     ScoreAggregation aggregation);
 

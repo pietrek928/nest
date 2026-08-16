@@ -11,7 +11,7 @@ from nest_graph.build_graph import (
 from nest_graph.config import ProposeConfig
 from nest_graph.elem_graph import (
     Circle,
-    ElemGraph,
+    PoseGraph,
     SelectMode,
     SelectOptions,
     Vec2,
@@ -46,7 +46,7 @@ def test_zones_have_void_hijack():
 
 
 def test_nest_by_scores_prefers_high_score():
-    g = ElemGraph()
+    g = PoseGraph()
     g.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=1.0, y=0.0), Circle.from_center_radius(1.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=0.0, y=1.0), Circle.from_center_radius(0.0, 1.0, 0.1))

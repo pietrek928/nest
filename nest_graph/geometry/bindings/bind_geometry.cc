@@ -141,6 +141,28 @@ void bind_geometry_class(nb::module_ &m) {
                 return GeometryHolder(decompose_complex_polygon<Vec2d>(outers, holes));
             },
             nb::arg("geom"))
+        .def_static(
+            "from_shapely_outline",
+            [](nb::handle geom) {
+                // Exterior ring(s) only — line Geometry for standoff / kiss (C0).
+                if (geom_type_is(geom, "LineString")
+                    || geom_type_is(geom, "LinearRing")) {
+                    std::vector<Vec2d> pts = ring_from_coords(geom.attr("coords"));
+                    return geometry_from_line_coords(std::move(pts));
+                }
+                std::vector<std::vector<Vec2d>> outers;
+                std::vector<std::vector<Vec2d>> holes;
+                collect_from_shapely(geom, outers, holes);
+                if (outers.empty()) {
+                    throw nb::value_error(
+                        "Geometry.from_shapely_outline: no usable exterior rings");
+                }
+                if (outers.size() == 1) {
+                    return geometry_from_line_coords(std::move(outers[0]));
+                }
+                return geometry_from_rings_coords(std::move(outers));
+            },
+            nb::arg("geom"))
         .def(
             "append_convex_poly",
             [](GeometryHolder &holder, nb::handle points) {

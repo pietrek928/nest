@@ -8,7 +8,7 @@
 #include "scoring/scoring.h"
 
 void sort_collision_lists_by_score(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tscore> &scores,
     std::vector<std::vector<Tvertex>> &collisions
 ) {
@@ -147,7 +147,7 @@ void select_elems_greedy(
 }
 
 float attract_to_selected(
-    const ElemGraph &g,
+    const PoseGraph &g,
     int n,
     Tvertex u,
     const std::vector<bool> &is_selected,
@@ -168,7 +168,7 @@ float attract_to_selected(
     return sum;
 }
 
-float attract_pair_weight(const ElemGraph &g, int n, Tvertex u, Tvertex v) {
+float attract_pair_weight(const PoseGraph &g, int n, Tvertex u, Tvertex v) {
     if (static_cast<int>(g.attract.size()) != n) {
         return 0.0f;
     }
@@ -181,7 +181,7 @@ float attract_pair_weight(const ElemGraph &g, int n, Tvertex u, Tvertex v) {
 }
 
 void select_elems_local_swap(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<std::vector<Tvertex>> &collisions,
     int n,
     const std::vector<Tscore> &scores,
@@ -255,7 +255,7 @@ bool nodes_independent(
 }
 
 void select_elems_two_swap(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<std::vector<Tvertex>> &collisions,
     int n,
     const std::vector<Tscore> &scores,
@@ -350,7 +350,7 @@ void select_elems_two_swap(
 }
 
 void select_elems(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<std::vector<Tvertex>> &elems_by_group,
     const PlacementRuleSet &rules,
     const std::vector<Tscore> &scores,
@@ -379,7 +379,7 @@ void select_elems(
 }
 
 std::vector<std::vector<Tvertex>> nest_by_graph(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<PlacementRuleSet> &cases,
     const SelectOptions &select
 ) {
@@ -400,7 +400,7 @@ std::vector<std::vector<Tvertex>> nest_by_graph(
 }
 
 std::vector<Tvertex> nest_by_scores(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tscore> &scores,
     const SelectOptions &select
 ) {

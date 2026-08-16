@@ -21,7 +21,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "nest_by_graph",
-        [](const ElemGraph &g,
+        [](const PoseGraph &g,
            const std::vector<PlacementRuleSet> &cases,
            const SelectOptions &select) {
             return ::nest_by_graph(g, cases, select);
@@ -32,7 +32,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "nest_by_scores",
-        [](const ElemGraph &g,
+        [](const PoseGraph &g,
            const std::vector<Tscore> &scores,
            const SelectOptions &select) {
             return ::nest_by_scores(g, scores, select);
@@ -50,7 +50,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "score_rules",
-        [](const std::vector<ElemGraph> &graphs,
+        [](const std::vector<PoseGraph> &graphs,
            const std::vector<PlacementRuleSet> &rules,
            const ScoreRulesOptions &options) {
             return ::score_rules(graphs, rules, options);
@@ -61,7 +61,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "score_elems",
-        [](const ElemGraph &g, const PlacementRuleSet &rules, ScoreAggregation agg) {
+        [](const PoseGraph &g, const PlacementRuleSet &rules, ScoreAggregation agg) {
             return ::score_elems(g, rules, agg);
         },
         nb::arg("g"),
@@ -105,7 +105,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "increase_score_dfs",
-        [](const ElemGraph &g,
+        [](const PoseGraph &g,
            const std::vector<Tvertex> &selected,
            const std::vector<Tscore> &scores,
            const RefineSelectionOptions &options) {
@@ -126,7 +126,7 @@ void bind_elem_graph_api(nb::module_ &m) {
 
     m.def(
         "finalize_selection",
-        [](const ElemGraph &g,
+        [](const PoseGraph &g,
            const std::vector<Tvertex> &selected,
            const std::vector<Tscore> &scores,
            const FinalizeSelectionOptions &options) {
@@ -141,7 +141,7 @@ void bind_elem_graph_api(nb::module_ &m) {
         "greedy_weighted_mis",
         [](const std::vector<Tvertex> &verts,
            const std::vector<Tscore> &scores,
-           const ElemGraph &g,
+           const PoseGraph &g,
            const std::vector<Tvertex> &locked) {
             return ::greedy_weighted_mis(verts, scores, g, locked);
         },

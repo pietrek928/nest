@@ -599,13 +599,14 @@ def make_demo_triangle_corner_cluster(
         group_counts=counts,
         seed_placements=tuple(seeds),
         iters=4,
-        tags=frozenset(["mid_pack", "void_fill", "seeded"]),
         floors=NestFloors(
             parts_final=len(seeds) + 8,
-            area_coverage=seed_cov + 0.08,
+            # E0 raise-gate under Q69: scrap area ≥ 0.570.
+            area_coverage=max(seed_cov + 0.08, 0.570),
             # Void shrinks but need not vanish in a short mid-pack run.
             largest_free_over_part=60.0,
         ),
+        tags=frozenset(["mid_pack", "void_fill", "seeded"]),
         family="demo_triangle_corner_cluster",
     )
 

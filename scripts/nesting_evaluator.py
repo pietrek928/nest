@@ -36,6 +36,9 @@ from nest_graph.build_graph import (
     void_elite_count,
     void_elite_tuple_from_archive,
 )
+from nest_graph.propose.heavy_polish import apply_refine_with_restore
+from nest_graph.propose.selection_compose import dual_nest_for, sheet_diag_from
+from nest_graph.decision.execute import prep_selection_freeze
 from nest_graph.config import BuildGraphConfig, score_rules_options
 from nest_graph.elem_graph import (
     FinalizeSelectionOptions,
@@ -60,8 +63,15 @@ from nest_graph.propose.context import (
     part_is_concave,
     propose_push_point,
     should_use_border_focus,
+    void_ratio_threshold,
 )
 from nest_graph.propose.pipeline import allow_void_repack, propose_coords_from_candidates
+from nest_graph.propose.block_replace import (
+    _sel_area,
+    lex_count_area_better,
+    try_block_hole_renest,
+)
+from nest_graph.propose.void_selection import count_selected_in_free
 from nest_graph.propose.post_pack import run_post_pack_passes
 from nest_graph.utils import transform_poly
 from scripts.nesting_fixtures import NestCase
@@ -329,8 +339,15 @@ def metrics_meet_floors(metrics: NestingMetrics, floors) -> list[str]:
 
 
 class NestingPipelineEvaluator:
-    def __init__(self, case: NestCase, cfg: BuildGraphConfig):
+    def __init__(
+        self,
+        case: NestCase,
+        cfg: BuildGraphConfig,
+        *,
+        always_heavy_polish: bool = False,
+    ):
         self.case = case
+        self.always_heavy_polish = bool(always_heavy_polish)
         self.user_holes = _case_user_holes(case)
         self.sheet, _ = board_context_from_geometry(
             case.board, user_holes=self.user_holes,
@@ -593,13 +610,22 @@ class NestingPipelineEvaluator:
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
+            # Q69: cheap expand until last iter; always_heavy ablation forces polish every iter.
+            do_heavy_polish = bool(self.always_heavy_polish) or (
+                int(iter_idx) >= int(self.case.iters) - 1
+            )
             sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
-            if (
-                plateau.on_plateau
-                and bool(getattr(self.cfg.propose, "enable_incumbent_loop", True))
-                and plateau.streak >= plateau.flat_iters + 2
-            ):
-                sel_iter = sel_iter.model_copy(update={"improve_rules_rounds": 0})
+            sel_iter, freeze_reason = prep_selection_freeze(
+                sel_iter,
+                do_heavy_polish=do_heavy_polish,
+                on_plateau=plateau.on_plateau,
+                plateau_streak=int(plateau.streak),
+                flat_iters=int(plateau.flat_iters),
+                enable_incumbent_loop=bool(
+                    getattr(self.cfg.propose, "enable_incumbent_loop", True)
+                ),
+            )
+            del freeze_reason
             sat_info = _late_border_saturation_info(
                 self.cfg, nest_state, self.sheet,
                 had_void_override=had_void_override,
@@ -688,17 +714,12 @@ class NestingPipelineEvaluator:
             packed_for_free = list(next_polys) if next_polys else []
             part_areas = [float(p[0].area) for p in self.parts]
             mean_part = float(np.mean(part_areas)) if part_areas else 1.0
-            void_thr = float(self.cfg.propose.late_border_void_override_ratio)
-            if void_thr <= 0.0:
-                void_thr = 2.5
+            void_thr = void_ratio_threshold(self.cfg.propose)
             free_info = analyze_free_space(
                 self.sheet, packed_for_free, mean_part, min_dist,
                 void_ratio_threshold=void_thr,
             )
-            sheet_diag = 0.0
-            if self.sheet is not None and not self.sheet.is_empty:
-                minx, miny, maxx, maxy = self.sheet.bounds
-                sheet_diag = float(np.hypot(maxx - minx, maxy - miny))
+            sheet_diag = sheet_diag_from(self.sheet)
             part_bases = part_bases_fixed
             candidate_geoms = _native_geoms_from_transforms(
                 group_id, transform, part_bases,
@@ -708,6 +729,8 @@ class NestingPipelineEvaluator:
                 packed_geoms = [
                     g for g in (as_geometry(p) for p in next_polys) if g is not None
                 ]
+            # Q105: dual = heavy OR large_void (same SoT as build_graph).
+            dual_nest = dual_nest_for(free_info, do_heavy=do_heavy_polish)
             composed = compose_and_nest_selection(
                 graph=graph,
                 rule_sets=rule_sets,
@@ -731,6 +754,7 @@ class NestingPipelineEvaluator:
                 ngroups=len(self.parts),
                 packed_group_id=prev_packed_gid or None,
                 packed_transform=prev_packed_tr or None,
+                dual_nest=dual_nest,
             )
             scores = composed.scores
             refine_scores = composed.refine_scores
@@ -739,20 +763,121 @@ class NestingPipelineEvaluator:
             free_poly = composed.free_poly
             free_info = composed.free_info
             n_void_nest = composed.n_void_nest
-            _, selected_polys, _score_sum = apply_dfs_refinement(
-                graph,
-                refine_rules,
-                selected,
-                refine_scores,
-                selection=sel_iter,
+            propose_stats["nest_dual"] = int(dual_nest)
+            propose_stats["mcts_heavy"] = int(do_heavy_polish)
+            # Q69: DFS + rim∨lex restore only on heavy leaf (parity with build_graph).
+            try:
+                nest_geoms = [
+                    polys[i] for i in selected
+                    if 0 <= int(i) < len(polys)
+                    and polys[i] is not None
+                    and not polys[i].is_empty
+                ]
+                rim_before = float(outline_coverage_ratio(
+                    nest_geoms,
+                    self.sheet,
+                    min_dist,
+                    pack_geoms=_native_geoms_from_transforms(
+                        [group_id[i] for i in selected],
+                        [transform[i] for i in selected],
+                        part_bases,
+                    ) if selected else None,
+                ))
+            except Exception:
+                rim_before = float(propose_stats.get("outline_cov", 0.0) or 0.0)
+            rim_reject = float(
+                getattr(self.cfg.propose, "refine_rim_drop_reject", 0.02) or 0.0
+            )
+            selected_polys = apply_refine_with_restore(
+                do_heavy_polish=do_heavy_polish,
+                apply_dfs_fn=apply_dfs_refinement,
+                graph=graph,
+                refine_rules=refine_rules,
+                selected_nest=selected,
+                refine_scores=refine_scores,
+                sel_iter=sel_iter,
                 node_areas=[
                     float(part_areas[int(g)]) if int(g) < len(part_areas) else 0.0
                     for g in group_id
                 ],
-                refine_seed=int(rng.integers(0, 2**31)),
+                refine_seed=int(rng.integers(1, 2**31)),
                 locked_indices=list(propose_stats.get("motif_locked") or []),
+                polys=polys,
+                group_id=group_id,
+                transform=transform,
+                part_areas=part_areas,
+                part_bases=part_bases,
+                sheet=self.sheet,
+                min_dist=min_dist,
+                rim_before=rim_before,
+                rim_reject=rim_reject,
+                propose_stats=propose_stats,
+                native_geoms_from_transforms_fn=_native_geoms_from_transforms,
             )
+            # P1: void refine hold — DFS that sheds void without lex win loses density.
+            propose_stats["void_refine_hold"] = 0
+            if (
+                do_heavy_polish
+                and free_info is not None
+                and getattr(free_info, "kind", None) == "large_void"
+                and free_poly is not None
+                and not getattr(free_poly, "is_empty", True)
+            ):
+                nv_nest = count_selected_in_free(polys, selected, free_poly)
+                nv_ref = count_selected_in_free(polys, selected_polys, free_poly)
+                refine_lex_better = lex_count_area_better(
+                    old_count=len(selected),
+                    old_area=_sel_area(selected, group_id, part_areas),
+                    new_count=len(selected_polys),
+                    new_area=_sel_area(selected_polys, group_id, part_areas),
+                )
+                if nv_ref < nv_nest and not refine_lex_better:
+                    selected_polys = list(selected)
+                    propose_stats["void_refine_hold"] = 1
             propose_stats["motif_sequential_repin"] = 0
+            propose_stats.setdefault("block_hole_accepted", 0)
+            propose_stats.setdefault("block_hole_emit_in_hull", 0)
+            # P1: 3b hole re-nest on heavy leaf only (evaluator ↔ build_graph parity).
+            if (
+                do_heavy_polish
+                and bool(getattr(self.cfg.propose, "enable_lns_rebuild", True))
+                and free_info is not None
+                and free_info.kind == "large_void"
+                and selected_polys
+            ):
+                _sheet_b, void_geoms_b = board_context_from_geometry(
+                    self.case.board, user_holes=self.user_holes,
+                )
+                del _sheet_b
+                (
+                    selected_polys,
+                    polys,
+                    transform,
+                    group_id,
+                    candidate_geoms,
+                    hole_telem,
+                ) = try_block_hole_renest(
+                    selected=selected_polys,
+                    polys=list(polys),
+                    transforms=list(transform),
+                    group_id=list(group_id),
+                    candidate_geoms=list(candidate_geoms)
+                    if candidate_geoms is not None
+                    else None,
+                    scores=refine_scores,
+                    part_areas=part_areas,
+                    part_by_group={
+                        i: self.parts[i][0] for i in range(len(self.parts))
+                    },
+                    sheet=self.sheet,
+                    min_dist=min_dist,
+                    propose_cfg=self.cfg.propose,
+                    pole=getattr(free_info, "target_pt", None),
+                    void_poly=free_poly,
+                    void_geoms=void_geoms_b,
+                    cluster_patterns=None,
+                )
+                propose_stats.update(hole_telem)
             pin_stats: dict = {
                 "pin_candidates": 0,
                 "pin_added": 0,
@@ -948,7 +1073,11 @@ class NestingPipelineEvaluator:
                     n_void_nest=0,
                     n_void_refine=0,
                 )
-            if free_post.kind == "large_void" and free_post.target_pt is not None:
+            if (
+                do_heavy_polish
+                and free_post.kind == "large_void"
+                and free_post.target_pt is not None
+            ):
                 polys, transform, selected_polys, pack_stats = run_post_pack_passes(
                     self.sheet,
                     list(polys),
@@ -980,6 +1109,10 @@ class NestingPipelineEvaluator:
                     last_void_leak["repack"] = _repack
                     last_void_leak["relocate"] = _reloc
                     last_void_leak["local_se2"] = _se2
+            elif isinstance(last_void_leak, dict):
+                last_void_leak.setdefault("repack", {"attempted": 0, "accepted": 0})
+                last_void_leak.setdefault("relocate", {})
+                last_void_leak.setdefault("local_se2", {})
 
             new_selected_t = [[] for _ in range(len(self.case.groups))]
             for i in selected_polys:

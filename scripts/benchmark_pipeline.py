@@ -299,6 +299,11 @@ def main() -> None:
     )
     parser.add_argument("--seeds", type=int, nargs="*", default=[0])
     parser.add_argument("--gate", action="store_true", help="Fail if case floors / baselines not met")
+    parser.add_argument(
+        "--always-heavy",
+        action="store_true",
+        help="E0 ablation: DFS/post-pack every iter (default Q69 last-iter only)",
+    )
     parser.add_argument("--update-baselines", action="store_true", help="Update docs/nesting_baselines.json")
     parser.add_argument(
         "--baselines",
@@ -336,7 +341,9 @@ def main() -> None:
         for propose in args.propose:
             for dfs_mode in args.dfs_modes:
                 cfg = _build_cfg(propose, dfs_mode)
-                evaluator = NestingPipelineEvaluator(case, cfg)
+                evaluator = NestingPipelineEvaluator(
+                    case, cfg, always_heavy_polish=bool(args.always_heavy),
+                )
 
                 case_metrics = []
                 for seed in args.seeds:

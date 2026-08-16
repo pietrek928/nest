@@ -10,8 +10,6 @@ from nest_graph.propose.motif_lock import (
 )
 from nest_graph.propose.placements_pattern import (
     ClusterPattern,
-    age_accepted_pattern_archive,
-    archive_accepted_patterns,
     cluster_pattern_from_indices,
     extract_cluster_patterns,
     merge_cluster_patterns,
@@ -54,25 +52,30 @@ def test_compactness_prefers_dense_over_stringy():
     assert patterns[0].ref_transform[0] < 50.0
 
 
-def test_archive_ttl_reset_and_age():
-    pat = ClusterPattern(
-        members=((0, (0.0, 0.0, 0.0)), (0, (10.0, 0.0, 0.0))),
-        part_count=2,
-        ref_transform=(0.0, 0.0, 0.0),
-    )
-    arch = archive_accepted_patterns([], [pat], ttl=3, max_keep=4)
-    assert len(arch) == 1
-    assert arch[0].ttl_remaining == 3
-    assert arch[0].accept_count == 1
-    arch = age_accepted_pattern_archive(arch)
-    assert arch[0].ttl_remaining == 2
-    arch = archive_accepted_patterns(arch, [pat], ttl=3, max_keep=4)
-    assert arch[0].ttl_remaining == 3
-    assert arch[0].accept_count == 2
-    arch = age_accepted_pattern_archive(arch)
-    arch = age_accepted_pattern_archive(arch)
-    arch = age_accepted_pattern_archive(arch)
-    assert arch == []
+def test_motif_base_ttl_reset_and_age():
+    from nest_graph.elem_graph import MotifBase, MotifRecord, Se2
+
+    base = MotifBase()
+    r = MotifRecord()
+    r.gid_a = 0
+    r.gid_b = 1
+    r.relative = Se2(10.0, 0.0, 0.0)
+    r.gci = 0.8
+    r.compactness = 0.9
+    r.area_a = 2.0
+    r.area_b = 1.0
+    assert base.upsert(r, 0.0, 3) == 0
+    assert base.at(0).ttl_remaining == 3
+    assert base.at(0).accept_count == 1
+    assert base.age(1) == 0
+    assert base.at(0).ttl_remaining == 2
+    assert base.upsert(r, 0.0, 3) == 0
+    assert base.at(0).ttl_remaining == 3
+    assert base.at(0).accept_count == 2
+    assert base.age(1) == 0
+    assert base.age(1) == 0
+    assert base.age(1) == 1
+    assert base.size() == 0
 
 
 def test_merge_prefers_contact_then_archive_then_synth():
@@ -149,14 +152,14 @@ def test_lattice_offsets_and_pole_sort_top_k():
 def test_nest_by_scores_keeps_locks():
     from nest_graph.elem_graph import (
         Circle,
-        ElemGraph,
+        PoseGraph,
         SelectMode,
         SelectOptions,
         Vec2,
         nest_by_scores,
     )
 
-    g = ElemGraph()
+    g = PoseGraph()
     for i, x in enumerate((0.0, 1.0, 2.0, 4.0)):
         g.append_elem(0, Vec2(x=x, y=0.0), Circle.from_center_radius(x, 0.0, 0.1))
     g.add_collision_pair(0, 1)
@@ -271,14 +274,14 @@ def test_sequential_accept_full_motif_growing_clear():
 
 def test_refine_keeps_independent_locks():
     from nest_graph.elem_graph import (
-        ElemGraph,
+        PoseGraph,
         RefineSelectionOptions,
         Circle,
         Vec2,
         refine_selection,
     )
 
-    g = ElemGraph()
+    g = PoseGraph()
     for i, x in enumerate((0.0, 2.0, 4.0)):
         g.append_elem(0, Vec2(x=x, y=0.0), Circle.from_center_radius(x, 0.0, 0.1))
     g.add_collision_pair(0, 1)

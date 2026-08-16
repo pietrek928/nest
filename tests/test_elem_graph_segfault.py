@@ -16,7 +16,7 @@ from nest_graph.build_graph import (
 )
 from nest_graph.elem_graph import (
     Circle,
-    ElemGraph,
+    PoseGraph,
     PlacementRuleSet,
     PointAngleRule,
     PointPlaceRule,
@@ -37,7 +37,7 @@ TRI = normalize_poly(Polygon([(0, 0), (0.15, 0), (0, 0.07)]))
 
 def test_nest_by_graph_rules_for_missing_group_do_not_segfault():
     """Rules targeting group 1 must not OOB when the graph only has group-0 nodes."""
-    graph = ElemGraph()
+    graph = PoseGraph()
     graph.append_elem(0, Vec2(x=0.5, y=0.5), Circle.from_center_radius(0.5, 0.5, 0.1))
     graph.append_elem(0, Vec2(x=0.2, y=0.2), Circle.from_center_radius(0.2, 0.2, 0.05))
 
@@ -134,7 +134,7 @@ def test_score_rules_seed0_iter4_graph_regression():
 
 def test_score_rules_synthetic_group0_only_graph():
     """Minimal deterministic case: only group-0 nodes, rules include group 1."""
-    graph = ElemGraph()
+    graph = PoseGraph()
     for i in range(5):
         graph.append_elem(
             0,

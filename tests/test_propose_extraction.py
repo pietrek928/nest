@@ -51,7 +51,7 @@ def _cfg() -> BuildGraphConfig:
 
 
 class _FakeGraph:
-    """Minimal duck-typed ElemGraph for pin repair (collisions + group_id)."""
+    """Minimal duck-typed PoseGraph for pin repair (collisions + group_id)."""
 
     def __init__(self, n: int, collisions: dict[int, list[int]]):
         self.group_id = [0] * n

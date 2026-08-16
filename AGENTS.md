@@ -28,7 +28,12 @@ Native sources are listed in `tool.uv.cache-keys`.
 
 - Python 3.12+: **never** add `from __future__ import …` (including `annotations`).
 - Prefer `X | None`; quote forward refs only when required.
-- Imports at file top unless there is a concrete reason otherwise.
+- Imports **only** at module top. No mid-function / mid-branch `import` / `from … import`
+  (including inside `run_build_graph`). Exception: true circular-import break with a one-line
+  comment naming the cycle — prefer restructuring over lazy import.
+- **No nested `def`** unless there is a concrete reason (closure over locals that cannot be
+  args, or a one-shot callback required by an API). Prefer module-level / file-scope helpers.
+  Do not nest helpers inside `run_build_graph` / propose hot paths for “locality.”
 
 ### C++
 
@@ -47,13 +52,23 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 - **Dedup / one gate.** Grep for the predicate you are about to add (lex hold, round-4 keys, prepend/union, zone skip, gravity vector, mix niches, rim restore). The plan must cite the existing function. Do not add a second helper, skip site, or restore path. Permission (`ZONE_PROPOSERS`) stays distinct from staging (`packed_n` / void / `use_*` flags). One truncation/cut per pipeline.
 - **Validate vs code.** Check comments that already claim the behavior against the actual condition. Check plan claims against live helpers (`transform_row_key`, `lex_count_area_better`, `part_extents`, `placement_obstacles`, …). Prefer extending a named path over a parallel RCL/beam/hold.
 - **Stage + bench.** Split the plan into letters. After each: smallest relevant `pytest`; `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate`; if propose/mix/nest changed, `NEST_BUILD_GRAPH_ITERS=2 uv run python -m nest_graph.build_graph`. Snapshot a baseline before the first letter.
-- **Miss → research that letter.** Hard stop if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. Max 2 research cycles on that letter (telem + named functions, one patch, re-gate). Do not start the next letter or pile a new mechanism.
+- **Miss → improvement loop (same letter).** Hard stop only if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. On miss: **loop** — research → patch → re-gate — until the letter passes or the user redirects. Do **not** start the next letter or pile a new parallel mechanism while looping.
 - Historical Qs stay in [docs/agent-domain-notes.md](docs/agent-domain-notes.md). Do not lock one-off Q-numbers in this file.
+
+### Improvement loop (research + unify)
+
+During each miss cycle and while a letter is still open:
+
+- **Research for improvements.** Read telem + named functions on the hot path; form one hypothesis; one patch; re-bench. Prefer levers already in-tree (flags, seeds, budgets, existing helpers) before inventing a third path.
+- **Hybrid unify.** If two solutions each win on different axes (density vs speed, swap-on vs swap-off, cascade vs free emit, …), do **not** keep both forever and do **not** pick one blindly. Look for a **combined / unified** form that keeps each advantage to the extent possible (lex pick, shared helper with both predicates, soft scale instead of hard skip, …). Cite both winners in the patch rationale.
+- **Unsure what hurts → telemetry first.** If the failure mode is opaque, add the smallest bench/telem that names the stage (void props/graph/nest/refine, cascade stop, pin add, rim drop, …), re-run, then patch from evidence — not from guess stacks.
+- **Unify as you iterate.** Every loop is also a cleanup pass: fold duplicates into one gate, flatten nested branches, delete dead flags. If logic is getting complex, duplicated, or deeply nested, **stop adding features** and unify/simplify first — otherwise you cannot move forward cleanly.
+- **Keep logic clean and consistent.** Same predicate → same helper; same SoT → same call site family; comments must match code. Prefer one readable path over clever special cases.
 
 ## Nesting invariants
 
 - **Output** must be collision-free (independent set). Transient DFS overlaps OK; `refine_selection` / `finalize_selection` must not return overlaps to Python.
-- Default pipeline: `compose_and_nest_selection` → `nest_by_scores` → **3a** (`block_replace` lock-swap, mid-pack) → `refine_selection` (unlocked) → `finalize_selection` → **3b** (contact-CC re-emit) → stamp fallback → post-pack gravity. Attract is finalize/tie-break only. Production nest keeps `local_swap=False`. DFS locks stay unset (finalize re-inserts clear locks). `nest_by_graph` remains for `score_rules` / tests only.
+- Default pipeline: `compose_and_nest_selection` → `nest_by_scores` → **3a** (`block_replace` lock-swap, mid-pack) → `refine_selection` (unlocked) → `finalize_selection` → **3b** (contact-CC re-emit) → stamp fallback → post-pack gravity. Attract is finalize/tie-break only. Cheap expand: `local_swap=False` unless **large_void** (then dual lex on/off). Heavy leaf always dual (**Q105**: dual = heavy OR large_void). Natives reuse `make_polygon_graph` / `NestState.native_geoms`. DFS locks stay unset (finalize re-inserts clear locks). `nest_by_graph` remains for `score_rules` / tests only.
 - Do not add `NEST_DFS_MIN_COLLISIONS_*` env vars; caps live in `refine_dfs.cc`.
 - **Board membership** = locked void solids (pad complement + exterior slabs + sheet holes) ∪ packed parts — **not** `fully_inside` / `footprint_inside` (oracle/tests only).
 - One obstacle assembler: `placement_obstacles(voids, packed)`.
@@ -82,8 +97,11 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 | `propose/post_pack.py` | repack → relocate → local_se2 runner |
 | `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest |
 | `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
+| `decision/` | Macro-MCTS policy (UCB1/PW/AMAF); thin `BoardSnapshot`; NFP-lite mates |
+| `elem_graph/pose_graph.*` | Pose MIS (replaces ElemGraph) |
+| `elem_graph/decision_arena.*` / `motif_base.*` / `se2.*` / `contact_relation.*` | C++ arena, motifs, SE2, ContactGRG+GCI |
 
-`build_graph` owns graph/selection only; it may re-export moved names for evaluator/tests.
+`build_graph` owns graph/selection + Macro-MCTS outer loop (cheap expand vs best-leaf polish); it may re-export moved names for evaluator/tests.
 
 ## Hard bans
 
@@ -110,4 +128,4 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 - Run the smallest relevant `pytest` for touched code.
 - After C++ edits: rebuild (`uv pip install -e .` or cmake targets above), then run matching C++ or binding tests.
 - Confirm selection outputs stay pairwise independent when changing pack/polish paths.
-- Staged impl follows Planning (gate after each letter).
+- Staged impl follows Planning (gate after each letter; on miss run the improvement loop, including unify/telem before the next letter).

@@ -15,7 +15,9 @@ from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
 from nest_graph.propose.placement_common import (
     as_geometry as _as_geometry,
+    dual_pose_from_base,
     is_pose_clear,
+    part_base_geoms,
     selection_pairwise_independent,
 )
 from nest_graph.propose.selection_edit import SelectionEditCtx
@@ -337,6 +339,7 @@ def stamp_motif_at_anchor(
     fixed: BaseGeometry,
     min_dist: float,
     void_geoms: Sequence | None = None,
+    part_bases: dict[int, Geometry] | None = None,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
     """Atomic peeled-motif stamp under Scene ``is_pose_clear``.
 
@@ -352,7 +355,7 @@ def stamp_motif_at_anchor(
         _, void_geoms = board_context_from_geometry(sheet)
     voids = list(void_geoms) if void_geoms else []
     obs = _obstacle_geoms(fixed)
-    part_geoms: dict[int, Geometry] = {}
+    part_geoms = part_base_geoms(part_by_group, part_bases=part_bases)
     placed: list[tuple[int, np.ndarray, BaseGeometry]] = []
     for idx, t_rel in mapping:
         gid = int(group_ids[idx])
@@ -362,13 +365,10 @@ def stamp_motif_at_anchor(
         t_abs = compose_transforms(t_anchor, t_rel)
         cand_tr = np.asarray(t_abs, dtype=np.float64).reshape(3)
         if gid not in part_geoms:
-            part_geoms[gid] = Geometry.from_shapely(part)
-        cand_g = part_geoms[gid].apply_transform(
-            float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
-        )
+            return None
+        cand_g, cand = dual_pose_from_base(part_geoms[gid], part, cand_tr)
         if not is_pose_clear(cand_g, voids, obs, min_dist):
             return None
-        cand = transform_poly(part, cand_tr)
         placed.append((idx, cand_tr, cand))
         obs.append(cand_g)
     return placed
@@ -388,6 +388,7 @@ def _motif_stamp_attempt(
     free_space=None,
     void_poly: Polygon | None = None,
     void_geoms: Sequence | None = None,
+    part_bases: dict[int, Geometry] | None = None,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
     peeled_gids = [int(group_ids[i]) for i in peeled]
     fitting = [p for p in patterns if pattern_fits_peeled(p, peeled_gids)]
@@ -443,6 +444,7 @@ def _motif_stamp_attempt(
                 fixed=kept_union,
                 min_dist=min_dist,
                 void_geoms=void_geoms,
+                part_bases=part_bases,
             )
             if stamped is not None:
                 return stamped
@@ -468,6 +470,7 @@ def cluster_repack_selection(
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
     void_geoms = None
+    part_bases = None
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
         sheet = ctx.sheet
@@ -483,9 +486,11 @@ def cluster_repack_selection(
             ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
         )
         void_geoms = ctx.void_geoms
+        part_bases = ctx.part_bases
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
+    part_geoms = part_base_geoms(part_by_group, part_bases=part_bases)
     stats: dict = {
         "attempted": 0,
         "accepted": 0,
@@ -588,6 +593,7 @@ def cluster_repack_selection(
             free_space=free_space,
             void_poly=void_poly,
             void_geoms=voids,
+            part_bases=part_bases,
         )
         if stamped is None:
             break
@@ -636,7 +642,6 @@ def cluster_repack_selection(
         og = _as_geometry(p)
         if og is not None:
             obs.append(og)
-    part_geoms: dict[int, Geometry] = {}
     for vi in victim_order:
         gid = int(group_ids[vi])
         part = part_by_group.get(gid)
@@ -668,17 +673,14 @@ def cluster_repack_selection(
         except Exception:
             coords = []
         if gid not in part_geoms:
-            part_geoms[gid] = Geometry.from_shapely(part)
+            continue
         part_g = part_geoms[gid]
         clear: list[tuple[tuple[float, float, float], BaseGeometry, np.ndarray, Geometry]] = []
         for c in coords:
             cand_tr = np.asarray(c, dtype=np.float64).reshape(3)
-            cand_g = part_g.apply_transform(
-                float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
-            )
+            cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
             if not is_pose_clear(cand_g, voids, obs, min_dist):
                 continue
-            cand = transform_poly(part, cand_tr)
             clear.append((c, cand, cand_tr, cand_g))
         if not clear:
             continue
@@ -777,6 +779,9 @@ def cluster_relocate_selection(
             ctx.fixed_obstacles if fixed_obstacles is None else fixed_obstacles
         )
         void_geoms = ctx.void_geoms if void_geoms is None else void_geoms
+        part_bases = ctx.part_bases
+    else:
+        part_bases = None
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
@@ -812,7 +817,7 @@ def cluster_relocate_selection(
         if g is not None and not g.is_empty
     ]
     step = max(0.5 * float(min_dist), 1e-4)
-    part_geoms: dict[int, Geometry] = {}
+    part_geoms = part_base_geoms(part_by_group, part_bases=part_bases)
 
     for local in local_groups:
         if len(local) < 2:
@@ -860,10 +865,9 @@ def cluster_relocate_selection(
                 tr = out_tr[gi]
                 cand_tr = np.array([tr[0] + ox, tr[1] + oy, tr[2]], dtype=np.float64)
                 if gid not in part_geoms:
-                    part_geoms[gid] = Geometry.from_shapely(part)
-                cand_g = part_geoms[gid].apply_transform(
-                    float(cand_tr[0]), float(cand_tr[1]), float(cand_tr[2]),
-                )
+                    ok = False
+                    break
+                cand_g, _cand = dual_pose_from_base(part_geoms[gid], part, cand_tr)
                 if not is_pose_clear(cand_g, voids, obs, min_dist):
                     ok = False
                     break
@@ -881,7 +885,11 @@ def cluster_relocate_selection(
             tr = out_tr[gi]
             cand_tr = np.array([tr[0] + ox, tr[1] + oy, tr[2]], dtype=np.float64)
             trial_tr[gi] = cand_tr
-            trial_polys[gi] = transform_poly(part, cand_tr)
+            gid = int(group_ids[gi])
+            if gid in part_geoms:
+                _, trial_polys[gi] = dual_pose_from_base(part_geoms[gid], part, cand_tr)
+            else:
+                trial_polys[gi] = transform_poly(part, cand_tr)
         if not selection_pairwise_independent(trial_polys, sel):
             continue
         out_polys = trial_polys

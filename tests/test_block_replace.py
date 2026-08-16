@@ -5,7 +5,7 @@ from shapely.geometry import Point, box
 from nest_graph.config import ProposeConfig
 from nest_graph.elem_graph import (
     Circle,
-    ElemGraph,
+    PoseGraph,
     Vec2,
 )
 from nest_graph.geometry import Geometry
@@ -34,7 +34,7 @@ def test_lex_count_beats_area():
 
 def test_cohort_swap_overlapping_third_never_tried():
     """A collides with B; disjoint C is never a related trial."""
-    g = ElemGraph()
+    g = PoseGraph()
     xs = (0.0, 1.0, 10.0, 11.0, 30.0, 31.0, 5.0)
     for x in xs:
         g.append_elem(0, Vec2(x=x, y=0.0), Circle.from_center_radius(x, 0.0, 0.4))
@@ -91,7 +91,7 @@ def test_cohort_swap_overlapping_third_never_tried():
 
 
 def test_cohort_swap_keeps_other_pinned_cohort():
-    g = ElemGraph()
+    g = PoseGraph()
     xs = (0.0, 1.0, 10.0, 11.0, 20.0, 21.0, 0.5)
     for x in xs:
         g.append_elem(0, Vec2(x=x, y=0.0), Circle.from_center_radius(x, 0.0, 0.4))

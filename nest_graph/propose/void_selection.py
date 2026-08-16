@@ -50,6 +50,39 @@ def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
     return float(ratio) * float(sheet_diag)
 
 
+def apply_void_centroid_score_term(
+    polys: Sequence,
+    scores: list[float],
+    *,
+    free_info,
+    free_poly: BaseGeometry | None,
+    void_term: float,
+) -> int:
+    """Add free-centroid void term to nest/refine scores (L1; one SoT).
+
+    Returns number of nodes that received the term.
+    """
+    if (
+        void_term <= 0.0
+        or free_info is None
+        or getattr(free_info, "kind", None) != "large_void"
+        or free_poly is None
+        or getattr(free_poly, "is_empty", True)
+    ):
+        return 0
+    hits = 0
+    for i, poly in enumerate(polys):
+        if i >= len(scores):
+            break
+        try:
+            if poly is not None and not poly.is_empty and free_poly.contains(poly.centroid):
+                scores[i] = float(scores[i]) + float(void_term)
+                hits += 1
+        except Exception:
+            continue
+    return hits
+
+
 def boost_border_scores(
     polys: list,
     scores: list[float],
@@ -275,6 +308,13 @@ def apply_void_selection_boosts(
     motif_w = float(getattr(cfg.propose, "motif_score_boost", 0.0) or 0.0)
     small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
     geom_w = float(getattr(cfg.propose, "selection_geom_weight", 0.0) or 0.0)
+    # Soft nest scale on large_void (decision + evaluator share this SoT).
+    mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
+    if free_info is not None and getattr(free_info, "kind", None) == "large_void" and pole_w > 0.0:
+        scale = 1.25 if mcts_zone == "void_seek" else 1.1
+        pole_w = float(pole_w) * scale
+        if propose_stats is not None:
+            propose_stats["void_island_soft_scale"] = float(scale)
     if free_info.kind == "large_void" and pole_w > 0.0:
         hits["void_island"] = boost_void_island_scores(
             polys,

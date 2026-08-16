@@ -36,6 +36,7 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("max_depth", &RefineSelectionOptions::max_depth)
         .def_rw("seed", &RefineSelectionOptions::seed)
         .def_rw("explore_shuffle", &RefineSelectionOptions::explore_shuffle)
+        .def_rw("growth_restarts", &RefineSelectionOptions::growth_restarts)
         .def_rw("beam_width", &RefineSelectionOptions::beam_width)
         .def_rw("max_root_collisions", &RefineSelectionOptions::max_root_collisions)
         .def_rw("max_tries", &RefineSelectionOptions::max_tries)
@@ -98,10 +99,10 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("cy"),
             nb::arg("radius"));
 
-    nb::class_<ElemPlace>(m, "ElemPlace")
+    nb::class_<PosePlace>(m, "PosePlace")
         .def(nb::init<>())
-        .def_rw("pos", &ElemPlace::pos)
-        .def_rw("a", &ElemPlace::a);
+        .def_rw("pos", &PosePlace::pos)
+        .def_rw("a", &PosePlace::a);
 
     nb::class_<PointPlaceRule>(m, "PointPlaceRule")
         .def(
@@ -250,16 +251,16 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("target", &AttractEdge::target)
         .def_rw("w", &AttractEdge::w);
 
-    nb::class_<ElemGraph>(m, "ElemGraph")
+    nb::class_<PoseGraph>(m, "PoseGraph")
         .def(nb::init<>())
-        .def_rw("group_id", &ElemGraph::group_id)
-        .def_rw("elems", &ElemGraph::elems)
-        .def_rw("coords", &ElemGraph::coords)
-        .def_rw("collisions", &ElemGraph::collisions)
-        .def_rw("attract", &ElemGraph::attract)
+        .def_rw("group_id", &PoseGraph::group_id)
+        .def_rw("elems", &PoseGraph::elems)
+        .def_rw("coords", &PoseGraph::coords)
+        .def_rw("collisions", &PoseGraph::collisions)
+        .def_rw("attract", &PoseGraph::attract)
         .def(
             "push_elem",
-            [](ElemGraph &g, int group_id, const ElemPlace &ep, const Circle2f &circle) {
+            [](PoseGraph &g, int group_id, const PosePlace &ep, const Circle2f &circle) {
                 g.group_id.push_back(group_id);
                 g.elems.push_back(ep);
                 g.coords.push_back(circle);
@@ -271,9 +272,9 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("circle"))
         .def(
             "append_elem",
-            [](ElemGraph &g, int group_id, Vec2f pos, Circle2f circle) {
+            [](PoseGraph &g, int group_id, Vec2f pos, Circle2f circle) {
                 g.group_id.push_back(group_id);
-                g.elems.push_back(ElemPlace{pos, 0.0f});
+                g.elems.push_back(PosePlace{pos, 0.0f});
                 g.coords.push_back(circle);
                 g.collisions.emplace_back();
                 g.attract.emplace_back();
@@ -283,10 +284,10 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("circle"))
         .def(
             "append_elem_at",
-            [](ElemGraph &g, int group_id, float x, float y, float a,
+            [](PoseGraph &g, int group_id, float x, float y, float a,
                float cx, float cy, float r_sq) {
                 g.group_id.push_back(group_id);
-                g.elems.push_back(ElemPlace{Vec2f({x, y}), a});
+                g.elems.push_back(PosePlace{Vec2f({x, y}), a});
                 g.coords.push_back(Circle2f(Vec2f({cx, cy}), r_sq));
                 g.collisions.emplace_back();
                 g.attract.emplace_back();
@@ -300,7 +301,7 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("r_sq"))
         .def(
             "add_collision_pair",
-            [](ElemGraph &g, int i, int j) {
+            [](PoseGraph &g, int i, int j) {
                 g.collisions[i].push_back(j);
                 g.collisions[j].push_back(i);
             },
@@ -308,7 +309,7 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("j"))
         .def(
             "add_collision",
-            [](ElemGraph &g, int i, int j) {
+            [](PoseGraph &g, int i, int j) {
                 g.collisions[i].push_back(j);
                 g.collisions[j].push_back(i);
             },
@@ -316,7 +317,7 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("j"))
         .def(
             "add_attract",
-            [](ElemGraph &g, int i, int j, float w) {
+            [](PoseGraph &g, int i, int j, float w) {
                 if (i == j || w <= 0.0f) {
                     return;
                 }
@@ -339,7 +340,7 @@ void bind_elem_graph_types(nb::module_ &m) {
             nb::arg("w"))
         .def(
             "reserve_elems",
-            [](ElemGraph &g, std::size_t n) {
+            [](PoseGraph &g, std::size_t n) {
                 g.group_id.reserve(n);
                 g.elems.reserve(n);
                 g.coords.reserve(n);

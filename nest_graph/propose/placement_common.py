@@ -26,6 +26,38 @@ def as_geometry(g) -> Geometry | None:
     return Geometry.from_shapely(g)
 
 
+def dual_pose_from_base(
+    part_base: Geometry,
+    part_poly: Polygon,
+    tr: Sequence[float] | np.ndarray,
+) -> tuple[Geometry, BaseGeometry]:
+    """Native clearance pose + matching Shapely poly (one sync site)."""
+    from nest_graph.utils import transform_poly
+
+    t = np.asarray(tr, dtype=np.float64).reshape(3)
+    native = part_base.apply_transform(float(t[0]), float(t[1]), float(t[2]))
+    return native, transform_poly(part_poly, t)
+
+
+def part_base_geoms(
+    part_by_group: dict[int, Polygon],
+    *,
+    part_bases: dict[int, Geometry] | None = None,
+) -> dict[int, Geometry]:
+    """Reuse caller natives when present; otherwise build once per gid."""
+    out: dict[int, Geometry] = {}
+    if part_bases:
+        for gid, g in part_bases.items():
+            if g is not None and not getattr(g, "is_empty", False):
+                out[int(gid)] = g
+    for gid, poly in part_by_group.items():
+        ig = int(gid)
+        if ig in out or poly is None or getattr(poly, "is_empty", False):
+            continue
+        out[ig] = Geometry.from_shapely(poly)
+    return out
+
+
 def is_board_adj(
     poly,
     sheet: Polygon,

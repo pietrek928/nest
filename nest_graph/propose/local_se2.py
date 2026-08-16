@@ -10,11 +10,13 @@ from shapely.ops import nearest_points
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
+from nest_graph.geometry import polish_se2_part, snap_pose_to_ring
 from nest_graph.propose.placement_common import (
     as_geometry,
+    dual_pose_from_base,
     is_board_adj,
     is_pose_clear,
+    part_base_geoms,
     selection_pairwise_independent,
 )
 from nest_graph.propose.placement_outline import (
@@ -25,7 +27,6 @@ from nest_graph.propose.placement_outline import (
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import preferred_spine_pole
-from nest_graph.utils import transform_poly
 
 
 def _slide_dirs(ux: float, uy: float) -> list[tuple[float, float]]:
@@ -85,6 +86,7 @@ def local_se2_selection(
     is True. Empty ``poles`` skips pole pull (no SW/corner fallback).
     """
     void_geoms = None
+    part_bases = None
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
         sheet = ctx.sheet
@@ -104,6 +106,7 @@ def local_se2_selection(
             ctx.board_adj_indices if board_adj_indices is None else board_adj_indices
         )
         void_geoms = ctx.void_geoms
+        part_bases = ctx.part_bases
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
@@ -175,7 +178,7 @@ def local_se2_selection(
         return 0.0
 
     order = sorted(sel, key=_order_key, reverse=True)
-    part_geoms: dict[int, Geometry] = {}
+    part_geoms = part_base_geoms(part_by_group, part_bases=part_bases)
 
     for idx in order:
         poly = out_polys[idx]
@@ -212,7 +215,7 @@ def local_se2_selection(
                 if contact is not None:
                     snap_contact, inward = inward_at_contact(sheet, contact)
                     if gid not in part_geoms:
-                        part_geoms[gid] = Geometry.from_shapely(part)
+                        continue
                     snapped = snap_pose_to_ring(
                         part_geoms[gid],
                         ring,
@@ -224,7 +227,9 @@ def local_se2_selection(
                     )
                     if snapped is not None:
                         sx, sy, sth = snapped
-                        snap_g = part_geoms[gid].apply_transform(sx, sy, sth)
+                        snap_g, snap_poly = dual_pose_from_base(
+                            part_geoms[gid], part, (sx, sy, sth),
+                        )
                         others0 = [
                             out_polys[j]
                             for j in sel
@@ -238,7 +243,6 @@ def local_se2_selection(
                             ) if g is not None
                         ]
                         if is_pose_clear(snap_g, voids, packed0, float(min_dist)):
-                            snap_poly = transform_poly(part, (sx, sy, sth))
                             prev_p, prev_t = out_polys[idx], out_tr[idx]
                             out_polys[idx] = snap_poly
                             out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
@@ -271,7 +275,7 @@ def local_se2_selection(
         ]
         obs_with_voids = [*voids, *packed]
         if gid not in part_geoms:
-            part_geoms[gid] = Geometry.from_shapely(part)
+            continue
         part_g = part_geoms[gid]
 
         stats["se2_native_hits"] += 1
@@ -302,7 +306,7 @@ def local_se2_selection(
             and abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi) < 1e-12
         ):
             continue
-        cand = transform_poly(part, cand_tr)
+        _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
         prev_p, prev_t = out_polys[idx], out_tr[idx]
         out_polys[idx] = cand
         out_tr[idx] = cand_tr

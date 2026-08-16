@@ -8,7 +8,7 @@
 #include "selection/selection.h"
 
 std::vector<Tscore> score_rules(
-    const std::vector<ElemGraph> &graphs,
+    const std::vector<PoseGraph> &graphs,
     const std::vector<PlacementRuleSet> &rule_sets,
     const ScoreRulesOptions &options
 ) {

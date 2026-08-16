@@ -16,7 +16,7 @@ bool vertex_is_locked(const unsigned char *locked, Tvertex v) {
 }
 
 bool selection_independent(
-    const ElemGraph &g, const std::vector<unsigned char> &selected
+    const PoseGraph &g, const std::vector<unsigned char> &selected
 ) {
     const int n = static_cast<int>(g.size());
     for (int v = 0; v < n; ++v) {
@@ -33,7 +33,7 @@ bool selection_independent(
 }
 
 void update_best_independent(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<unsigned char> &selected,
     const std::vector<Tscore> &scores,
     std::vector<unsigned char> &best_selected,
@@ -234,7 +234,7 @@ bool increase_path_dfs(
 }
 
 void run_growth_pass(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tscore> &scores,
     int max_tries,
     int min_collisions,
@@ -257,7 +257,7 @@ void run_growth_pass(
         nodes[i] = i;
     }
 
-    std::mt19937 rng(std::random_device{}());
+    std::mt19937 rng(options.seed);
     int tries = max_tries;
     do {
         std::shuffle(nodes.begin(), nodes.end(), rng);
@@ -283,7 +283,7 @@ void run_growth_pass(
 
 float score_path_dfs(
     Tvertex node,
-    const ElemGraph &g,
+    const PoseGraph &g,
     const Tscore *scores,
     float path_delta,
     int depth,
@@ -392,7 +392,7 @@ float score_path_dfs(
 
 bool try_refine_root(
     Tvertex v,
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options,
     float baseline_sum,
@@ -444,7 +444,7 @@ bool try_refine_root(
 }
 
 std::vector<Tvertex> refine_selection_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options
@@ -515,16 +515,42 @@ std::vector<Tvertex> refine_selection_dfs(
         g, selected, scores, best_independent, best_sum, best_count, best_area,
         options);
 
-    run_growth_pass(
-        g, scores, options.max_tries, options.min_collisions, selected,
-        selected_collisions, best_independent, best_sum, best_count, best_area,
-        options, is_locked.data());
+    {
+        const int restarts = std::max(1, options.growth_restarts);
+        const std::vector<unsigned char> growth_start = selected;
+        const std::vector<int> growth_coll_start = selected_collisions;
+        std::vector<unsigned char> best_work = selected;
+        std::vector<int> best_work_coll = selected_collisions;
+        for (int r = 0; r < restarts; ++r) {
+            selected = growth_start;
+            selected_collisions = growth_coll_start;
+            RefineSelectionOptions growth_opts = options;
+            growth_opts.seed = options.seed
+                + static_cast<std::uint32_t>(r) * 0x9E3779B9u;
+            const int prev_count = best_count;
+            const float prev_area = best_area;
+            const float prev_sum = best_sum;
+            run_growth_pass(
+                g, scores, options.max_tries, options.min_collisions, selected,
+                selected_collisions, best_independent, best_sum, best_count,
+                best_area, growth_opts, is_locked.data());
+            if (best_count > prev_count
+                || (best_count == prev_count && best_area > prev_area)
+                || (best_count == prev_count && best_area == prev_area
+                    && best_sum > prev_sum)
+                || r == 0) {
+                best_work = selected;
+                best_work_coll = selected_collisions;
+            }
+        }
+        selected = std::move(best_work);
+        selected_collisions = std::move(best_work_coll);
+    }
 
     float selected_sum =
         sum_selected_scores(scores.data(), selected.data(), n);
 
-    std::mt19937 rng(
-        options.seed != 0 ? options.seed : std::random_device{}());
+    std::mt19937 rng(options.seed);
 
     const int max_root_coll = std::max(0, options.max_root_collisions);
 
@@ -623,7 +649,7 @@ std::vector<Tvertex> refine_selection_dfs(
 }
 
 std::vector<Tvertex> refine_selection(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options
@@ -632,7 +658,7 @@ std::vector<Tvertex> refine_selection(
 }
 
 std::vector<Tvertex> increase_selection_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     int max_tries
 ) {
@@ -641,11 +667,20 @@ std::vector<Tvertex> increase_selection_dfs(
     opts.min_collisions = kDefaultMinCollisionsLoose;
     opts.max_passes = 0;
     opts.max_root_collisions = kDefaultMinCollisionsLoose;
+    // Selection-hash seed: former random_device path; seed=0 collapsed all
+    // increase_selection calls onto one shuffle after growth was seeded.
+    std::uint32_t h = 0x9e3779b9u;
+    for (Tvertex v : selected_nodes) {
+        h ^= static_cast<std::uint32_t>(v) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    }
+    h ^= static_cast<std::uint32_t>(max_tries) * 0x85ebca6bu;
+    opts.seed = h != 0 ? h : 1u;
+    opts.growth_restarts = std::max(1, max_tries);
     return refine_selection_dfs(g, selected_nodes, std::vector<Tscore>(g.size(), 1.0f), opts);
 }
 
 std::vector<Tvertex> increase_score_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options

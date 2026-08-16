@@ -7,6 +7,7 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
+from nest_graph.geometry import Geometry
 
 
 @dataclass
@@ -26,3 +27,5 @@ class SelectionEditCtx:
     fixed_obstacles: Sequence[BaseGeometry] | None = None
     void_geoms: Sequence | None = None
     board_adj_indices: Sequence[int] | None = None
+    part_bases: dict[int, Geometry] | None = None
+    board_geom: Geometry | None = None

@@ -10,28 +10,28 @@
 #include "types/types.h"
 
 inline void append_elem_at(
-    ElemGraph &g, int group_id, float x, float y, float r_sq = 0.25f) {
+    PoseGraph &g, int group_id, float x, float y, float r_sq = 0.25f) {
     g.group_id.push_back(group_id);
-    g.elems.push_back(ElemPlace{Vec2f({x, y}), 0.0f});
+    g.elems.push_back(PosePlace{Vec2f({x, y}), 0.0f});
     g.coords.push_back(Circle2f(Vec2f({x, y}), r_sq));
     g.collisions.emplace_back();
     g.attract.emplace_back();
 }
 
-inline void add_collision_pair(ElemGraph &g, int i, int j) {
+inline void add_collision_pair(PoseGraph &g, int i, int j) {
     g.collisions[static_cast<std::size_t>(i)].push_back(j);
     g.collisions[static_cast<std::size_t>(j)].push_back(i);
 }
 
-inline void add_attract_pair(ElemGraph &g, int i, int j, float w) {
+inline void add_attract_pair(PoseGraph &g, int i, int j, float w) {
     g.attract[static_cast<std::size_t>(i)].push_back(
         AttractEdge{static_cast<Tvertex>(j), w});
     g.attract[static_cast<std::size_t>(j)].push_back(
         AttractEdge{static_cast<Tvertex>(i), w});
 }
 
-inline ElemGraph star_graph(int spokes) {
-    ElemGraph g;
+inline PoseGraph star_graph(int spokes) {
+    PoseGraph g;
     append_elem_at(g, 0, 0.0f, 0.0f);
     for (int i = 1; i <= spokes; ++i) {
         append_elem_at(g, 0, static_cast<float>(i), 1.0f);
@@ -40,11 +40,11 @@ inline ElemGraph star_graph(int spokes) {
     return g;
 }
 
-inline ElemGraph path_graph(int n, const std::vector<float> &scores) {
+inline PoseGraph path_graph(int n, const std::vector<float> &scores) {
     if (static_cast<int>(scores.size()) != n) {
         throw std::invalid_argument("path_graph: scores length must match n");
     }
-    ElemGraph g;
+    PoseGraph g;
     for (int i = 0; i < n; ++i) {
         append_elem_at(g, 0, static_cast<float>(i), 0.0f);
     }
@@ -55,7 +55,7 @@ inline ElemGraph path_graph(int n, const std::vector<float> &scores) {
     return g;
 }
 
-inline bool is_independent_set(const ElemGraph &g, const std::vector<int> &selected) {
+inline bool is_independent_set(const PoseGraph &g, const std::vector<int> &selected) {
     std::set<int> sel(selected.begin(), selected.end());
     const int n = static_cast<int>(g.size());
     for (int v : sel) {

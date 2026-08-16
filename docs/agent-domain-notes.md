@@ -319,3 +319,93 @@ Post hollow-nest stability left `nest=0` / rim freeze. Colonization recovery:
 | **Verdict** | Cloud when densify is empty, `void_yield_drop`, or densify xy∉free; densify reason stays `void_yield_union` when densify pinned. `void_densify_pole_gravity` flag skips rim-band in `_merged_guidance_propositions` (densify enable rolled back — void_fill miss). Incumbent hold overridden on `large_void` when cand has more free centroids and count ≥0.9× incumbent. |
 | **Evidence** | 4-iter smoke: `nest=14–24`, `incumbent_hold=0`, coverage ends 54.6% / 65 parts (no sterile rim lock). `void_fill` seed 0 stays near shipped floor with `independent_ok`. |
 | **Constraint** | One hold gate beside existing lex; no second gravity helper; do not enable densify pole-gravity by default until re-gated. D/E (explorer budget / 3b) not needed once nest>0. |
+
+---
+
+## Macro-MCTS × PoseGraph (Q61–Q89, shipped 2026-08-15)
+
+Two-tier only: Python Macro-MCTS over C++ PoseGraph. Clean break from ElemGraph / old iter loop dual. Gate loop after every letter (0.9× quality / 1.5× time; hard stop on `independent_ok=false`).
+
+### Language ownership
+
+| Component | Lang |
+|-----------|------|
+| UCB1 / PW / AMAF / ActionGenerator | Python |
+| Propose emit / mix / zone wrap | Python orchestration |
+| DecisionArena / MotifBase / SE2 / ContactGRG+GCI / PoseGraph | C++ |
+| BoardSnapshot | Thin Python ledger (gids + float SE2 + coverage) — no Shapely clone per expand |
+
+### Expand vs best leaf (Q69)
+
+| Phase | Runs | Skips |
+|-------|------|-------|
+| Expand | `for_place` propose; freeze `improve_rules`; MotifBase→`cluster_copy`; greedy nest `local_swap=False`; 3a | DFS refine, finalize polish, 3b, `local_se2` |
+| Best leaf (final iter) | DFS + finalize + 3b + post_pack/`local_se2` | — |
+
+### Locked table
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q61 | YES two-tier | Python MCTS × C++ PoseGraph; no 4D |
+| Q62 | NO | Vertices geometric only |
+| Q63 | NO | No compound MIS; locks/stamps |
+| Q64 | YES | Delete ElemGraph; no facade |
+| Q65 | YES | `local_swap=False` |
+| Q66 | YES finalize NEAR | Sniper keys; not greedy obj |
+| Q67 | YES motif pins | Locks pre-nest for motifs; DFS refine unset |
+| Q68 | YES count→area | MCTS owns coverage reward |
+| Q69 | YES cheap expand | Nest+motif+3a in expand; refine/3b/se2 on best leaf |
+| Q70 | YES | Force `for_place` via `mcts_zone` |
+| Q71 | YES | Unplaced ∩ allowlist |
+| Q72 | YES | Skip `improve_rules` on expand |
+| Q73 | YES | Inject → `cluster_copy` |
+| Q74 | YES | Keep densify on void |
+| Q75 | YES | Keep incumbent hold |
+| Q76 | YES | MotifBase SoT |
+| Q77 | YES either | Coverage or compact median; independent |
+| Q78 | YES fixed | GCI α=β=0.5 |
+| Q79 | YES warm motifs | AMAF not related-merged; related-sig warms MotifBase only |
+| Q80 | YES | PW α=0.5 c=1.5 |
+| Q81 | NO | No part-hash in AMAF |
+| Q82 | YES | MCTS only outer loop |
+| Q83 | YES | Research not rollback |
+| Q84 | YES | Assert independence at tree end |
+| Q85 | YES | Fix MCTS; no greedy resurrect |
+| Q86 | NO full BoardState in C++ | Thin Python ledger + native geom SoT |
+| Q87 | NO | No FAISS/SQLite |
+| Q88 | YES | ContactGRG motif path (C++ SoT; upsert uses GCI) |
+| Q89 | YES NFP-lite | `find_closest_polygon_cast` + `polish_se2_part` only |
+
+### MotifBase SoT + nest/zone (Q90–Q104, locked 2026-08-16)
+
+Unify letters N0→U5: MotifBase cross-iter library; retire Python `ArchivedPattern`; ContactGRG-only mining; cheap expand `local_swap=False`.
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q90 | YES pair SoT + live extract | MotifBase stores **pairs only**. N-way `ClusterPattern` on-the-fly same-iter only — **never** archive N-way. |
+| Q91 | Hybrid | After M2 MotifBase = sole **cross-iter** source; `extract_cluster_patterns` may still feed `merge_cluster_patterns` **same iter** for immediate re-stamp. |
+| Q92 | TTL+age **and** rank+truncate | Reset TTL on accept; `age` drops TTL≤0; at `max_keep` truncate by `accept_count` → `gci`. |
+| Q93 | ContactGRG **only** | Delete NFP-lite last-two MotifBase mining. One miner. |
+| Q94 | Floor = max(cfg, median) | Hard floor `motif_min_compactness=0.35`; moving median only **raises** floor when library healthy. |
+| Q95 | Keep split | Relatives `se2_key3` / round-3; absolute MIS `transform_row_key` round-4. Do not unify. |
+| Q96 | Cheap False + void dual | Expand: `local_swap=False` by default. Dual lex on **heavy/final leaf** (Q96 base). |
+| Q97 | YES override + telem | Rim force + `large_void` → soft hijack to `void_seek`; log `void_hijack_over_mcts`. |
+| Q98 | `interior_pocket` | Sheet MacroRegion → `PlaceZone.interior_pocket`. |
+| Q99 | `part_gid` only | Tag/soft boost propose by `action.part_gid`; do **not** hard-filter remaining gids. |
+| Q100 | Defer `runner.run` | Linear `pick_expand_action` until Ub/D3 multi-sim. |
+| Q101 | Scalars until after M2 | Related warm: rim/void scalars — **no** 8×8 Hamming in this plan. |
+| Q102 | Stay `rule_id=0` | No secondary rule preset exploration. |
+| Q103 | Keep dual clearance | `emit_packing_clear` vs `is_pose_clear`; MotifBase pair stamps obey emit rules into MWIS. |
+| Q104 | Motif → `void_seek` | PLACE_MOTIF forces `void_seek` (rigid pairs need free space). |
+| Q105 | Dual = heavy OR large_void | Hybrid of Q96 strict + void basins: `dual_nest` True when heavy leaf **or** `free_info.kind == large_void`. |
+
+Gate scrap (unify): void_fill area ≥ **0.570**, time **&lt; 170s**, `independent_ok`. (Raised from 0.555 under Q69 / E0.)
+
+### Gate scrap (void_fill seed0 shipped)
+
+| Ref | Parts | Area | Time | Indep |
+|-----|-------|------|------|-------|
+| Baseline (pre-R0) | 48 | 0.490 | 62.95s | True |
+| U3 cutover | 50 | 0.498 | 73.89s | True |
+
+Pass: ≥0.9× quality, ≤1.5× time, `independent_ok`. Telem: `propose_stats["mcts"]` (`pw_expand`, `expand_ms`, `from_shapely_count`, `motif_hit`, `nfp_lite_ok`, `related_warm`).

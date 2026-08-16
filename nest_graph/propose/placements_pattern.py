@@ -10,6 +10,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
+from nest_graph.geometry import Geometry, convex_hull_area_of
 from nest_graph.propose.context import (
     cluster_packed_indices,
     placement_free_region,
@@ -33,13 +34,16 @@ class ClusterPattern:
     ref_transform: tuple[float, float, float]
 
 
-@dataclass
-class ArchivedPattern:
-    """Cross-iter accepted motif with TTL (void-elite twin; relatives only)."""
-
-    pattern: ClusterPattern
-    accept_count: int = 1
-    ttl_remaining: int = 4
+def _as_native_geom(p) -> Geometry | None:
+    """C1: one Geometry conversion site for placements_pattern."""
+    if p is None or getattr(p, "is_empty", False):
+        return None
+    if isinstance(p, Geometry):
+        return p
+    try:
+        return Geometry.from_shapely(p)
+    except Exception:
+        return None
 
 
 def _cluster_compactness(
@@ -54,22 +58,14 @@ def _cluster_compactness(
         if p is None or getattr(p, "is_empty", False):
             continue
         areas += float(p.area)
-        try:
-            from nest_graph.geometry import Geometry
-
-            if isinstance(p, Geometry):
-                geoms.append(p)
-            else:
-                geoms.append(Geometry.from_shapely(p))
-        except Exception:
-            pass
+        g = _as_native_geom(p)
+        if g is not None:
+            geoms.append(g)
     if areas <= 1e-18:
         return 0.0
     hull = 0.0
     if len(geoms) >= 1:
         try:
-            from nest_graph.geometry import convex_hull_area_of
-
             hull = float(convex_hull_area_of(geoms))
         except Exception:
             hull = 0.0
@@ -198,10 +194,10 @@ def _pair_hull_area(
     if a is None or b is None or a.is_empty or b.is_empty:
         return float("inf")
     try:
-        from nest_graph.geometry import Geometry, convex_hull_area_of
-
-        ga = a if isinstance(a, Geometry) else Geometry.from_shapely(a)
-        gb = b if isinstance(b, Geometry) else Geometry.from_shapely(b)
+        ga = _as_native_geom(a)
+        gb = _as_native_geom(b)
+        if ga is None or gb is None:
+            raise ValueError("native geom missing")
         return float(convex_hull_area_of([ga, gb]))
     except Exception:
         try:
@@ -374,69 +370,6 @@ def merge_cluster_patterns(
     _add(archived)
     _add(synthesized)
     return out
-
-
-def accepted_patterns_from_archive(
-    archive: Sequence[ArchivedPattern] | None,
-) -> list[ClusterPattern]:
-    """Patterns still alive (ttl > 0), highest accept_count first."""
-    if not archive:
-        return []
-    alive = [e for e in archive if int(e.ttl_remaining) > 0]
-    alive.sort(key=lambda e: (int(e.accept_count), int(e.pattern.part_count)), reverse=True)
-    return [e.pattern for e in alive]
-
-
-def archive_accepted_patterns(
-    archive: list[ArchivedPattern] | None,
-    patterns: Sequence[ClusterPattern],
-    *,
-    ttl: int = 4,
-    max_keep: int = 4,
-    enabled: bool = True,
-) -> list[ArchivedPattern]:
-    """Upsert accepted motifs; bump accept_count and reset TTL (void-elite twin)."""
-    if not enabled:
-        return list(archive or [])
-    out = list(archive or [])
-    ttl_i = max(int(ttl), 1)
-    for pat in patterns:
-        sig = _pattern_signature(pat)
-        found = False
-        for entry in out:
-            if _pattern_signature(entry.pattern) == sig:
-                entry.accept_count = int(entry.accept_count) + 1
-                entry.ttl_remaining = ttl_i
-                entry.pattern = pat
-                found = True
-                break
-        if not found:
-            out.append(
-                ArchivedPattern(pattern=pat, accept_count=1, ttl_remaining=ttl_i)
-            )
-    out.sort(key=lambda e: (int(e.accept_count), int(e.pattern.part_count)), reverse=True)
-    return out[: max(int(max_keep), 1)]
-
-
-def age_accepted_pattern_archive(
-    archive: list[ArchivedPattern] | None,
-) -> list[ArchivedPattern]:
-    """Decrement TTL once per iter without successful re-application; drop at 0."""
-    if not archive:
-        return []
-    next_arch: list[ArchivedPattern] = []
-    for entry in archive:
-        ttl = int(entry.ttl_remaining) - 1
-        if ttl <= 0:
-            continue
-        next_arch.append(
-            ArchivedPattern(
-                pattern=entry.pattern,
-                accept_count=int(entry.accept_count),
-                ttl_remaining=ttl,
-            )
-        )
-    return next_arch
 
 
 def motif_lattice_offsets(

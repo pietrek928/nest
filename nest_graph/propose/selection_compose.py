@@ -19,6 +19,7 @@ from nest_graph.elem_graph import (
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import should_use_border_focus
 from nest_graph.propose.void_selection import (
+    apply_void_centroid_score_term,
     apply_void_selection_boosts,
     boost_border_scores,
     count_selected_in_free,
@@ -29,11 +30,51 @@ from nest_graph.propose.block_replace import (
     _packing_independent,
     _sel_area,
     lex_count_area_better,
+    try_block_cohort_swap,
 )
 from nest_graph.propose.motif_lock import (
     _key_index_map,
     sequential_accept_motif_cohorts,
 )
+from nest_graph.propose.first_pass_border import border_kiss_indices
+from nest_graph.board import board_context_from_geometry
+from shapely.geometry import Polygon
+import math
+
+
+def dual_nest_for(free_info: Any, *, do_heavy: bool) -> bool:
+    """Q105: dual lex when heavy leaf OR large_void basin."""
+    if bool(do_heavy):
+        return True
+    return free_info is not None and getattr(free_info, "kind", None) == "large_void"
+
+
+def kiss_lock_subset(
+    polys: Sequence,
+    outline: BaseGeometry,
+    min_dist: float,
+    candidates: Sequence[int],
+    *,
+    max_n: int = 3,
+) -> list[int]:
+    """Top kiss-outline anchors among ``candidates`` (L2: ≤3 keystones)."""
+    if not candidates or max_n <= 0:
+        return []
+    cand_set = {int(i) for i in candidates}
+    kiss = [
+        int(i)
+        for i in border_kiss_indices(list(polys), outline, float(min_dist))
+        if int(i) in cand_set
+    ]
+    return kiss[: max(0, int(max_n))]
+
+
+def sheet_diag_from(sheet) -> float:
+    if sheet is None or getattr(sheet, "is_empty", True):
+        return 0.0
+    minx, miny, maxx, maxy = sheet.bounds
+    return float(math.hypot(maxx - minx, maxy - miny))
+
 
 def _map_incumbent_indices(
     *,
@@ -57,13 +98,65 @@ def _map_incumbent_indices(
     return idxs
 
 
-def _nest_with_locks(graph, scores: Sequence[float], locked: Sequence[int]) -> list[int]:
+def _nest_with_locks(
+    graph,
+    scores: Sequence[float],
+    locked: Sequence[int],
+    *,
+    group_id: Sequence[int] | None = None,
+    part_areas: Sequence[float] | None = None,
+    dual: bool = True,
+) -> list[int]:
     nest_opts = SelectOptions()
-    nest_opts.local_swap = False
     if locked:
+        nest_opts.local_swap = False
         nest_opts.mode = SelectMode.greedy_score
         nest_opts.locked_indices = [int(i) for i in locked]
-    return list(nest_by_scores(graph, scores, nest_opts)) if scores else []
+        return list(nest_by_scores(graph, scores, nest_opts)) if scores else []
+    # Q105: dual=False → cheap local_swap=False; dual=True → lex on/off (heavy OR large_void).
+    if not dual:
+        nest_opts.local_swap = False
+        nest_opts.mode = SelectMode.greedy_score
+        return list(nest_by_scores(graph, scores, nest_opts)) if scores else []
+    nest_opts.local_swap = True
+    cand_on = list(nest_by_scores(graph, scores, nest_opts)) if scores else []
+    if group_id is None or part_areas is None:
+        return cand_on
+    nest_off = SelectOptions()
+    nest_off.local_swap = False
+    cand_off = list(nest_by_scores(graph, scores, nest_off)) if scores else []
+    if _lex_pick_better(
+        best=cand_on,
+        cand=cand_off,
+        group_id=group_id,
+        part_areas=part_areas,
+    ):
+        return cand_off
+    return cand_on
+
+
+def nest_border_kiss_selection(
+    graph,
+    polys: Sequence,
+    outline: BaseGeometry,
+    min_dist: float,
+    scores: Sequence[float],
+    *,
+    locked: Sequence[int] | None = None,
+) -> list[int]:
+    """Greedy MIS on outline-kiss nodes; optional locks (Ua: first+mid kiss SoT)."""
+    border = set(border_kiss_indices(polys, outline, min_dist))
+    n = len(scores)
+    nest_scores = [0.0] * n
+    for i in border:
+        if 0 <= i < n:
+            nest_scores[i] = float(scores[i])
+    locked_list = [int(i) for i in (locked or ()) if 0 <= int(i) < n]
+    for i in locked_list:
+        nest_scores[i] = max(nest_scores[i], float(scores[i]), 1.0)
+    if not border and not locked_list:
+        return []
+    return _nest_with_locks(graph, nest_scores, locked_list, dual=False)
 
 
 def _lex_pick_better(
@@ -131,10 +224,17 @@ def compose_and_nest_selection(
     ngroups: int,
     packed_group_id: Sequence[int] | None = None,
     packed_transform: Sequence | None = None,
+    dual_nest: bool = True,
+    void_geoms: Sequence | None = None,
+    locked_seed: Sequence[int] | None = None,
 ) -> ComposedSelection:
-    """Apply void/geom boosts, pick nest seed, prepare refine_scores (G22/G24)."""
-    from shapely.geometry import Polygon
+    """Apply void/geom boosts, pick nest seed, prepare refine_scores (G22/G24).
 
+    ``dual_nest`` (Q105): False → cheap ``local_swap=False``; True → lex on/off.
+    build_graph sets True on heavy leaf or large_void. ``void_geoms`` from board
+    prep (Ua); ``locked_seed`` optional kiss/motif locks — unlocked dual is always
+    beamed when ``dual_nest`` (L2; locks kill local_swap inside one nest call).
+    """
     free_poly = free_info.target_poly
     nest_rules = rule_sets
     refine_rules = active_rules
@@ -170,6 +270,18 @@ def compose_and_nest_selection(
         propose_stats["geom_ms"] = geom_stats.get("geom_ms", 0.0)
         propose_stats["geom_share"] = geom_stats.get("geom_share", 0.0)
 
+    # L1: void-centroid term on nest scores before MIS (refine shares same helper).
+    void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * 0.25
+    nest_void_hits = apply_void_centroid_score_term(
+        polys,
+        scores,
+        free_info=free_info,
+        free_poly=free_poly,
+        void_term=void_term,
+    )
+    if propose_stats is not None:
+        propose_stats["nest_void_term_hits"] = int(nest_void_hits)
+
     n_graph = len(graph.elems) if hasattr(graph, "elems") else len(getattr(graph, "collisions", []))
     if len(scores) != n_graph:
         raise AssertionError(
@@ -178,16 +290,15 @@ def compose_and_nest_selection(
 
     locked_motif: list[int] = []
     lock_sets: list[list[int]] = []
-    void_geoms: list = []
+    void_geoms_list: list = list(void_geoms) if void_geoms is not None else []
     if bool(getattr(cfg.propose, "enable_motif_sequential_accept", False)):
         cohorts = (propose_stats or {}).get("motif_cohorts") or []
-        try:
-            from nest_graph.board import board_context_from_geometry
-
-            _sheet, void_geoms = board_context_from_geometry(outline)
-            void_geoms = list(void_geoms or [])
-        except Exception:
-            void_geoms = []
+        if not void_geoms_list:
+            try:
+                _sheet, void_geoms_list = board_context_from_geometry(outline)
+                void_geoms_list = list(void_geoms_list or [])
+            except Exception:
+                void_geoms_list = []
         _combined, seq_telem = sequential_accept_motif_cohorts(
             graph=graph,
             scores=scores,
@@ -195,7 +306,7 @@ def compose_and_nest_selection(
             transform=transform,
             cohorts=cohorts,
             candidate_geoms=candidate_geoms,
-            void_geoms=void_geoms,
+            void_geoms=void_geoms_list,
             packed_geoms=packed_geoms,
             min_dist=float(min_dist),
             pole=getattr(free_info, "target_pt", None),
@@ -211,10 +322,43 @@ def compose_and_nest_selection(
         if propose_stats is not None:
             propose_stats.update(seq_telem)
 
-    # Beam: unlocked + up to 4 Scene-clear lock-sets; lex count then area.
-    selected_nest = _nest_with_locks(graph, scores, [])
+    seed_lock = [int(i) for i in (locked_seed or ()) if 0 <= int(i) < n_graph]
+    # L2: always beam unlocked dual when dual_nest (locks kill dual inside one call).
+    selected_nest = _nest_with_locks(
+        graph,
+        scores,
+        [],
+        group_id=group_id,
+        part_areas=part_areas,
+        dual=bool(dual_nest),
+    )
+    beam_unlocked = 1
+    if seed_lock:
+        locked_cand = _nest_with_locks(
+            graph,
+            scores,
+            seed_lock,
+            group_id=group_id,
+            part_areas=part_areas,
+            dual=bool(dual_nest),
+        )
+        if _lex_pick_better(
+            best=selected_nest,
+            cand=locked_cand,
+            group_id=group_id,
+            part_areas=part_areas,
+        ):
+            selected_nest = locked_cand
+            locked_motif = list(seed_lock)
     for lock in lock_sets:
-        cand = _nest_with_locks(graph, scores, lock)
+        cand = _nest_with_locks(
+            graph,
+            scores,
+            lock,
+            group_id=group_id,
+            part_areas=part_areas,
+            dual=bool(dual_nest),
+        )
         if _lex_pick_better(
             best=selected_nest,
             cand=cand,
@@ -260,15 +404,15 @@ def compose_and_nest_selection(
         propose_stats["incumbent_hold"] = int(incumbent_hold)
         propose_stats["motif_locked"] = list(locked_motif)
         propose_stats["motif_beam_sets"] = int(len(lock_sets))
+        propose_stats["uh_beam_unlocked"] = int(beam_unlocked)
+        propose_stats["compose_beam_unlocked"] = int(beam_unlocked)
 
     if (
         not first_pass
         and bool(getattr(cfg.propose, "enable_block_replace", True))
         and locked_motif
     ):
-        from nest_graph.propose.block_replace import try_block_cohort_swap
-
-        void_geoms_swap = void_geoms
+        void_geoms_swap = void_geoms_list
         selected_nest, locked_motif, swap_telem = try_block_cohort_swap(
             graph=graph,
             scores=scores,
@@ -290,23 +434,7 @@ def compose_and_nest_selection(
 
 
     refine_scores = list(scores)
-    # Refine-only non-negative void/coverage term (tie-break within lex count/area).
-    if (
-        free_info is not None
-        and free_info.kind == "large_void"
-        and free_poly is not None
-        and not getattr(free_poly, "is_empty", True)
-    ):
-        void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * 0.25
-        if void_term > 0.0:
-            for i, poly in enumerate(polys):
-                if i >= len(refine_scores):
-                    break
-                try:
-                    if poly is not None and not poly.is_empty and free_poly.contains(poly.centroid):
-                        refine_scores[i] = float(refine_scores[i]) + void_term
-                except Exception:
-                    continue
+    # Term already on nest scores under large_void; refine inherits via copy.
     if (
         first_pass
         and should_use_border_focus(Polygon(), cfg.propose)

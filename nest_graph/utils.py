@@ -13,10 +13,14 @@ def transform_poly(p: Polygon, transform_data: Tuple[float, float, float]):
 
 
 def invert_transform(t: Tuple[float, float, float]) -> Tuple[float, float, float]:
-    """Inverse of rotate-about-origin then translate (matches transform_poly)."""
+    """Inverse of rotate-about-origin then translate (matches transform_poly).
+
+    Double-precision Python SoT for propose/motif keys. C++ ``Se2`` stays float
+    for MotifBase/arena; float round-trip shifted cluster_copy relatives enough
+    to miss void_fill best-so-far (S1 research).
+    """
     x, y, a = float(t[0]), float(t[1]), float(t[2])
     c, s = math.cos(a), math.sin(a)
-    # R(-a) @ (-t)
     return (-c * x - s * y, s * x - c * y, -a)
 
 

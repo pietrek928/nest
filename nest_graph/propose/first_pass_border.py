@@ -21,7 +21,7 @@ from nest_graph.board import (
 )
 from nest_graph.config import BuildGraphConfig, RankingMode, dedupe_transforms
 from nest_graph.elem_graph import (
-    ElemGraph,
+    PoseGraph,
     selection_is_independent,
 )
 from nest_graph.geometry import Geometry, GuidanceConfig, find_polygon_intersections, find_polygon_distances
@@ -41,7 +41,11 @@ from nest_graph.propose.pipeline import (
     collect_propose_candidates,
     proposed_transforms_for_groups,
 )
-from nest_graph.propose.placement_common import as_geometry, is_pose_clear
+from nest_graph.propose.placement_common import (
+    as_geometry,
+    is_pose_clear,
+    part_base_geoms,
+)
 from nest_graph.propose.placement_outline import (
     outline_kiss_tolerance,
     outline_standoff_distance,
@@ -434,6 +438,8 @@ def guidance_border_refine(
     pack_polys: list,
     pack_gids: list[int],
     pack_tr: list[np.ndarray],
+    part_bases: dict[int, Geometry] | None = None,
+    board_geom: Geometry | None = None,
 ) -> tuple[list, list[int], list[np.ndarray]]:
     """Tighten border ring placements using per-anchor guidance casts."""
     passes = max(cfg.propose.first_pass_guidance_refine_passes, 0)
@@ -444,11 +450,12 @@ def guidance_border_refine(
     eps = cfg.placement_epsilon_ratio(first_pass=True)
     propose_cfg = cfg.first_pass_propose_config()
     sheet, voids = board_context_from_geometry(board)
-    board_geom = Geometry.from_shapely(sheet)
+    if board_geom is None:
+        board_geom = Geometry.from_shapely(sheet)
     pad = default_sheet_padding(board)
     bounds = padded_board_bounds(board, pad)
     part_by_gid = {gid: poly for poly, gid in parts}
-    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
+    bases = part_base_geoms(part_by_gid, part_bases=part_bases)
 
     polys = list(pack_polys)
     gids = list(pack_gids)
@@ -564,9 +571,9 @@ def build_elem_graph(
     geoms: Sequence[Geometry],
     angles: Sequence[float],
     attract_pairs: Sequence[tuple[int, int, float]] | None = None,
-) -> ElemGraph:
+) -> PoseGraph:
     """Single SoA writer: vertices at real θ, packing collisions, optional attract."""
-    graph = ElemGraph()
+    graph = PoseGraph()
     n = len(geoms)
     graph.reserve_elems(n)
     for gid, geom, ang in zip(gids, geoms, angles, strict=True):
@@ -715,7 +722,7 @@ def border_pack_graph(
     void_geoms: list[Geometry] | None = None,
     placed_geoms: list[Geometry] | None = None,
     bases: dict[int, Geometry] | None = None,
-) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
+) -> tuple[PoseGraph, list, list[int], list[np.ndarray], list[int]]:
     del board_geom  # board membership via void_geoms
     if void_geoms:
         kept_polys: list = []
@@ -898,12 +905,15 @@ def sequential_border_augment(
     transform: list[np.ndarray],
     selected: list[int],
     skip_guidance_refine: bool = False,
-) -> tuple[ElemGraph, list, list[int], list[np.ndarray], list[int]]:
+    part_bases: dict[int, Geometry] | None = None,
+    board_geom: Geometry | None = None,
+) -> tuple[PoseGraph, list, list[int], list[np.ndarray], list[int]]:
     """Fill outline gaps by proposing against the full packed union each step."""
     min_dist = cfg.board_min_dist(first_pass=True)
     eps = cfg.placement_epsilon_ratio(first_pass=True)
     sheet, voids = board_context_from_geometry(board)
-    board_geom = Geometry.from_shapely(sheet)
+    if board_geom is None:
+        board_geom = Geometry.from_shapely(sheet)
     pad = default_sheet_padding(board)
     guidance_cfg = guidance_config_for_graph(
         min_dist,
@@ -911,7 +921,7 @@ def sequential_border_augment(
         epsilon_ratio=eps,
     )
     part_by_gid = {gid: poly for poly, gid in parts}
-    bases = {gid: Geometry.from_shapely(part_by_gid[gid]) for gid in part_by_gid}
+    bases = part_base_geoms(part_by_gid, part_bases=part_bases)
 
     pack_polys = [polys[i] for i in selected]
     pack_gids = [group_id[i] for i in selected]
@@ -991,6 +1001,8 @@ def sequential_border_augment(
             pack_polys=pack_polys,
             pack_gids=pack_gids,
             pack_tr=pack_tr,
+            part_bases=part_bases,
+            board_geom=board_geom,
         )
         placed_geoms = [
             bases[gid].apply_transform(np.asarray(tr, dtype=np.float64))

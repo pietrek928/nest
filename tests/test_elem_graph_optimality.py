@@ -7,7 +7,7 @@ import pytest
 from nest_graph.config import _make_select_options
 from nest_graph.elem_graph import (
     Circle,
-    ElemGraph,
+    PoseGraph,
     PlacementRuleSet,
     RefineSelectionOptions,
     ScoreRulesOptions,
@@ -18,7 +18,7 @@ from nest_graph.elem_graph import (
 )
 
 
-def assert_independent_set(g: ElemGraph, selected: Sequence[int]) -> None:
+def assert_independent_set(g: PoseGraph, selected: Sequence[int]) -> None:
     sel = set(selected)
     n = len(g.group_id)
     for v in sel:
@@ -62,7 +62,7 @@ def brute_force_mis(
     return best_w, best_sel
 
 
-def _append_elem(g: ElemGraph, group_id: int, x: float, y: float, radius: float = 0.5):
+def _append_elem(g: PoseGraph, group_id: int, x: float, y: float, radius: float = 0.5):
     c = Circle.from_center_radius(x, y, radius)
     g.append_elem_at(group_id, x, y, 0.0, c.center.x, c.center.y, c.r_sq)
 
@@ -71,8 +71,8 @@ def _build_graph(
     n: int,
     edges: Sequence[tuple[int, int]],
     scores: Sequence[float] | None = None,
-) -> tuple[ElemGraph, List[float]]:
-    g = ElemGraph()
+) -> tuple[PoseGraph, List[float]]:
+    g = PoseGraph()
     for i in range(n):
         _append_elem(g, 0, float(i), 0.0)
     for a, b in edges:
@@ -81,19 +81,19 @@ def _build_graph(
     return g, w
 
 
-def _path3() -> tuple[ElemGraph, List[float]]:
+def _path3() -> tuple[PoseGraph, List[float]]:
     return _build_graph(3, [(0, 1), (1, 2)], [10.0, 1.0, 10.0])
 
 
-def _triangle() -> tuple[ElemGraph, List[float]]:
+def _triangle() -> tuple[PoseGraph, List[float]]:
     return _build_graph(3, [(0, 1), (1, 2), (0, 2)], [5.0, 6.0, 4.0])
 
 
-def _claw() -> tuple[ElemGraph, List[float]]:
+def _claw() -> tuple[PoseGraph, List[float]]:
     return _build_graph(4, [(0, 1), (0, 2), (0, 3)], [1.0, 10.0, 9.0, 8.0])
 
 
-def _weighted_star() -> tuple[ElemGraph, List[float]]:
+def _weighted_star() -> tuple[PoseGraph, List[float]]:
     return _build_graph(5, [(0, i) for i in range(1, 5)], [100.0, 3.0, 4.0, 5.0, 6.0])
 
 

@@ -42,7 +42,7 @@ float sum_selected_scores_vec(
     const std::vector<Tscore> &elem_scores, const std::vector<Tvertex> &selected);
 
 inline float attract_to_mask(
-    const ElemGraph &g,
+    const PoseGraph &g,
     int n,
     Tvertex u,
     const unsigned char *selected,
@@ -63,7 +63,7 @@ inline float attract_to_mask(
     return sum;
 }
 
-inline float attract_weight_uv(const ElemGraph &g, int n, Tvertex u, Tvertex v) {
+inline float attract_weight_uv(const PoseGraph &g, int n, Tvertex u, Tvertex v) {
     if (static_cast<int>(g.attract.size()) != n) {
         return 0.0f;
     }
@@ -76,7 +76,7 @@ inline float attract_weight_uv(const ElemGraph &g, int n, Tvertex u, Tvertex v) 
 }
 
 inline float selected_attract_pairs(
-    const ElemGraph &g, const unsigned char *selected, int n
+    const PoseGraph &g, const unsigned char *selected, int n
 ) {
     if (static_cast<int>(g.attract.size()) != n) {
         return 0.0f;
@@ -97,7 +97,7 @@ inline float selected_attract_pairs(
 }
 
 inline float sum_selected_objective(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const Tscore *scores,
     const unsigned char *selected,
     int n

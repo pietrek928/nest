@@ -228,6 +228,10 @@ class SelectionConfig(BaseModel):
     select_mode: ScoreSelectMode = ScoreSelectMode.WEIGHTED_GREEDY
     dfs_max_tries: int = 4
     dfs_passes: int = 3
+    # Deterministic multi-start growth (replaces former random_device shuffle).
+    dfs_growth_restarts: int = 1
+    # Full refine multi-start (outer seed offsets); lex keep count→area.
+    dfs_refine_restarts: int = 1
     nest_rule_sets_used: int = 1
     dfs_refine_max_passes: int = 1024
     dfs_refine_max_stagnant_passes: int = 4
@@ -661,15 +665,16 @@ class ProposeConfig(BaseModel):
     lns_destroy_fraction: float = 0.25
     enable_incumbent_loop: bool = True
     """On plateau after LNS: prefer incumbent LNS over full pool re-solve (Phase 5)."""
-    # Lean Void Cascade / diversity (defaults off until E2E gate; lean_void_combo enables).
+    # Void-soft cascade (R0): soft explorer budget on rich snipers — not hard skip.
+    # Hard skip starved void_fill explorers (~0.06 area). Soft scale keeps density.
     propose_cascade_short_circuit: bool = True
-    """Hard skip explorers after snipers/builders fill reserve (void_seek / interior_pocket)."""
+    """When True, apply void-soft cascade (scale explorers on rich snipers; free order on void_seek)."""
     cascade_sniper_stop_n: int = 4
-    """Min fast-valid pocket/motif seeds to short-circuit explorers."""
+    """Min fast-valid pocket/motif seeds to trigger explorer budget scale."""
     cascade_kiss_stop_threshold: float = 0.0
     """If >0 and pool full with mean kiss score above threshold, skip explorers."""
     cascade_explorer_budget_scale: float = 0.35
-    """Non-void packed zones: shrink explorer max_items by this factor when cascade on."""
+    """Shrink explorer max_items by this factor when cascade soft-scales (rich snipers / non-void)."""
     use_pose_nms: bool = False
     """SE(2) spatial-hash NMS on ranked pool (reserve-safe merge after)."""
     pose_nms_eps: float = 1.0
@@ -1112,6 +1117,8 @@ class BuildGraphConfig(BaseModel):
                 ),
                 dfs_max_tries=_env_int("NEST_DFS_MAX_TRIES", 4),
                 dfs_passes=_env_int("NEST_DFS_PASSES", 3),
+                dfs_growth_restarts=_env_int("NEST_DFS_GROWTH_RESTARTS", 1),
+                dfs_refine_restarts=_env_int("NEST_DFS_REFINE_RESTARTS", 1),
                 dfs_refine_max_passes=_env_int("NEST_DFS_REFINE_MAX_PASSES", 1024),
                 dfs_refine_max_stagnant_passes=_env_int(
                     "NEST_DFS_REFINE_STAGNANT_PASSES", 4,

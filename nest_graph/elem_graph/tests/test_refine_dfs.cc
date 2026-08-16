@@ -6,7 +6,7 @@
 #include "tests/elem_graph_test_helpers.h"
 
 TEST_CASE("increase_selection_dfs stays independent", "[refine]") {
-    ElemGraph g = path_graph(5, {1, 1, 1, 1, 1});
+    PoseGraph g = path_graph(5, {1, 1, 1, 1, 1});
     std::vector<int> selected = {0, 2, 4};
     REQUIRE(is_independent_set(g, selected));
 
@@ -15,7 +15,7 @@ TEST_CASE("increase_selection_dfs stays independent", "[refine]") {
 }
 
 TEST_CASE("increase_score_dfs stays independent", "[refine]") {
-    ElemGraph g = path_graph(5, {10, 1, 8, 1, 9});
+    PoseGraph g = path_graph(5, {10, 1, 8, 1, 9});
     std::vector<float> scores = {10.0f, 1.0f, 8.0f, 1.0f, 9.0f};
     std::vector<int> selected = {0, 2, 4};
     REQUIRE(is_independent_set(g, selected));
@@ -30,7 +30,7 @@ TEST_CASE("increase_score_dfs stays independent", "[refine]") {
 }
 
 TEST_CASE("refine_selection returns independent set", "[refine]") {
-    ElemGraph g = path_graph(6, {5, 1, 4, 1, 3, 2});
+    PoseGraph g = path_graph(6, {5, 1, 4, 1, 3, 2});
     std::vector<float> scores = {5.0f, 1.0f, 4.0f, 1.0f, 3.0f, 2.0f};
     std::vector<int> selected = {0, 2, 4};
 
@@ -44,7 +44,7 @@ TEST_CASE("refine_selection returns independent set", "[refine]") {
 }
 
 TEST_CASE("refine cannot overlap a pin with a new node", "[refine]") {
-    ElemGraph g = path_graph(3, {1.0f, 100.0f, 1.0f});
+    PoseGraph g = path_graph(3, {1.0f, 100.0f, 1.0f});
     std::vector<float> scores = {1.0f, 100.0f, 1.0f};
     RefineSelectionOptions opts;
     opts.max_passes = 8;
@@ -57,7 +57,7 @@ TEST_CASE("refine cannot overlap a pin with a new node", "[refine]") {
 }
 
 TEST_CASE("finalize cannot drop a lock for score", "[refine]") {
-    ElemGraph g = path_graph(3, {1.0f, 100.0f, 1.0f});
+    PoseGraph g = path_graph(3, {1.0f, 100.0f, 1.0f});
     std::vector<float> scores = {1.0f, 100.0f, 1.0f};
     FinalizeSelectionOptions opts;
     opts.locked_indices = {0, 2};
@@ -69,7 +69,7 @@ TEST_CASE("finalize cannot drop a lock for score", "[refine]") {
 }
 
 TEST_CASE("finalize_selection repairs overlapping selection", "[refine]") {
-    ElemGraph g = star_graph(3);
+    PoseGraph g = star_graph(3);
     std::vector<float> scores = {3.0f, 2.0f, 2.0f, 2.0f};
     const std::vector<int> overlapping = {0, 1, 2};
 
@@ -85,7 +85,7 @@ TEST_CASE("kiss attract cannot beat part count in finalize", "[refine]") {
     // Path 0-1-2: max independent is {0,2}. Huge attract on {0,2} must not
     // drop to the high-score singleton {1}.
     std::vector<float> scores = {1.0f, 100.0f, 1.0f};
-    ElemGraph g = path_graph(3, scores);
+    PoseGraph g = path_graph(3, scores);
     add_attract_pair(g, 0, 2, 1000.0f);
     const auto finalized = finalize_selection(g, {0, 1, 2}, scores);
     REQUIRE(is_independent_set(g, finalized));

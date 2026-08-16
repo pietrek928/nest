@@ -10,7 +10,7 @@
 
 TEST_CASE("nest_by_graph path returns independent set", "[selection]") {
     const std::vector<float> scores = {10.0f, 1.0f, 10.0f};
-    ElemGraph g = path_graph(3, scores);
+    PoseGraph g = path_graph(3, scores);
     PlacementRuleSet rules = point_rule_at(0.0f, 0.0f);
 
     SelectOptions opts;
@@ -28,7 +28,7 @@ TEST_CASE("nest_by_graph path returns independent set", "[selection]") {
 }
 
 TEST_CASE("score_elems peaks at rule center", "[selection]") {
-    ElemGraph g;
+    PoseGraph g;
     append_elem_at(g, 0, 0.5f, 0.5f, 0.01f);
     append_elem_at(g, 0, 2.0f, 2.0f, 0.01f);
     PlacementRuleSet rules = point_rule_at(0.5f, 0.5f, 0.2f, 1.0f);
@@ -39,7 +39,7 @@ TEST_CASE("score_elems peaks at rule center", "[selection]") {
 }
 
 TEST_CASE("score_transform matches score_elems at rule center", "[selection]") {
-    ElemGraph g;
+    PoseGraph g;
     append_elem_at(g, 0, 0.5f, 0.5f, 0.0f);
     PlacementRuleSet rules = point_rule_at(0.5f, 0.5f, 0.2f, 1.0f);
 
@@ -52,7 +52,7 @@ TEST_CASE("score_transform matches score_elems at rule center", "[selection]") {
 
 TEST_CASE("nest_by_scores keeps non-adjacent locks", "[selection]") {
     const std::vector<float> scores = {1.0f, 100.0f, 1.0f, 1.0f};
-    ElemGraph g = path_graph(4, scores);
+    PoseGraph g = path_graph(4, scores);
     SelectOptions opts;
     opts.local_swap = true;
     opts.locked_indices = {0, 2};
@@ -65,7 +65,7 @@ TEST_CASE("nest_by_scores keeps non-adjacent locks", "[selection]") {
 
 TEST_CASE("nest_by_scores drops later lock that collides with earlier lock", "[selection]") {
     const std::vector<float> scores = {1.0f, 1.0f, 1.0f};
-    ElemGraph g = path_graph(3, scores);
+    PoseGraph g = path_graph(3, scores);
     SelectOptions opts;
     opts.local_swap = false;
     opts.locked_indices = {0, 1};
@@ -77,7 +77,7 @@ TEST_CASE("nest_by_scores drops later lock that collides with earlier lock", "[s
 
 TEST_CASE("local_swap cannot eject a lock", "[selection]") {
     const std::vector<float> scores = {1.0f, 100.0f};
-    ElemGraph g = path_graph(2, scores);
+    PoseGraph g = path_graph(2, scores);
     SelectOptions opts;
     opts.local_swap = true;
     opts.locked_indices = {0};
@@ -89,7 +89,7 @@ TEST_CASE("local_swap cannot eject a lock", "[selection]") {
 TEST_CASE("two_swap fires on a path and cannot eject a lock", "[selection]") {
     // 0-1-2-3; scores make 1-for-2 profitable (replace 1 with 0 and 2).
     const std::vector<float> scores = {10.0f, 1.0f, 10.0f, 1.0f};
-    ElemGraph g = path_graph(4, scores);
+    PoseGraph g = path_graph(4, scores);
     SelectOptions opts;
     opts.mode = SelectMode::GreedyScore;
     opts.local_swap = true;

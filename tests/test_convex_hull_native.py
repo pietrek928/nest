@@ -6,7 +6,7 @@ from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
 from nest_graph.elem_graph import (
-    ElemGraph,
+    PoseGraph,
     Circle,
     Vec2,
     nest_by_scores,
@@ -126,7 +126,7 @@ def test_batch_rank_valid_filter_and_propose_map():
 
 
 def test_nest_by_scores_prefers_high_quality():
-    g = ElemGraph()
+    g = PoseGraph()
     # Overlapping nodes — only one can be selected; higher score wins.
     g.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 1.0))
     g.append_elem(0, Vec2(x=0.5, y=0.0), Circle.from_center_radius(0.5, 0.0, 1.0))
@@ -141,14 +141,14 @@ def test_nest_by_scores_prefers_high_quality():
 
 
 def test_nest_by_scores_length_mismatch_raises():
-    g = ElemGraph()
+    g = PoseGraph()
     g.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 0.1))
     with pytest.raises(Exception):
         nest_by_scores(g, [1.0, 2.0])
 
 
 def test_dfs_grows_with_nonnegative_quality():
-    g = ElemGraph()
+    g = PoseGraph()
     g.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=2.0, y=0.0), Circle.from_center_radius(2.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=4.0, y=0.0), Circle.from_center_radius(4.0, 0.0, 0.1))
@@ -163,7 +163,7 @@ def test_dfs_grows_with_nonnegative_quality():
 
 def test_signed_scores_can_block_dfs_growth():
     """Control: negative scores demonstrate why selection must use quality ≥ 0."""
-    g = ElemGraph()
+    g = PoseGraph()
     g.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=2.0, y=0.0), Circle.from_center_radius(2.0, 0.0, 0.1))
     g.append_elem(0, Vec2(x=4.0, y=0.0), Circle.from_center_radius(4.0, 0.0, 0.1))

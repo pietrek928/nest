@@ -5,7 +5,7 @@
 #include "graph/graph.h"
 
 void select_elems(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<std::vector<Tvertex>> &elems_by_group,
     const PlacementRuleSet &rules,
     const std::vector<Tscore> &scores,

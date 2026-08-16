@@ -6,10 +6,10 @@
 #include "rules/rules.h"
 
 
-typedef struct ElemPlace {
+typedef struct PosePlace {
     Vec2f pos;
     float a;
-} ElemPlace;
+} PosePlace;
 
 typedef struct ElemGroup {
     int count_limit;
@@ -21,15 +21,15 @@ typedef struct AttractEdge {
     float w;
 } AttractEdge;
 
-typedef struct ElemGraph {
+typedef struct PoseGraph {
     std::vector<Tvertex> group_id;
-    std::vector<ElemPlace> elems;
+    std::vector<PosePlace> elems;
     std::vector<Circle2f> coords;
     std::vector<std::vector<Tvertex>> collisions;
     std::vector<std::vector<AttractEdge>> attract;
 
     auto size() const { return group_id.size(); }
-} ElemGraph;
+} PoseGraph;
 
 enum class ScoreAggregation : int { Sum = 0, Max = 1 };
 enum class SelectMode : int { GreedyScore = 0, WeightedGreedy = 1 };
@@ -37,6 +37,7 @@ enum class SelectMode : int { GreedyScore = 0, WeightedGreedy = 1 };
 struct SelectOptions {
     SelectMode mode = SelectMode::WeightedGreedy;
     bool local_swap = true;
+
     ScoreAggregation aggregation = ScoreAggregation::Sum;
     std::vector<Tvertex> locked_indices;
 };
@@ -50,6 +51,9 @@ struct RefineSelectionOptions {
     int max_depth = 64;
     std::uint32_t seed = 0;
     bool explore_shuffle = false;
+    /** Independent growth shuffles from seed+r (deterministic stand-in for
+     *  former random_device growth). 1 = single stream. */
+    int growth_restarts = 1;
     int beam_width = 2;
     int max_root_collisions = 2;
     int max_tries = 0;
@@ -84,59 +88,59 @@ struct ScoreRulesOptions {
 };
 
 std::vector<std::vector<Tvertex>> nest_by_graph(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<PlacementRuleSet> &cases,
     const SelectOptions &select = SelectOptions{}
 );
 
 // Weighted MIS using a precomputed score vector (does not call compute_scores).
 std::vector<Tvertex> nest_by_scores(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tscore> &scores,
     const SelectOptions &select = SelectOptions{}
 );
 
-ElemGraph sort_graph(const ElemGraph &g, const PlacementRuleSet &rules, bool reverse);
+PoseGraph sort_graph(const PoseGraph &g, const PlacementRuleSet &rules, bool reverse);
 
 std::vector<Tscore> score_elems(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const PlacementRuleSet &rules,
     ScoreAggregation aggregation = ScoreAggregation::Sum);
 
 std::vector<Tscore> score_rules(
-    const std::vector<ElemGraph> &graphs,
+    const std::vector<PoseGraph> &graphs,
     const std::vector<PlacementRuleSet> &rule_sets,
     const ScoreRulesOptions &options = ScoreRulesOptions{}
 );
 
 std::vector<Tvertex> refine_selection_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options = RefineSelectionOptions{}
 );
 
 std::vector<Tvertex> increase_selection_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     int max_tries);
 
 std::vector<Tvertex> increase_score_dfs(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options = RefineSelectionOptions{}
 );
 
 std::vector<Tvertex> refine_selection(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const RefineSelectionOptions &options = RefineSelectionOptions{}
 );
 
 std::vector<Tvertex> finalize_selection(
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &selected_nodes,
     const std::vector<Tscore> &scores,
     const FinalizeSelectionOptions &options = FinalizeSelectionOptions{},
@@ -146,9 +150,9 @@ std::vector<Tvertex> finalize_selection(
 std::vector<int> greedy_weighted_mis(
     const std::vector<Tvertex> &verts,
     const std::vector<Tscore> &scores,
-    const ElemGraph &g,
+    const PoseGraph &g,
     const std::vector<Tvertex> &locked_indices = {},
     const unsigned char *kept_outside = nullptr);
 
 bool selection_is_independent(
-    const ElemGraph &g, const std::vector<Tvertex> &selected_nodes);
+    const PoseGraph &g, const std::vector<Tvertex> &selected_nodes);

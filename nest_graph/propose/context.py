@@ -89,6 +89,67 @@ class FreeSpaceSnapshot:
         return float(self.analysis.largest_area)
 
 
+def void_ratio_threshold(propose_cfg, *, default: float = 2.5) -> float:
+    """One gate for late_border_void_override_ratio floor (compose + post-pack)."""
+    thr = float(getattr(propose_cfg, "late_border_void_override_ratio", 0.0) or 0.0)
+    if thr <= 0.0:
+        return float(default)
+    return thr
+
+
+def prep_free_space(
+    sheet: Polygon,
+    packed: Sequence[BaseGeometry],
+    part_area: float,
+    min_dist: float,
+    *,
+    void_ratio_threshold: float = 2.5,
+    pack_geoms: Sequence[Geometry] | None = None,
+    snapshot: bool = False,
+    max_topology_anchors: int = 6,
+) -> FreeSpaceAnalysis | FreeSpaceSnapshot:
+    """One free-space prep: analysis mid-pack, or full snapshot post-pack."""
+    if snapshot:
+        return build_free_space_snapshot(
+            sheet,
+            packed,
+            part_area,
+            min_dist,
+            void_ratio_threshold=void_ratio_threshold,
+            max_topology_anchors=max_topology_anchors,
+            pack_geoms=pack_geoms,
+        )
+    return analyze_free_space(
+        sheet,
+        packed,
+        part_area,
+        min_dist,
+        void_ratio_threshold=void_ratio_threshold,
+        pack_geoms=pack_geoms,
+    )
+
+
+def free_difference_from_pack_geoms(
+    sheet: Polygon,
+    pack_geoms: Sequence[Geometry] | None,
+) -> BaseGeometry | None:
+    """Sheet minus native pack union; None if empty input / union fails."""
+    if sheet is None or sheet.is_empty or not pack_geoms:
+        return None
+    from nest_graph.geometry_util import geoms_to_shapely_union
+
+    geoms = [
+        g for g in pack_geoms
+        if g is not None and not getattr(g, "is_empty", False)
+    ]
+    if not geoms:
+        return None
+    try:
+        return sheet.difference(geoms_to_shapely_union(list(geoms)))
+    except Exception:
+        return None
+
+
 def analyze_free_space(
     sheet: Polygon,
     packed: Sequence[BaseGeometry],
@@ -97,19 +158,21 @@ def analyze_free_space(
     *,
     void_ratio_threshold: float = 2.5,
     free: BaseGeometry | None = None,
+    pack_geoms: Sequence[Geometry] | None = None,
 ) -> FreeSpaceAnalysis:
     """Classify free space as one large void vs Swiss-cheese slivers.
 
     ``void_ratio_threshold`` should match ``ProposeConfig.late_border_void_override_ratio``
     so Mode A / late-sat / MIS agree on what counts as large_void.
     Pass ``free`` when the caller already computed ``sheet.difference(union(packed))``.
+    Pass ``pack_geoms`` to derive ``free`` via native union when ``free`` is omitted.
     """
     from nest_graph.propose.void_topology import polylabel as void_polylabel
 
     placed = [p for p in packed if p is not None and not p.is_empty]
     if sheet is None or sheet.is_empty:
         return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
-    if not placed:
+    if not placed and not pack_geoms:
         area = float(sheet.area)
         ratio = area / max(float(part_area), 1e-12)
         try:
@@ -124,7 +187,23 @@ def analyze_free_space(
             target_pt=pt,
         )
     if free is None:
+        free = free_difference_from_pack_geoms(sheet, pack_geoms)
+    if free is None and placed:
         free = sheet.difference(unary_union(placed))
+    if free is None and not placed:
+        area = float(sheet.area)
+        ratio = area / max(float(part_area), 1e-12)
+        try:
+            pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
+        except Exception:
+            pt = sheet.representative_point()
+        return FreeSpaceAnalysis(
+            kind="large_void" if ratio > void_ratio_threshold else "swiss_cheese",
+            max_void_ratio=ratio,
+            largest_area=area,
+            target_poly=sheet if isinstance(sheet, Polygon) else None,
+            target_pt=pt,
+        )
     components = _polygon_components(free)
     if not components:
         return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
@@ -166,7 +245,6 @@ def build_free_space_snapshot(
     Pass ``pack_geoms`` (e.g. from ``NestState.native_geoms``) to union via
     ``geoms_to_shapely_union`` instead of ``unary_union`` on Shapely packed.
     """
-    from nest_graph.geometry_util import geoms_to_shapely_union
     from nest_graph.propose.void_topology import (
         hull_bay_polygons,
         topology_pocket_poles,
@@ -174,18 +252,10 @@ def build_free_space_snapshot(
     )
 
     placed = [p for p in packed if p is not None and not p.is_empty]
-    free = None
-    if sheet is not None and not sheet.is_empty:
+    free = free_difference_from_pack_geoms(sheet, pack_geoms)
+    if free is None and sheet is not None and not sheet.is_empty and placed:
         try:
-            if pack_geoms is not None:
-                geoms = [
-                    g for g in pack_geoms
-                    if g is not None and not getattr(g, "is_empty", False)
-                ]
-                if geoms:
-                    free = sheet.difference(geoms_to_shapely_union(list(geoms)))
-            elif placed:
-                free = sheet.difference(unary_union(placed))
+            free = sheet.difference(unary_union(placed))
         except Exception:
             free = None
     analysis = analyze_free_space(
@@ -195,6 +265,7 @@ def build_free_space_snapshot(
         min_dist,
         void_ratio_threshold=void_ratio_threshold,
         free=free,
+        pack_geoms=pack_geoms,
     )
     voids = tuple(trapped_void_polygons(sheet, packed, free=free))
     bays = tuple(hull_bay_polygons(packed, min_dist=min_dist, sheet=sheet))
@@ -1345,11 +1416,11 @@ def late_border_saturation_info(
     threshold = float(cfg.propose.place_border_coverage_threshold)
 
     mean_part = sum(float(p.area) for p in placed) / float(len(placed))
-    void_thr = float(cfg.propose.late_border_void_override_ratio)
-    if void_thr <= 0.0:
-        void_thr = 2.5
+    void_thr = void_ratio_threshold(cfg.propose)
     free_info = analyze_free_space(
-        sheet, placed, mean_part, min_dist, void_ratio_threshold=void_thr,
+        sheet, placed, mean_part, min_dist,
+        void_ratio_threshold=void_thr,
+        pack_geoms=pack_geoms,
     )
     free_kind = str(free_info.kind)
     void_ratio = float(free_info.max_void_ratio)

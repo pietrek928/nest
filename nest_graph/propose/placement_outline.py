@@ -41,8 +41,15 @@ def outline_ring_geom(
     *,
     propose_geom: Optional["ProposeGeometry"] = None,
 ) -> Optional[Geometry]:
+    """Thin outline → line Geometry (C0: prefer from_shapely_outline)."""
     if propose_geom is not None and outline is propose_geom.sheet:
         return propose_geom.boundary_ring_geom
+    if outline is None or getattr(outline, "is_empty", False):
+        return None
+    try:
+        return Geometry.from_shapely_outline(outline)
+    except Exception:
+        pass
     if isinstance(outline, (LineString, LinearRing)):
         coords = list(outline.coords)
         if len(coords) < 2:

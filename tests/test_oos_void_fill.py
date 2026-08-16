@@ -12,7 +12,7 @@ from nest_graph.build_graph import (
     _transform_row_key,
 )
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import ElemGraph
+from nest_graph.elem_graph import PoseGraph
 from nest_graph.propose.context import classify_propose_zone
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import _extend_counted, _proposal_key
@@ -150,7 +150,7 @@ def test_oos4_void_pole_bonus_prefers_deeper_and_larger():
 def test_p3_pin_adds_independent_nest_void_only():
     from nest_graph.elem_graph import Circle, Vec2
 
-    graph = ElemGraph()
+    graph = PoseGraph()
     for i in range(3):
         graph.append_elem(0, Vec2(x=float(i), y=0.0), Circle.from_center_radius(float(i), 0.0, 0.1))
     graph.add_collision(0, 1)

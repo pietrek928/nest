@@ -20,6 +20,7 @@ nanobind_add_module(elem_graph
   bindings/module.cc
   bindings/types.cc
   bindings/api.cc
+  bindings/bind_decision.cc
 )
 target_link_libraries(elem_graph PRIVATE elem_graph_core)
 target_include_directories(elem_graph PRIVATE
@@ -54,6 +55,9 @@ if(NEST_GRAPH_BUILD_TESTS)
   add_executable(elem_graph_cpp_tests
     tests/test_selection.cc
     tests/test_refine_dfs.cc
+    tests/test_se2.cc
+    tests/test_contact_relation.cc
+    tests/test_decision_motif.cc
   )
   target_link_libraries(elem_graph_cpp_tests PRIVATE
     elem_graph_core
@@ -61,8 +65,13 @@ if(NEST_GRAPH_BUILD_TESTS)
   )
   target_include_directories(elem_graph_cpp_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_SOURCE_DIR}/nest_graph"
+    "${CMAKE_SOURCE_DIR}/nest_graph/geometry"
   )
 
   add_test(NAME elem_graph.cpp.selection COMMAND elem_graph_cpp_tests "[selection]")
   add_test(NAME elem_graph.cpp.refine COMMAND elem_graph_cpp_tests "[refine]")
+  add_test(NAME elem_graph.cpp.se2 COMMAND elem_graph_cpp_tests "[se2]")
+  add_test(NAME elem_graph.cpp.contact COMMAND elem_graph_cpp_tests "[contact_relation]")
+  add_test(NAME elem_graph.cpp.decision COMMAND elem_graph_cpp_tests "[decision_arena],[motif_base],[node_signature]")
 endif()
