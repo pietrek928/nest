@@ -150,6 +150,23 @@ public:
         return true;
     }
 
+    /**
+     * Q113 hollow Motif miss: ban unproven (ttl=-1); floor proven at 1.
+     * Mutates in-place (do not use Python .at() copy).
+     */
+    bool note_hollow_miss(int32_t id) {
+        if (id < 0 || id >= static_cast<int32_t>(motifs_.size())) {
+            return false;
+        }
+        MotifRecord &m = motifs_[static_cast<std::size_t>(id)];
+        if (m.accept_count <= 0) {
+            m.ttl_remaining = -1;
+        } else {
+            m.ttl_remaining = std::max(1, m.ttl_remaining - 1);
+        }
+        return true;
+    }
+
     /** Truncate to max_keep by accept_count then gci (Q92). Alive TTL preferred. */
     void truncate(int32_t max_keep) {
         if (max_keep <= 0 || static_cast<int32_t>(motifs_.size()) <= max_keep) {

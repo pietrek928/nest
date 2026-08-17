@@ -1010,15 +1010,17 @@ class BuildGraphConfig(BaseModel):
         sampling_update: dict = {}
         selection_update: dict = {}
         if seeded or n_holes >= 1:
-            cap = min(self.sampling.max_transforms_per_group or 120, 120)
+            # Seeded void-fill: peak scrap budget (~0.55) without time miss.
+            base_cap = int(self.sampling.max_transforms_per_group or 500)
+            cap = min(max(base_cap, 500), 500)
             sampling_update = {
                 "max_transforms_per_group": cap,
-                "initial_random": min(self.sampling.initial_random, 48),
-                "random_per_iter": min(self.sampling.random_per_iter, 32),
+                "initial_random": min(self.sampling.initial_random, 64),
+                "random_per_iter": min(self.sampling.random_per_iter, 48),
                 "random_per_iter_when_proposed": min(
-                    self.sampling.random_per_iter_when_proposed, 16,
+                    self.sampling.random_per_iter_when_proposed, 24,
                 ),
-                "shuffle_passes": min(self.sampling.shuffle_passes, 1),
+                "shuffle_passes": min(self.sampling.shuffle_passes, 2),
             }
             selection_update = {
                 "improve_rules_rounds": min(self.selection.improve_rules_rounds, 1),
@@ -1026,8 +1028,8 @@ class BuildGraphConfig(BaseModel):
                 "improve_rules_elite_count": min(
                     self.selection.improve_rules_elite_count, 4,
                 ),
-                "dfs_passes": min(self.selection.dfs_passes, 1),
-                "dfs_max_tries": min(self.selection.dfs_max_tries, 2),
+                "dfs_passes": min(max(int(self.selection.dfs_passes), 2), 2),
+                "dfs_max_tries": min(max(int(self.selection.dfs_max_tries), 3), 3),
                 "dfs_finalize_repair_passes": min(
                     self.selection.dfs_finalize_repair_passes, 2,
                 ),

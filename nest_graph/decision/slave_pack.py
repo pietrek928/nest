@@ -8,7 +8,15 @@ from typing import Any, Callable, Sequence
 from nest_graph.decision.action_gen import region_to_zone
 from nest_graph.decision.mcts import leaf_reward, timed_expand_ms
 from nest_graph.decision.types import BoardSnapshot
-from nest_graph.elem_graph import MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
+from nest_graph.elem_graph import (
+    ContactEdge,
+    MacroAction,
+    MacroRegion,
+    MotifBase,
+    Se2,
+    clamp01,
+    gci_surrogate,
+)
 from nest_graph.utils import relative_transform
 
 
@@ -29,19 +37,6 @@ def _motif_inject_patterns(
     return list(motif_to_cluster_patterns(motif_base, action))
 
 
-def _clamp01(v: float) -> float:
-    if v < 0.0:
-        return 0.0
-    if v > 1.0:
-        return 1.0
-    return float(v)
-
-
-def _gci_surrogate(compactness: float, contact_score: float) -> float:
-    """GCI = clamp01(α·compactness + β·contact_score); α=β=0.5 (Q78)."""
-    return _clamp01(0.5 * float(compactness) + 0.5 * float(contact_score))
-
-
 def _pair_compactness(ga, gb) -> float:
     from nest_graph.geometry import convex_hull_area_of
 
@@ -51,7 +46,7 @@ def _pair_compactness(ga, gb) -> float:
     hull = float(convex_hull_area_of([ga, gb]))
     if hull <= 1e-12:
         return 0.0
-    return _clamp01(area_sum / hull)
+    return float(clamp01(area_sum / hull))
 
 
 def motif_floor_compactness(
@@ -78,11 +73,10 @@ def upsert_from_contacts(
     telem: dict | None = None,
     selection_mask: Sequence[bool] | None = None,
 ) -> int:
-    """
-    ContactGRG → MotifBase.upsert (Q93 / Mg).
+    """ContactGRG → MotifBase via bound ContactEdge + gci_surrogate (C1).
 
-    Uses the same GCI/kiss predicates as ``build_contact_relations`` (α=β=0.5).
-    Mg: when ``selection_mask`` is set, only nest-selected pairs upsert.
+    Distance query stays Python (Geometry module); GCI/score use C++ ContactGRG
+    helpers; Motif upsert via ``upsert_contact``.
     """
     from nest_graph.geometry import find_polygon_distances
 
@@ -116,14 +110,13 @@ def upsert_from_contacts(
             continue
         contact_score = 1.0
         if contact > 0.0 and not bool(r.intersect):
-            contact_score = _clamp01(1.0 - dist / contact)
+            contact_score = float(clamp01(1.0 - dist / contact))
         ga, gb = geoms[i], geoms[j]
         compactness = _pair_compactness(ga, gb)
-        gci = _gci_surrogate(compactness, contact_score)
+        gci = float(gci_surrogate(float(compactness), float(contact_score)))
         area_i = abs(float(ga.area()))
         area_j = abs(float(gb.area()))
         gid_i, gid_j = int(gids[i]), int(gids[j])
-        # Order-invariant: larger area (then smaller gid) as A — matches C++.
         if area_j > area_i + 1e-12 or (
             abs(area_j - area_i) <= 1e-12 and gid_j < gid_i
         ):
@@ -132,21 +125,23 @@ def upsert_from_contacts(
         else:
             ia, ib = i, j
             area_a, area_b = area_i, area_j
+        del area_a, area_b
         t_a = transforms[ia]
         t_b = transforms[ib]
         rel = relative_transform(
             (float(t_a[0]), float(t_a[1]), float(t_a[2])),
             (float(t_b[0]), float(t_b[1]), float(t_b[2])),
         )
-        rec = MotifRecord()
-        rec.gid_a = int(gids[ia])
-        rec.gid_b = int(gids[ib])
-        rec.relative = Se2(float(rel[0]), float(rel[1]), float(rel[2]))
-        rec.gci = float(gci)
-        rec.compactness = float(compactness)
-        rec.area_a = float(area_a)
-        rec.area_b = float(area_b)
-        mid = int(motif_base.upsert(rec, float(floor), int(ttl)))
+        edge = ContactEdge()
+        edge.gid_a = int(gids[ia])
+        edge.gid_b = int(gids[ib])
+        edge.packed_i = int(ia)
+        edge.packed_j = int(ib)
+        edge.relative_pose = Se2(float(rel[0]), float(rel[1]), float(rel[2]))
+        edge.contact_score = float(contact_score)
+        edge.compactness = float(compactness)
+        edge.gci = float(gci)
+        mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
         if mid >= 0:
             n_up += 1
     if max_keep > 0:
@@ -197,11 +192,11 @@ def cheap_expand_slave(
             arena_node_id=parent.arena_node_id,
             kiss_pairs=parent.kiss_pairs,
             mean_compactness=parent.mean_compactness,
-            telem={"zone": zone, "stub": 1},
+            rim_fill=parent.rim_fill,
+            void_fill=parent.void_fill,
+            free_kind=parent.free_kind,
+            motif_ids_used=parent.motif_ids_used,
+            telem=dict(parent.telem or {}),
         )
-
-    reward = leaf_reward(snap)
-    if telem is not None:
-        timed_expand_ms(telem, t0)
-        telem["from_shapely_count"] = int(telem.get("from_shapely_count", 0))
-    return ExpandResult(snapshot=snap, reward=reward, ok=True)
+    timed_expand_ms(telem, t0)
+    return ExpandResult(snapshot=snap, reward=leaf_reward(snap), ok=True)

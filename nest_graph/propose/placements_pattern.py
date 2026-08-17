@@ -350,15 +350,25 @@ def merge_cluster_patterns(
     *,
     max_patterns: int,
     archived: Sequence[ClusterPattern] = (),
+    reserve_archived: int = 0,
 ) -> list[ClusterPattern]:
-    """Prefer contact → accepted archive → synthesized mates (one prefer path)."""
+    """Prefer contact → accepted archive → synthesized mates (one prefer path).
+
+    When ``reserve_archived>0`` and archive non-empty, leave room so MotifBase
+    archive is not starved by live contact filling the cap (P2 / large_void).
+    """
     cap = max(int(max_patterns), 1)
+    arch_list = list(archived or ())
+    reserve = min(max(int(reserve_archived), 0), cap, len(arch_list))
+    contact_cap = max(0, cap - reserve)
     out: list[ClusterPattern] = []
     seen: set[tuple] = set()
 
-    def _add(seq: Sequence[ClusterPattern]) -> None:
+    def _add(seq: Sequence[ClusterPattern], limit: int | None = None) -> None:
         for pat in seq:
             if len(out) >= cap:
+                return
+            if limit is not None and len(out) >= limit:
                 return
             sig = _pattern_signature(pat)
             if sig in seen:
@@ -366,8 +376,8 @@ def merge_cluster_patterns(
             seen.add(sig)
             out.append(pat)
 
-    _add(contact)
-    _add(archived)
+    _add(contact, contact_cap if reserve > 0 else None)
+    _add(arch_list)
     _add(synthesized)
     return out
 

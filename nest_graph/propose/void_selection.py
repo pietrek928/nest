@@ -215,6 +215,35 @@ def boost_small_part_scores(
     return n
 
 
+def boost_large_part_scores(
+    group_id: Sequence[int],
+    scores: list[float],
+    part_areas: Sequence[float],
+    *,
+    weight: float,
+) -> int:
+    """Prefer larger catalog groups into open basins (scrap density)."""
+    if weight <= 0.0 or not scores or not part_areas:
+        return 0
+    areas = [float(a) for a in part_areas]
+    max_a = max(areas) if areas else 0.0
+    if max_a <= 1e-12:
+        return 0
+    n = 0
+    for i, sc in enumerate(scores):
+        if i >= len(group_id):
+            break
+        gid = int(group_id[i])
+        if gid < 0 or gid >= len(areas):
+            continue
+        factor = max(0.0, areas[gid] / max_a)
+        if factor <= 0.0:
+            continue
+        scores[i] = float(sc) + float(weight) * factor
+        n += 1
+    return n
+
+
 def boost_selection_geom_quality(
     candidate_geoms: list[Geometry],
     scores: list[float],
@@ -305,6 +334,7 @@ def apply_void_selection_boosts(
         "pocket_keys": 0,
         "motif_keys": 0,
         "small_part": 0,
+        "large_part": 0,
         "selection_geom": 0,
     }
     pole_w = float(cfg.propose.void_island_score_boost)
@@ -357,12 +387,21 @@ def apply_void_selection_boosts(
             motif_keys,
             weight=motif_w,
         )
-    if free_info.kind == "large_void" and small_w > 0.0:
+    # Open basin (high void ratio): prefer large parts for scrap density;
+    # swiss-cheese / modest voids keep small-part pocket fill.
+    void_ratio = float(getattr(free_info, "max_void_ratio", 0.0) or 0.0)
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and void_ratio >= 8.0
+        and small_w > 0.0
+    ):
+        hits["large_part"] = boost_large_part_scores(
+            group_id, scores, part_areas, weight=small_w,
+        )
+    elif small_w > 0.0:
         hits["small_part"] = boost_small_part_scores(
-            group_id,
-            scores,
-            part_areas,
-            weight=small_w,
+            group_id, scores, part_areas, weight=small_w,
         )
     if geom_w > 0.0 and candidate_geoms is not None and outline is not None:
         board_ring = outline_ring_geom(outline)
@@ -384,11 +423,26 @@ def apply_void_selection_boosts(
     return hits
 
 
-def centroid_in_free(poly, free_poly: BaseGeometry | None) -> bool:
+def centroid_in_free(
+    poly,
+    free_poly: BaseGeometry | None,
+    *,
+    interior_margin: float = 0.0,
+) -> bool:
+    """Centroid in free; optional eroded core for true-interior colonize (V2)."""
     if free_poly is None or free_poly.is_empty or poly is None or poly.is_empty:
         return False
     c = poly.centroid
-    return bool(free_poly.contains(c) or free_poly.intersects(c))
+    region = free_poly
+    margin = float(interior_margin)
+    if margin > 1e-12:
+        try:
+            core = free_poly.buffer(-margin)
+            if core is not None and not getattr(core, "is_empty", True):
+                region = core
+        except Exception:
+            region = free_poly
+    return bool(region.contains(c) or region.intersects(c))
 
 
 def xy_in_free(x: float, y: float, free_poly: BaseGeometry | None) -> bool:
@@ -402,12 +456,26 @@ def count_selected_in_free(
     polys: list,
     selected: Sequence[int],
     free_poly: BaseGeometry | None,
+    *,
+    interior_margin: float = 0.0,
 ) -> int:
-    return sum(1 for i in selected if centroid_in_free(polys[i], free_poly))
+    return sum(
+        1
+        for i in selected
+        if centroid_in_free(polys[i], free_poly, interior_margin=interior_margin)
+    )
 
 
-def count_graph_in_free(polys: list, free_poly: BaseGeometry | None) -> int:
-    return sum(1 for p in polys if centroid_in_free(p, free_poly))
+def count_graph_in_free(
+    polys: list,
+    free_poly: BaseGeometry | None,
+    *,
+    interior_margin: float = 0.0,
+) -> int:
+    return sum(
+        1 for p in polys
+        if centroid_in_free(p, free_poly, interior_margin=interior_margin)
+    )
 
 
 def count_props_in_free(
@@ -502,6 +570,108 @@ def format_prop_accept(
     return " ".join(parts)
 
 
+def colonize_pin_clear(
+    candidates: Sequence[int],
+    collisions,
+    cur: list[int],
+    cur_set: set[int],
+) -> tuple[list[int], set[int], int, int]:
+    """Pin collision-clear void candidates onto ``cur`` (one SoT walk)."""
+    add = 0
+    blk = 0
+    for v in candidates:
+        vi = int(v)
+        if vi in cur_set:
+            continue
+        if any(int(u) in cur_set for u in collisions[vi]):
+            blk += 1
+            continue
+        cur.append(vi)
+        cur_set.add(vi)
+        add += 1
+    return cur, cur_set, add, blk
+
+
+def colonize_blocker_order(
+    candidates: Sequence[int],
+    collisions,
+    out_set: set[int],
+    polys: list,
+    free_poly: BaseGeometry | None,
+    margin: float,
+) -> list[int]:
+    """Prefer rim plugs; protect free-core residents; fall back to any plug."""
+    unlocks: dict[int, int] = {}
+    core_m = float(margin) if float(margin) > 1e-12 else 1e-6
+    for v in list(candidates)[:64]:
+        hit = [int(u) for u in collisions[int(v)] if int(u) in out_set]
+        if not hit:
+            continue
+        for ui in hit:
+            if centroid_in_free(polys[ui], free_poly, interior_margin=core_m):
+                continue
+            unlocks[ui] = int(unlocks.get(ui, 0)) + 1
+    if not unlocks:
+        # All plugs sit on the free fringe — still drop highest-degree plugs.
+        for v in list(candidates)[:64]:
+            for u in collisions[int(v)]:
+                ui = int(u)
+                if ui in out_set:
+                    unlocks[ui] = int(unlocks.get(ui, 0)) + 1
+    if not unlocks:
+        return []
+    return sorted(unlocks.keys(), key=lambda ui: -int(unlocks[ui]))
+
+
+def _colonize_sel_area(
+    selected: Sequence[int],
+    group_id: Sequence[int] | None,
+    part_areas: Sequence[float] | None,
+) -> float:
+    if not group_id or not part_areas:
+        return float(len(selected))
+    total = 0.0
+    n_areas = len(part_areas)
+    for i in selected:
+        gi = int(group_id[int(i)]) if 0 <= int(i) < len(group_id) else -1
+        if 0 <= gi < n_areas:
+            total += float(part_areas[gi])
+    return total
+
+
+def _colonize_trial_better(
+    trial: Sequence[int],
+    cur: Sequence[int],
+    *,
+    base_len: int,
+    base_area: float,
+    group_id: Sequence[int] | None,
+    part_areas: Sequence[float] | None,
+    n_drop: int,
+    add: int,
+) -> bool:
+    """Accept unlock when area holds and void pins replace rim plugs."""
+    if add <= 0:
+        return False
+    t_area = _colonize_sel_area(trial, group_id, part_areas)
+    c_area = _colonize_sel_area(cur, group_id, part_areas)
+    # Hybrid: allow a small dip when the unlock nets more void pins than plugs.
+    area_floor = base_area
+    if add > n_drop:
+        area_floor = 0.95 * base_area
+    if t_area + 1e-12 < area_floor:
+        return False
+    if t_area > c_area + 1e-12:
+        return True
+    if t_area + 1e-12 < c_area:
+        return False
+    if len(trial) > len(cur):
+        return True
+    if len(trial) < len(cur):
+        return False
+    return add >= n_drop and len(trial) >= max(base_len, len(cur))
+
+
 def colonize_void_onto_base(
     graph,
     base: Sequence[int],
@@ -510,21 +680,30 @@ def colonize_void_onto_base(
     scores: list[float] | None = None,
     *,
     stats_out: dict | None = None,
+    interior_margin: float = 0.0,
+    max_rim_drop: int = 16,
+    group_id: Sequence[int] | None = None,
+    part_areas: Sequence[float] | None = None,
 ) -> list[int]:
     """Pin free-centroid graph nodes onto ``base`` if collision-clear.
 
-    Same collision walk as ``pin_nest_void_independent`` (one SoT). Used at the
-    incumbent hold site when ``large_void`` still has unused void graph capacity.
+    Same collision walk as ``pin_nest_void_independent`` (one SoT). Used after
+    incumbent hold so rim density and void pins hybridize.
+
+    V2: ``interior_margin`` prefers true free core. V3: iterative rim-blocker
+    unlock — drop ≤``max_rim_drop`` plugs when area-aware retry is non-worse.
     """
     t0 = time.perf_counter()
     out = list(base)
     out_set = set(int(i) for i in out)
     collisions = getattr(graph, "collisions", None)
+    margin = float(interior_margin)
     if collisions is None or free_poly is None or getattr(free_poly, "is_empty", True):
         if stats_out is not None:
             stats_out["colonize_candidates"] = 0
             stats_out["colonize_pinned"] = 0
             stats_out["colonize_blocked"] = 0
+            stats_out["colonize_rim_drop"] = 0
             stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
         return out
     candidates = [
@@ -532,24 +711,214 @@ def colonize_void_onto_base(
         for i in range(len(collisions))
         if i not in out_set
         and i < len(polys)
-        and centroid_in_free(polys[i], free_poly)
+        and centroid_in_free(polys[i], free_poly, interior_margin=margin)
     ]
+    # Fallback to full free if eroded core empties candidates.
+    if not candidates and margin > 1e-12:
+        candidates = [
+            i
+            for i in range(len(collisions))
+            if i not in out_set
+            and i < len(polys)
+            and centroid_in_free(polys[i], free_poly, interior_margin=0.0)
+        ]
     pinned = 0
     blocked = 0
+    rim_drop = 0
+    base_len = len(out)
+    base_area = _colonize_sel_area(out, group_id, part_areas)
     if scores is not None and len(scores) >= len(collisions):
         candidates.sort(key=lambda v: float(scores[v]), reverse=True)
-    for v in candidates:
-        if any(int(u) in out_set for u in collisions[v]):
-            blocked += 1
-            continue
-        out.append(v)
-        out_set.add(v)
-        pinned += 1
+
+    out, out_set, pinned, blocked = colonize_pin_clear(
+        candidates, collisions, out, out_set,
+    )
+    drop_budget = max(0, int(max_rim_drop))
+    core_m = float(margin) if float(margin) > 1e-12 else 1e-6
+    tried_victims: set[frozenset[int]] = set()
+    while drop_budget > 0 and blocked > 0 and candidates:
+        # Map still-blocked cands → rim plugs (protect free-core residents).
+        blocked_plugs: list[tuple[int, list[int]]] = []
+        for v in candidates:
+            vi = int(v)
+            if vi in out_set:
+                continue
+            plugs = [int(u) for u in collisions[vi] if int(u) in out_set]
+            if not plugs:
+                continue
+            rim_plugs = [
+                ui for ui in plugs
+                if not centroid_in_free(
+                    polys[ui], free_poly, interior_margin=core_m,
+                )
+            ]
+            if not rim_plugs:
+                rim_plugs = list(plugs)
+            blocked_plugs.append((vi, rim_plugs))
+        if not blocked_plugs:
+            ordered = colonize_blocker_order(
+                candidates, collisions, out_set, polys, free_poly, margin,
+            )
+            if not ordered:
+                break
+            blocked_plugs = [(-1, [int(ordered[0])])]
+        # Prefer unlocks that clear ≥ as many void cands as plugs dropped
+        # (area-safe fanout); then fewest plugs; then highest void score.
+        def _unlock_key(item: tuple[int, list[int]]) -> tuple:
+            vi, rim_plugs = item
+            drop_set = frozenset(rim_plugs)
+            cover = sum(
+                1 for _w, plugs in blocked_plugs
+                if drop_set.issuperset(plugs)
+            )
+            sc = (
+                float(scores[vi])
+                if scores is not None and 0 <= vi < len(scores)
+                else 0.0
+            )
+            return (-cover, len(rim_plugs), -sc)
+
+        blocked_plugs.sort(key=_unlock_key)
+        progressed = False
+        for vi, rim_plugs in blocked_plugs:
+            if not rim_plugs:
+                continue
+            # V3 minimal drop: at most 2 highest-cover plugs, not the full collision star
+            # (stars of 10–20 rim hits were skipped by drop_budget and never unlocked).
+            if len(rim_plugs) > 2:
+                deg: dict[int, int] = {}
+                for u in rim_plugs:
+                    deg[int(u)] = sum(
+                        1 for _w, plugs in blocked_plugs if int(u) in plugs
+                    )
+                rim_plugs = sorted(rim_plugs, key=lambda u: -int(deg.get(int(u), 0)))[:2]
+            if len(rim_plugs) > drop_budget:
+                rim_plugs = list(rim_plugs)[:drop_budget]
+            if not rim_plugs:
+                continue
+            drop_set = frozenset(int(u) for u in rim_plugs)
+            if drop_set in tried_victims:
+                continue
+            tried_victims.add(drop_set)
+            trial = [i for i in out if int(i) not in drop_set]
+            trial_set = set(int(i) for i in trial)
+            trial, trial_set, add, blk = colonize_pin_clear(
+                candidates, collisions, trial, trial_set,
+            )
+            n_drop = len(drop_set)
+            if not _colonize_trial_better(
+                trial,
+                out,
+                base_len=base_len,
+                base_area=base_area,
+                group_id=group_id,
+                part_areas=part_areas,
+                n_drop=n_drop,
+                add=add,
+            ):
+                continue
+            out = trial
+            out_set = trial_set
+            pinned += add
+            blocked = blk
+            rim_drop += n_drop
+            drop_budget -= n_drop
+            progressed = True
+            break
+        if not progressed:
+            break
+    # Cohort unlock: drop the top-k highest-degree rim plugs together when
+    # single-set V3 stalls (many void cands share a small plug clique).
+    if drop_budget >= 2 and blocked > 0:
+        ordered = colonize_blocker_order(
+            candidates, collisions, out_set, polys, free_poly, margin,
+        )
+        k = min(4, int(drop_budget), len(ordered))
+        if k >= 2:
+            drop_set = frozenset(int(u) for u in ordered[:k])
+            trial = [i for i in out if int(i) not in drop_set]
+            trial_set = set(int(i) for i in trial)
+            trial, trial_set, add, blk = colonize_pin_clear(
+                candidates, collisions, trial, trial_set,
+            )
+            if _colonize_trial_better(
+                trial,
+                out,
+                base_len=base_len,
+                base_area=base_area,
+                group_id=group_id,
+                part_areas=part_areas,
+                n_drop=k,
+                add=add,
+            ):
+                out = trial
+                out_set = trial_set
+                pinned += add
+                blocked = blk
+                rim_drop += k
     if stats_out is not None:
         stats_out["colonize_candidates"] = len(candidates)
         stats_out["colonize_pinned"] = pinned
         stats_out["colonize_blocked"] = blocked
+        stats_out["colonize_rim_drop"] = rim_drop
         stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
+    return out
+
+
+def void_core_then_rim(
+    graph,
+    polys: list,
+    free_poly: BaseGeometry | None,
+    scores: list[float] | None = None,
+    *,
+    interior_margin: float = 0.0,
+    stats_out: dict | None = None,
+) -> list[int]:
+    """Void-first MIS then rim fill (hybrid complement to rim-first colonize)."""
+    t0 = time.perf_counter()
+    collisions = getattr(graph, "collisions", None)
+    if collisions is None or free_poly is None or getattr(free_poly, "is_empty", True):
+        if stats_out is not None:
+            stats_out["void_core_n"] = 0
+            stats_out["void_core_rim_add"] = 0
+            stats_out["void_core_ms"] = (time.perf_counter() - t0) * 1000.0
+        return []
+    margin = float(interior_margin)
+    void_cands = [
+        i
+        for i in range(len(collisions))
+        if i < len(polys)
+        and centroid_in_free(polys[i], free_poly, interior_margin=margin)
+    ]
+    if not void_cands and margin > 1e-12:
+        void_cands = [
+            i
+            for i in range(len(collisions))
+            if i < len(polys)
+            and centroid_in_free(polys[i], free_poly, interior_margin=0.0)
+        ]
+    if scores is not None and len(scores) >= len(collisions):
+        void_cands.sort(key=lambda v: float(scores[v]), reverse=True)
+    core: list[int] = []
+    core_set: set[int] = set()
+    for v in void_cands:
+        vi = int(v)
+        if any(int(u) in core_set for u in collisions[vi]):
+            continue
+        core.append(vi)
+        core_set.add(vi)
+    rest = [
+        i for i in range(len(collisions))
+        if i not in core_set and i < len(polys)
+    ]
+    if scores is not None and len(scores) >= len(collisions):
+        rest.sort(key=lambda v: float(scores[v]), reverse=True)
+    out, out_set, add, _blk = colonize_pin_clear(rest, collisions, core, core_set)
+    if stats_out is not None:
+        stats_out["void_core_n"] = len(core)
+        stats_out["void_core_rim_add"] = int(add)
+        stats_out["void_core_total"] = len(out)
+        stats_out["void_core_ms"] = (time.perf_counter() - t0) * 1000.0
     return out
 
 

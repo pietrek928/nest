@@ -22,11 +22,13 @@ from nest_graph.propose.void_selection import (
     apply_void_centroid_score_term,
     apply_void_selection_boosts,
     boost_border_scores,
+    centroid_in_free,
     colonize_void_onto_base,
     count_graph_in_free,
     count_selected_in_free,
     transform_row_key,
     void_attractor_radius,
+    void_core_then_rim,
 )
 from nest_graph.propose.block_replace import (
     _packing_independent,
@@ -51,6 +53,60 @@ def dual_nest_for(free_info: Any, *, last_leaf: bool = False, do_heavy: bool | N
     if bool(last_leaf):
         return True
     return free_info is not None and getattr(free_info, "kind", None) == "large_void"
+
+
+def free_basin_is_fat(
+    free_poly: BaseGeometry | None,
+    part_areas: Sequence[float] | None,
+    *,
+    erode: float = 0.04,
+) -> bool:
+    """True when eroded free still holds ≥2× smallest catalog part (stampable basin)."""
+    if free_poly is None or getattr(free_poly, "is_empty", True):
+        return False
+    try:
+        min_part = max(
+            min((float(a) for a in (part_areas or [0.01])), default=0.01),
+            0.01,
+        )
+        return float(free_poly.buffer(-float(erode)).area) > 2.0 * min_part
+    except Exception:
+        return False
+
+
+def prefer_void_core_selection(
+    *,
+    rim_sel: Sequence[int],
+    void_sel: Sequence[int],
+    polys: list,
+    free_poly: BaseGeometry,
+    group_id: Sequence[int],
+    part_areas: Sequence[float],
+) -> bool:
+    """Hybrid: take void-first when it wins area, or soft-keeps area with more void.
+
+    Fat basin (early large_void): softer floors so void packs before rim ribbons
+    the residual. Thin basin: require near area parity.
+    """
+    if not void_sel:
+        return False
+    rim_area = float(_sel_area(rim_sel, group_id, part_areas))
+    vf_area = float(_sel_area(void_sel, group_id, part_areas))
+    if vf_area > rim_area + 1e-12:
+        return True
+    vf_void = count_selected_in_free(polys, void_sel, free_poly)
+    rim_void = count_selected_in_free(polys, rim_sel, free_poly)
+    if vf_void <= rim_void:
+        return False
+    fat = free_basin_is_fat(free_poly, part_areas)
+    if fat and vf_void >= 8 and vf_area + 1e-12 >= 0.90 * rim_area:
+        return True
+    area_floor = 0.90 if fat else 0.94
+    count_floor = 0.85 if fat else 0.90
+    return (
+        vf_area + 1e-12 >= area_floor * rim_area
+        and len(void_sel) >= int(count_floor * max(len(rim_sel), 1))
+    )
 
 
 def compose_nest_kwargs(
@@ -333,11 +389,13 @@ def compose_and_nest_selection(
         propose_stats["geom_share"] = geom_stats.get("geom_share", 0.0)
 
     # L1: void-centroid term on nest scores before MIS (refine shares same helper).
-    # Q118 miss-loop: deepen to 2.0× island boost under large_void (was 0.75).
+    # Q118: deepen island boost under large_void / void_seek.
     void_scale = 2.0
     mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
     if mcts_zone == "void_seek":
         void_scale = 2.5
+    if free_info is not None and getattr(free_info, "kind", None) == "large_void":
+        void_scale = max(void_scale, 4.0)
     void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * void_scale
     nest_void_hits = apply_void_centroid_score_term(
         polys,
@@ -435,6 +493,55 @@ def compose_and_nest_selection(
             selected_nest = cand
             locked_motif = list(lock)
 
+    # Beam void-core MIS before incumbent hold so fat-basin void packs can
+    # survive S0 via the same void_override path (one prefer helper).
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        interior_m = float(min_dist) * 0.25
+        core_stats: dict = {}
+        void_first = void_core_then_rim(
+            graph,
+            polys,
+            free_poly,
+            scores,
+            interior_margin=interior_m,
+            stats_out=core_stats,
+        )
+        if not void_first and interior_m > 1e-12:
+            void_first = void_core_then_rim(
+                graph,
+                polys,
+                free_poly,
+                scores,
+                interior_margin=0.0,
+                stats_out=core_stats,
+            )
+        if propose_stats is not None:
+            propose_stats.update(core_stats)
+        if void_first and prefer_void_core_selection(
+            rim_sel=selected_nest,
+            void_sel=void_first,
+            polys=polys,
+            free_poly=free_poly,
+            group_id=group_id,
+            part_areas=part_areas,
+        ):
+            selected_nest = list(void_first)
+            if propose_stats is not None:
+                propose_stats["void_core_accepted"] = 1
+                propose_stats["void_core_fat_free"] = int(
+                    free_basin_is_fat(free_poly, part_areas)
+                )
+        elif propose_stats is not None:
+            propose_stats["void_core_accepted"] = 0
+            propose_stats["void_core_fat_free"] = int(
+                free_basin_is_fat(free_poly, part_areas)
+            )
+
     incumbent = _map_incumbent_indices(
         group_id=group_id,
         transform=transform,
@@ -446,38 +553,13 @@ def compose_and_nest_selection(
     void_override_flag = 0
     if propose_stats is not None:
         propose_stats["incumbent_mapped"] = int(len(incumbent))
-    # Colonize unused void graph onto MIS cand whenever large_void has capacity
-    # (not only inside hold — lex-better rim packs otherwise skip the hole).
-    if (
-        free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
-        and free_poly is not None
-        and not getattr(free_poly, "is_empty", True)
-    ):
-        void_cand0 = count_selected_in_free(polys, selected_nest, free_poly)
-        n_void_graph = count_graph_in_free(polys, free_poly)
-        if n_void_graph > void_cand0:
-            colonize_stats: dict = {}
-            colonized = colonize_void_onto_base(
-                graph,
-                selected_nest,
-                polys,
-                free_poly,
-                scores,
-                stats_out=colonize_stats,
-            )
-            if propose_stats is not None:
-                propose_stats.update(colonize_stats)
-            if len(colonized) > len(selected_nest):
-                selected_nest = colonized
     if incumbent and not _lex_pick_better(
         best=incumbent,
         cand=selected_nest,
         group_id=group_id,
         part_areas=part_areas,
     ):
-        # Void override: allow cand when it colonizes more free space and is
-        # not a collapse (count ≥ 0.9× incumbent). S0: refuse outline cov drop.
+        # Soft void override when MIS already fills free with near area parity.
         void_override = False
         if (
             free_info is not None
@@ -485,12 +567,50 @@ def compose_and_nest_selection(
             and free_poly is not None
             and not getattr(free_poly, "is_empty", True)
             and len(incumbent) > 0
-            and len(selected_nest) >= int(0.9 * len(incumbent))
         ):
             void_cand = count_selected_in_free(polys, selected_nest, free_poly)
             void_inc = count_selected_in_free(polys, incumbent, free_poly)
-            void_override = void_cand > void_inc
+            void_gain = int(void_cand) - int(void_inc)
+            cand_area = float(_sel_area(selected_nest, group_id, part_areas))
+            inc_area = float(_sel_area(incumbent, group_id, part_areas))
+            fat_free = free_basin_is_fat(free_poly, part_areas)
+            if void_inc <= 2 and void_gain >= 8:
+                area_ok = cand_area + 1e-12 >= (0.88 if fat_free else 0.93) * inc_area
+                count_ok = len(selected_nest) >= int(0.75 * len(incumbent))
+            else:
+                area_floor = 0.90 if fat_free else 0.97
+                area_ok = cand_area + 1e-12 >= area_floor * inc_area
+                count_ok = len(selected_nest) >= int(0.9 * len(incumbent))
+                if (
+                    not count_ok
+                    and area_ok
+                    and void_gain >= 3
+                    and len(selected_nest) >= int(0.85 * len(incumbent))
+                ):
+                    count_ok = True
+            void_override = bool(void_gain > 0 and area_ok and count_ok)
+            # Fat basin / void-core beam: skip hold so rim incumbent does not
+            # restore a hollow pack after void-first MIS.
+            if (
+                not void_override
+                and fat_free
+                and void_gain >= 5
+                and cand_area + 1e-12 >= 0.85 * inc_area
+            ):
+                void_override = True
+            if (
+                not void_override
+                and int((propose_stats or {}).get("void_core_accepted", 0) or 0) > 0
+                and void_gain >= 1
+                and cand_area + 1e-12 >= 0.92 * inc_area
+            ):
+                void_override = True
             if void_override:
+                drop_allow = 0.10 if fat_free else (
+                    0.08 if (void_inc <= 2 and void_gain >= 8) else (
+                        0.06 if void_gain >= 3 else 0.02
+                    )
+                )
                 try:
                     cov_cand = float(outline_coverage_ratio(
                         [polys[i] for i in selected_nest if 0 <= int(i) < len(polys)],
@@ -502,16 +622,75 @@ def compose_and_nest_selection(
                         outline,
                         float(min_dist),
                     ))
-                    if cov_cand + 1e-9 < cov_inc - 0.02:
+                    if cov_cand + 1e-9 < cov_inc - drop_allow:
                         void_override = False
                 except Exception:
                     pass
         if void_override:
             void_override_flag = 1
-        if not void_override:
+        else:
             selected_nest = list(incumbent)
             locked_motif = []
             incumbent_hold = 1
+    # One colonize walk onto the held/MIS base (rim density + void pins).
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        interior_m = float(min_dist) * 0.25
+        void_base = count_selected_in_free(
+            polys, selected_nest, free_poly, interior_margin=interior_m,
+        )
+        n_void_graph = count_graph_in_free(
+            polys, free_poly, interior_margin=interior_m,
+        )
+        use_margin = interior_m
+        if n_void_graph <= void_base:
+            void_base = count_selected_in_free(polys, selected_nest, free_poly)
+            n_void_graph = count_graph_in_free(polys, free_poly)
+            use_margin = 0.0
+        if n_void_graph > void_base:
+            colonize_stats: dict = {}
+            colonized = colonize_void_onto_base(
+                graph,
+                selected_nest,
+                polys,
+                free_poly,
+                scores,
+                stats_out=colonize_stats,
+                interior_margin=use_margin,
+                max_rim_drop=20,
+                group_id=group_id,
+                part_areas=part_areas,
+            )
+            if propose_stats is not None:
+                propose_stats.update(colonize_stats)
+            pinned_n = int(colonize_stats.get("colonize_pinned", 0) or 0)
+            if pinned_n > 0 or len(colonized) != len(selected_nest):
+                base_area = float(_sel_area(selected_nest, group_id, part_areas))
+                col_area = float(_sel_area(colonized, group_id, part_areas))
+                if col_area > base_area + 1e-12 or (
+                    col_area + 1e-12 >= base_area
+                    and len(colonized) >= len(selected_nest)
+                ):
+                    selected_nest = colonized
+                elif propose_stats is not None:
+                    propose_stats["colonize_area_reject"] = 1
+            # Keep colonized free-core pins locked through refine so DFS cannot
+            # shed void fill (R0 soft unify: budget/hold, not Motif→DFS).
+            void_pins = [
+                int(i) for i in selected_nest
+                if 0 <= int(i) < len(polys)
+                and centroid_in_free(
+                    polys[int(i)], free_poly, interior_margin=use_margin,
+                )
+            ][:12]
+            if void_pins:
+                locked_motif = list(dict.fromkeys(list(locked_motif) + void_pins))
+            # void_core already beamed before hold (prefer_void_core_selection).
+            # Colonize is the rim↔void hybrid pin walk on the held/MIS base.
     if propose_stats is not None:
         propose_stats["incumbent_hold"] = int(incumbent_hold)
         propose_stats["void_override"] = int(void_override_flag)

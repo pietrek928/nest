@@ -55,8 +55,8 @@ from .propose.pipeline import allow_void_repack, collect_propose_batch_for_nest
 from .propose.post_pack import run_post_pack_passes
 from .propose.pattern_archive import (
     age_motif_library,
-    patterns_from_motif_base,
-    polish_patterns_at_inject,
+    motif_patterns_for_inject,
+    note_motif_hollow_miss,
 )
 from .propose.placements_selection_expand import (
     history_expand_arrays,
@@ -69,7 +69,6 @@ from .propose.cluster_repack import (
     cluster_repack_selection,
 )
 from .propose.context import (
-    analyze_free_space,
     build_free_space_snapshot,
     outline_coverage_ratio,
     part_is_concave,
@@ -89,7 +88,6 @@ from nest_graph.propose.block_replace import try_block_hole_renest
 from .propose.heavy_polish import (
     apply_refine_with_restore,
     polish_budget_for_iter,
-    polish_budget_mid,
     run_improve_rules_rounds,
 )
 # Re-exported for scripts/nesting_evaluator.py and tests that still import the
@@ -116,6 +114,7 @@ from .propose.void_selection import (  # noqa: F401
     boost_small_part_scores as _boost_small_part_scores,
     boost_void_island_scores as _boost_void_island_scores,
     centroid_in_free as _centroid_in_free,
+    colonize_void_onto_base,
     count_graph_in_free as _count_graph_in_free,
     count_props_in_free as _count_props_in_free,
     count_props_near_pole as _count_props_near_pole,
@@ -153,6 +152,7 @@ from .decision.execute import (
     record_mcts_expand,
     run_mcts_multi_sim,
     run_pack_stages,
+    schedule_prep_selection_free,
 )
 from .decision.motif_credit import (
     credit_motif_on_nest_survival,
@@ -1645,6 +1645,160 @@ def _make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
     return _make_seed_rule_sets(cfg) + [_make_demo_rule_set(cfg)]
 
 
+def cheap_pack_from_cache(
+    *,
+    pack_cache: dict,
+    rule_sets: list,
+    sel,
+    budget,
+    zone=None,
+    apply_dfs_fn,
+    native_geoms_fn,
+    coverage_pct_fn,
+    telem: dict | None = None,
+) -> tuple[list[int], float, dict]:
+    """Hybrid cheap expand: cache reuse + mid compose/refine (no re-propose).
+
+    Shares ``compose_nest_kwargs`` / ``apply_refine_with_restore`` with outer pack.
+    """
+    telem_out: dict = dict(telem or {})
+    telem_out["zone"] = zone
+    selected_out: list[int] = list(
+        pack_cache.get("selected") or ()
+    )
+    coverage_out = 0.0
+
+    def _compose() -> None:
+        nonlocal selected_out, coverage_out
+        if not pack_cache.get("ready"):
+            return
+        graph = pack_cache["graph"]
+        polys = pack_cache["polys"]
+        group_id = pack_cache["group_id"]
+        transform = pack_cache["transform"]
+        part_areas_c = pack_cache["part_areas"]
+        part_bases_c = pack_cache["part_bases"]
+        p_sheet_c = pack_cache["p_sheet"]
+        min_dist_c = float(pack_cache["min_dist"])
+        cfg_c = pack_cache["cfg"]
+        free_info_c = pack_cache.get("free_info")
+        propose_stats_c = dict(pack_cache.get("propose_stats") or {})
+        propose_stats_c["mcts_zone"] = zone
+        active_rules = active_rule_set(rule_sets)
+        scores = list(score_elems(graph, active_rules))
+        sheet_diag = sheet_diag_from(pack_cache.get("sheet") or p_sheet_c)
+        candidate_geoms = native_geoms_fn(
+            group_id, transform, part_bases_c,
+        )
+        composed = compose_and_nest_selection(
+            **compose_nest_kwargs(
+                graph=graph,
+                rule_sets=rule_sets,
+                active_rules=active_rules,
+                scores=scores,
+                polys=polys,
+                group_id=group_id,
+                transform=transform,
+                candidate_geoms=candidate_geoms,
+                packed_geoms=list(pack_cache.get("packed_geoms") or []),
+                part_areas=part_areas_c,
+                free_info=free_info_c,
+                cfg=cfg_c,
+                selection=sel,
+                first_pass=False,
+                outline=p_sheet_c,
+                min_dist=min_dist_c,
+                sheet_area=float(pack_cache.get("sheet_area") or 0.0),
+                sheet_diag=sheet_diag,
+                propose_stats=propose_stats_c,
+                ngroups=int(cfg_c.rules.ngroups),
+                packed_group_id=pack_cache.get("packed_group_id"),
+                packed_transform=pack_cache.get("packed_transform"),
+                last_leaf=False,
+                void_geoms=pack_cache.get("void_geoms"),
+            )
+        )
+        pack_cache["compose_sel"] = list(composed.selected_nest)
+        pack_cache["compose_scores"] = composed.refine_scores
+        pack_cache["compose_rules"] = composed.refine_rules
+        pack_cache["compose_polys"] = polys
+        pack_cache["compose_group_id"] = group_id
+        pack_cache["compose_transform"] = transform
+        pack_cache["compose_free_poly"] = composed.free_poly
+        pack_cache["compose_free_info"] = composed.free_info
+        selected_out = list(composed.selected_nest)
+        try:
+            coverage_out = coverage_pct_fn(
+                selected_out, group_id, part_areas_c,
+                float(pack_cache.get("board_area") or 1.0),
+            ) / 100.0
+        except Exception:
+            pass
+
+    def _refine() -> None:
+        nonlocal selected_out, coverage_out
+        telem_out["dfs_passes"] = int(budget.dfs_passes)
+        if not pack_cache.get("ready") or "compose_sel" not in pack_cache:
+            return
+        graph = pack_cache["graph"]
+        polys = pack_cache["compose_polys"]
+        group_id = pack_cache["compose_group_id"]
+        transform = pack_cache["compose_transform"]
+        part_areas_c = pack_cache["part_areas"]
+        part_bases_c = pack_cache["part_bases"]
+        nest_sel = list(pack_cache["compose_sel"])
+        node_areas = [
+            float(part_areas_c[int(g)]) if int(g) < len(part_areas_c) else 0.0
+            for g in group_id
+        ]
+        selected_out = apply_refine_with_restore(
+            budget=budget,
+            apply_dfs_fn=apply_dfs_fn,
+            graph=graph,
+            refine_rules=pack_cache["compose_rules"],
+            selected_nest=nest_sel,
+            refine_scores=pack_cache["compose_scores"],
+            sel_iter=sel,
+            node_areas=node_areas,
+            refine_seed=0,
+            locked_indices=[],
+            polys=polys,
+            group_id=group_id,
+            transform=transform,
+            part_areas=part_areas_c,
+            part_bases=part_bases_c,
+            sheet=pack_cache["p_sheet"],
+            min_dist=float(pack_cache["min_dist"]),
+            free_poly=pack_cache.get("compose_free_poly"),
+            free_info=pack_cache.get("compose_free_info"),
+            rim_before=0.0,
+            rim_reject=0.02,
+            propose_stats=telem_out,
+            native_geoms_from_transforms_fn=native_geoms_fn,
+        )
+        try:
+            coverage_out = coverage_pct_fn(
+                selected_out, group_id, part_areas_c,
+                float(pack_cache.get("board_area") or 1.0),
+            ) / 100.0
+        except Exception:
+            pass
+
+    stage = run_pack_stages(
+        rim_only=False,
+        heavy=False,
+        compose_fn=_compose,
+        refine_fn=_refine,
+        post_pack_fn=None,
+    )
+    telem_out.update(stage)
+    telem_out["pack_body"] = 1
+    telem_out["polish_budget"] = "mid"
+    telem_out["execute_wired"] = 1
+    telem_out["patterns_applied"] = 0  # telem-only; no re-stamp on cheap
+    return selected_out, float(coverage_out), telem_out
+
+
 def run_build_graph(cfg: BuildGraphConfig) -> None:
     """Demo build loop: propose → graph → rules → nest → DFS refine.
 
@@ -1747,156 +1901,53 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     def _execute_pack(parent, *, zone=None, action=None, patterns=None):
         """DgP: mid-budget cheap_pack on expand (compose+nest + mid DFS).
 
-        Reuses last outer graph from ``_pack_cache`` when ready; applies zone-scaled
-        void MIS + ``polish_budget_mid`` refine. No 3b/se2 (Q69).
+        Reuses last outer graph from ``_pack_cache`` via ``cheap_pack_from_cache``.
+        Patterns are telem-only (no re-propose / re-stamp). Q69: no 3b on cheap.
         """
+        del action  # expand action carried in zone/patterns telem only
         snap = parent if parent is not None else _exec_last["snap"]
         telem = dict(getattr(snap, "telem", None) or {})
-        telem["zone"] = zone
         telem["patterns_n"] = len(patterns or [])
-        heavy = bool(telem.get("mcts_heavy", 0))
-        budget = polish_budget_mid(sel) if not heavy else polish_budget_for_iter(
-            is_last_leaf=True, sel=sel,
-        )
-        selected_out: list[int] = list(
-            _pack_cache.get("selected")
-            or getattr(snap, "packed_gids", ())
-            or ()
-        )
-        coverage_out = float(getattr(snap, "coverage", 0.0) or 0.0)
-
-        def _compose() -> None:
-            nonlocal selected_out, coverage_out
-            if not _pack_cache.get("ready"):
-                return
-            graph = _pack_cache["graph"]
-            polys = _pack_cache["polys"]
-            group_id = _pack_cache["group_id"]
-            transform = _pack_cache["transform"]
-            part_areas_c = _pack_cache["part_areas"]
-            part_bases_c = _pack_cache["part_bases"]
-            p_sheet_c = _pack_cache["p_sheet"]
-            min_dist_c = float(_pack_cache["min_dist"])
-            cfg_c = _pack_cache["cfg"]
-            free_info_c = _pack_cache.get("free_info")
-            propose_stats_c = dict(_pack_cache.get("propose_stats") or {})
-            propose_stats_c["mcts_zone"] = zone
-            active_rules = active_rule_set(rule_sets)
-            scores = list(score_elems(graph, active_rules))
-            sheet_diag = sheet_diag_from(_pack_cache.get("sheet") or p_sheet_c)
-            candidate_geoms = _native_geoms_from_transforms(
-                group_id, transform, part_bases_c,
-            )
-            composed = compose_and_nest_selection(
-                **compose_nest_kwargs(
-                    graph=graph,
-                    rule_sets=rule_sets,
-                    active_rules=active_rules,
-                    scores=scores,
-                    polys=polys,
-                    group_id=group_id,
-                    transform=transform,
-                    candidate_geoms=candidate_geoms,
-                    packed_geoms=list(_pack_cache.get("packed_geoms") or []),
-                    part_areas=part_areas_c,
-                    free_info=free_info_c,
-                    cfg=cfg_c,
-                    selection=sel,
-                    first_pass=False,
-                    outline=p_sheet_c,
-                    min_dist=min_dist_c,
-                    sheet_area=float(_pack_cache.get("sheet_area") or 0.0),
-                    sheet_diag=sheet_diag,
-                    propose_stats=propose_stats_c,
-                    ngroups=int(cfg_c.rules.ngroups),
-                    packed_group_id=_pack_cache.get("packed_group_id"),
-                    packed_transform=_pack_cache.get("packed_transform"),
-                    last_leaf=False,
-                    void_geoms=_pack_cache.get("void_geoms"),
+        # Hybrid Motif inject SoT for count only — cheap does not re-stamp.
+        if patterns is None and bool(
+            getattr(cfg.propose, "enable_accepted_pattern_archive", True)
+        ):
+            telem["patterns_n"] = len(
+                motif_patterns_for_inject(
+                    mcts_runner.motif_base,
+                    max_keep=int(getattr(cfg.propose, "accepted_pattern_max", 4) or 4),
+                    polish=False,
                 )
             )
-            _pack_cache["compose_sel"] = list(composed.selected_nest)
-            _pack_cache["compose_scores"] = composed.refine_scores
-            _pack_cache["compose_rules"] = composed.refine_rules
-            _pack_cache["compose_polys"] = polys
-            _pack_cache["compose_group_id"] = group_id
-            _pack_cache["compose_transform"] = transform
-            _pack_cache["compose_free_poly"] = composed.free_poly
-            _pack_cache["compose_free_info"] = composed.free_info
-            selected_out = list(composed.selected_nest)
-            try:
-                coverage_out = _selection_coverage_pct(
-                    selected_out, group_id, part_areas_c,
-                    float(_pack_cache.get("board_area") or 1.0),
-                ) / 100.0
-            except Exception:
-                pass
-
-        def _refine() -> None:
-            nonlocal selected_out, coverage_out
-            telem["dfs_passes"] = int(budget.dfs_passes)
-            if not _pack_cache.get("ready") or "compose_sel" not in _pack_cache:
-                return
-            graph = _pack_cache["graph"]
-            polys = _pack_cache["compose_polys"]
-            group_id = _pack_cache["compose_group_id"]
-            transform = _pack_cache["compose_transform"]
-            part_areas_c = _pack_cache["part_areas"]
-            part_bases_c = _pack_cache["part_bases"]
-            nest_sel = list(_pack_cache["compose_sel"])
-            node_areas = [
-                float(part_areas_c[int(g)]) if int(g) < len(part_areas_c) else 0.0
-                for g in group_id
-            ]
-            selected_out = apply_refine_with_restore(
-                budget=budget,
-                apply_dfs_fn=apply_dfs_refinement,
-                graph=graph,
-                refine_rules=_pack_cache["compose_rules"],
-                selected_nest=nest_sel,
-                refine_scores=_pack_cache["compose_scores"],
-                sel_iter=sel,
-                node_areas=node_areas,
-                refine_seed=0,
-                locked_indices=[],
-                polys=polys,
-                group_id=group_id,
-                transform=transform,
-                part_areas=part_areas_c,
-                part_bases=part_bases_c,
-                sheet=_pack_cache["p_sheet"],
-                min_dist=float(_pack_cache["min_dist"]),
-                free_poly=_pack_cache.get("compose_free_poly"),
-                free_info=_pack_cache.get("compose_free_info"),
-                rim_before=0.0,
-                rim_reject=0.02,
-                propose_stats=telem,
-                native_geoms_from_transforms_fn=_native_geoms_from_transforms,
-            )
-            try:
-                coverage_out = _selection_coverage_pct(
-                    selected_out, group_id, part_areas_c,
-                    float(_pack_cache.get("board_area") or 1.0),
-                ) / 100.0
-            except Exception:
-                pass
-
-        stage = run_pack_stages(
-            rim_only=False,
-            heavy=False,
-            compose_fn=_compose,
-            refine_fn=_refine,
-            post_pack_fn=None,
+        heavy = bool(telem.get("mcts_heavy", 0))
+        budget = polish_budget_for_iter(
+            is_last_leaf=bool(heavy),
+            sel=sel,
+            cheap_expand=not bool(heavy),
+            large_void=False,
         )
-        telem.update(stage)
-        telem["pack_body"] = 1
-        telem["polish_budget"] = "mid"
-        telem["execute_wired"] = 1
-        # Map selection indices → gids/transforms when cache ready.
+        selected_out, coverage_out, telem = cheap_pack_from_cache(
+            pack_cache=_pack_cache,
+            rule_sets=rule_sets,
+            sel=sel,
+            budget=budget,
+            zone=zone,
+            apply_dfs_fn=apply_dfs_refinement,
+            native_geoms_fn=_native_geoms_from_transforms,
+            coverage_pct_fn=_selection_coverage_pct,
+            telem=telem,
+        )
+        if not selected_out:
+            selected_out = list(
+                _pack_cache.get("selected")
+                or getattr(snap, "packed_gids", ())
+                or ()
+            )
+            coverage_out = float(getattr(snap, "coverage", 0.0) or coverage_out)
         packed_gids = tuple(getattr(snap, "packed_gids", ()) or ())
         packed_tf = tuple(getattr(snap, "packed_transforms", ()) or ())
         rem = tuple(getattr(snap, "remaining_gids", ()) or ())
-        if _pack_cache.get("ready") and selected_out:
+        if _pack_cache.get("ready") and selected_out and "compose_group_id" in _pack_cache:
             gid_list = _pack_cache["compose_group_id"]
             tf_list = _pack_cache["compose_transform"]
             gids = []
@@ -1938,8 +1989,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
 
     for _it in pbar:
         # Q69: last leaf = full DFS + post_pack; mid = dfs_passes=1 finalize_end.
+        # Hybrid: parent free_kind hints mid+large_void 3b; refreshed after compose.
         is_last_leaf = int(_it) >= int(out.n_iters) - 1
-        polish_budget = polish_budget_for_iter(is_last_leaf=is_last_leaf, sel=sel)
+        near_last = int(_it) == int(out.n_iters) - 2
+        parent_free_hint = str(
+            getattr(mcts_runner.snapshots.get(int(mcts_parent_id), mcts_root), "free_kind", "")
+            or ""
+        ) == "large_void"
+        polish_budget = polish_budget_for_iter(
+            is_last_leaf=is_last_leaf,
+            sel=sel,
+            large_void=parent_free_hint,
+            cheap_expand=False,
+            near_last=near_last,
+        )
         t_expand0 = time.perf_counter()
         # R1: RSS bands — taper graphs_window / transforms / n_sims; freeze expand.
         ram = evaluate_ram_band(
@@ -2010,6 +2073,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     )
         mcts_parent_id = int(browse_parent_id)
         mcts_action = tip_action
+        # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
+        if not str(getattr(parent_snap, "free_kind", "") or ""):
+            try:
+                md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
+                packed_fk = []
+                if nest_state is not None and nest_state.selected_indices:
+                    seed_n = int(nest_state.seed_count or 0)
+                    for i in nest_state.selected_indices:
+                        if int(i) < seed_n:
+                            continue
+                        if int(i) < len(nest_state.polys):
+                            packed_fk.append(nest_state.polys[i])
+                fk_prep = prep_selection_free(
+                    sheet=p_sheet,
+                    part_areas=part_areas,
+                    min_dist=md_fk,
+                    cfg_propose=cfg.propose,
+                    packed_shapely=packed_fk,
+                    pack_geoms=None,
+                )
+                parent_snap.free_kind = str(
+                    getattr(fk_prep.free_info, "kind", "") or ""
+                )
+            except Exception:
+                pass
         if mcts_action is None and mcts_runner.agent is not None:
             mcts_action = mcts_runner.agent.pick_expand_action(
                 parent_snap.remaining_gids
@@ -2069,6 +2157,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 or mcts_runner.niche_archive.buckets
             )
         arch_rows = mcts_runner.niche_archive.active_by_group(ngroups)
+        merged_elite = void_elite_by_group
         if arch_rows and void_seek_mix:
             merged_elite = merge_void_elite_with_archive(
                 void_elite_by_group,
@@ -2092,8 +2181,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         )
                     )
             mcts_runner.niche_archive.last_feed_keys = set(_archive_feed_keys)
-        elite_n = void_elite_count(void_elite_by_group)
+        elite_n = void_elite_count(merged_elite)
         propose_stats["void_elite_seeded"] = elite_n
+        propose_stats["archive_elite_n"] = sum(
+            len(v) for v in (arch_rows or {}).values()
+        )
         propose_stats["keep_history_on_sterile"] = keep_hist_sterile
         # Q141: cut sterile hist boost when archive miss_rate high or fail streak
         cut_sterile_boost = bool(
@@ -2108,25 +2200,29 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             else -1
         )
         archived_for_propose = (
-            patterns_from_motif_base(
+            motif_patterns_for_inject(
                 mcts_runner.motif_base,
                 max_keep=int(getattr(cfg.propose, "accepted_pattern_max", 4) or 4),
                 prefer_motif_id=prefer_mid,
+                part_bases=part_bases,
+                min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=False)),
+                telem=mcts_telem,
+                polish=True,
             )
             if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
             else []
         )
-        # Np: polish Motif relatives at inject (ContactGRG mine only; no MotifBase upsert).
-        if archived_for_propose:
-            archived_for_propose = polish_patterns_at_inject(
-                archived_for_propose,
-                part_bases,
-                min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=False)),
-                telem=mcts_telem,
-            )
         propose_stats["accepted_patterns_n"] = len(archived_for_propose)
         propose_stats["motif_library_n"] = int(mcts_runner.motif_base.size())
         propose_stats["nfp_lite_ok"] = int(mcts_telem.get("nfp_lite_ok", 0))
+        propose_stats["dg_force_zone"] = mcts_force_zone
+        if mcts_force_zone:
+            enabled_z = ProposeConfig.proposers_for_place(str(mcts_force_zone))
+            propose_stats["enabled_proposers_n"] = (
+                len(enabled_z) if enabled_z is not None else 0
+            )
+        else:
+            propose_stats["enabled_proposers_n"] = 0
         # Q99 / M0: soft Motif gids so stamp no_rels≠default under PLACE_MOTIF.
         parts_for_propose = parts
         if mcts_action is not None:
@@ -2168,6 +2264,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             archived_patterns=archived_for_propose,
         )
         first_pass = nest_state is None
+        free_prep_mid = None
         # Q128 / T1: soft-cap attract degree when prior graph ≫ nest.
         attract_deg = int(cfg.propose.attract_max_degree)
         prev_graph_n = int(mcts_telem.get("last_graph_n", 0) or 0)
@@ -2294,14 +2391,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     [transform[i] for i in selected_polys],
                     part_bases,
                 ) if selected_polys else []
-                post_rim = prep_selection_free(
+                post_rim = schedule_prep_selection_free(
+                    phase="uh",
                     sheet=sheet_rim,
                     part_areas=part_areas,
                     min_dist=md_rim,
                     cfg_propose=cfg.propose,
                     packed_shapely=rim_geoms,
                     pack_geoms=rim_pack,
+                    run_uh=True,
                 )
+                if post_rim is None:
+                    raise RuntimeError("uh free prep skipped")
                 propose_stats["post_rim_free_kind"] = getattr(
                     post_rim.free_info, "kind", None
                 )
@@ -2379,17 +2480,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sheet, void_geoms_compose = board_ctx_outline
             min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
 
-            free_prep = prep_selection_free(
+            free_prep = schedule_prep_selection_free(
+                phase="mid",
                 sheet=sheet,
                 part_areas=part_areas,
                 min_dist=min_dist,
                 cfg_propose=cfg.propose,
                 nest_state=nest_state,
             )
+            assert free_prep is not None
             free_info = free_prep.free_info
             packed_geoms = free_prep.packed_geoms
             packed_group_id = free_prep.packed_group_id
             packed_transform = free_prep.packed_transform
+            free_prep_mid = free_prep
             sheet_diag = sheet_diag_from(sheet)
             candidate_geoms = _native_geoms_from_transforms(
                 group_id, transform, part_bases,
@@ -2430,6 +2534,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             refine_rules = composed.refine_rules
             free_poly = composed.free_poly
             free_info = composed.free_info
+            # Hybrid budget: mid+large_void enables 3b; cheap expand stays no-3b.
+            polish_budget = polish_budget_for_iter(
+                is_last_leaf=is_last_leaf,
+                sel=sel,
+                large_void=bool(
+                    free_info is not None and free_info.kind == "large_void"
+                ),
+                cheap_expand=False,
+                near_last=near_last,
+            )
             n_void_nest = composed.n_void_nest
             boost_hits = composed.boost_hits
             old_len = len(selected_nest)
@@ -2522,10 +2636,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats.setdefault("block_hole_emit_in_hull", 0)
             propose_stats.setdefault("block_hole_victim", None)
             skip_3b = int(propose_stats.get("block_cohort_accepted", 0) or 0) > 0
-            # Miss-loop: allow hole re-nest on mid large_void (not only last-leaf 3b).
-            allow_3b = bool(polish_budget.run_3b) or (
-                free_info is not None and free_info.kind == "large_void"
-            )
+            # 3b gated solely by polish_budget.run_3b (G1 hybrid SoT).
+            allow_3b = bool(polish_budget.run_3b)
             if (
                 allow_3b
                 and not skip_3b
@@ -2712,6 +2824,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     if j > i and j in sel_set:
                         attract_pairs_selected += 1
                         attract_bonus += float(e.w)
+            propose_stats["browse_jump"] = int(mcts_telem.get("browse_jump", 0) or 0)
+            propose_stats["amaf_miss"] = int(mcts_telem.get("amaf_miss", 0) or 0)
+            propose_stats["motif_nest_credit"] = int(
+                mcts_telem.get("motif_nest_credit", 0) or 0
+            )
+            propose_stats["niche_hits"] = int(
+                sum(b.hits for b in mcts_runner.niche_archive.buckets.values())
+            )
             void_leak = format_void_leak_line(
                 free_kind=free_info.kind,
                 max_void_ratio=float(free_info.max_void_ratio),
@@ -2854,18 +2974,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         void_nest=int(n_void_nest),
                         score=0.0,
                     )
-                # Q113: Motif miss-streak — ban unproven (ttl=-1); floor proven at 1.
+                # Q113: Motif miss via MotifBase.note_hollow_miss (no .at() copy).
                 if (
                     mcts_action is not None
                     and mcts_action.region == MacroRegion.Motif
                     and int(mcts_action.motif_id) >= 0
-                    and int(mcts_action.motif_id) < int(mcts_runner.motif_base.size())
                 ):
-                    rec = mcts_runner.motif_base.at(int(mcts_action.motif_id))
-                    if int(rec.accept_count) <= 0:
-                        rec.ttl_remaining = -1
-                    else:
-                        rec.ttl_remaining = max(1, int(rec.ttl_remaining) - 1)
+                    note_motif_hollow_miss(
+                        mcts_runner.motif_base, int(mcts_action.motif_id),
+                    )
                 # Seed free-centroid graph rows under Void AMAF key (not the failed Rim key).
                 if int(n_void_graph) > 0:
                     void_key = (
@@ -2994,15 +3111,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             [transform[i] for i in selected_polys],
             part_bases,
         ) if selected_polys else []
-        free_prep_post = prep_selection_free(
+        free_prep_post = schedule_prep_selection_free(
+            phase="post",
             sheet=sheet_compact,
             part_areas=part_areas,
             min_dist=min_dist,
             cfg_propose=cfg.propose,
             packed_shapely=sel_geoms,
             pack_geoms=sel_pack_geoms,
-            snapshot=True,
+            prior=free_prep_mid,
+            selection_changed=True,
         )
+        assert free_prep_post is not None
         free_snap_post = free_prep_post.free_snap
         free_post = free_prep_post.free_info
         mean_part_post = free_prep_post.mean_part

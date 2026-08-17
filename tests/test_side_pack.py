@@ -24,7 +24,8 @@ from nest_graph.utils import transform_poly
 
 
 def test_zone_includes_side_pack():
-    assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+    # Void: permission matches staging (no side_pack on void_seek).
+    assert ProposerName.SIDE_PACK not in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
     assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.CLUSTER_EDGE]
     assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.BORDER_GAP]
     # Void path XOR: group_fit not in VOID_SEEK set.

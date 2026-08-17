@@ -35,6 +35,14 @@ from nest_graph.build_graph import (
     void_elite_count,
     void_elite_tuple_from_archive,
 )
+from nest_graph.decision.motif_credit import (
+    credit_void_niche_from_iter,
+    merge_void_elite_with_archive,
+)
+from nest_graph.decision.runner import MacroMctsRunner
+from nest_graph.decision.slave_pack import upsert_from_contacts
+from nest_graph.propose.pattern_archive import motif_patterns_for_inject
+from nest_graph.propose.telem import classify_void_funnel
 from nest_graph.propose.heavy_polish import (
     apply_refine_with_restore,
     polish_budget_for_iter,
@@ -46,7 +54,7 @@ from nest_graph.propose.selection_compose import (
     sheet_diag_from,
 )
 from nest_graph.decision.execute import prep_selection_freeze
-from nest_graph.config import BuildGraphConfig, score_rules_options
+from nest_graph.config import BuildGraphConfig, ProposeConfig, score_rules_options
 from nest_graph.elem_graph import (
     FinalizeSelectionOptions,
     finalize_selection,
@@ -75,6 +83,7 @@ from nest_graph.propose.context import (
 from nest_graph.propose.pipeline import allow_void_repack, propose_coords_from_candidates
 from nest_graph.propose.block_replace import try_block_hole_renest
 from nest_graph.propose.post_pack import run_post_pack_passes
+from nest_graph.propose.void_selection import colonize_void_onto_base
 from nest_graph.utils import transform_poly
 from scripts.nesting_fixtures import NestCase
 
@@ -378,6 +387,19 @@ class NestingPipelineEvaluator:
             concave_parts=concave_parts,
             seeded=seeded,
         )
+        # Modest void_fill elite only (DG mix); do not inflate transform pool.
+        if "void_fill" in (case.tags or ()):
+            cfg = cfg.model_copy(
+                update={
+                    "propose": cfg.propose.model_copy(
+                        update={
+                            "stratified_void_elite_quota": max(
+                                int(cfg.propose.stratified_void_elite_quota), 24,
+                            ),
+                        }
+                    ),
+                }
+            )
         self.cfg = cfg
         self.parts = list(case.groups)
         self.last_result: dict | None = None
@@ -609,6 +631,9 @@ class NestingPipelineEvaluator:
         part_bases_fixed = {
             i: Geometry.from_shapely(p[0]) for i, p in enumerate(self.parts)
         }
+        # P0: DG spine (niche + Motif) alongside classic evaluator harness.
+        mcts_runner = MacroMctsRunner()
+        prev_void_nest = 0
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
@@ -616,7 +641,12 @@ class NestingPipelineEvaluator:
             is_last_leaf = bool(self.always_heavy_polish) or (
                 int(iter_idx) >= int(self.case.iters) - 1
             )
-            polish_budget = polish_budget_for_iter(is_last_leaf=is_last_leaf, sel=sel)
+            near_last = bool(self.always_heavy_polish) or (
+                int(iter_idx) == int(self.case.iters) - 2
+            )
+            polish_budget = polish_budget_for_iter(
+                is_last_leaf=is_last_leaf, sel=sel, near_last=near_last,
+            )
             sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
             sel_iter, freeze_reason = prep_selection_freeze(
                 sel_iter,
@@ -646,9 +676,57 @@ class NestingPipelineEvaluator:
             )
             ngroups = max(len(self.parts) if self.parts else len(selected_t), 1)
             void_elite_t = void_elite_tuple_from_archive(void_elite_by_group, ngroups)
-            elite_n = void_elite_count(void_elite_by_group)
+            # P0 hybrid: DG niche/Motif after first pack (keep rim first-pass SoT).
+            use_dg_mix = nest_state is not None
+            arch_rows = (
+                mcts_runner.niche_archive.active_by_group(ngroups) if use_dg_mix else {}
+            )
+            merged_elite = void_elite_by_group
+            if arch_rows:
+                merged_elite = merge_void_elite_with_archive(
+                    void_elite_by_group,
+                    arch_rows,
+                    elite_quota=int(
+                        getattr(self.cfg.propose, "stratified_void_elite_quota", 15)
+                        or 15
+                    ),
+                    void_seek=True,
+                )
+                void_elite_t = void_elite_tuple_from_archive(merged_elite, ngroups)
+            elite_n = void_elite_count(merged_elite)
             propose_stats["void_elite_seeded"] = elite_n
+            propose_stats["archive_elite_n"] = sum(
+                len(v) for v in (arch_rows or {}).values()
+            )
             propose_stats["keep_history_on_sterile"] = keep_hist_sterile
+            propose_stats["dg_force_zone"] = "void_seek" if use_dg_mix else None
+            propose_stats["mcts_zone"] = "void_seek" if use_dg_mix else None
+            archived_for_propose = []
+            if use_dg_mix and bool(
+                getattr(self.cfg.propose, "enable_accepted_pattern_archive", True)
+            ):
+                archived_for_propose = motif_patterns_for_inject(
+                    mcts_runner.motif_base,
+                    max_keep=int(
+                        getattr(self.cfg.propose, "accepted_pattern_max", 4) or 4
+                    ),
+                    part_bases=part_bases_fixed,
+                    min_dist=float(self._min_dist(first_pass=False)),
+                    polish=True,
+                )
+            propose_stats["accepted_patterns_n"] = len(archived_for_propose)
+            propose_stats["enabled_proposers_n"] = (
+                len(ProposeConfig.proposers_for_place("void_seek") or ())
+                if use_dg_mix else 0
+            )
+            cut_sterile_boost = bool(
+                use_dg_mix
+                and (
+                    mcts_runner.niche_archive.any_void_miss_rate_high(0.8)
+                    or int(mcts_runner.niche_archive.place_fail_streak) >= 3
+                )
+            )
+            propose_stats["cut_sterile_hist_boost"] = cut_sterile_boost
             selected_t = _build_transform_batch(
                 self.cfg, selected_t, history, rng,
                 board=self.sheet,
@@ -662,15 +740,21 @@ class NestingPipelineEvaluator:
                 keep_history_on_sterile=keep_hist_sterile,
                 part_bases=part_bases_fixed,
                 graph_valid_carry=graph_valid_carry,
+                archived_patterns=archived_for_propose or None,
             )
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
                 for group_idx, transforms in enumerate(selected_t)
             ]
+            # Keep first-pass-tight clearance under persistent large_void scrap.
+            tight_clearance = bool(first_pass) or (
+                str(last_void_leak.get("free_kind") or "") == "large_void"
+            )
+            iter_min_dist = self._min_dist(first_pass=tight_clearance)
             graph, polys, group_id, transform = make_polygon_graph(
                 self.case.board,
                 flat_parts,
-                min_dist=self._min_dist(first_pass=first_pass),
+                min_dist=iter_min_dist,
                 epsilon_ratio=self.cfg.propose.placement_clearance_epsilon_ratio,
                 user_holes=self.user_holes,
                 extra_voids=extra_voids,
@@ -712,7 +796,7 @@ class NestingPipelineEvaluator:
 
             active_rules = active_rule_set(rule_sets)
             scores = list(score_elems(graph, active_rules))
-            min_dist = self._min_dist(first_pass=False)
+            min_dist = float(iter_min_dist)
 
             packed_for_free = list(next_polys) if next_polys else []
             part_areas = [float(p[0].area) for p in self.parts]
@@ -768,6 +852,16 @@ class NestingPipelineEvaluator:
             free_poly = composed.free_poly
             free_info = composed.free_info
             n_void_nest = composed.n_void_nest
+            # G1 parity with build_graph: refresh budget after free_info known.
+            polish_budget = polish_budget_for_iter(
+                is_last_leaf=is_last_leaf,
+                sel=sel,
+                large_void=bool(
+                    free_info is not None and free_info.kind == "large_void"
+                ),
+                cheap_expand=False,
+                near_last=near_last,
+            )
             propose_stats["nest_dual"] = int(dual_nest)
             propose_stats["mcts_heavy"] = int(polish_budget.mcts_heavy)
             propose_stats["dfs_passes"] = int(polish_budget.dfs_passes)
@@ -892,6 +986,7 @@ class NestingPipelineEvaluator:
                     refine_scores,
                     stats_out=pin_stats,
                 )
+            # V6 stamp deferred to after post_pack (stamp into final residual).
             pin_cands = int(pin_stats.get("pin_candidates", 0))
             pin_added = int(pin_stats.get("pin_added", 0))
             if pin_cands > 0 and pin_added == 0:
@@ -962,6 +1057,87 @@ class NestingPipelineEvaluator:
             prop_accept = _format_prop_accept(emitted_bp, pool_bp, nest_bp, refine_bp)
             elite_seeded = int(propose_stats.get("void_elite_seeded", 0))
             elite_next = void_elite_count(void_elite_by_group)
+            funnel = classify_void_funnel(
+                n_void_props=n_void_props,
+                n_void_graph=n_void_graph,
+                n_void_nest=n_void_nest,
+                n_void_refine=n_void_refine,
+                densify_a=int(densify.get("accepted", 0) or 0),
+                densify_f=int(densify.get("fired", 0) or 0),
+                pin_added=int(pin_stats.get("pin_added", 0)),
+                pin_cands=int(pin_stats.get("pin_candidates", 0)),
+            )
+            propose_stats["r0_bottleneck"] = funnel["bottleneck"]
+            # P0: credit niche + Motif contacts so next-iter mix/inject are live.
+            niche_telem = credit_void_niche_from_iter(
+                mcts_runner.niche_archive,
+                free_kind=str(free_info.kind or ""),
+                bottleneck=str(funnel.get("bottleneck") or ""),
+                n_void_nest=int(n_void_nest),
+                n_void_graph=int(n_void_graph),
+                prev_void_nest=int(prev_void_nest),
+                polys=polys,
+                transform=transform,
+                group_id=group_id,
+                selected=selected,
+                free_poly=free_poly,
+                outline_cov=float(propose_stats.get("outline_cov", 0.0) or 0.0),
+                ttl=int(getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4),
+                max_seed=int(getattr(self.cfg.propose, "max_proposals", 64) or 64),
+            )
+            propose_stats.update(niche_telem)
+            # Contact Motif upsert is expensive; once before last leaf is enough
+            # for inject on the final propose pass.
+            if selected_polys and is_last_leaf:
+                contact_geoms = []
+                contact_gids = []
+                contact_tfs = []
+                for i in selected_polys:
+                    ii = int(i)
+                    if ii < 0 or ii >= len(group_id) or ii >= len(transform):
+                        continue
+                    gi = int(group_id[ii])
+                    base = part_bases_fixed.get(gi)
+                    if base is None:
+                        continue
+                    tf = np.asarray(transform[ii], dtype=np.float64).reshape(3)
+                    try:
+                        contact_geoms.append(
+                            base.apply_transform(
+                                float(tf[0]), float(tf[1]), float(tf[2]),
+                            )
+                        )
+                    except Exception:
+                        continue
+                    contact_gids.append(gi)
+                    contact_tfs.append(
+                        (float(tf[0]), float(tf[1]), float(tf[2]))
+                    )
+                if len(contact_geoms) >= 2:
+                    upsert_from_contacts(
+                        mcts_runner.motif_base,
+                        contact_geoms,
+                        contact_gids,
+                        contact_tfs,
+                        gap=float(min_dist),
+                        min_compactness=float(
+                            getattr(
+                                self.cfg.propose, "motif_min_compactness", 0.35,
+                            )
+                            or 0.35
+                        ),
+                        ttl=int(
+                            getattr(self.cfg.propose, "accepted_pattern_ttl", 4)
+                            or 4
+                        ),
+                        max_keep=int(
+                            getattr(self.cfg.propose, "accepted_pattern_max", 4)
+                            or 4
+                        ),
+                        telem=propose_stats,
+                    )
+            prev_void_nest = int(n_void_nest)
+            mcts_runner.niche_archive.age(1)
             last_void_leak = {
                 "free_kind": free_info.kind,
                 "max_void_ratio": float(free_info.max_void_ratio),
@@ -999,6 +1175,26 @@ class NestingPipelineEvaluator:
                 "pin_added": int(pin_stats.get("pin_added", 0)),
                 "pin_blocked_collision": int(pin_stats.get("pin_blocked_collision", 0)),
                 "pin_ms": float(pin_stats.get("pin_ms", 0.0)),
+                "colonize_pinned": int(propose_stats.get("colonize_pinned", 0) or 0),
+                "colonize_blocked": int(propose_stats.get("colonize_blocked", 0) or 0),
+                "colonize_rim_drop": int(propose_stats.get("colonize_rim_drop", 0) or 0),
+                "colonize_candidates": int(
+                    propose_stats.get("colonize_candidates", 0) or 0
+                ),
+                "colonize_area_reject": int(
+                    propose_stats.get("colonize_area_reject", 0) or 0
+                ),
+                "incumbent_hold": int(propose_stats.get("incumbent_hold", 0) or 0),
+                "void_override": int(propose_stats.get("void_override", 0) or 0),
+                "nest_void_term_hits": int(
+                    propose_stats.get("nest_void_term_hits", 0) or 0
+                ),
+                "void_refine_hold": int(
+                    propose_stats.get("void_refine_hold", 0) or 0
+                ),
+                "void_core_accepted": int(
+                    propose_stats.get("void_core_accepted", 0) or 0
+                ),
                 "void_elite_seeded": elite_seeded,
                 "void_elite_archived": elite_next,
                 "cluster_copy_emitted": int(emitted_bp.get("cluster_copy", 0)),

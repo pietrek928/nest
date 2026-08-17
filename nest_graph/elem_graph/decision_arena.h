@@ -3,6 +3,8 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <map>
+#include <tuple>
 #include <vector>
 
 #include "se2.h"
@@ -85,6 +87,64 @@ public:
         return static_cast<float>(children) < cap;
     }
 
+    /** C0: AMAF ledger key = (region, rule_id, motif_id). */
+    void amaf_record(int32_t region, int32_t rule_id, int32_t motif_id, float reward, bool miss) {
+        const auto key = std::make_tuple(region, rule_id, motif_id);
+        AmafEntry &e = amaf_[key];
+        e.visits += 1;
+        e.total_reward += reward;
+        if (miss) {
+            e.misses += 1;
+        }
+    }
+
+    float amaf_mean(int32_t region, int32_t rule_id, int32_t motif_id) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id);
+        auto it = amaf_.find(key);
+        if (it == amaf_.end() || it->second.visits <= 0) {
+            return 0.f;
+        }
+        return it->second.total_reward / static_cast<float>(it->second.visits);
+    }
+
+    int32_t amaf_visits(int32_t region, int32_t rule_id, int32_t motif_id) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id);
+        auto it = amaf_.find(key);
+        if (it == amaf_.end()) {
+            return 0;
+        }
+        return it->second.visits;
+    }
+
+    /** UCB1 + optional AMAF blend (C0). Returns -1e30 if visits==0 and not unvisited-inf. */
+    float ucb_score(int32_t node_id, int32_t parent_visits, float ucb_c = 1.4f) const {
+        const DecisionNode &n = node(node_id);
+        if (n.visits <= 0) {
+            return std::numeric_limits<float>::infinity();
+        }
+        float mean = n.total_reward / static_cast<float>(n.visits);
+        const float explore = ucb_c * std::sqrt(
+            std::log(static_cast<float>(std::max(parent_visits, 1)) + 1.f)
+            / static_cast<float>(n.visits)
+        );
+        const int32_t region = static_cast<int32_t>(n.action.region);
+        const int32_t av = amaf_visits(region, n.action.rule_id, n.action.motif_id);
+        if (av > 0) {
+            const float beta = static_cast<float>(av)
+                / (static_cast<float>(av) + static_cast<float>(n.visits) + 1e-9f);
+            mean = beta * amaf_mean(region, n.action.rule_id, n.action.motif_id)
+                + (1.f - beta) * mean;
+        }
+        return mean + explore;
+    }
+
 private:
+    struct AmafEntry {
+        int32_t visits = 0;
+        float total_reward = 0.f;
+        int32_t misses = 0;
+    };
+
     std::vector<DecisionNode> arena_;
+    std::map<std::tuple<int32_t, int32_t, int32_t>, AmafEntry> amaf_;
 };

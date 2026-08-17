@@ -469,6 +469,17 @@ def _void_seek_densify(
         and free_ratio > 0.2
         and zone in sterile_zones
     )
+    # V5: in-void emit when props still sterile under void_seek.
+    if (
+        not need_densify
+        and zone == "void_seek"
+        and arr.shape[0] == 0
+        and placed
+        and not border_only_propose
+        and free_ratio > 0.15
+    ):
+        need_densify = True
+        telem["v5_sterile_void_emit"] = 1
     if (
         (not need_densify)
         and floor_ratio > 0.0
@@ -711,7 +722,8 @@ def _void_seek_densify(
     telem["densify_xy_in"] = int(densify_xy_in)
     telem["props_empty"] = int(arr.shape[0] == 0)
     telem["densify_empty"] = int(densify_arr.shape[0] == 0)
-    # L3: cloud only when densify empty / drop / xy∉free (props_empty after L1/L2 path).
+    # L3: cloud when densify empty / drop / xy∉free; also under large free
+    # basins so deep Halton samples are not starved by rim densify.
     need_cloud = densify_arr.shape[0] == 0 or (
         use_void_yield
         and (
@@ -719,6 +731,15 @@ def _void_seek_densify(
             or densify_xy_in == 0
         )
     )
+    if (
+        not need_cloud
+        and void_path
+        and float(free_ratio) > 0.3
+        and yield_poly is not None
+        and not getattr(yield_poly, "is_empty", True)
+    ):
+        need_cloud = True
+        telem["v6_large_free_cloud"] = 1
     densify_pinned = bool(accepted) and reason == "void_yield_union"
     if (
         need_cloud
@@ -2691,11 +2712,13 @@ def _prepare_group_propose(
             max_patterns=int(propose_cfg.cluster_copy_max_patterns),
         )
     if archived or synth:
+        reserve = 1 if archived else 0
         cluster_patterns = merge_cluster_patterns(
             cluster_patterns,
             synth,
             max_patterns=int(propose_cfg.cluster_copy_max_patterns),
             archived=archived,
+            reserve_archived=reserve,
         )
     void_thr = void_ratio_threshold(propose_cfg)
     free_snap = None

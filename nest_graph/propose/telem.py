@@ -61,6 +61,8 @@ def format_void_leak_line(
         f"outline_cov={outline_cov:.3f} sat_override={sat_override} "
         f"rim={rim_progress:.3f} plateau={int(on_plateau)} "
         f"zones=[{zone_snip}] "
+        f"force_zone={propose_stats.get('dg_force_zone') or '-'} "
+        f"en_prop={int(propose_stats.get('enabled_proposers_n', 0))} "
         f"pocket={pf_em}/{pf_att} sel={pf_sel} valid={pf_surv}% "
         f"key_boost={pocket_key_hits} motif_boost={motif_key_hits} "
         f"island_boost={island_hits} "
@@ -70,6 +72,11 @@ def format_void_leak_line(
         f"(block={pin_stats.get('pin_blocked_collision', 0)},"
         f"{pin_stats.get('pin_ms', 0.0):.1f}ms) "
         f"elite={elite_seeded}->{elite_next} "
+        f"arch_elite={int(propose_stats.get('archive_elite_n', 0))} "
+        f"browse={int(propose_stats.get('browse_jump', 0))} "
+        f"amaf_miss={int(propose_stats.get('amaf_miss', 0))} "
+        f"motif_credit={int(propose_stats.get('motif_nest_credit', 0))} "
+        f"hollow={int(propose_stats.get('hollow_miss', 0))} "
         f"cluster_copy={cc_e}/{cc_p} patterns={n_patterns} "
         f"side_pack={sp_e}/{sp_p} cloud={fsc_e}/{fsc_p} "
         f"carry={int(propose_stats.get('carry_n', 0))}/"
@@ -208,6 +215,11 @@ def build_void_leak_dict(
         "incumbent_hold": int(propose_stats.get("incumbent_hold", 0)),
         "incumbent_mapped": int(propose_stats.get("incumbent_mapped", 0)),
         "void_override": int(propose_stats.get("void_override", 0)),
+        "colonize_pinned": int(propose_stats.get("colonize_pinned", 0)),
+        "colonize_blocked": int(propose_stats.get("colonize_blocked", 0)),
+        "colonize_rim_drop": int(propose_stats.get("colonize_rim_drop", 0)),
+        "colonize_candidates": int(propose_stats.get("colonize_candidates", 0)),
+        "colonize_area_reject": int(propose_stats.get("colonize_area_reject", 0)),
         "nest_void_term_hits": int(propose_stats.get("nest_void_term_hits", 0)),
         "void_refine_hold": int(propose_stats.get("void_refine_hold", 0)),
         "dfs_passes": int(propose_stats.get("dfs_passes", 0)),
@@ -319,8 +331,10 @@ def classify_void_funnel(
         "pin": int(pin_added),
     }
     bottleneck = "ok"
-    # Prefer earliest collapse in the funnel.
-    if n_void_props <= 0 and densify_f <= 0:
+    # V1: props sterile with hollow graph → props_empty even if densify fired.
+    if int(n_void_props) <= 0 and int(n_void_nest) <= 0 and int(n_void_graph) > 0:
+        bottleneck = "props_empty"
+    elif n_void_props <= 0 and densify_f <= 0:
         bottleneck = "props_empty"
     elif n_void_props > 0 and n_void_graph <= max(1, int(0.15 * n_void_props)):
         bottleneck = "props_to_graph"

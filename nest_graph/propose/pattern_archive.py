@@ -60,6 +60,36 @@ def patterns_from_motif_base(
     return out
 
 
+def motif_patterns_for_inject(
+    motif_base: Any,
+    *,
+    max_keep: int = 4,
+    prefer_motif_id: int = -1,
+    part_bases: Mapping[int, Any] | None = None,
+    min_dist: float = 0.0,
+    telem: dict | None = None,
+    polish: bool = True,
+) -> list[ClusterPattern]:
+    """One Motif inject SoT: list_for_inject (+ optional NFP-lite polish).
+
+    Outer propose uses polish=True. Cheap expand may call with polish=False for
+    telem-only pattern counts — patterns are not re-stamped on cache compose.
+    """
+    pats = patterns_from_motif_base(
+        motif_base,
+        max_keep=int(max_keep),
+        prefer_motif_id=int(prefer_motif_id),
+    )
+    if not pats or not polish or part_bases is None:
+        return pats
+    return polish_patterns_at_inject(
+        pats,
+        part_bases,
+        min_dist=float(min_dist),
+        telem=telem,
+    )
+
+
 def polish_patterns_at_inject(
     patterns: Sequence[ClusterPattern],
     part_bases: Mapping[int, Any],
@@ -141,10 +171,21 @@ def age_motif_library(motif_base: Any, step: int = 1) -> int:
     return int(motif_base.age(int(step)))
 
 
+def note_motif_hollow_miss(motif_base: Any, motif_id: int) -> bool:
+    """Q113 hollow Motif: ban unproven / floor proven via MotifBase.note_hollow_miss."""
+    if motif_base is None or int(motif_id) < 0:
+        return False
+    if int(motif_id) >= int(motif_base.size()):
+        return False
+    return bool(motif_base.note_hollow_miss(int(motif_id)))
+
+
 __all__ = [
     "age_motif_library",
     "extract_cluster_patterns",
+    "motif_patterns_for_inject",
     "motif_to_cluster_patterns",
+    "note_motif_hollow_miss",
     "patterns_from_motif_base",
     "polish_patterns_at_inject",
     "record_to_cluster_pattern",

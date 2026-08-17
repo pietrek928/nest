@@ -58,12 +58,22 @@ class MctsAgent:
     def _ucb(self, node_id: int, parent_visits: int) -> float:
         if self._is_tombstoned(node_id):
             return -1e300
+        # C0 hybrid: Arena ucb_score when AMAF ledger populated; else Python AMAF.
+        action = self.arena.action(node_id)
+        region_i = int(getattr(action.region, "value", action.region))
+        if int(self.arena.amaf_visits(region_i, int(action.rule_id), int(action.motif_id))) > 0:
+            self.telem["amaf_hits"] = int(self.telem["amaf_hits"]) + 1
+            score = float(
+                self.arena.ucb_score(int(node_id), int(parent_visits), float(self.ucb_c))
+            )
+            if score == float("inf") or score > 1e299:
+                return float("inf")
+            return score
         visits = int(self.arena.visits(node_id))
         if visits <= 0:
             return float("inf")
         mean = float(self.arena.total_reward(node_id)) / visits
         explore = self.ucb_c * math.sqrt(math.log(max(parent_visits, 1) + 1) / visits)
-        action = self.arena.action(node_id)
         key = self._action_key(action)
         amaf = self.amaf.get(key)
         if amaf is not None and amaf.visits > 0:
@@ -123,6 +133,10 @@ class MctsAgent:
             bucket = self.amaf.setdefault(key, MacroAmaf())
             bucket.visits += 1
             bucket.total_reward += float(reward)
+            region_i = int(getattr(action.region, "value", action.region))
+            self.arena.amaf_record(
+                region_i, int(action.rule_id), int(action.motif_id), float(reward), False,
+            )
             cur = int(self.arena.parent_id(cur))
 
     def note_macro_miss(self, action: MacroAction | None) -> None:
@@ -132,6 +146,10 @@ class MctsAgent:
         bucket = self.amaf.setdefault(key, MacroAmaf())
         bucket.misses += 1
         self.telem["amaf_miss"] = int(self.telem.get("amaf_miss", 0)) + 1
+        region_i = int(getattr(action.region, "value", action.region))
+        self.arena.amaf_record(
+            region_i, int(action.rule_id), int(action.motif_id), 0.0, True,
+        )
 
     def best_child(self, node_id: int | None = None) -> int:
         root = int(self.arena.root_id() if node_id is None else node_id)

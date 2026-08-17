@@ -12,33 +12,9 @@
 #include "distance/polygon_distance.h"
 #include "solid/solid_geometry.h"
 
-/** Contact GRG edge: kiss / dist ≤ 2·gap with relative SE2 and GCI surrogate (α=β=0.5). */
+#include "contact_edge.h"
 
-struct ContactEdge {
-    int32_t gid_a = -1;
-    int32_t gid_b = -1;
-    int packed_i = -1;
-    int packed_j = -1;
-    Se2 relative_pose{};
-    float contact_score = 0.f;
-    float compactness = 0.f;
-    float gci = 0.f;
-};
-
-inline float clamp01(float v) {
-    if (v < 0.f) {
-        return 0.f;
-    }
-    if (v > 1.f) {
-        return 1.f;
-    }
-    return v;
-}
-
-/** GCI = clamp01(α·compactness + β·contact_score); locked α=β=0.5 (Q78). */
-inline float gci_surrogate(float compactness, float contact_score, float alpha = 0.5f, float beta = 0.5f) {
-    return clamp01(alpha * compactness + beta * contact_score);
-}
+/** Contact GRG: kiss / dist ≤ 2·gap with relative SE2 and GCI surrogate (α=β=0.5). */
 
 /**
  * contact_score: 1 at touch/overlap, 0 at dist == contact_thresh.

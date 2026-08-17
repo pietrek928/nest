@@ -125,12 +125,12 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.HISTORY_EXPAND,
     }),
     # No VORONOI / NEIGHBOR_SLIDE — large open void drift spam; explorers = erosion+raycast.
+    # No SIDE_PACK — staging void XOR skips wall-fill; permission matches staging.
     PlaceZone.VOID_SEEK: frozenset({
         ProposerName.EROSION,
         ProposerName.RIBBON_FREE,
         ProposerName.RAYCASTING,
         ProposerName.GUIDANCE_CAST_REFINE,
-        ProposerName.SIDE_PACK,
         ProposerName.BOARD_EDGE,
         ProposerName.CLUSTER_COPY,
         ProposerName.POCKET_FIT,

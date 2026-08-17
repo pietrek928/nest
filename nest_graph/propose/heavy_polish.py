@@ -65,11 +65,31 @@ def polish_budget_for_iter(
     *,
     is_last_leaf: bool,
     sel: SelectionConfig | None = None,
+    large_void: bool = False,
+    cheap_expand: bool = False,
+    near_last: bool = False,
 ) -> PolishBudget:
-    """Schedule: mid → mid budget; last leaf → last budget."""
-    if is_last_leaf:
+    """Hybrid schedule: last → full; cheap → mid no-3b; mid+large_void → mid+3b near last.
+
+    Keeps Q69 cheap expand speed; mid large_void 3b only on near-last (time/scrap).
+    """
+    if is_last_leaf and not cheap_expand:
         return polish_budget_last(sel)
-    return polish_budget_mid(sel)
+    mid = polish_budget_mid(sel)
+    if cheap_expand or not large_void:
+        return mid
+    tries = mid.dfs_max_tries
+    if sel is not None:
+        tries = min(int(sel.dfs_max_tries), max(int(tries or 2), 3))
+    return PolishBudget(
+        dfs_passes=mid.dfs_passes,
+        dfs_mode=mid.dfs_mode,
+        dfs_max_tries=tries,
+        # G1 hybrid: mid void 3b only near last (every mid-iter 3b blew time).
+        run_3b=bool(near_last),
+        run_post_pack=False,
+        freeze_improve_rules=mid.freeze_improve_rules,
+    )
 
 
 def freeze_improve_rules(sel_iter, *, freeze: bool):
@@ -230,7 +250,7 @@ def apply_refine_with_restore(
     if not refine_lex_better:
         restore_refine = True
 
-    # U1: void shed without lex win → same restore OR.
+    # U1/R0: void shed without lex win → restore; also hold if refine empties void.
     if (
         free_info is not None
         and getattr(free_info, "kind", None) == "large_void"
@@ -239,9 +259,10 @@ def apply_refine_with_restore(
     ):
         nv_nest = count_selected_in_free(polys, nest_before_refine, free_poly)
         nv_ref = count_selected_in_free(polys, selected_polys, free_poly)
-        if nv_ref < nv_nest and not refine_lex_better:
-            restore_refine = True
-            void_refine_hold = 1
+        if nv_nest > 0 and nv_ref < nv_nest:
+            if (not refine_lex_better) or nv_ref <= 0 or nv_ref < max(1, int(0.5 * nv_nest)):
+                restore_refine = True
+                void_refine_hold = 1
 
     if restore_refine:
         selected_polys = list(nest_before_refine)

@@ -59,10 +59,14 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 
 During each miss cycle and while a letter is still open:
 
+- **Stuck → research, then unify.** Do not stack another special case. Read telem + the named hot-path functions; look for a better existing lever or a **hybrid** of two winners (shared helper, lex pick, soft scale). Optimize / simplify the current path before inventing a third.
+- **Do not alter the problem.** Never make a gate easier by changing the fixture: no larger/smaller board, no catalog/demand/mix/iters retune, no lowered floors. Restore any such edits. Work the algorithm on the original case.
+- **Simplify while looping.** Complex, duplicated, or deeply nested logic makes the next optimization impossible. If the path is getting hard to follow, **stop adding features** and unify/flatten first (one gate, one helper, delete dead flags).
+- **Validate logic as you go.** Periodically check that comments, conditions, and call sites still match (hold vs override, colonize vs pin, floor vs actual predicate). Catch contradictions early — do not wait for the letter to finish.
 - **Research for improvements.** Read telem + named functions on the hot path; form one hypothesis; one patch; re-bench. Prefer levers already in-tree (flags, seeds, budgets, existing helpers) before inventing a third path.
 - **Hybrid unify.** If two solutions each win on different axes (density vs speed, swap-on vs swap-off, cascade vs free emit, …), do **not** keep both forever and do **not** pick one blindly. Look for a **combined / unified** form that keeps each advantage to the extent possible (lex pick, shared helper with both predicates, soft scale instead of hard skip, …). Cite both winners in the patch rationale.
 - **Unsure what hurts → telemetry first.** If the failure mode is opaque, add the smallest bench/telem that names the stage (void props/graph/nest/refine, cascade stop, pin add, rim drop, …), re-run, then patch from evidence — not from guess stacks.
-- **Unify as you iterate.** Every loop is also a cleanup pass: fold duplicates into one gate, flatten nested branches, delete dead flags. If logic is getting complex, duplicated, or deeply nested, **stop adding features** and unify/simplify first — otherwise you cannot move forward cleanly.
+- **Unify as you iterate.** Every loop is also a cleanup pass: fold duplicates into one gate, flatten nested branches, delete dead flags.
 - **Keep logic clean and consistent.** Same predicate → same helper; same SoT → same call site family; comments must match code. Prefer one readable path over clever special cases.
 
 ## Nesting invariants

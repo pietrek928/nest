@@ -4,6 +4,7 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
+#include "contact_edge.h"
 #include "decision_arena.h"
 #include "motif_base.h"
 #include "node_signature.h"
@@ -45,6 +46,32 @@ void bind_elem_graph_decision(nb::module_ &m) {
             nb::arg("reward"))
         .def("size", &DecisionArena::size)
         .def("may_expand", &DecisionArena::may_expand, nb::arg("id"), nb::arg("c") = 1.5f, nb::arg("alpha") = 0.5f)
+        .def(
+            "amaf_record",
+            &DecisionArena::amaf_record,
+            nb::arg("region"),
+            nb::arg("rule_id"),
+            nb::arg("motif_id"),
+            nb::arg("reward"),
+            nb::arg("miss") = false)
+        .def(
+            "amaf_mean",
+            &DecisionArena::amaf_mean,
+            nb::arg("region"),
+            nb::arg("rule_id"),
+            nb::arg("motif_id"))
+        .def(
+            "amaf_visits",
+            &DecisionArena::amaf_visits,
+            nb::arg("region"),
+            nb::arg("rule_id"),
+            nb::arg("motif_id"))
+        .def(
+            "ucb_score",
+            &DecisionArena::ucb_score,
+            nb::arg("node_id"),
+            nb::arg("parent_visits"),
+            nb::arg("ucb_c") = 1.4f)
         .def(
             "visits",
             [](const DecisionArena &a, int32_t id) { return a.node(id).visits; },
@@ -96,6 +123,23 @@ void bind_elem_graph_decision(nb::module_ &m) {
         .def("size", &MotifBase::size)
         .def("at", nb::overload_cast<int32_t>(&MotifBase::at), nb::arg("id"))
         .def("credit_accept", &MotifBase::credit_accept, nb::arg("id"), nb::arg("ttl") = 0)
+        .def("note_hollow_miss", &MotifBase::note_hollow_miss, nb::arg("id"))
+        .def(
+            "upsert_contact",
+            [](MotifBase &b, const ContactEdge &edge, float min_c, int32_t ttl) {
+                MotifRecord rec;
+                rec.gid_a = edge.gid_a;
+                rec.gid_b = edge.gid_b;
+                rec.relative = edge.relative_pose;
+                rec.gci = edge.gci;
+                rec.compactness = edge.compactness;
+                rec.area_a = 1.f;
+                rec.area_b = 1.f;
+                return b.upsert(rec, min_c, ttl);
+            },
+            nb::arg("edge"),
+            nb::arg("min_compactness") = 0.f,
+            nb::arg("ttl") = 0)
         .def(
             "find_exact_id",
             &MotifBase::find_exact_id,
@@ -151,6 +195,26 @@ void bind_elem_graph_decision(nb::module_ &m) {
             nb::arg("max_key_dist") = 5.f,
             nb::arg("area_a") = 1.f,
             nb::arg("area_b") = 1.f);
+
+    nb::class_<ContactEdge>(m, "ContactEdge")
+        .def(nb::init<>())
+        .def_rw("gid_a", &ContactEdge::gid_a)
+        .def_rw("gid_b", &ContactEdge::gid_b)
+        .def_rw("packed_i", &ContactEdge::packed_i)
+        .def_rw("packed_j", &ContactEdge::packed_j)
+        .def_rw("relative_pose", &ContactEdge::relative_pose)
+        .def_rw("contact_score", &ContactEdge::contact_score)
+        .def_rw("compactness", &ContactEdge::compactness)
+        .def_rw("gci", &ContactEdge::gci);
+
+    m.def(
+        "gci_surrogate",
+        &gci_surrogate,
+        nb::arg("compactness"),
+        nb::arg("contact_score"),
+        nb::arg("alpha") = 0.5f,
+        nb::arg("beta") = 0.5f);
+    m.def("clamp01", &clamp01, nb::arg("v"));
 
     nb::class_<NodeSignature>(m, "NodeSignature")
         .def(nb::init<>())

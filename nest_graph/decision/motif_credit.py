@@ -72,7 +72,11 @@ def merge_void_elite_with_archive(
     elite_quota: int,
     void_seek: bool,
 ) -> dict[int, list]:
-    """Q137: under VOID_SEEK, 60% current void_elite / 40% archive abs SE2."""
+    """Hybrid abs elite bag: current void_elite ∪ archive (Q137).
+
+    When current is empty under void_seek, archive supplies the **full** quota
+    (not 40%). Otherwise 60% current / 40% archive.
+    """
     q = max(int(elite_quota), 0)
     if q <= 0:
         return {}
@@ -81,8 +85,13 @@ def merge_void_elite_with_archive(
         for gid, rows in (current or {}).items():
             out[int(gid)] = list(rows)[:q]
         return out
-    n_cur = max(1, int(round(0.6 * q)))
-    n_arch = max(0, q - n_cur)
+    cur_total = sum(len(v) for v in (current or {}).values())
+    if cur_total <= 0:
+        n_cur = 0
+        n_arch = q
+    else:
+        n_cur = max(1, int(round(0.6 * q)))
+        n_arch = max(0, q - n_cur)
     out: dict[int, list] = {}
     gids = set(int(g) for g in (current or {})) | set(int(g) for g in archive_by_group)
     for gid in gids:
@@ -107,3 +116,87 @@ def merge_void_elite_with_archive(
         if kept:
             out[int(gid)] = kept
     return out
+
+
+def credit_void_niche_from_iter(
+    niche_archive: Any,
+    *,
+    free_kind: str,
+    bottleneck: str,
+    n_void_nest: int,
+    n_void_graph: int,
+    prev_void_nest: int,
+    polys: Sequence,
+    transform: Sequence,
+    group_id: Sequence[int],
+    selected: Sequence[int],
+    free_poly: Any,
+    outline_cov: float,
+    ttl: int,
+    max_seed: int = 64,
+    centroid_in_free_fn: Any = None,
+) -> dict[str, int]:
+    """P0 evaluator/build_graph SoT: hollow rescue + void-nest↑ niche credit.
+
+    Uses Void AMAF key ``(Void, 0, -1)`` when no MacroAction is available
+    (evaluator spine). Returns telem counters.
+    """
+    from nest_graph.elem_graph import MacroRegion
+    from nest_graph.propose.void_selection import centroid_in_free as _cif
+
+    cif = centroid_in_free_fn or _cif
+    telem = {"hollow_miss": 0, "niche_pos": 0, "niche_rescue": 0}
+    large_void = str(free_kind or "") == "large_void"
+    if niche_archive is None or not large_void:
+        return telem
+    void_key = (
+        int(getattr(MacroRegion.Void, "value", 1)),
+        0,
+        -1,
+    )
+    hollow = bool(
+        bottleneck == "graph_to_nest" or int(n_void_nest) <= 0
+    )
+    telem["hollow_miss"] = int(hollow)
+    if hollow and int(n_void_graph) > 0:
+        niche_archive.append_negative(void_key, void_nest=int(n_void_nest), score=0.0)
+        pos_rows: list[tuple[int, float, float, float]] = []
+        seed_idxs = [
+            i for i in range(len(polys)) if cif(polys[i], free_poly)
+        ][: max(int(max_seed), 1)]
+        for vii in seed_idxs:
+            if vii < 0 or vii >= len(transform):
+                continue
+            gid = int(group_id[vii]) if vii < len(group_id) else 0
+            row = np.asarray(transform[vii], dtype=np.float64).reshape(3)
+            pos_rows.append((gid, float(row[0]), float(row[1]), float(row[2])))
+        if pos_rows:
+            niche_archive.append_positive(
+                void_key,
+                rows=pos_rows,
+                void_nest=0,
+                score=float(outline_cov),
+                ttl=max(int(ttl), 1),
+            )
+            telem["niche_rescue"] = len(pos_rows)
+    elif int(n_void_nest) > int(prev_void_nest):
+        pos_rows = []
+        for vi in selected:
+            vii = int(vi)
+            if vii < 0 or vii >= len(polys) or vii >= len(transform):
+                continue
+            if not cif(polys[vii], free_poly):
+                continue
+            gid = int(group_id[vii]) if vii < len(group_id) else 0
+            row = np.asarray(transform[vii], dtype=np.float64).reshape(3)
+            pos_rows.append((gid, float(row[0]), float(row[1]), float(row[2])))
+        if pos_rows:
+            niche_archive.append_positive(
+                void_key,
+                rows=pos_rows,
+                void_nest=int(n_void_nest),
+                score=float(outline_cov),
+                ttl=max(int(ttl), 1),
+            )
+            telem["niche_pos"] = len(pos_rows)
+    return telem

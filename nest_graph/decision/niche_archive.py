@@ -116,15 +116,16 @@ class MacroNicheArchive:
         return out
 
     def age(self, step: int = 1) -> int:
-        """Decrement TTL; drop sterile (all-miss, ttl exhausted) buckets."""
+        """Decrement TTL; drop sterile buckets; protect niches with hits>0."""
         dropped = 0
         dead: list[tuple] = []
         for key, bucket in self.buckets.items():
             bucket.ttl_remaining -= int(step)
             if bucket.ttl_remaining > 0:
                 continue
-            if bucket.hits > 0 and bucket.best_void_nest > 0:
-                bucket.ttl_remaining = 1  # protect proven niches
+            # P2: hollow Void-key rescue uses void_nest=0 but hits>0 — keep alive.
+            if bucket.hits > 0:
+                bucket.ttl_remaining = 1
                 continue
             dead.append(key)
             dropped += 1

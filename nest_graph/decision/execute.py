@@ -58,6 +58,51 @@ class SelectionFreePrep:
         return r if hasattr(r, "analysis") else None
 
 
+def schedule_prep_selection_free(
+    *,
+    phase: str,
+    sheet,
+    part_areas: Sequence[float],
+    min_dist: float,
+    cfg_propose,
+    packed_shapely: Sequence | None = None,
+    pack_geoms: Sequence | None = None,
+    packed_group_id: Sequence[int] | None = None,
+    packed_transform: Sequence | None = None,
+    prior: SelectionFreePrep | None = None,
+    selection_changed: bool = True,
+    run_uh: bool = False,
+    nest_state=None,
+) -> SelectionFreePrep | None:
+    """Hybrid free-prep schedule (G3): Uh when needed; reuse mid when safe.
+
+    phase: ``uh`` | ``mid`` | ``post``.
+    """
+    if phase == "uh" and not run_uh:
+        return None
+    if (
+        phase == "post"
+        and prior is not None
+        and not selection_changed
+        and prior.free_info is not None
+        and prior.free_snap is not None
+    ):
+        return prior
+    snap = phase == "post"
+    return prep_selection_free(
+        sheet=sheet,
+        part_areas=part_areas,
+        min_dist=min_dist,
+        cfg_propose=cfg_propose,
+        nest_state=nest_state,
+        packed_shapely=packed_shapely,
+        pack_geoms=pack_geoms,
+        packed_group_id=packed_group_id,
+        packed_transform=packed_transform,
+        snapshot=snap,
+    )
+
+
 def prep_selection_free(
     *,
     sheet,
