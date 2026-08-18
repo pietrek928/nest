@@ -4,9 +4,69 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from nest_graph.elem_graph import Se2
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.elem_graph import MacroRegion, Se2
+from nest_graph.propose.void_selection import centroid_in_free, transform_row_key
 from nest_graph.utils import relative_transform
+
+
+def niche_amaf_key(action: Any | None) -> tuple[int, int, int]:
+    """Q140/Q141: ``(region, 0, motif_id)``; Void/-1 when there is no action."""
+    if action is None:
+        return (int(getattr(MacroRegion.Void, "value", 1)), 0, -1)
+    region = action.region
+    region_i = int(getattr(region, "value", region))
+    motif_id = int(getattr(action, "motif_id", -1) or -1)
+    if motif_id < 0:
+        motif_id = -1
+    return (region_i, 0, motif_id)
+
+
+def _key_is_void_seek(key: tuple[int, int, int]) -> bool:
+    region_i = int(key[0])
+    void_i = int(getattr(MacroRegion.Void, "value", 1))
+    motif_i = int(getattr(MacroRegion.Motif, "value", 3))
+    return region_i == void_i or region_i == motif_i
+
+
+def _pose_in_proposer_keys(row3, proposer_keys: dict | None) -> bool:
+    if not proposer_keys:
+        return False
+    key = transform_row_key(np.asarray(row3, dtype=np.float64))
+    for owned in proposer_keys.values():
+        if key in (owned or ()):
+            return True
+    return False
+
+
+def _niche_rows_from_indices(
+    indices: Sequence[int],
+    *,
+    polys: Sequence,
+    transform: Sequence,
+    group_id: Sequence[int],
+    free_poly: Any,
+    cif,
+    proposer_keys: dict | None,
+    cap: int | None = None,
+) -> tuple[list[tuple[int, float, float, float]], list[tuple[int, float, float, float]]]:
+    """Return (proposer-tagged nest-in-free rows, all nest-in-free rows)."""
+    tagged: list[tuple[int, float, float, float]] = []
+    in_free: list[tuple[int, float, float, float]] = []
+    for vi in indices:
+        vii = int(vi)
+        if vii < 0 or vii >= len(polys) or vii >= len(transform):
+            continue
+        if not cif(polys[vii], free_poly):
+            continue
+        gid = int(group_id[vii]) if vii < len(group_id) else 0
+        row = np.asarray(transform[vii], dtype=np.float64).reshape(3)
+        rec = (gid, float(row[0]), float(row[1]), float(row[2]))
+        in_free.append(rec)
+        if _pose_in_proposer_keys(row, proposer_keys):
+            tagged.append(rec)
+        if cap is not None and len(in_free) >= int(cap):
+            break
+    return tagged, in_free
 
 
 def credit_motif_on_nest_survival(
@@ -135,68 +195,72 @@ def credit_void_niche_from_iter(
     ttl: int,
     max_seed: int = 64,
     centroid_in_free_fn: Any = None,
+    amaf_key: tuple[int, int, int] | None = None,
+    proposer_keys: dict | None = None,
+    action: Any | None = None,
 ) -> dict[str, int]:
-    """P0 evaluator/build_graph SoT: hollow rescue + void-nest↑ niche credit.
+    """One niche write per iter (Q140/Q142): current AMAF key, one ``append_positive``.
 
-    Uses Void AMAF key ``(Void, 0, -1)`` when no MacroAction is available
-    (evaluator spine). Returns telem counters.
+    Hollow: ``append_negative(key)`` then one positive — proposer-tagged nest
+    survivors if any, else nest-in-void, else centroid ghosts. ``(Void, 0, -1)``
+    only when there is no action.
     """
-    from nest_graph.elem_graph import MacroRegion
-    from nest_graph.propose.void_selection import centroid_in_free as _cif
-
-    cif = centroid_in_free_fn or _cif
+    cif = centroid_in_free_fn or centroid_in_free
     telem = {"hollow_miss": 0, "niche_pos": 0, "niche_rescue": 0}
     large_void = str(free_kind or "") == "large_void"
     if niche_archive is None or not large_void:
         return telem
-    void_key = (
-        int(getattr(MacroRegion.Void, "value", 1)),
-        0,
-        -1,
-    )
-    hollow = bool(
-        bottleneck == "graph_to_nest" or int(n_void_nest) <= 0
-    )
+    key = amaf_key if amaf_key is not None else niche_amaf_key(action)
+    hollow = bool(bottleneck == "graph_to_nest" or int(n_void_nest) <= 0)
     telem["hollow_miss"] = int(hollow)
-    if hollow and int(n_void_graph) > 0:
-        niche_archive.append_negative(void_key, void_nest=int(n_void_nest), score=0.0)
-        pos_rows: list[tuple[int, float, float, float]] = []
-        seed_idxs = [
-            i for i in range(len(polys)) if cif(polys[i], free_poly)
-        ][: max(int(max_seed), 1)]
-        for vii in seed_idxs:
-            if vii < 0 or vii >= len(transform):
-                continue
-            gid = int(group_id[vii]) if vii < len(group_id) else 0
-            row = np.asarray(transform[vii], dtype=np.float64).reshape(3)
-            pos_rows.append((gid, float(row[0]), float(row[1]), float(row[2])))
+    tagged, nest_free = _niche_rows_from_indices(
+        selected,
+        polys=polys,
+        transform=transform,
+        group_id=group_id,
+        free_poly=free_poly,
+        cif=cif,
+        proposer_keys=proposer_keys,
+    )
+    pos_rows = tagged or nest_free
+    if hollow:
+        niche_archive.append_negative(key, void_nest=int(n_void_nest), score=0.0)
+        # Q140: current key only — no Void dump on Rim/Sheet.
+        # Q142: tagged nest survivors first; else ghosts (old hollow SoT), not
+        # untagged nest_free (that subset starved void_seek vs full graph seeds).
+        pos_rows = list(tagged)
+        if not pos_rows and _key_is_void_seek(key) and int(n_void_graph) > 0:
+            _tagged_g, ghosts = _niche_rows_from_indices(
+                range(len(polys)),
+                polys=polys,
+                transform=transform,
+                group_id=group_id,
+                free_poly=free_poly,
+                cif=cif,
+                proposer_keys=None,
+                cap=max(int(max_seed), 1),
+            )
+            del _tagged_g
+            pos_rows = ghosts
         if pos_rows:
             niche_archive.append_positive(
-                void_key,
+                key,
                 rows=pos_rows,
-                void_nest=0,
+                void_nest=0 if not tagged else int(n_void_nest),
                 score=float(outline_cov),
                 ttl=max(int(ttl), 1),
             )
-            telem["niche_rescue"] = len(pos_rows)
-    elif int(n_void_nest) > int(prev_void_nest):
-        pos_rows = []
-        for vi in selected:
-            vii = int(vi)
-            if vii < 0 or vii >= len(polys) or vii >= len(transform):
-                continue
-            if not cif(polys[vii], free_poly):
-                continue
-            gid = int(group_id[vii]) if vii < len(group_id) else 0
-            row = np.asarray(transform[vii], dtype=np.float64).reshape(3)
-            pos_rows.append((gid, float(row[0]), float(row[1]), float(row[2])))
-        if pos_rows:
-            niche_archive.append_positive(
-                void_key,
-                rows=pos_rows,
-                void_nest=int(n_void_nest),
-                score=float(outline_cov),
-                ttl=max(int(ttl), 1),
-            )
-            telem["niche_pos"] = len(pos_rows)
+            if tagged:
+                telem["niche_pos"] = len(pos_rows)
+            else:
+                telem["niche_rescue"] = len(pos_rows)
+    elif int(n_void_nest) > int(prev_void_nest) and pos_rows:
+        niche_archive.append_positive(
+            key,
+            rows=pos_rows,
+            void_nest=int(n_void_nest),
+            score=float(outline_cov),
+            ttl=max(int(ttl), 1),
+        )
+        telem["niche_pos"] = len(pos_rows)
     return telem

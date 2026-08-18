@@ -3,7 +3,7 @@
 import numpy as np
 
 from nest_graph.config import cap_graph_valid_carry, trim_history
-from nest_graph.build_graph import _graph_valid_carry_by_group
+from nest_graph.propose.transform_batch import graph_valid_carry_by_group as _graph_valid_carry_by_group
 
 
 def test_trim_history_keeps_newest_selected_not_lexicographic_tail():

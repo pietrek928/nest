@@ -196,7 +196,6 @@ def cheap_expand_slave(
             void_fill=parent.void_fill,
             free_kind=parent.free_kind,
             motif_ids_used=parent.motif_ids_used,
-            telem=dict(parent.telem or {}),
         )
     timed_expand_ms(telem, t0)
     return ExpandResult(snapshot=snap, reward=leaf_reward(snap), ok=True)

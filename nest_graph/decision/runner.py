@@ -16,26 +16,41 @@ class MacroMctsRunner:
     arena: DecisionArena = field(default_factory=DecisionArena)
     motif_base: MotifBase = field(default_factory=MotifBase)
     niche_archive: MacroNicheArchive = field(default_factory=MacroNicheArchive)
-    snapshots: dict[int, BoardSnapshot] = field(default_factory=dict)
     agent: MctsAgent | None = None
     execute_fn: Callable[..., BoardSnapshot] | None = None
 
     def __post_init__(self) -> None:
         self.agent = MctsAgent(arena=self.arena, motif_base=self.motif_base)
         root = int(self.arena.root_id())
-        if root not in self.snapshots:
-            self.snapshots[root] = BoardSnapshot(arena_node_id=root)
+        self.arena.set_snapshot(root, BoardSnapshot(arena_node_id=root))
+
+    def snapshot_at(
+        self,
+        node_id: int,
+        default: BoardSnapshot | None = None,
+        *,
+        missing_ok: bool = False,
+    ) -> BoardSnapshot | None:
+        nid = int(node_id)
+        if nid < 0 or nid >= int(self.arena.size()):
+            if missing_ok or default is not None:
+                return default
+            raise IndexError(f"snapshot {nid} out of range")
+        return self.arena.snapshot(nid)
+
+    def store_snapshot(self, node_id: int, snap: BoardSnapshot) -> None:
+        self.arena.set_snapshot(int(node_id), snap)
 
     def run(self, root_snapshot: BoardSnapshot, *, n_sims: int = 32) -> BoardSnapshot:
         assert self.agent is not None
         root = int(self.arena.root_id())
-        self.snapshots[root] = root_snapshot
         root_snapshot.arena_node_id = root
+        self.store_snapshot(root, root_snapshot)
 
         for _ in range(max(int(n_sims), 1)):
             leaf = self.agent.select_leaf()
-            parent_snap = self.snapshots.get(leaf) or root_snapshot
-            if not parent_snap.remaining_gids:
+            parent_snap = self.snapshot_at(leaf, root_snapshot)
+            if not parent_snap.has_remaining:
                 self.agent.backprop(leaf, float(parent_snap.coverage))
                 continue
             action = self.agent.pick_expand_action(
@@ -58,7 +73,7 @@ class MacroMctsRunner:
             )
             child = self.agent.expand(leaf, action, result.reward)
             result.snapshot.arena_node_id = child
-            self.snapshots[child] = result.snapshot
+            self.store_snapshot(child, result.snapshot)
 
         best = self.agent.best_child()
         # Walk to deepest best-mean leaf
@@ -68,7 +83,7 @@ class MacroMctsRunner:
             if nxt == cur:
                 break
             cur = nxt
-        return self.snapshots.get(cur, root_snapshot)
+        return self.snapshot_at(cur, root_snapshot)
 
     def best_leaf_polish(self, snapshot: BoardSnapshot, polish_fn: Callable[[BoardSnapshot], BoardSnapshot]) -> BoardSnapshot:
         """Q69: heavy DFS/3b/local_se2 only here."""

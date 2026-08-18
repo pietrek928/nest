@@ -134,3 +134,39 @@ TEST_CASE("NodeSignature self distance zero", "[node_signature]") {
     b.rim_fill = 1.f;
     REQUIRE(related_distance(a, b) > 0.f);
 }
+
+TEST_CASE("DecisionArena snapshots copy parent then mutate", "[decision_arena]") {
+    DecisionArena arena;
+    REQUIRE(arena.size() == 1);
+    BoardSnapshot root;
+    root.coverage = 0.25f;
+    board_snapshot_set_remaining(root, {0, 1});
+    root.free_kind = "large_void";
+    arena.set_snapshot(0, root);
+    REQUIRE(arena.snapshot(0).coverage == Catch::Approx(0.25f));
+    REQUIRE(arena.snapshot(0).has_remaining());
+    REQUIRE(board_snapshot_remaining_gids(arena.snapshot(0)) == std::vector<int32_t>({0, 1}));
+
+    MacroAction a{};
+    a.region = MacroRegion::Void;
+    const int32_t c0 = arena.add_node(0, a);
+    REQUIRE(arena.size() == 2);
+    REQUIRE(arena.snapshot(c0).arena_node_id == c0);
+    REQUIRE(arena.snapshot(c0).coverage == Catch::Approx(0.25f));
+    REQUIRE(arena.snapshot(c0).free_kind == "large_void");
+    arena.snapshot(c0).coverage = 0.4f;
+    REQUIRE(arena.snapshot(0).coverage == Catch::Approx(0.25f));
+    REQUIRE(arena.snapshot(c0).coverage == Catch::Approx(0.4f));
+}
+
+TEST_CASE("BoardSnapshot remaining bitmask catalog types", "[decision_arena]") {
+    BoardSnapshot snap;
+    board_snapshot_set_remaining(snap, {10, 11, 12});
+    REQUIRE(snap.remaining_mask == ((uint64_t{1} << 10) | (uint64_t{1} << 11) | (uint64_t{1} << 12)));
+    const auto gids = board_snapshot_remaining_gids(snap);
+    REQUIRE(gids.size() == 3);
+    REQUIRE(gids[0] == 10);
+    REQUIRE(gids[1] == 11);
+    REQUIRE(gids[2] == 12);
+    REQUIRE(snap.n_packed() == 0);
+}

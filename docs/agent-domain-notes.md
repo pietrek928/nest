@@ -373,7 +373,7 @@ Polish budgets: `polish_budget_mid()` / `polish_budget_last()` in `heavy_polish.
 | Q83 | YES | Research not rollback |
 | Q84 | YES | Assert independence at tree end |
 | Q85 | YES | Fix MCTS; no greedy resurrect |
-| Q86 | NO full BoardState in C++ | Thin Python ledger + native geom SoT |
+| Q86 | **Reversed Q130** | `BoardSnapshot` lives on `DecisionArena` (POD; no telem). Thin Python ledger deleted. |
 | Q87 | NO | No FAISS/SQLite |
 | Q88 | YES | ContactGRG motif path (C++ SoT; upsert uses GCI) |
 | Q89 | YES NFP-lite | `find_closest_polygon_cast` + `polish_se2_part` only |
@@ -429,8 +429,8 @@ G1 floor raised to **0.585** in fixtures; live seed0 still miss on `area_coverag
 | Q | Question | Why ask |
 |---|----------|---------|
 | Q106 | Soft `force_zone`: Rim Q97 full reclaim (shipped) vs densify-floor-only (Q126)? | Validate scrap |
-| Q109 | Motif PLACE vs Void: keep Q104 `void_seek` alias? | Action fidelity |
-| Q110 | Unlock `rule_id` presets after U3, or stay Q102=`0`? | Branching |
+| Q109 | Motif PLACE vs Void: keep Q104 `void_seek` alias? | **Locked Q147:** keep alias |
+| Q110 | Unlock `rule_id` presets after U3, or stay Q102=`0`? | **Locked Q141:** stay `rule_id=0` |
 | Q112 | Motif→`join_attract_pairs` net density or noise (Q30)? | Soft MIS |
 | Q113 | Adaptive inject prune via compactness / accept_count? | **Locked:** TTL miss-streak; accept=0→delete/ttl=-1; accept>0 floor TTL=1 |
 | Q115 | `find_nearest` at stamp time vs inject-only warm? | Pattern match |
@@ -446,3 +446,40 @@ G1 floor raised to **0.585** in fixtures; live seed0 still miss on `area_coverag
 | Q126 | Rim Q97 zone flip vs densify-floor-only? | Preference vs geometry |
 | Q127 | Keep `refine_ms` on void_leak permanently? | Stage SoT |
 | Q129 | Keep `mcts_heavy` alias or telem `dfs_passes` only? | Telem SoT |
+
+### Native DG storage + pack execute (Q130–Q149, locked 2026-08-17)
+
+Q86 reversed. Q89/Q93/Q102/Q104 kept. Letter pass = no drop vs snapshot (`independent_ok`, area ≥ snapshot, time ≤1.5× and not slower unless area rose). Fixture floor 0.585 unchanged.
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q130 | Native `BoardSnapshot` on `DecisionArena` | `vector<BoardSnapshot>` indexed by node id. `snapshots.size()==arena.size()`. |
+| Q131 | Telem Python only | Existing `mcts_telem`. No `snapshot.telem`, no parallel `telem_by_node`. |
+| Q132 | AoS snapshots, SoA inside one snapshot | `vector<int32_t> packed_gids` + `vector<Se2> packed_transforms`. |
+| Q133 | Bitmask remaining if contiguous ≤64 | Catalog `ngroups` (default 2). `uint64_t remaining_mask`. Packed instances stay vectors. |
+| Q134 | Copy parent, then mutate | No COW. |
+| Q135 | Native `nfp_lite` | Batch inject loop in C++; one Scene. |
+| Q136 | Keep Q93 | NFP-lite is inject polish only. MotifBase miner = ContactGRG. |
+| Q137 | `geometry/common/nfp_lite.h` | Bind next to `polish_se2_part`. Relative via `se2_relative`. |
+| Q138 | Scene fail-closed | Cast must pass Scene; keep original on fail. |
+| Q139 | Native `MacroNicheArchive` | Sibling type; runner holds one. Not on `DecisionArena` / snapshots. |
+| Q140 | Niche key = current AMAF tuple | `(region, 0, motif_id)`; `(Void, 0, -1)` only when no action. |
+| Q141 | Keep Q102 `rule_id=0` | No per-proposer AMAF. EMA pool scales stay proposer budget. |
+| Q142 | Survivors and hollow ghosts | One `append_positive`: nest `proposer_keys` else centroids. |
+| Q143 | Cheap must apply sampled Motif | Cache key `(zone, motif_id)`. Miss → re-compose. |
+| Q144 | ContactGRG upsert outer leaf only | Do not upsert inside `run_mcts_multi_sim`. |
+| Q145 | Do not mute replay when tree chose Void/Motif | Rim-sat `use_history_expand=False` only for Rim/Sheet. |
+| Q146 | `free_space_cloud` in main `void_seek` explorer | One emit; densify reuses it. |
+| Q147 | Keep Q104 Motif → `void_seek` | Rigid pairs need free space. |
+| Q148 | One `execute_pack` + flags | Calls `run_pack_stages`. No `cheap_pack_from_cache` / `run_pack_body`. |
+| Q149 | Evaluator = same execute | Delete `analyze_free_space` fork. |
+
+**N0 snapshot** (2026-08-17, seed 0, shipped, `--gate` fixture FAIL vs 0.585 is not a miss):
+
+| Tag / case | Area | Time | Indep |
+|------------|------|------|-------|
+| void_fill `demo_triangle_corner_cluster_s6` | 0.536 | 321.49s | True |
+| mid_pack `demo_triangle_corner_cluster_s6` | 0.536 | 222.21s | True |
+| mid_pack `border_then_fill_s13` | 0.538 | 189.46s | True |
+| mid_pack `loose_cluster_compact_s9` | 0.462 | 241.35s | True |
+| mid_pack `dense_cluster_pockets_s8` | 0.558 | 153.61s | True |

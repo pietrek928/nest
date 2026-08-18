@@ -3,10 +3,10 @@
 import numpy as np
 from shapely.geometry import Point, box
 
-from nest_graph.build_graph import (
-    _count_props_near_pole,
-    _void_attractor_radius,
-    _zones_have_void_hijack,
+from nest_graph.propose.void_selection import (
+    count_props_near_pole as _count_props_near_pole,
+    void_attractor_radius as _void_attractor_radius,
+    zones_have_void_hijack as _zones_have_void_hijack,
 )
 from nest_graph.config import ProposeConfig
 from nest_graph.elem_graph import (
@@ -59,3 +59,12 @@ def test_nest_by_scores_prefers_high_score():
     assert 1 in sel
     assert 0 not in sel
     assert 2 in sel
+
+
+def test_pin_nest_void_independent_delegates_colonize_pin_clear():
+    import inspect
+
+    from nest_graph.propose.void_selection import pin_nest_void_independent
+
+    src = inspect.getsource(pin_nest_void_independent)
+    assert "colonize_pin_clear(" in src

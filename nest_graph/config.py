@@ -609,7 +609,7 @@ class ProposeConfig(BaseModel):
     prune_colliding_transforms: bool = False
     """Drop expand_rest transforms that penetrate locked packed solids before graph build."""
     rim_saturated_skip_emitters: bool = False
-    """When rim_progress >= threshold, skip side_pack / history_expand emit only (not mixer history)."""
+    """When rim_progress >= threshold, skip side_pack; mute history_expand only for Rim/Sheet (Q145)."""
     rim_saturated_threshold: float = 0.9
     # Carry-forward of last-iter board-valid graph poses (pool refinement).
     enable_graph_valid_carry: bool = True

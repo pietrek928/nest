@@ -201,9 +201,9 @@ def test_rank_score_for_mode_receives_propose_cfg_on_border():
     assert score == pytest.approx(score_none + 0.5 * 0.1)
 
 
-def test_build_graph_transform_selection_is_reexport():
+def test_transform_selection_is_expand_arrays_wrapper():
     import inspect
-    from nest_graph.build_graph import transform_selection
+    from nest_graph.propose.transform_batch import transform_selection
 
     src = inspect.getsource(transform_selection)
     assert "selection_expand_arrays" in src

@@ -3,8 +3,8 @@
 import numpy as np
 from shapely.geometry import Point, box
 
-from nest_graph.build_graph import (
-    _boost_void_island_scores,
+from nest_graph.propose.void_selection import (
+    boost_void_island_scores as _boost_void_island_scores,
 )
 from nest_graph.config import ProposeConfig
 from nest_graph.utils import transform_poly
@@ -22,9 +22,9 @@ def test_gravity_compaction_enabled_by_default():
 
 
 def test_boost_keyed_and_small_part_scores():
-    from nest_graph.build_graph import (
-        _boost_keyed_proposal_scores,
-        _boost_small_part_scores,
+    from nest_graph.propose.void_selection import (
+        boost_keyed_proposal_scores as _boost_keyed_proposal_scores,
+        boost_small_part_scores as _boost_small_part_scores,
     )
 
     scores = [1.0, 2.0, 3.0]

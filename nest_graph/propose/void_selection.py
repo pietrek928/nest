@@ -932,11 +932,7 @@ def pin_nest_void_independent(
     *,
     stats_out: dict | None = None,
 ) -> list[int]:
-    """P3: re-add nest-void nodes missing from refine if collision-clear.
-
-    Uses ``graph.collisions`` (not Shapely pose-clear). Optional ``stats_out``
-    records pin_candidates / pin_added / pin_blocked_collision / pin_ms.
-    """
+    """P3: re-add nest-void nodes missing from refine if collision-clear."""
     t0 = time.perf_counter()
     refine = list(selected_refine)
     refine_set = set(refine)
@@ -944,28 +940,25 @@ def pin_nest_void_independent(
         i for i in selected_nest
         if i not in refine_set and centroid_in_free(polys[i], free_poly)
     ]
-    pin_added = 0
-    pin_blocked = 0
+    if stats_out is not None:
+        stats_out["pin_candidates"] = len(candidates)
     if not candidates:
         if stats_out is not None:
-            stats_out["pin_candidates"] = 0
             stats_out["pin_added"] = 0
             stats_out["pin_blocked_collision"] = 0
             stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
         return refine
     if scores is not None and len(scores) == len(graph.group_id):
         candidates.sort(key=lambda v: scores[v], reverse=True)
-    for v in candidates:
-        if any(u in refine_set for u in graph.collisions[v]):
-            pin_blocked += 1
-            continue
-        refine.append(v)
-        refine_set.add(v)
-        pin_added += 1
+    refine, refine_set, pin_added, pin_blocked = colonize_pin_clear(
+        candidates,
+        graph.collisions,
+        refine,
+        refine_set,
+    )
     if stats_out is not None:
-        stats_out["pin_candidates"] = len(candidates)
-        stats_out["pin_added"] = pin_added
-        stats_out["pin_blocked_collision"] = pin_blocked
+        stats_out["pin_added"] = int(pin_added)
+        stats_out["pin_blocked_collision"] = int(pin_blocked)
         stats_out["pin_ms"] = (time.perf_counter() - t0) * 1000.0
     return refine
 

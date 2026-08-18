@@ -16,6 +16,7 @@ target_link_libraries(geometry PRIVATE nest_graph_headers)
 target_include_directories(geometry PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/bindings"
+  "${CMAKE_SOURCE_DIR}/nest_graph/elem_graph"
 )
 
 if(DEFINED ENV{NEST_GRAPH_NATIVE})

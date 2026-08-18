@@ -10,25 +10,29 @@ from nest_graph.build_graph import (
     Geometry,
     _append_selection_window,
     _base_geometries,
-    _border_pack_graph,
-    _build_transform_batch,
     _first_pass_border_ring_selection,
     _first_pass_layered_selection,
-    _guidance_border_refine,
     _make_initial_rule_sets,
     _make_seed_rule_sets,
     _poly_and_transforms,
     _rule_region,
     active_rule_set,
-    apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
     make_polygon_matrix,
-    window_selected_transforms,
     placement_board_score,
     run_build_graph,
     score_elems,
     select_polygons_from_edges,
+)
+from nest_graph.propose.first_pass_border import (
+    border_pack_graph as _border_pack_graph,
+    guidance_border_refine as _guidance_border_refine,
+)
+from nest_graph.propose.heavy_polish import apply_dfs_refinement
+from nest_graph.propose.transform_batch import (
+    build_transform_batch as _build_transform_batch,
+    window_selected_transforms,
 )
 from nest_graph.board import board_context_from_geometry
 from nest_graph.propose.ranking import pack_tightness_cost
@@ -616,3 +620,73 @@ def test_empty_corridor_first_pass_uses_place_profiles():
     assert "cluster_edge" in zones
     assert "empty_border" not in zones
     assert counts.get("corridor_channel", 0) > 0 or stats.get("proposal_count", 0) > 0
+
+
+def test_execute_pack_stage_telem():
+    from nest_graph.decision.execute import execute_pack
+
+    ran: list[str] = []
+    telem = execute_pack(
+        rim_only=False,
+        heavy=False,
+        compose_fn=lambda: ran.append("compose"),
+        refine_fn=lambda: ran.append("refine"),
+    )
+    assert ran == ["compose", "refine"]
+    assert telem["compose_ran"] == 1
+    assert telem["refine_ran"] == 1
+    assert telem["uh_ran"] == 0
+    assert telem["execute_wired"] == 1
+
+
+def test_cheap_pack_cache_key_motif_distinct():
+    from nest_graph.build_graph import cheap_pack_cache_key
+    from nest_graph.elem_graph import MacroAction, MacroRegion
+
+    rim = MacroAction()
+    rim.region = MacroRegion.Rim
+    rim.motif_id = -1
+    motif = MacroAction()
+    motif.region = MacroRegion.Motif
+    motif.motif_id = 3
+    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1)
+    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3)
+    assert cheap_pack_cache_key("void_seek", rim) != cheap_pack_cache_key(
+        "void_seek", motif
+    )
+
+
+def test_motif_graph_hits_cluster_copy_emit():
+    from nest_graph.propose.pattern_archive import motif_graph_hits
+    from nest_graph.propose.placements_pattern import ClusterPattern
+
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)), (1, (2.0, 0.0, 0.0))),
+        part_count=2,
+        ref_transform=(0.0, 0.0, 0.0),
+    )
+    group_id = [0, 1]
+    transform = [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)]
+    keys, cohorts, n_hits = motif_graph_hits([pat], group_id, transform)
+    assert n_hits >= 1
+    assert 0 in keys and 1 in keys
+    assert cohorts
+    assert cohorts[0]["leader_gid"] == 0
+
+
+def test_r4_split_homes_not_reexported():
+    import inspect
+
+    import nest_graph.build_graph as bg
+    from nest_graph.propose.heavy_polish import apply_dfs_refinement
+    from nest_graph.propose.telem import assemble_void_leak
+    from nest_graph.propose.transform_batch import build_transform_batch
+
+    src = inspect.getsource(bg)
+    assert "noqa: F401" not in src
+    assert "def apply_dfs_refinement" not in src
+    assert "def assemble_void_leak" not in src
+    assert apply_dfs_refinement.__module__.endswith("heavy_polish")
+    assert build_transform_batch.__module__.endswith("transform_batch")
+    assert assemble_void_leak.__module__.endswith("telem")
+

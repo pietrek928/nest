@@ -2,7 +2,8 @@
 
 from shapely.geometry import box
 
-from nest_graph.build_graph import NestState, _late_border_saturation_info
+from nest_graph.build_graph import NestState
+from nest_graph.propose.context import late_border_saturation_info as _late_border_saturation_info
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.utils import transform_poly
 

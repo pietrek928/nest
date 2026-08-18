@@ -214,3 +214,14 @@ def test_case_spec_determinism():
     assert a.name == b.name
     assert a.group_counts == b.group_counts
     assert abs(a.demand_ratio - b.demand_ratio) < 1e-9
+
+
+def test_evaluator_uses_execute_pack_not_analyze_free_space():
+    import inspect
+
+    from scripts import nesting_evaluator
+
+    src = inspect.getsource(nesting_evaluator)
+    assert "schedule_prep_selection_free" in src
+    assert "execute_pack" in src
+    assert "analyze_free_space" not in src

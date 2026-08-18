@@ -5,6 +5,16 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 from nest_graph.config import DfsMode, SelectionConfig
+from nest_graph.elem_graph import (
+    FinalizeSelectionOptions,
+    PoseGraph,
+    RefineSelectionOptions,
+    finalize_selection,
+    increase_score_dfs,
+    increase_selection_dfs,
+    refine_selection,
+    sort_graph,
+)
 from nest_graph.propose.block_replace import _sel_area, lex_count_area_better
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.void_selection import count_selected_in_free
@@ -272,3 +282,276 @@ def apply_refine_with_restore(
     propose_stats["rim_drop"] = float(rim_drop)
     propose_stats["void_refine_hold"] = int(void_refine_hold)
     return list(selected_polys)
+
+
+def prune_selection_to_independent_set(
+    graph: PoseGraph,
+    selected: list[int],
+    scores: list[float] | None = None,
+) -> list[int]:
+    """Greedy MIS fallback (prefer finalize_selection for score-optimal drops)."""
+    if not selected:
+        return []
+    order = list(selected)
+    if scores is not None and len(scores) == len(graph.group_id):
+        order.sort(key=lambda v: scores[v], reverse=True)
+    kept: list[int] = []
+    kept_set: set[int] = set()
+    for v in order:
+        if any(u in kept_set for u in graph.collisions[v]):
+            continue
+        kept.append(v)
+        kept_set.add(v)
+    return kept
+
+
+def refine_options(
+    sel: SelectionConfig,
+    *,
+    loose: bool,
+    max_tries: int | None = None,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    opts = RefineSelectionOptions()
+    opts.max_tries = sel.dfs_max_tries if max_tries is None else max_tries
+    opts.max_passes = sel.dfs_refine_max_passes
+    opts.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
+    opts.beam_width = sel.dfs_refine_beam_width
+    opts.explore_shuffle = bool(getattr(sel, "refine_explore_shuffle", False))
+    opts.growth_restarts = max(1, int(getattr(sel, "dfs_growth_restarts", 1) or 1))
+    if seed is not None:
+        opts.seed = int(seed) & 0xFFFFFFFF
+    opts.lexicographic_area = bool(getattr(sel, "refine_lexicographic_area", True))
+    if node_areas is not None and opts.lexicographic_area:
+        opts.node_areas = [float(a) for a in node_areas]
+    if loose:
+        opts.min_collisions = 2
+        opts.max_root_collisions = 2
+    else:
+        opts.min_collisions = 1
+        opts.max_root_collisions = 1
+    return opts
+
+
+def finalize_options(
+    sel: SelectionConfig,
+    locked_indices: Sequence[int] | None = None,
+) -> FinalizeSelectionOptions:
+    opts = FinalizeSelectionOptions()
+    opts.repair_passes = sel.dfs_finalize_repair_passes
+    opts.max_exact_component_size = sel.dfs_finalize_max_component
+    if locked_indices:
+        opts.locked_indices = [int(i) for i in locked_indices]
+    return opts
+
+
+def loose_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    return refine_options(
+        sel, loose=True, node_areas=node_areas, seed=seed,
+    )
+
+
+def tight_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    return refine_options(
+        sel, loose=False, node_areas=node_areas, seed=seed,
+    )
+
+
+def strict_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    opts = refine_options(
+        sel, loose=False, node_areas=node_areas, seed=seed,
+    )
+    opts.min_collisions = 0
+    opts.max_root_collisions = 0
+    return opts
+
+
+def head_loose_refine_options(
+    sel: SelectionConfig,
+    *,
+    node_areas: Sequence[float] | None = None,
+    seed: int | None = None,
+) -> RefineSelectionOptions:
+    """HEAD-style score DFS: allow transient overlaps during search."""
+    return refine_options(
+        sel, loose=True, node_areas=node_areas, seed=seed,
+    )
+
+
+def selection_score_sum(scores: list[float], selected: list[int]) -> float:
+    return float(sum(scores[v] for v in selected))
+
+
+def dfs_finalize_selection(graph, selected, scores, finalize_opts) -> list[int]:
+    return list(finalize_selection(graph, selected, scores, finalize_opts))
+
+
+def dfs_refine_seed(seed0: int | None, pass_i: int) -> int | None:
+    if seed0 is None:
+        return None
+    return int(seed0) + int(pass_i) * 17
+
+
+def apply_dfs_refinement(
+    graph: PoseGraph,
+    rule_set,
+    selected: list[int],
+    scores: list[float],
+    *,
+    dfs_passes: int | None = None,
+    dfs_max_tries: int | None = None,
+    mode: DfsMode | str | None = None,
+    selection: SelectionConfig | None = None,
+    node_areas: Sequence[float] | None = None,
+    refine_seed: int | None = None,
+    locked_indices: Sequence[int] | None = None,
+) -> tuple[list[int], list[int], float]:
+    """Refine selection; return (pre_finalize, final, score_sum_final).
+
+    ``locked_indices`` are finalize-only (``insert_clear_locks``). DFS options
+    must not receive them — force-on refine pins dropped count (Q47).
+    """
+    sel = selection if selection is not None else SelectionConfig()
+    passes = dfs_passes if dfs_passes is not None else sel.dfs_passes
+    max_tries = dfs_max_tries if dfs_max_tries is not None else sel.dfs_max_tries
+    mode = DfsMode(mode if mode is not None else sel.dfs_mode)
+    locks = [int(i) for i in (locked_indices or [])]
+    finalize_opts = finalize_options(sel, locked_indices=locks)
+    areas = list(node_areas) if node_areas is not None else None
+    seed0 = refine_seed
+
+    selected = list(selected)
+    graph_sorted = sort_graph(graph, rule_set)
+    graph_sorted_rev = sort_graph(graph, rule_set, reverse=True)
+    pre_finalize = selected
+
+    if mode == DfsMode.NEST_ONLY:
+        return selected, selected, selection_score_sum(scores, selected)
+
+    if mode == DfsMode.LEGACY_ALTERNATING:
+        for _ in range(passes):
+            selected = list(increase_selection_dfs(
+                graph_sorted_rev, selected, max_tries,
+            ))
+            selected = list(increase_selection_dfs(graph, selected, max_tries))
+            selected = list(increase_score_dfs(graph_sorted_rev, selected, scores))
+            selected = list(increase_selection_dfs(
+                graph_sorted, selected, max_tries,
+            ))
+            selected = list(increase_score_dfs(graph_sorted, selected, scores))
+        pre_finalize = selected
+        final = dfs_finalize_selection(graph, selected, scores, finalize_opts)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode == DfsMode.HEAD_PIPELINE:
+        loose = head_loose_refine_options(sel)
+        tight = RefineSelectionOptions()
+        tight.min_collisions = 1
+        tight.max_root_collisions = 2
+        tight.max_passes = sel.dfs_refine_max_passes
+        tight.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
+        tight.beam_width = sel.dfs_refine_beam_width
+        for _ in range(passes):
+            selected = list(increase_selection_dfs(
+                graph_sorted_rev, selected, max_tries,
+            ))
+            selected = list(increase_selection_dfs(graph, selected, max_tries))
+            selected = list(increase_score_dfs(
+                graph_sorted_rev, selected, scores, loose,
+            ))
+            selected = list(increase_selection_dfs(
+                graph_sorted, selected, max_tries,
+            ))
+            selected = list(increase_score_dfs(graph_sorted, selected, scores, tight))
+        pre_finalize = selected
+        return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
+
+    if mode == DfsMode.STRICT_NO_PRUNE:
+        for pass_i in range(passes):
+            strict = strict_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            )
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
+            selected = list(refine_selection(graph, selected, scores, strict))
+        pre_finalize = selected
+        return pre_finalize, pre_finalize, selection_score_sum(scores, pre_finalize)
+
+    if mode == DfsMode.STRICT_PRUNE:
+        for pass_i in range(passes):
+            strict = strict_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            )
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
+            selected = list(refine_selection(graph, selected, scores, strict))
+        pre_finalize = selected
+        final = prune_selection_to_independent_set(graph, selected, scores)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode == DfsMode.MERGED_SINGLE_PASS:
+        final = selected
+        for pass_i in range(passes):
+            loose = loose_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            )
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+            pre_finalize = selected
+            final = dfs_finalize_selection(graph, selected, scores, finalize_opts)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode == DfsMode.MERGED_LOOSE_FINALIZE_END:
+        for pass_i in range(passes):
+            loose = loose_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            )
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+        pre_finalize = selected
+        final = dfs_finalize_selection(graph, selected, scores, finalize_opts)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    if mode in (DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END, DfsMode.HIGH_PASS_LOOSE):
+        for pass_i in range(passes):
+            loose = loose_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            )
+            tight = tight_refine_options(
+                sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i + 1),
+            )
+            selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+            selected = list(refine_selection(graph, selected, scores, tight))
+        pre_finalize = selected
+        final = dfs_finalize_selection(graph, selected, scores, finalize_opts)
+        return pre_finalize, final, selection_score_sum(scores, final)
+
+    # merged_loose_tight: finalize after each outer pass
+    for pass_i in range(passes):
+        loose = loose_refine_options(
+            sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+        )
+        tight = tight_refine_options(
+            sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i + 1),
+        )
+        selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
+        selected = list(refine_selection(graph, selected, scores, tight))
+    pre_finalize = selected
+    final = dfs_finalize_selection(graph, selected, scores, finalize_opts)
+    grown = list(increase_selection_dfs(graph_sorted_rev, final, max_tries))
+    grown = list(increase_selection_dfs(graph, grown, max_tries))
+    if len(grown) > len(final):
+        final = dfs_finalize_selection(graph, grown, scores, finalize_opts)
+    return pre_finalize, final, selection_score_sum(scores, final)

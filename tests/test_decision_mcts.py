@@ -1,5 +1,5 @@
 from nest_graph.decision.mcts import MctsAgent, leaf_reward
-from nest_graph.decision.nfp_lite import nfp_lite_relative
+from nest_graph.geometry import nfp_lite_relative
 from nest_graph.decision.runner import MacroMctsRunner
 from nest_graph.decision.types import BoardSnapshot
 from nest_graph.elem_graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
@@ -54,6 +54,26 @@ def test_mcts_runner_stub_sims():
     assert runner.agent is not None
     assert runner.agent.telem["pw_expand"] >= 1
     assert runner.agent.telem["from_shapely_count"] == 0
+
+
+def test_arena_snapshot_size_invariant():
+    arena = DecisionArena()
+    assert arena.size() == 1
+    root = BoardSnapshot(remaining_gids=(0, 1), coverage=0.1, free_kind="large_void")
+    arena.set_snapshot(0, root)
+    assert abs(arena.snapshot(0).coverage - 0.1) < 1e-6
+    assert arena.snapshot(0).has_remaining
+    assert list(arena.snapshot(0).remaining_gids) == [0, 1]
+    a = MacroAction()
+    a.region = MacroRegion.Void
+    cid = arena.add_node(0, a)
+    assert arena.size() == 2
+    child = arena.snapshot(cid)
+    assert abs(child.coverage - 0.1) < 1e-6
+    assert child.free_kind == "large_void"
+    child.coverage = 0.2
+    assert abs(arena.snapshot(0).coverage - 0.1) < 1e-6
+    assert abs(arena.snapshot(cid).coverage - 0.2) < 1e-6
 
 
 def test_leaf_reward_terms():
@@ -131,3 +151,13 @@ def test_upsert_from_contacts_kissing_pair():
     assert base.size() >= 1
     assert base.at(0).gci > 0.0
     assert base.at(0).compactness >= 0.35
+
+
+def test_run_mcts_multi_sim_does_not_upsert_contacts():
+    import inspect
+
+    from nest_graph.decision.execute import run_mcts_multi_sim
+    from nest_graph.decision.slave_pack import cheap_expand_slave
+
+    assert "upsert_from_contacts(" not in inspect.getsource(run_mcts_multi_sim)
+    assert "upsert_from_contacts(" not in inspect.getsource(cheap_expand_slave)

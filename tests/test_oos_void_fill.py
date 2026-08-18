@@ -5,11 +5,11 @@ from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
 from nest_graph.board import board_sheet_from_outline
-from nest_graph.build_graph import (
-    _count_selected_by_proposer,
-    _format_prop_accept,
-    _pin_nest_void_independent,
-    _transform_row_key,
+from nest_graph.propose.void_selection import (
+    count_selected_by_proposer,
+    format_prop_accept,
+    pin_nest_void_independent,
+    transform_row_key,
 )
 from nest_graph.config import ProposeConfig
 from nest_graph.elem_graph import PoseGraph
@@ -22,7 +22,7 @@ from nest_graph.utils import transform_poly
 
 def test_proposal_key_matches_transform_row_key_round4():
     row = np.asarray([1.23456, -9.87654, 0.123456], dtype=np.float64)
-    assert _proposal_key(tuple(row)) == _transform_row_key(row)
+    assert _proposal_key(tuple(row)) == transform_row_key(row)
     assert _proposal_key(row) == (round(1.23456, 4), round(-9.87654, 4), round(0.123456, 4))
 
 
@@ -43,13 +43,13 @@ def test_extend_counted_first_writer_wins():
     assert _proposal_key(a) in proposer_keys["pocket_fit"]
     assert _proposal_key(a) not in proposer_keys.get("raycast", set())
     assert _proposal_key((3.0, 4.0, 0.0)) in proposer_keys["raycast"]
-    nest = _count_selected_by_proposer(
+    nest = count_selected_by_proposer(
         [np.asarray(a), np.asarray((3.0, 4.0, 0.0))],
         [0, 1],
         proposer_keys,
     )
     assert nest == {"pocket_fit": 1, "raycast": 1}
-    snip = _format_prop_accept(
+    snip = format_prop_accept(
         {"pocket_fit": 2, "raycast": 5},
         {"pocket_fit": 1, "raycast": 3},
         nest,
@@ -164,12 +164,12 @@ def test_p3_pin_adds_independent_nest_void_only():
     nest = [0, 2]
     refine = [0]
     scores = [1.0, 0.5, 2.0]
-    pinned = _pin_nest_void_independent(graph, nest, refine, polys, free, scores)
+    pinned = pin_nest_void_independent(graph, nest, refine, polys, free, scores)
     assert 2 in pinned
     assert 0 in pinned
     # Nest void that collides with refine is skipped (blocked_collision).
     pin_stats: dict = {}
-    pinned2 = _pin_nest_void_independent(
+    pinned2 = pin_nest_void_independent(
         graph, [1, 2], [0], polys, free, scores, stats_out=pin_stats,
     )
     assert 1 not in pinned2
@@ -178,3 +178,136 @@ def test_p3_pin_adds_independent_nest_void_only():
     assert pin_stats["pin_added"] == 1
     assert pin_stats["pin_blocked_collision"] == 1
     assert pin_stats["pin_ms"] >= 0.0
+
+
+def test_pin_nest_void_independent_is_colonize_pin_clear():
+    import inspect
+
+    from nest_graph.propose.void_selection import pin_nest_void_independent
+
+    src = inspect.getsource(pin_nest_void_independent)
+    assert "colonize_pin_clear" in src
+    assert src.count("for ") <= 1
+
+
+def test_credit_void_niche_uses_current_amaf_key_not_void_dump():
+    from nest_graph.decision.motif_credit import credit_void_niche_from_iter, niche_amaf_key
+    from nest_graph.decision.niche_archive import MacroNicheArchive
+    from nest_graph.elem_graph import MacroAction, MacroRegion
+
+    free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    polys = [
+        Polygon([(1, 1), (2, 1), (2, 2), (1, 2)]),
+        Polygon([(8, 8), (9, 8), (9, 9), (8, 9)]),
+    ]
+    transform = [
+        np.array([1.5, 1.5, 0.0]),
+        np.array([8.5, 8.5, 0.0]),
+    ]
+    action = MacroAction()
+    action.region = MacroRegion.Rim
+    action.rule_id = 0
+    action.motif_id = -1
+    key = niche_amaf_key(action)
+    assert key[1] == 0
+    assert key[2] == -1
+    assert key[0] == int(getattr(MacroRegion.Rim, "value", MacroRegion.Rim))
+    arch = MacroNicheArchive()
+    telem = credit_void_niche_from_iter(
+        arch,
+        free_kind="large_void",
+        bottleneck="graph_to_nest",
+        n_void_nest=0,
+        n_void_graph=2,
+        prev_void_nest=0,
+        polys=polys,
+        transform=transform,
+        group_id=[0, 1],
+        selected=[],
+        free_poly=free,
+        outline_cov=0.2,
+        ttl=4,
+        amaf_key=key,
+    )
+    assert telem["hollow_miss"] == 1
+    assert telem["niche_rescue"] == 0
+    assert telem["niche_pos"] == 0
+    bucket = arch.get(key)
+    assert bucket.misses == 1
+    assert bucket.hits == 0
+    void_key = niche_amaf_key(None)
+    assert void_key not in arch.buckets
+
+
+def test_credit_void_niche_rescue_on_void_seek_key():
+    from nest_graph.decision.motif_credit import credit_void_niche_from_iter, niche_amaf_key
+    from nest_graph.decision.niche_archive import MacroNicheArchive
+    from nest_graph.elem_graph import MacroAction, MacroRegion
+
+    free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    polys = [Polygon([(1, 1), (2, 1), (2, 2), (1, 2)])]
+    transform = [np.array([1.5, 1.5, 0.0])]
+    action = MacroAction()
+    action.region = MacroRegion.Void
+    action.rule_id = 0
+    action.motif_id = -1
+    key = niche_amaf_key(action)
+    arch = MacroNicheArchive()
+    telem = credit_void_niche_from_iter(
+        arch,
+        free_kind="large_void",
+        bottleneck="graph_to_nest",
+        n_void_nest=0,
+        n_void_graph=1,
+        prev_void_nest=0,
+        polys=polys,
+        transform=transform,
+        group_id=[0],
+        selected=[],
+        free_poly=free,
+        outline_cov=0.2,
+        ttl=4,
+        amaf_key=key,
+    )
+    assert telem["niche_rescue"] >= 1
+    bucket = arch.get(key)
+    assert bucket.misses == 1
+    assert bucket.hits == 1
+
+
+def test_credit_void_niche_pos_from_proposer_keys():
+    from nest_graph.decision.motif_credit import credit_void_niche_from_iter
+    from nest_graph.decision.niche_archive import MacroNicheArchive
+    from nest_graph.propose.void_selection import transform_row_key
+
+    free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    polys = [
+        Polygon([(1, 1), (2, 1), (2, 2), (1, 2)]),
+        Polygon([(8, 8), (9, 8), (9, 9), (8, 9)]),
+    ]
+    t_untagged = np.array([1.5, 1.5, 0.0])
+    t_tagged = np.array([8.5, 8.5, 0.0])
+    tagged_key = transform_row_key(t_tagged)
+    arch = MacroNicheArchive()
+    telem = credit_void_niche_from_iter(
+        arch,
+        free_kind="large_void",
+        bottleneck="",
+        n_void_nest=2,
+        n_void_graph=2,
+        prev_void_nest=0,
+        polys=polys,
+        transform=[t_untagged, t_tagged],
+        group_id=[0, 1],
+        selected=[0, 1],
+        free_poly=free,
+        outline_cov=0.4,
+        ttl=4,
+        amaf_key=(1, 0, -1),
+        proposer_keys={"history_expand": {tagged_key}},
+    )
+    assert telem["niche_pos"] == 1
+    assert telem["hollow_miss"] == 0
+    bucket = arch.get((1, 0, -1))
+    assert bucket.hits == 1
+    assert bucket.misses == 0

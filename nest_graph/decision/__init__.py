@@ -2,6 +2,7 @@
 
 from nest_graph.decision.execute import (
     board_snapshot_from_selection,
+    execute_pack,
     make_execute_fn,
     record_mcts_expand,
 )
@@ -12,6 +13,7 @@ __all__ = [
     "BoardSnapshot",
     "MacroMctsRunner",
     "board_snapshot_from_selection",
+    "execute_pack",
     "make_execute_fn",
     "record_mcts_expand",
 ]

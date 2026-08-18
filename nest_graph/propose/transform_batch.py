@@ -6,9 +6,189 @@ import numpy as np
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry import Polygon
 
-from nest_graph.config import BuildGraphConfig
+from nest_graph.config import (
+    BuildGraphConfig,
+    ProposeConfig,
+    cap_graph_valid_carry,
+    dedupe_transforms,
+    expand_structured_transforms,
+    subsample_transforms_stratified,
+)
 from nest_graph.elem_graph import PlacementRuleSet
 from nest_graph.geometry import Geometry
+from nest_graph.propose.context import sheet_has_narrow_corridor
+from nest_graph.propose.pipeline import (
+    border_edge_transforms_for_group,
+    collect_propose_batch_for_nest,
+)
+from nest_graph.propose.placements_selection_expand import (
+    history_expand_arrays,
+    selection_expand_arrays,
+)
+from nest_graph.propose.void_selection import transform_row_key
+
+
+def rim_sat_proposer_updates(mcts_zone: str) -> dict:
+    """Q145: rim-sat mute. ``use_side_pack`` always; ``use_history_expand`` only Rim/Sheet.
+
+    Void/Motif map to ``void_seek`` (Q104). ``cluster_copy`` is never muted here.
+    """
+    updates: dict = {"use_side_pack": False}
+    zone = str(mcts_zone or "")
+    if zone in ("cluster_edge", "interior_pocket"):
+        updates["use_history_expand"] = False
+    return updates
+
+
+def prune_transforms_vs_packed(
+    transforms: np.ndarray,
+    base: Geometry | None,
+    packed: Sequence[Geometry] | None,
+) -> np.ndarray:
+    """Drop expand_rest rows that penetrate locked packed solids."""
+    if (
+        transforms is None
+        or transforms.size == 0
+        or base is None
+        or not packed
+    ):
+        return transforms
+    keep: list[np.ndarray] = []
+    for row in np.asarray(transforms, dtype=np.float64).reshape(-1, 3):
+        placed = base.apply_transform(row)
+        if placed is None:
+            continue
+        if placed.intersects_any(list(packed)):
+            continue
+        keep.append(row)
+    if not keep:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.asarray(keep, dtype=np.float64).reshape(-1, 3)
+
+
+def project_angles_to_allowed(
+    transforms: np.ndarray,
+    allowed: Sequence[float],
+) -> np.ndarray:
+    """Snap angle column to nearest allowed grain angle (mod 2π)."""
+    if transforms.size == 0 or not allowed:
+        return transforms
+    out = np.asarray(transforms, dtype=np.float64).copy()
+    allowed_arr = np.asarray(allowed, dtype=np.float64)
+    two_pi = 2.0 * np.pi
+    angles = np.mod(out[:, 2], two_pi)
+    allowed_mod = np.mod(allowed_arr, two_pi)
+    diffs = angles[:, None] - allowed_mod[None, :]
+    diffs = (diffs + np.pi) % two_pi - np.pi
+    nearest = np.argmin(np.abs(diffs), axis=1)
+    out[:, 2] = allowed_mod[nearest]
+    return out
+
+
+def allowed_for_gid(
+    group_allowed_angles: Sequence[tuple[float, ...] | None] | tuple,
+    gid: int,
+) -> Sequence[float] | None:
+    if not group_allowed_angles or gid < 0 or gid >= len(group_allowed_angles):
+        return None
+    return group_allowed_angles[gid]
+
+
+def project_row_key(
+    row,
+    allowed: Sequence[float] | None,
+) -> tuple[float, float, float]:
+    arr = np.asarray(row, dtype=np.float64).reshape(-1)
+    if arr.size < 3:
+        padded = list(map(float, arr.tolist())) + [0.0] * (3 - int(arr.size))
+        return transform_row_key(padded)
+    row3 = arr[:3].reshape(1, 3)
+    if allowed:
+        row3 = project_angles_to_allowed(row3, allowed)
+    return transform_row_key(row3[0])
+
+
+def graph_valid_carry_by_group(
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    max_keep: int,
+) -> tuple[np.ndarray, ...]:
+    """Board-valid graph transforms per group (make_polygon_graph survivors)."""
+    buckets: list[list[np.ndarray]] = [[] for _ in range(max(int(ngroups), 1))]
+    for gid, t in zip(group_id, transform, strict=True):
+        g = int(gid)
+        if g < 0 or g >= len(buckets):
+            continue
+        buckets[g].append(np.asarray(t, dtype=np.float64).reshape(3))
+    out: list[np.ndarray] = []
+    for rows in buckets:
+        if not rows:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+            continue
+        stacked = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+        out.append(cap_graph_valid_carry(stacked, max_keep))
+    return tuple(out)
+
+
+def window_selected_transforms(
+    selection_window: list[tuple[np.ndarray, ...]] | None,
+    ngroups: int = 2,
+) -> tuple[np.ndarray, ...]:
+    """Merge per-iteration nest selections from the graph window (deduped per group)."""
+    if not selection_window:
+        return tuple(np.zeros((0, 3)) for _ in range(ngroups))
+    out = []
+    for i in range(ngroups):
+        parts = [w[i] for w in selection_window if len(w) > i and w[i].shape[0] > 0]
+        if parts:
+            out.append(dedupe_transforms(np.concatenate(parts, axis=0)))
+        else:
+            out.append(np.zeros((0, 3)))
+    return tuple(out)
+
+
+def prepend_group_transforms(
+    phase1: np.ndarray,
+    batch: np.ndarray,
+) -> np.ndarray:
+    if phase1.shape[0] == 0:
+        return batch
+    if batch.shape[0] == 0:
+        return phase1
+    return dedupe_transforms(np.concatenate([phase1, batch], axis=0))
+
+
+def transform_shuffle_mix(
+    sel: np.ndarray,
+    hist: np.ndarray,
+    count: int,
+    rng: np.random.Generator,
+    scale: tuple[float, float, float],
+) -> np.ndarray:
+    """Resample shuffled selection/history rows with fresh jitter."""
+    parts = [arr for arr in (sel, hist) if arr.shape[0] > 0]
+    if not parts or count <= 0:
+        return np.zeros((0, 3))
+    merged = np.concatenate(parts)
+    rng.shuffle(merged)
+    if merged.shape[0] >= count:
+        picked = merged[:count]
+    else:
+        extra = rng.integers(0, merged.shape[0], size=count - merged.shape[0])
+        picked = np.concatenate([merged, merged[extra]])
+    jitter = rng.uniform(-1, 1, (picked.shape[0], 3)) * scale
+    return picked + jitter
+
+
+def transform_selection(s, n, rng: np.random.Generator):
+    """Expand selected transforms for the next graph batch (selection_expand proposer)."""
+    yield from selection_expand_arrays(s, n, rng)
+
+
+def transform_history(h, n, rng: np.random.Generator):
+    """Expand history transforms for the next graph batch (history_expand proposer)."""
+    yield from history_expand_arrays(h, n, rng)
 
 
 def build_transform_batch(
@@ -35,33 +215,6 @@ def build_transform_batch(
     archived_patterns: Sequence | None = None,
 ) -> tuple[np.ndarray, ...]:
     del keep_history_on_sterile  # history always kept; sterile boosts hist_q instead
-
-    from nest_graph.build_graph import (
-        NestState,
-        _project_angles_to_allowed,
-        _allowed_for_gid,
-        _project_row_key,
-        _graph_valid_carry_by_group,
-        _prune_transforms_vs_packed,
-        _prepend_group_transforms,
-        transform_shuffle_mix,
-        scale_coords,
-        window_selected_transforms,
-        transform_selection,
-        transform_history,
-    )
-    from nest_graph.config import (
-        ProposeConfig,
-        dedupe_transforms,
-        expand_structured_transforms,
-        subsample_transforms_stratified,
-    )
-    from nest_graph.propose.pipeline import (
-        border_edge_transforms_for_group,
-        collect_propose_batch_for_nest,
-    )
-    from nest_graph.propose.context import sheet_has_narrow_corridor
-    from nest_graph.propose.void_selection import transform_row_key as _transform_row_key
     sc = cfg.sampling
     scale = sc.transform_scale
     propose_by_group: dict[int, np.ndarray] = {}
@@ -94,10 +247,12 @@ def build_transform_batch(
             cfg.first_pass_propose_config() if first_pass else cfg.propose
         )
         if rim_sat:
-            propose_cfg = propose_cfg.model_copy(update={
-                "use_side_pack": False,
-                "use_history_expand": False,
-            })
+            mcts_zone = ""
+            if propose_stats_out is not None:
+                mcts_zone = str(propose_stats_out.get("mcts_zone") or "")
+            propose_cfg = propose_cfg.model_copy(
+                update=rim_sat_proposer_updates(mcts_zone),
+            )
             if propose_stats_out is not None:
                 propose_stats_out["rim_saturated_skip"] = True
         seeded = bool(nest_state is not None and nest_state.seed_count > 0)
@@ -165,15 +320,15 @@ def build_transform_batch(
             if group_allowed_angles and gid < len(group_allowed_angles):
                 allowed = group_allowed_angles[gid]
                 if allowed is not None:
-                    projected = _project_angles_to_allowed(arr, allowed)
-            proposal_keys[gid] = {_transform_row_key(r) for r in projected}
+                    projected = project_angles_to_allowed(arr, allowed)
+            proposal_keys[gid] = {transform_row_key(r) for r in projected}
             raw = pocket_keys_raw.get(gid) or set()
             if raw and group_allowed_angles and gid < len(group_allowed_angles):
                 allowed = group_allowed_angles[gid]
                 if allowed is not None and len(raw) > 0:
                     raw_arr = np.asarray(list(raw), dtype=np.float64)
-                    proj = _project_angles_to_allowed(raw_arr, allowed)
-                    pocket_keys[gid] = {_transform_row_key(r) for r in proj}
+                    proj = project_angles_to_allowed(raw_arr, allowed)
+                    pocket_keys[gid] = {transform_row_key(r) for r in proj}
                 else:
                     pocket_keys[gid] = set(raw)
             else:
@@ -193,16 +348,16 @@ def build_transform_batch(
                     allowed = group_allowed_angles[int(gid)]
                     if allowed is not None and len(raw) > 0:
                         raw_arr = np.asarray(list(raw), dtype=np.float64)
-                        proj = _project_angles_to_allowed(raw_arr, allowed)
-                        motif_keys[int(gid)] = {_transform_row_key(r) for r in proj}
+                        proj = project_angles_to_allowed(raw_arr, allowed)
+                        motif_keys[int(gid)] = {transform_row_key(r) for r in proj}
                     else:
                         motif_keys[int(gid)] = {
-                            _transform_row_key(np.asarray(r, dtype=np.float64))
+                            transform_row_key(np.asarray(r, dtype=np.float64))
                             for r in raw
                         }
                 else:
                     motif_keys[int(gid)] = {
-                        _transform_row_key(np.asarray(r, dtype=np.float64))
+                        transform_row_key(np.asarray(r, dtype=np.float64))
                         for r in raw
                     }
             propose_stats_out["motif_keys"] = motif_keys
@@ -215,9 +370,9 @@ def build_transform_batch(
                     continue
                 out_c = dict(cohort)
                 lg = int(cohort.get("leader_gid", -1))
-                allowed_l = _allowed_for_gid(group_allowed_angles, lg)
+                allowed_l = allowed_for_gid(group_allowed_angles, lg)
                 if cohort.get("leader_key") is not None:
-                    out_c["leader_key"] = _project_row_key(
+                    out_c["leader_key"] = project_row_key(
                         cohort["leader_key"], allowed_l,
                     )
                 members = []
@@ -226,8 +381,8 @@ def build_transform_batch(
                         gid_m, key_m = int(item[0]), item[1]
                         members.append((
                             gid_m,
-                            _project_row_key(
-                                key_m, _allowed_for_gid(group_allowed_angles, gid_m),
+                            project_row_key(
+                                key_m, allowed_for_gid(group_allowed_angles, gid_m),
                             ),
                         ))
                 out_c["member_keys"] = members
@@ -236,9 +391,9 @@ def build_transform_batch(
             sniper_raw = (densify or {}).get("sniper_keys") or {}
             sniper_proj: dict[int, set[tuple[float, float, float]]] = {}
             for gid, raw in sniper_raw.items():
-                allowed = _allowed_for_gid(group_allowed_angles, int(gid))
+                allowed = allowed_for_gid(group_allowed_angles, int(gid))
                 sniper_proj[int(gid)] = {
-                    _project_row_key(r, allowed) for r in (raw or ())
+                    project_row_key(r, allowed) for r in (raw or ())
                 }
             propose_stats_out["sniper_keys"] = sniper_proj
             raw_pairs = (densify or {}).get("batch_pack_pairs") or []
@@ -248,8 +403,8 @@ def build_transform_batch(
                     continue
                 ca, cb, ga, gb = rec[0], rec[1], int(rec[2]), int(rec[3])
                 proj_pairs.append((
-                    _project_row_key(ca, _allowed_for_gid(group_allowed_angles, ga)),
-                    _project_row_key(cb, _allowed_for_gid(group_allowed_angles, gb)),
+                    project_row_key(ca, allowed_for_gid(group_allowed_angles, ga)),
+                    project_row_key(cb, allowed_for_gid(group_allowed_angles, gb)),
                     ga,
                     gb,
                 ))
@@ -417,7 +572,7 @@ def build_transform_batch(
             and group_id in part_bases
             and expand_rest.shape[0] > 0
         ):
-            expand_rest = _prune_transforms_vs_packed(
+            expand_rest = prune_transforms_vs_packed(
                 expand_rest, part_bases[group_id], full_packed_geoms,
             )
         densify_hit = (
@@ -466,7 +621,7 @@ def build_transform_batch(
             )
         if allowed is not None and proposal_pins.shape[0] > 0:
             proposal_pins = dedupe_transforms(
-                _project_angles_to_allowed(proposal_pins, allowed)
+                project_angles_to_allowed(proposal_pins, allowed)
             )
         elite_q = int(getattr(cfg.propose, "stratified_void_elite_quota", 15))
         hist_q = int(getattr(cfg.propose, "stratified_history_quota", 15))
@@ -501,17 +656,17 @@ def build_transform_batch(
         )
         if propose_stats_out is not None:
             sel_keys = {
-                _transform_row_key(np.asarray(r, dtype=np.float64)) for r in sel
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in sel
             }
             mix_keys = {
-                _transform_row_key(np.asarray(r, dtype=np.float64)) for r in merged
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in merged
             }
             kept = len(sel_keys & mix_keys) if sel_keys else 0
             propose_stats_out["sel_kept"] = int(
                 propose_stats_out.get("sel_kept", 0)
             ) + kept
         if allowed is not None and merged.shape[0] > 0:
-            merged = _project_angles_to_allowed(merged, allowed)
+            merged = project_angles_to_allowed(merged, allowed)
             merged = dedupe_transforms(merged)
         return merged
 
@@ -526,7 +681,7 @@ def build_transform_batch(
         mixed_keys: dict[int, set[tuple[float, float, float]]] = {}
         for gid, arr in enumerate(mixed):
             mixed_keys[gid] = {
-                _transform_row_key(np.asarray(r, dtype=np.float64)) for r in arr
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in arr
             }
         for name in ("sniper_keys", "proposal_keys"):
             raw = propose_stats_out.get(name) or {}

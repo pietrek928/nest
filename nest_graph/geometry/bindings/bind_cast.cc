@@ -12,9 +12,11 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
+#include "common/nfp_lite.h"
 #include "common/polish_se2.h"
 #include "common/snap_pose.h"
 #include "geometry_factory.h"
+#include "se2.h"
 #include "types.h"
 
 void bind_cast_types(nb::module_ &m) {
@@ -182,4 +184,70 @@ void bind_snap_api(nb::module_ &m) {
         nb::arg("min_dist"),
         nb::arg("board") = nb::none(),
         nb::arg("standoff_pad") = nb::none());
+
+    m.def(
+        "nfp_lite_relative",
+        [](const GeometryHolder &follow,
+           nb::handle pose,
+           const GeometryHolder &anchor,
+           std::vector<GeometryHolder> other_obstacles,
+           double min_dist,
+           double max_t) -> std::tuple<double, double, double> {
+            double px = 0.0;
+            double py = 0.0;
+            double pth = 0.0;
+            if (!read_transform(pose, px, py, pth)) {
+                throw nb::value_error("nfp_lite_relative: pose needs (x, y, theta)");
+            }
+            const auto out = nfp_lite_relative(
+                follow.solid,
+                static_cast<Vec2d::Scalar>(px),
+                static_cast<Vec2d::Scalar>(py),
+                static_cast<Vec2d::Scalar>(pth),
+                anchor.solid,
+                solids_from_holders(std::move(other_obstacles)),
+                static_cast<Vec2d::Scalar>(min_dist),
+                static_cast<Vec2d::Scalar>(max_t));
+            return {
+                static_cast<double>(std::get<0>(out)),
+                static_cast<double>(std::get<1>(out)),
+                static_cast<double>(std::get<2>(out)),
+            };
+        },
+        nb::arg("follow_base"),
+        nb::arg("t_follow"),
+        nb::arg("anchor_solid"),
+        nb::arg("other_obstacles") = std::vector<GeometryHolder>{},
+        nb::arg("min_dist") = 0.0,
+        nb::arg("max_t") = 10.0);
+
+    m.def(
+        "nfp_lite_pair_relative",
+        [](const GeometryHolder &follow,
+           nb::handle t_a,
+           nb::handle t_b,
+           const GeometryHolder &anchor,
+           double min_dist) -> std::tuple<double, double, double> {
+            double ax = 0.0;
+            double ay = 0.0;
+            double aa = 0.0;
+            double bx = 0.0;
+            double by = 0.0;
+            double ba = 0.0;
+            if (!read_transform(t_a, ax, ay, aa) || !read_transform(t_b, bx, by, ba)) {
+                throw nb::value_error("nfp_lite_pair_relative: poses need (x, y, theta)");
+            }
+            const Se2 rel = nfp_lite_pair_relative(
+                follow.solid,
+                Se2{static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(aa)},
+                Se2{static_cast<float>(bx), static_cast<float>(by), static_cast<float>(ba)},
+                anchor.solid,
+                static_cast<Vec2d::Scalar>(min_dist));
+            return {static_cast<double>(rel.x), static_cast<double>(rel.y), static_cast<double>(rel.a)};
+        },
+        nb::arg("follow_base"),
+        nb::arg("t_a"),
+        nb::arg("t_b"),
+        nb::arg("anchor_solid"),
+        nb::arg("min_dist") = 0.0);
 }

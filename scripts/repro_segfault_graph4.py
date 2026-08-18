@@ -12,6 +12,8 @@ from shapely.geometry import Polygon
 from nest_graph.build_graph import (
     improve_rules,
     make_polygon_graph,
+)
+from nest_graph.propose.transform_batch import (
     transform_history,
     transform_selection,
 )

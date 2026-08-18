@@ -401,6 +401,69 @@ def allow_void_repack(
     return int(n_void_nest) > int(n_void_refine)
 
 
+def _free_space_target_poly(part_free_space):
+    """Void polygon from a snapshot or analysis (one gate for cloud emit)."""
+    if part_free_space is None:
+        return None
+    analysis = getattr(part_free_space, "analysis", None)
+    poly = None
+    if analysis is not None:
+        poly = getattr(analysis, "target_poly", None)
+    if poly is None:
+        poly = getattr(part_free_space, "target_poly", None)
+    if poly is None or getattr(poly, "is_empty", True):
+        return None
+    return poly
+
+
+def _arr_rows_for_keys(
+    arr: np.ndarray,
+    keys: set[tuple[float, float, float]],
+) -> np.ndarray:
+    if arr is None or arr.size == 0 or not keys:
+        return np.zeros((0, 3), dtype=np.float64)
+    keep: list[np.ndarray] = []
+    for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
+        key = _proposal_key((float(row[0]), float(row[1]), float(row[2])))
+        if key in keys:
+            keep.append(row)
+    if not keep:
+        return np.zeros((0, 3), dtype=np.float64)
+    return np.asarray(keep, dtype=np.float64).reshape(-1, 3)
+
+
+def _free_space_cloud_coords(
+    *,
+    collect_cloud_keys: set[tuple[float, float, float]] | None,
+    arr: np.ndarray,
+    void_poly,
+    propose_geom: ProposeGeometry,
+    propose_cfg: ProposeConfig,
+    top_n: int,
+    allowed_angles,
+) -> tuple[list[tuple[float, float, float]], bool]:
+    """Q146: reuse explorer collect emit when those rows remain in ``arr``.
+
+    Ranked-out collect keys fall through to one densify last-resort emit.
+    """
+    keys = collect_cloud_keys or set()
+    if keys:
+        rows = _arr_rows_for_keys(arr, keys)
+        if rows.shape[0] > 0:
+            cloud = [(float(r[0]), float(r[1]), float(r[2])) for r in rows]
+            return cloud, True
+    if void_poly is None or getattr(void_poly, "is_empty", True):
+        return [], False
+    cloud = propose_placements_free_space_cloud(
+        void_poly,
+        propose_geom=propose_geom,
+        propose_cfg=propose_cfg,
+        top_n=top_n,
+        allowed_angles=allowed_angles,
+    )
+    return list(cloud), False
+
+
 def _void_seek_densify(
     *,
     arr: np.ndarray,
@@ -433,8 +496,9 @@ def _void_seek_densify(
     sterile_zones: tuple[str, ...],
     border_only_propose: bool,
     push: Point,
+    collect_cloud_keys: set[tuple[float, float, float]] | None = None,
 ) -> tuple[np.ndarray, str, bool, bool, str | None, dict]:
-    """Sterile densify + optional free_space_cloud (§3, §6). Behavior-neutral extract."""
+    """Sterile densify + optional free_space_cloud (Q146: densify reuses explorer emit)."""
     telem: dict = {
         "total_counts": {},
         "proposer_keys": {},
@@ -540,6 +604,8 @@ def _void_seek_densify(
         "cascade_explorer_budget_scale": float(
             propose_cfg.cascade_explorer_budget_scale
         ),
+        # Q146: inner densify collect must not Halton again; reuse / last-resort below.
+        "use_free_space_cloud": False,
     })
     # void_densify_pole_gravity stays False on densify: enabling regressed void_fill
     # (44/0.436 vs best 51/0.492). Flag + merged skip remain for tests / future gate.
@@ -622,9 +688,8 @@ def _void_seek_densify(
     telem["pocket_skips"] = [str(sk) for sk in (densify_pocket.get("pocket_skip") or [])]
 
     densify_arr = propositions_to_ndarray(densify_coords)
-    yield_poly = None
-    if part_free_space is not None and part_free_space.analysis is not None:
-        yield_poly = part_free_space.analysis.target_poly
+    yield_poly = _free_space_target_poly(part_free_space)
+    void_path = void_hijack_from is not None or zone == "void_seek"
     use_void_yield = (
         bool(getattr(propose_cfg, "enable_void_yield_densify_accept", True))
         and (void_hijack_from is not None or zone == "void_seek")
@@ -706,7 +771,6 @@ def _void_seek_densify(
     else:
         reason = "count_drop"
 
-    void_path = void_hijack_from is not None or zone == "void_seek"
     # Cloud when densify empty, drop-tagged, or densify xy never hits free_poly
     # (centroid iv can rise while props telem stays 0 — xy vs centroid mismatch).
     densify_xy_in = 0
@@ -758,13 +822,17 @@ def _void_seek_densify(
             propose_cfg=densify_cfg,
             full_packed_geoms=full_packed_geoms,
         )
-        cloud = propose_placements_free_space_cloud(
-            yield_poly,
+        cloud, cloud_reused = _free_space_cloud_coords(
+            collect_cloud_keys=collect_cloud_keys,
+            arr=arr,
+            void_poly=yield_poly,
             propose_geom=cloud_geom,
             propose_cfg=propose_cfg,
             top_n=max(int(densify_cfg.max_proposals), 1),
             allowed_angles=angle_override,
         )
+        if cloud_reused:
+            telem["cloud_reused"] = 1
         if cloud:
             accepted = True
             # Keep void_yield_union when densify already pinned; cloud is separate telem.
@@ -1211,7 +1279,7 @@ def _collect_explorer_candidates(
     state: _CollectState,
 ) -> None:
     """Explorer stage: perimeter walk, neighbor slide, erosion, raycast, voronoi,
-    point cloud, guidance walk, ribbon."""
+    point cloud, guidance walk, ribbon, free_space_cloud (Q146)."""
     if state.skip_explorers:
         return
     cfg = ctx.propose_cfg
@@ -1388,6 +1456,41 @@ def _collect_explorer_candidates(
                     pt_push=ctx.pt_push,
                 ),
             )
+    _collect_free_space_cloud(ctx, extras, state)
+
+
+def _collect_free_space_cloud(
+    ctx: ProposeContext,
+    extras: PackedProposeExtras,
+    state: _CollectState,
+) -> None:
+    """Q146: one free_space_cloud emit from explorer collect on void_seek."""
+    if not _proposer_enabled("free_space_cloud", ctx.enabled_proposers):
+        return
+    cfg = ctx.propose_cfg
+    if not bool(getattr(cfg, "use_free_space_cloud", True)):
+        return
+    void_poly = _free_space_target_poly(extras.free_space)
+    if void_poly is None:
+        return
+    cap = state.explorer_cap(ctx.pool)
+    if cap <= 0:
+        return
+    angles = None
+    if (
+        ctx.placement_angles_override is not None
+        and len(ctx.placement_angles_override) > 0
+    ):
+        angles = [float(a) for a in ctx.placement_angles]
+    cloud = propose_placements_free_space_cloud(
+        void_poly,
+        propose_geom=ctx.propose_geom,
+        propose_cfg=cfg,
+        top_n=cap,
+        allowed_angles=angles,
+    )
+    if cloud:
+        state.ext("free_space_cloud", cloud, max_items=cap)
 
 
 def _collect_cast_refine_candidates(
@@ -2561,7 +2664,7 @@ def collect_propose_batch_for_nest(
 ) -> tuple[dict[int, np.ndarray], dict]:
     """Propose slice of nest transform-batch (proposals + densify/pocket stats).
 
-    Angle projection / sampling mix stay in ``build_graph._build_transform_batch``.
+    Angle projection / sampling mix stay in ``transform_batch.build_transform_batch``.
     """
     zones_used: list[str] = []
     pocket_keys_raw: dict[int, set[tuple[float, float, float]]] = {}
@@ -3145,14 +3248,15 @@ def proposed_transforms_for_groups(
                 if allowed is not None:
                     angle_override = np.asarray(allowed, dtype=np.float64)
         part_free_space = free_snap
-        # On Mode A hijack, prefer per-part free analysis (target_poly) over mean-area snap.
+        # Per-part target_poly for void_seek (hijack or MCTS/Motif Q104), not mean-area snap.
+        void_seek_free = void_hijack_from is not None or zone == "void_seek"
         if (
-            void_hijack_from is not None
+            void_seek_free
             and free_analysis is not None
             and free_snap is not None
         ):
             part_free_space = replace(free_snap, analysis=free_analysis)
-        elif void_hijack_from is not None and free_analysis is not None:
+        elif void_seek_free and free_analysis is not None:
             part_free_space = FreeSpaceSnapshot(
                 analysis=free_analysis,
                 trapped_voids=(),
@@ -3312,6 +3416,9 @@ def proposed_transforms_for_groups(
                 sterile_zones=sterile_zones,
                 border_only_propose=border_only_propose,
                 push=push,
+                collect_cloud_keys=set(
+                    group_proposer_keys.get("free_space_cloud") or ()
+                ),
             )
         )
         if fired:

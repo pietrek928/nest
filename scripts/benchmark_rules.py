@@ -9,14 +9,14 @@ from pathlib import Path
 import numpy as np
 
 from nest_graph.build_graph import (
-    _build_transform_batch,
     _make_initial_rule_sets,
     active_rule_set,
-    apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
     score_rule_sets_with_dfs,
 )
+from nest_graph.propose.heavy_polish import apply_dfs_refinement
+from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import (
     BuildGraphConfig,
     ProposeConfig,

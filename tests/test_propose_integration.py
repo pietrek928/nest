@@ -4,9 +4,9 @@ from shapely.geometry import Point, Polygon
 
 from nest_graph.build_graph import (
     NestState,
-    _build_transform_batch,
     make_polygon_graph,
 )
+from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.placement_scene import board_placement_valid
 from nest_graph.config import BuildGraphConfig, ProposeConfig, dedupe_transforms
 from nest_graph.geometry import Geometry

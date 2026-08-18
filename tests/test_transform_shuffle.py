@@ -1,6 +1,6 @@
 import numpy as np
 
-from nest_graph.build_graph import transform_shuffle_mix
+from nest_graph.propose.transform_batch import transform_shuffle_mix
 from nest_graph.config import shuffle_transforms
 
 

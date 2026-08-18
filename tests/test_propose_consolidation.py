@@ -233,3 +233,24 @@ def test_all_place_zones_have_zone_proposers():
     for zone in PLACE_ZONES:
         assert zone in ZONE_PROPOSERS
         assert ProposeConfig.proposers_for_place(zone) is not None
+
+
+def test_rim_sat_mutes_history_expand_only_for_rim_sheet():
+    from nest_graph.decision.action_gen import region_to_zone
+    from nest_graph.elem_graph import MacroRegion
+    from nest_graph.propose.transform_batch import rim_sat_proposer_updates
+
+    void_u = rim_sat_proposer_updates("void_seek")
+    assert void_u["use_side_pack"] is False
+    assert "use_history_expand" not in void_u
+    assert "use_cluster_copy" not in void_u
+    motif_u = rim_sat_proposer_updates(region_to_zone(MacroRegion.Motif))
+    assert "use_history_expand" not in motif_u
+    assert rim_sat_proposer_updates(
+        region_to_zone(MacroRegion.Rim),
+    )["use_history_expand"] is False
+    assert rim_sat_proposer_updates(
+        region_to_zone(MacroRegion.Sheet),
+    )["use_history_expand"] is False
+    # Unknown / empty zone is not Rim/Sheet — keep replay.
+    assert "use_history_expand" not in rim_sat_proposer_updates("")

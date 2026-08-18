@@ -378,7 +378,7 @@ def leaf_reward(
     Q108: under ``large_void``, raise void λ and cut rim so AMAF prefers
     colonization over hollow-rim kiss cosmetics.
     """
-    packed = max(len(snapshot.packed_gids), 1)
+    packed = max(int(snapshot.n_packed), 1)
     void_w = float(lam_void)
     rim_w = float(lam_rim)
     if str(snapshot.free_kind or "") == "large_void":

@@ -52,6 +52,7 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 - **Dedup / one gate.** Grep for the predicate you are about to add (lex hold, round-4 keys, prepend/union, zone skip, gravity vector, mix niches, rim restore). The plan must cite the existing function. Do not add a second helper, skip site, or restore path. Permission (`ZONE_PROPOSERS`) stays distinct from staging (`packed_n` / void / `use_*` flags). One truncation/cut per pipeline.
 - **Validate vs code.** Check comments that already claim the behavior against the actual condition. Check plan claims against live helpers (`transform_row_key`, `lex_count_area_better`, `part_extents`, `placement_obstacles`, …). Prefer extending a named path over a parallel RCL/beam/hold.
 - **Stage + bench.** Split the plan into letters. After each: smallest relevant `pytest`; `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate`; if propose/mix/nest changed, `NEST_BUILD_GRAPH_ITERS=2 uv run python -m nest_graph.build_graph`. Snapshot a baseline before the first letter.
+- **Bench the letter's component.** Gate tags/cases must actually run the helper you changed (letter telem present, e.g. `niche_pos` / `contact_grg_upserts` / `pin_added` / `dfs_passes` / `refine_ms` / `history_expand` / `cluster_copy` / `free_space_cloud`). Do not declare pass from a tag that never hit that path. To isolate vs other stages, mute unrelated existing `use_*` / `enable_*` flags — `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --cfg enable_lns_rebuild=false enable_cluster_repack=false enable_gravity_compaction=false` — and compare muted vs shipped on the **same** fixture. Prefix `selection.` for SelectionConfig (e.g. `--cfg selection.dfs_passes=1`). Do not add a second pack/credit/pin just to turn something off. Muted runs are compare-only; letter pass is still shipped vs snapshot.
 - **Miss → improvement loop (same letter).** Hard stop only if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. On miss: **loop** — research → patch → re-gate — until the letter passes or the user redirects. Do **not** start the next letter or pile a new parallel mechanism while looping.
 - Historical Qs stay in [docs/agent-domain-notes.md](docs/agent-domain-notes.md). Do not lock one-off Q-numbers in this file.
 
@@ -97,15 +98,19 @@ During each miss cycle and while a letter is still open:
 |--------|------|
 | `propose/types.py` | `ProposeContext`, extras, `make_propose_context` |
 | `propose/pipeline.py` | staged `_collect_candidates`, ranking handoff |
+| `propose/transform_batch.py` | mix / window / angle project / graph-valid carry |
+| `propose/heavy_polish.py` | polish budget + DFS dispatcher (`apply_dfs_refinement`) |
+| `propose/telem.py` | void_leak assembly (`assemble_void_leak`) |
 | `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / repack / relocate |
 | `propose/post_pack.py` | repack → relocate → local_se2 runner |
 | `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest |
 | `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
-| `decision/` | Macro-MCTS policy (UCB1/PW/AMAF); thin `BoardSnapshot`; NFP-lite mates |
+| `decision/` | Macro-MCTS policy (UCB1/PW/AMAF); `execute_pack` / `run_pack_stages` |
 | `elem_graph/pose_graph.*` | Pose MIS (replaces ElemGraph) |
-| `elem_graph/decision_arena.*` / `motif_base.*` / `se2.*` / `contact_relation.*` | C++ arena, motifs, SE2, ContactGRG+GCI |
+| `elem_graph/decision_arena.*` / `motif_base.*` / `se2.*` / `contact_relation.*` | C++ arena + `BoardSnapshot` + `MacroNicheArchive`, motifs, SE2, ContactGRG+GCI |
+| `geometry/common/nfp_lite.h` | Motif inject polish (`nfp_lite_relative`); not a MotifBase miner |
 
-`build_graph` owns graph/selection + Macro-MCTS outer loop (cheap expand vs best-leaf polish); it may re-export moved names for evaluator/tests.
+`build_graph` owns graph/selection + Macro-MCTS outer loop (cheap expand vs best-leaf polish). Do not re-export moved names from `build_graph`.
 
 ## Hard bans
 

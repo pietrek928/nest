@@ -9,16 +9,16 @@ import numpy as np
 
 from nest_graph.propose.ranking import pack_tightness_cost
 from nest_graph.build_graph import (
-    _build_transform_batch,
     _first_pass_border_ring_selection,
     _first_pass_layered_selection,
-    _guidance_border_refine,
     _make_initial_rule_sets,
     _selection_coverage_pct,
     active_rule_set,
     make_polygon_graph,
     score_elems,
 )
+from nest_graph.propose.first_pass_border import guidance_border_refine as _guidance_border_refine
+from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import BuildGraphConfig, SamplingConfig
 
 

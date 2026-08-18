@@ -260,6 +260,46 @@ def _build_cfg(
     return cfg
 
 
+def _parse_cfg_value(raw: str):
+    s = raw.strip()
+    low = s.lower()
+    if low in ("true", "yes", "1"):
+        return True
+    if low in ("false", "no", "0"):
+        return False
+    try:
+        if "." in s:
+            return float(s)
+        return int(s)
+    except ValueError:
+        return s
+
+
+def _apply_cfg_overrides(cfg: BuildGraphConfig, specs: list[str] | None) -> BuildGraphConfig:
+    """Mute/retune existing ProposeConfig (or SelectionConfig) fields. No new flags."""
+    if not specs:
+        return cfg
+    propose_upd: dict = {}
+    selection_upd: dict = {}
+    for spec in specs:
+        if "=" not in spec:
+            raise ValueError(f"cfg override must be key=value got {spec!r}")
+        key, raw = spec.split("=", 1)
+        key = key.strip()
+        val = _parse_cfg_value(raw)
+        if key.startswith("selection."):
+            selection_upd[key.split(".", 1)[1]] = val
+        elif key.startswith("propose."):
+            propose_upd[key.split(".", 1)[1]] = val
+        else:
+            propose_upd[key] = val
+    if propose_upd:
+        cfg.propose = cfg.propose.model_copy(update=propose_upd)
+    if selection_upd:
+        cfg.selection = cfg.selection.model_copy(update=selection_upd)
+    return cfg
+
+
 def _parse_matrix(specs: list[str]) -> dict[str, list[str]]:
     """Parse axis=v1,v2 into dict."""
     out: dict[str, list[str]] = {}
@@ -282,7 +322,16 @@ def main() -> None:
         nargs="*",
         help="Expand axes e.g. pitch=1.6,1.8 (reserved; currently filters only)",
     )
-    parser.add_argument("--force", action="store_true", help="Allow >40 matrix/suite runs")
+    parser.add_argument(
+        "--cfg",
+        nargs="*",
+        default=[],
+        help=(
+            "ProposeConfig/SelectionConfig overrides key=value to mute other stages "
+            "while gating the letter's component (e.g. enable_lns_rebuild=false). "
+            "Prefix selection. for SelectionConfig."
+        ),
+    )
     parser.add_argument(
         "--propose",
         nargs="*",
@@ -340,7 +389,9 @@ def main() -> None:
     for case in cases_to_run:
         for propose in args.propose:
             for dfs_mode in args.dfs_modes:
-                cfg = _build_cfg(propose, dfs_mode)
+                cfg = _apply_cfg_overrides(_build_cfg(propose, dfs_mode), args.cfg)
+                if args.cfg:
+                    print(f"  cfg overrides: {args.cfg}", flush=True)
                 evaluator = NestingPipelineEvaluator(
                     case, cfg, always_heavy_polish=bool(args.always_heavy),
                 )
@@ -362,6 +413,30 @@ def main() -> None:
                         f"{metrics.void_selected_nest}/{metrics.void_selected_refine} "
                         f"time={metrics.time_s:.2f}s"
                     )
+                    leak = (evaluator.last_result or {}).get("void_leak") or {}
+                    ebp = leak.get("emitted_by_proposer") or {}
+                    if (
+                        leak.get("niche_pos") is not None
+                        or leak.get("contact_grg_upserts")
+                        or leak.get("dfs_passes")
+                        or leak.get("refine_ms")
+                        or leak.get("free_space_cloud_emitted")
+                        or leak.get("cluster_copy_emitted")
+                        or ebp.get("history_expand")
+                    ):
+                        print(
+                            f"     letter telem niche_pos={leak.get('niche_pos', 0)} "
+                            f"niche_rescue={leak.get('niche_rescue', 0)} "
+                            f"contact_grg_upserts={leak.get('contact_grg_upserts', 0)} "
+                            f"pin={leak.get('pin_added', 0)}/{leak.get('pin_candidates', 0)} "
+                            f"dfs_passes={leak.get('dfs_passes', 0)} "
+                            f"refine_ms={float(leak.get('refine_ms', 0.0) or 0.0):.1f} "
+                            f"history_expand={int(ebp.get('history_expand', 0) or 0)} "
+                            f"cluster_copy={int(leak.get('cluster_copy_emitted', ebp.get('cluster_copy', 0)) or 0)} "
+                            f"free_space_cloud={int(leak.get('free_space_cloud_emitted', ebp.get('free_space_cloud', 0)) or 0)} "
+                            f"zones={leak.get('zones_used', [])} "
+                            f"densify={leak.get('densify_reason')}"
+                        )
 
                 avg_parts = np.mean([m.parts_final for m in case_metrics])
                 avg_area = np.mean([m.area_coverage for m in case_metrics])

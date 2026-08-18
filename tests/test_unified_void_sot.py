@@ -202,3 +202,110 @@ def test_cluster_repack_passes_cascade_zone():
 
     src = inspect.getsource(cr.cluster_repack_selection)
     assert "cascade_zone=zone" in src
+
+
+def test_explorer_emits_free_space_cloud_on_void_seek():
+    from nest_graph.propose.context import FreeSpaceAnalysis, FreeSpaceSnapshot
+    from nest_graph.propose.pipeline import collect_propose_candidates
+
+    sheet = box(0, 0, 30, 30)
+    void = box(10, 10, 25, 25)
+    obstacle = box(0, 0, 8, 8)
+    part = box(0, 0, 1.5, 1.5)
+    cfg = ProposeConfig(
+        use_free_space_cloud=True,
+        free_space_cloud_samples=32,
+        use_voronoi=False,
+        use_point_cloud=False,
+        use_neighbor_slide=False,
+        use_ribbon_seeds=False,
+        use_pocket_fit=False,
+        use_cluster_copy=False,
+        use_guidance_propositions=False,
+        candidate_pool=16,
+        max_proposals=16,
+        placement_num_angles=4,
+    )
+    geom = ProposeGeometry(
+        sheet, obstacle, part, 0.1, propose_cfg=cfg, full_packed_geoms=[],
+    )
+    snap = FreeSpaceSnapshot(
+        analysis=FreeSpaceAnalysis(
+            kind="large_void",
+            max_void_ratio=5.0,
+            largest_area=float(void.area),
+            target_poly=void,
+        ),
+    )
+    counts: dict[str, int] = {}
+    keys: dict[str, set] = {}
+    collect_propose_candidates(
+        obstacle,
+        part,
+        sheet,
+        cfg,
+        min_dist=0.1,
+        pt_push=Point(15, 15),
+        propose_geom=geom,
+        enabled_proposers=frozenset({"free_space_cloud"}),
+        proposer_counts=counts,
+        proposer_keys=keys,
+        free_space=snap,
+        cascade_zone="void_seek",
+    )
+    assert counts.get("free_space_cloud", 0) > 0
+    assert keys.get("free_space_cloud")
+
+
+def test_densify_reuses_explorer_cloud_without_second_emit():
+    from nest_graph.propose.pipeline import _free_space_cloud_coords
+
+    keys = {(1.0, 2.0, 0.0), (3.0, 4.0, 0.1)}
+    arr = np.array([[1.0, 2.0, 0.0], [9.0, 9.0, 0.0], [3.0, 4.0, 0.1]])
+    cloud, reused = _free_space_cloud_coords(
+        collect_cloud_keys=keys,
+        arr=arr,
+        void_poly=box(0, 0, 10, 10),
+        propose_geom=None,  # unused on reuse
+        propose_cfg=ProposeConfig(),
+        top_n=8,
+        allowed_angles=None,
+    )
+    assert reused is True
+    assert {(round(c[0], 4), round(c[1], 4), round(c[2], 4)) for c in cloud} == keys
+
+
+def test_densify_cloud_fallback_when_collect_ranked_out(monkeypatch):
+    from nest_graph.propose.pipeline import _free_space_cloud_coords
+
+    calls = {"n": 0}
+
+    def _fake_cloud(*_a, **_k):
+        calls["n"] += 1
+        return [(5.0, 5.0, 0.0)]
+
+    monkeypatch.setattr(
+        "nest_graph.propose.pipeline.propose_placements_free_space_cloud",
+        _fake_cloud,
+    )
+    cloud, reused = _free_space_cloud_coords(
+        collect_cloud_keys={(1.0, 2.0, 0.0)},
+        arr=np.array([[9.0, 9.0, 0.0]]),
+        void_poly=box(0, 0, 10, 10),
+        propose_geom=None,
+        propose_cfg=ProposeConfig(),
+        top_n=8,
+        allowed_angles=None,
+    )
+    assert reused is False
+    assert calls["n"] == 1
+    assert cloud == [(5.0, 5.0, 0.0)]
+
+
+def test_densify_inner_collect_disables_cloud_reemit():
+    from nest_graph.propose import pipeline as pl
+
+    src = inspect.getsource(pl._void_seek_densify)
+    assert '"use_free_space_cloud": False' in src
+    assert "_free_space_cloud_coords" in src
+    assert "void_seek_free" in inspect.getsource(pl.proposed_transforms_for_groups)

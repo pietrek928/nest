@@ -49,7 +49,7 @@ def choose_browse_parent(
     leaf = int(agent.select_leaf())
     if not agent.may_expand_node(leaf):
         leaf = int(agent.deepest_best_child())
-    tip_snap = runner.snapshots.get(leaf) or spine_snap
+    tip_snap = runner.snapshot_at(leaf, spine_snap)
     if not packed_gids_compatible(tip_snap, nest_packed_gids):
         mcts_telem["browse_leaf_id"] = spine
         mcts_telem["browse_jump"] = 0

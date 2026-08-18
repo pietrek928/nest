@@ -26,6 +26,30 @@ def test_progressive_bias_no_1e9():
     assert math.isfinite(score)
 
 
+def test_macro_niche_archive_buckets_dict():
+    arch = MacroNicheArchive()
+    key = (1, 0, -1)
+    arch.append_positive(key, rows=[(0, 1.0, 2.0, 0.0)], void_nest=1)
+    assert int(arch.size) == 1
+    assert int(arch.total_hits()) == 1
+    assert arch.buckets
+
+
+def test_macro_niche_archive_last_feed_keys_roundtrip():
+    arch = MacroNicheArchive()
+    keys = {
+        (round(1.2345, 4), round(6.789, 4), round(0.0, 4)),
+        (round(0.1, 4), round(0.2, 4), round(1.5708, 4)),
+    }
+    arch.last_feed_keys = set(keys)
+    got = set(tuple(k) for k in arch.last_feed_keys)
+    assert got == keys
+    nest_keys = set(keys)
+    assert bool(got & nest_keys)
+    arch.last_feed_keys = set()
+    assert not arch.last_feed_keys
+
+
 def test_macro_niche_archive_ring_and_negative_meta_only():
     arch = MacroNicheArchive()
     key = (1, 0, -1)
@@ -40,7 +64,7 @@ def test_macro_niche_archive_ring_and_negative_meta_only():
     assert bucket.misses == 1
     assert len(bucket.ring) <= NICHE_RING_H
     assert bucket.ring[-1].polarity == -1
-    assert bucket.ring[-1].rows == ()
+    assert len(bucket.ring[-1].rows) == 0
     by_g = arch.active_by_group(2)
     assert 0 in by_g and len(by_g[0]) >= 1
 

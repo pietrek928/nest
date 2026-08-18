@@ -7,8 +7,9 @@ goes only through MotifBase (pairs). N-way clusters are never archived.
 
 from typing import Any, Mapping, Sequence
 
-from nest_graph.decision.nfp_lite import nfp_lite_pair_relative
+from nest_graph.geometry import nfp_lite_pair_relative
 from nest_graph.propose.placements_pattern import ClusterPattern, extract_cluster_patterns
+from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.utils import compose_transforms
 
 
@@ -33,6 +34,51 @@ def motif_to_cluster_patterns(motif_base: Any, action: Any) -> list[ClusterPatte
     if int(action.motif_id) < 0 or int(action.motif_id) >= int(motif_base.size()):
         return []
     return [record_to_cluster_pattern(motif_base.at(int(action.motif_id)))]
+
+
+def motif_graph_hits(
+    patterns: Sequence[ClusterPattern],
+    group_id: Sequence[int],
+    transform: Sequence,
+) -> tuple[dict[int, set[tuple[float, float, float]]], list[dict], int]:
+    """Match Motif-local ClusterPatterns onto graph world poses (cheap inject).
+
+    Returns (motif_keys, motif_cohorts, n_hits). Sequential accept and score
+    boost already consume those propose_stats fields.
+    """
+    key_map: dict[tuple[int, tuple[float, float, float]], list[int]] = {}
+    for i, (gid, t) in enumerate(zip(group_id, transform)):
+        key_map.setdefault((int(gid), transform_row_key(t)), []).append(int(i))
+    motif_keys: dict[int, set[tuple[float, float, float]]] = {}
+    cohorts: list[dict] = []
+    n_hits = 0
+    for pat in patterns:
+        if len(getattr(pat, "members", ()) or ()) < 2:
+            continue
+        gid_a, _t_a = pat.members[0]
+        gid_b, t_b = pat.members[1]
+        rel_b = (float(t_b[0]), float(t_b[1]), float(t_b[2]))
+        for i, (gid, t) in enumerate(zip(group_id, transform)):
+            if int(gid) != int(gid_a):
+                continue
+            world_a = (float(t[0]), float(t[1]), float(t[2]))
+            world_b = compose_transforms(world_a, rel_b)
+            key_b = transform_row_key(world_b)
+            if (int(gid_b), key_b) not in key_map:
+                continue
+            key_a = transform_row_key(world_a)
+            motif_keys.setdefault(int(gid_a), set()).add(key_a)
+            motif_keys.setdefault(int(gid_b), set()).add(key_b)
+            cohorts.append({
+                "leader_gid": int(gid_a),
+                "leader_key": key_a,
+                "member_keys": [
+                    (int(gid_a), key_a),
+                    (int(gid_b), key_b),
+                ],
+            })
+            n_hits += 1
+    return motif_keys, cohorts, n_hits
 
 
 def patterns_from_motif_base(
@@ -183,6 +229,7 @@ def note_motif_hollow_miss(motif_base: Any, motif_id: int) -> bool:
 __all__ = [
     "age_motif_library",
     "extract_cluster_patterns",
+    "motif_graph_hits",
     "motif_patterns_for_inject",
     "motif_to_cluster_patterns",
     "note_motif_hollow_miss",

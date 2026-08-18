@@ -190,6 +190,7 @@ def board_snapshot_from_selection(
         if int(i) < len(transform)
     )
     packed_set = set(packed_gids)
+    del mcts_telem  # Q131: telem stays on the Python mcts_telem dict
     leak = propose_stats.get("void_leak") if isinstance(propose_stats.get("void_leak"), dict) else {}
     free_kind = str(
         leak.get("free_kind")
@@ -222,7 +223,6 @@ def board_snapshot_from_selection(
             if mcts_action is not None and int(mcts_action.motif_id) >= 0
             else ()
         ),
-        telem=dict(mcts_telem),
     )
 
 
@@ -256,7 +256,7 @@ def record_mcts_expand(
         child_id = parent_id
         agent.backprop(parent_id, reward)
     child_snap.arena_node_id = int(child_id)
-    runner.snapshots[int(child_id)] = child_snap
+    runner.store_snapshot(int(child_id), child_snap)
     # Q138: positive-only related warm (skip hollow-miss snaps).
     hollow = bool(propose_stats.get("hollow_miss", False))
     agent.remember_related(child_snap, allow=not hollow)
@@ -331,6 +331,7 @@ def run_mcts_multi_sim(
 
     Populates arena/AMAF so the following outer ``pick_expand_action`` is informed.
     Tip action is from the final ``select_leaf`` (UCB), not a leftover last expand.
+    Q144: do **not** call ``upsert_from_contacts`` here — outer ``record_mcts_expand`` only.
     """
     from nest_graph.decision.slave_pack import cheap_expand_slave
 
@@ -343,8 +344,8 @@ def run_mcts_multi_sim(
     for _ in range(max(int(n_sims), 1)):
         leaf = int(agent.select_leaf())
         tip_leaf = leaf
-        leaf_snap = runner.snapshots.get(leaf) or parent_snap
-        if not leaf_snap.remaining_gids:
+        leaf_snap = runner.snapshot_at(leaf, parent_snap)
+        if not leaf_snap.has_remaining:
             agent.backprop(leaf, float(leaf_snap.coverage))
             continue
         action = agent.pick_expand_action(
@@ -368,15 +369,15 @@ def run_mcts_multi_sim(
         )
         child = agent.expand(leaf, action, result.reward)
         result.snapshot.arena_node_id = int(child)
-        runner.snapshots[int(child)] = result.snapshot
+        runner.store_snapshot(int(child), result.snapshot)
         mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1
         tip_leaf = int(child)
         tip_action = action
     # Prefer deepest best_child tip when expandable leaf unavailable
     if tip_action is None:
         tip_leaf = int(agent.deepest_best_child())
-        tip_snap = runner.snapshots.get(tip_leaf) or parent_snap
-        if tip_snap.remaining_gids:
+        tip_snap = runner.snapshot_at(tip_leaf, parent_snap)
+        if tip_snap.has_remaining:
             tip_action = agent.pick_expand_action(
                 tip_snap.remaining_gids,
                 rule_ids=(0,),
@@ -439,22 +440,38 @@ def run_pack_stages(
     return telem
 
 
-def run_pack_body(
+def execute_pack(
     *,
-    do_heavy_polish: bool | None = None,
-    run_post_pack: bool | None = None,
-    run_improve_fn: Callable[..., Any],
+    rim_only: bool = False,
+    heavy: bool = False,
+    run_improve_fn: Callable[..., Any] | None = None,
+    rim_fn: Callable[..., Any] | None = None,
     compose_fn: Callable[..., Any] | None = None,
     refine_fn: Callable[..., Any] | None = None,
     post_pack_fn: Callable[..., Any] | None = None,
+    uh_void_fn: Callable[..., Any] | None = None,
 ) -> dict:
-    """Backward-compatible wrapper → ``run_pack_stages`` (Ub)."""
-    heavy = bool(run_post_pack) if run_post_pack is not None else bool(do_heavy_polish)
+    """Flags API for cheap / Uh / last pack. Only calls ``run_pack_stages`` (Q148)."""
     return run_pack_stages(
-        rim_only=False,
+        rim_only=rim_only,
         heavy=heavy,
         run_improve_fn=run_improve_fn,
+        rim_fn=rim_fn,
         compose_fn=compose_fn,
         refine_fn=refine_fn,
         post_pack_fn=post_pack_fn,
+        uh_void_fn=uh_void_fn,
     )
+
+
+__all__ = [
+    "board_snapshot_from_selection",
+    "execute_pack",
+    "make_execute_fn",
+    "prep_selection_free",
+    "prep_selection_freeze",
+    "record_mcts_expand",
+    "run_mcts_multi_sim",
+    "run_pack_stages",
+    "schedule_prep_selection_free",
+]

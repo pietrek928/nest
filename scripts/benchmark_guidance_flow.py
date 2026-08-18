@@ -16,13 +16,13 @@ from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
     _append_selection_window,
-    _build_transform_batch,
     _make_initial_rule_sets,
     active_rule_set,
-    apply_dfs_refinement,
     improve_rules,
     make_polygon_graph,
 )
+from nest_graph.propose.heavy_polish import apply_dfs_refinement
+from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.config import score_rules_options
 from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
