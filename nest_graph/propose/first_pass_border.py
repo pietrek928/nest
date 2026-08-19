@@ -33,7 +33,7 @@ from nest_graph.placement_scene import (
     placement_scene_for_part,
     proposition_translation,
 )
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 from nest_graph.propose.context import border_focal_for_propose, propose_push_point
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import (
@@ -648,9 +648,7 @@ def join_attract_pairs(
     ):
         return []
     n = len(gids)
-    key_to_verts: dict[tuple[int, tuple[float, float, float]], list[int]] = {}
-    for i, (gid, tr) in enumerate(zip(gids, transforms, strict=True)):
-        key_to_verts.setdefault((int(gid), transform_row_key(tr)), []).append(i)
+    key_to_verts = pose_key_to_verts(gids, transforms)
 
     weights: dict[tuple[int, int], float] = {}
 

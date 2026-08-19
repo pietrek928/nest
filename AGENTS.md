@@ -87,7 +87,7 @@ During each miss cycle and while a letter is still open:
 ## Propose / post-pack
 
 - **`ProposeContext`** is propose-only (emit/rank). Do **not** widen it or import it from `build_graph` / `elem_graph`. Post-pack edits use **`SelectionEditCtx`**.
-- Emit order is static (not a registry). Poles → `pocket_fit` → `cluster_copy` precede sweepers. Funnel keys: `round(x,y,θ, 4)` = `build_graph._transform_row_key`.
+- Emit order is static (not a registry). Poles → `pocket_fit` → `cluster_copy` precede sweepers. Funnel keys: `round(x,y,θ, 4)` = `propose/void_selection.transform_row_key`.
 - Mid-pack rim: `board_edge` reserve before `side_pack` key claims; late kiss in `local_se2` (cached exterior ring).
 - **`enable_gravity_compaction`** gates `local_se2` floater pole SE(2) toward an explicit void pole (default on). Ban corner / min-x+y sheet gravity (`compact_selection` deleted). Distinct from propose `border_focus`.
 - `cluster_relocate` = rigid island ΔT (keep). `local_se2` = per-part SE(2).

@@ -26,22 +26,21 @@ from nest_graph.propose.void_selection import (
     colonize_void_onto_base,
     count_graph_in_free,
     count_selected_in_free,
+    pose_key_to_index,
     transform_row_key,
     void_attractor_radius,
     void_core_then_rim,
+    _sel_area,
 )
 from nest_graph.propose.block_replace import (
     _packing_independent,
-    _sel_area,
     lex_count_area_better,
     try_block_cohort_swap,
 )
-from nest_graph.propose.motif_lock import (
-    _key_index_map,
-    sequential_accept_motif_cohorts,
-)
+from nest_graph.propose.motif_lock import sequential_accept_motif_cohorts
 from nest_graph.propose.first_pass_border import border_kiss_indices
 from nest_graph.board import board_context_from_geometry
+from nest_graph.decision.epoch import materialize_selection
 from shapely.geometry import Polygon
 import math
 
@@ -136,6 +135,7 @@ def compose_nest_kwargs(
     last_leaf: bool = False,
     void_geoms: Sequence | None = None,
     locked_seed: Sequence[int] | None = None,
+    dg=None,
 ) -> dict:
     """One kwargs dict for ``compose_and_nest_selection`` (Uh + mid + evaluator)."""
     return {
@@ -164,6 +164,7 @@ def compose_nest_kwargs(
         "dual_nest": dual_nest_for(free_info, last_leaf=last_leaf),
         "void_geoms": void_geoms,
         "locked_seed": locked_seed,
+        "dg": dg,
     }
 
 
@@ -205,7 +206,7 @@ def _map_incumbent_indices(
     """Map last packed (gid, key) into this graph; empty if not packing-independent."""
     if not packed_group_id or packed_transform is None:
         return []
-    key_map = _key_index_map(group_id, transform)
+    key_map = pose_key_to_index(group_id, transform)
     idxs: list[int] = []
     for gid, tr in zip(packed_group_id, packed_transform, strict=False):
         ix = key_map.get((int(gid), transform_row_key(tr)))
@@ -345,6 +346,7 @@ def compose_and_nest_selection(
     dual_nest: bool = True,
     void_geoms: Sequence | None = None,
     locked_seed: Sequence[int] | None = None,
+    dg=None,
 ) -> ComposedSelection:
     """Apply void/geom boosts, pick nest seed, prepare refine_scores (G22/G24).
 
@@ -737,6 +739,8 @@ def compose_and_nest_selection(
             polys, refine_scores, outline, min_dist,
             weight=cfg.propose.border_selection_score_boost,
         )
+
+    materialize_selection(dg, selected_nest, propose_stats)
 
     return ComposedSelection(
         scores=scores,

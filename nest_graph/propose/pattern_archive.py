@@ -9,7 +9,7 @@ from typing import Any, Mapping, Sequence
 
 from nest_graph.geometry import nfp_lite_pair_relative
 from nest_graph.propose.placements_pattern import ClusterPattern, extract_cluster_patterns
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 from nest_graph.utils import compose_transforms
 
 
@@ -46,9 +46,7 @@ def motif_graph_hits(
     Returns (motif_keys, motif_cohorts, n_hits). Sequential accept and score
     boost already consume those propose_stats fields.
     """
-    key_map: dict[tuple[int, tuple[float, float, float]], list[int]] = {}
-    for i, (gid, t) in enumerate(zip(group_id, transform)):
-        key_map.setdefault((int(gid), transform_row_key(t)), []).append(int(i))
+    key_map = pose_key_to_verts(group_id, transform)
     motif_keys: dict[int, set[tuple[float, float, float]]] = {}
     cohorts: list[dict] = []
     n_hits = 0
@@ -79,6 +77,23 @@ def motif_graph_hits(
             })
             n_hits += 1
     return motif_keys, cohorts, n_hits
+
+
+def merge_motif_hits(
+    propose_stats: dict,
+    motif_keys: dict[int, set[tuple[float, float, float]]] | None,
+    cohorts: Sequence[dict] | None,
+) -> None:
+    """Cheap Motif inject: union motif_keys / append cohorts (Q143)."""
+    if motif_keys:
+        merged = dict(propose_stats.get("motif_keys") or {})
+        for gid, keys in motif_keys.items():
+            merged.setdefault(int(gid), set()).update(keys or ())
+        propose_stats["motif_keys"] = merged
+    if cohorts:
+        propose_stats["motif_cohorts"] = list(
+            propose_stats.get("motif_cohorts") or []
+        ) + list(cohorts)
 
 
 def patterns_from_motif_base(
@@ -230,6 +245,7 @@ __all__ = [
     "age_motif_library",
     "extract_cluster_patterns",
     "motif_graph_hits",
+    "merge_motif_hits",
     "motif_patterns_for_inject",
     "motif_to_cluster_patterns",
     "note_motif_hollow_miss",

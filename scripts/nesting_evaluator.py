@@ -22,7 +22,9 @@ from nest_graph.build_graph import (
     void_elite_count,
     void_elite_tuple_from_archive,
 )
+from nest_graph.decision.epoch import bind_epoch, materialize_selection
 from nest_graph.decision.motif_credit import (
+    credit_motif_on_nest_survival,
     credit_void_niche_from_iter,
     merge_void_elite_with_archive,
 )
@@ -62,6 +64,7 @@ from nest_graph.decision.execute import (
     execute_pack,
     prep_selection_freeze,
     schedule_prep_selection_free,
+    stamp_arena_amaf,
 )
 from nest_graph.config import BuildGraphConfig, ProposeConfig, score_rules_options
 from nest_graph.elem_graph import (
@@ -639,6 +642,7 @@ class NestingPipelineEvaluator:
         }
         # P0: DG spine (niche + Motif) alongside classic evaluator harness.
         mcts_runner = MacroMctsRunner()
+        mcts_parent_id = 0
         prev_void_nest = 0
 
         for iter_idx in range(self.case.iters):
@@ -769,6 +773,7 @@ class NestingPipelineEvaluator:
                 attract_kiss_band_scale=float(self.cfg.propose.attract_kiss_band_scale),
                 attract_max_degree=int(self.cfg.propose.attract_max_degree),
             )
+            bind_epoch(mcts_runner.dg, graph, propose_stats, group_id, transform)
             carry_max = int(
                 getattr(self.cfg.propose, "graph_valid_carry_max", 512) or 512
             )
@@ -863,6 +868,7 @@ class NestingPipelineEvaluator:
                         packed_transform=packed_transform or None,
                         last_leaf=is_last_leaf,
                         void_geoms=void_geoms_compose,
+                        dg=mcts_runner.dg,
                     )
                 )
                 pack_box["composed"] = composed_loc
@@ -928,6 +934,9 @@ class NestingPipelineEvaluator:
                     native_geoms_from_transforms_fn=_native_geoms_from_transforms,
                     free_info=composed_loc.free_info,
                     free_poly=composed_loc.free_poly,
+                )
+                materialize_selection(
+                    mcts_runner.dg, pack_box["selected"], propose_stats,
                 )
 
             stage = execute_pack(
@@ -1096,6 +1105,54 @@ class NestingPipelineEvaluator:
             pocket_by_tag = dict(
                 propose_stats.get("pocket_by_tag") or densify.get("pocket_by_tag") or {}
             )
+            propose_stats["free_kind"] = str(getattr(free_info, "kind", "") or "")
+            packed_area = 0.0
+            for si in selected_polys:
+                gi = int(group_id[int(si)]) if int(si) < len(group_id) else -1
+                if 0 <= gi < len(part_areas):
+                    packed_area += float(part_areas[gi])
+            sheet_area = float(self.sheet.area) if self.sheet is not None else 0.0
+            cov_pct = (100.0 * packed_area / sheet_area) if sheet_area > 0.0 else 0.0
+            materialize_selection(
+                mcts_runner.dg, selected_polys, propose_stats,
+            )
+            if mcts_runner.agent is not None:
+                credit_motif_on_nest_survival(
+                    mcts_runner.motif_base,
+                    selected_polys=selected_polys,
+                    group_id=group_id,
+                    transform=transform,
+                    motif_keys=propose_stats.get("motif_keys"),
+                    ttl=int(
+                        getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4
+                    ),
+                    telem=propose_stats,
+                    realized_out=mcts_runner.agent.realized,
+                    kind_survive=propose_stats.get("kind_survive_hist"),
+                    materialized_attach=int(
+                        propose_stats.get("materialized_attach", 0) or 0
+                    ),
+                    member_hits=int(propose_stats.get("member_hits", 0) or 0),
+                    credit_motif=False,
+                )
+            mcts_parent_id, _amaf_action = stamp_arena_amaf(
+                mcts_runner,
+                selected_polys=selected_polys,
+                group_id=group_id,
+                transform=transform,
+                ngroups=max(len(self.parts), 1),
+                coverage_pct=cov_pct,
+                propose_stats=propose_stats,
+                parent_id=mcts_parent_id,
+            )
+            del _amaf_action
+            agent = mcts_runner.agent
+            if agent is not None:
+                propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
+                propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+            mcts_box = propose_stats.get("mcts") or {}
+            if int(propose_stats.get("amaf_hits", 0) or 0) <= 0:
+                propose_stats["amaf_hits"] = int(mcts_box.get("amaf_hits", 0) or 0)
             _, last_void_leak = assemble_void_leak(
                 free_kind=free_info.kind,
                 max_void_ratio=float(free_info.max_void_ratio),

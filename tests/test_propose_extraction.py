@@ -39,6 +39,8 @@ from nest_graph.propose.void_selection import (
     count_props_near_pole,
     format_prop_accept,
     pin_nest_void_independent,
+    pose_key_to_index,
+    pose_key_to_verts,
     transform_row_key,
     void_attractor_radius,
 )
@@ -61,6 +63,16 @@ class _FakeGraph:
 def test_transform_row_key_matches_round4():
     key = transform_row_key(np.array([1.234567, -2.0, 0.5]))
     assert key == (1.2346, -2.0, 0.5)
+
+
+def test_pose_key_index_last_wins_verts_keep_all():
+    gids = [0, 1, 0]
+    transforms = [(1.0, 2.0, 0.0), (3.0, 4.0, 0.0), (1.0, 2.0, 0.0)]
+    key = transform_row_key(transforms[0])
+    idx = pose_key_to_index(gids, transforms)
+    verts = pose_key_to_verts(gids, transforms)
+    assert idx[(0, key)] == 2
+    assert verts[(0, key)] == [0, 2]
 
 
 def test_void_attractor_radius_is_sheet_aware():

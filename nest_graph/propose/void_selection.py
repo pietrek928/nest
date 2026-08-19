@@ -23,11 +23,48 @@ from nest_graph.geometry import (
     PlacementRankMode,
     batch_score_placed_contact_hybrid,
 )
+from nest_graph.utils import transform_row_key
 
 
-def transform_row_key(t) -> tuple[float, float, float]:
-    """Round-4 (x, y, θ) join key shared by propose / nest / refine telemetry."""
-    return (round(float(t[0]), 4), round(float(t[1]), 4), round(float(t[2]), 4))
+def pose_key_to_index(
+    group_id: Sequence[int],
+    transform: Sequence,
+) -> dict[tuple[int, tuple[float, float, float]], int]:
+    """Last-wins (gid, round-4 key) → vertex index."""
+    out: dict[tuple[int, tuple[float, float, float]], int] = {}
+    for i, (gid, tr) in enumerate(zip(group_id, transform, strict=False)):
+        out[(int(gid), transform_row_key(tr))] = int(i)
+    return out
+
+
+def pose_key_to_verts(
+    group_id: Sequence[int],
+    transform: Sequence,
+) -> dict[tuple[int, tuple[float, float, float]], list[int]]:
+    """(gid, round-4 key) → all matching vertex indices."""
+    out: dict[tuple[int, tuple[float, float, float]], list[int]] = {}
+    for i, (gid, tr) in enumerate(zip(group_id, transform, strict=False)):
+        out.setdefault((int(gid), transform_row_key(tr)), []).append(int(i))
+    return out
+
+
+def _sel_area(
+    idxs: Sequence[int],
+    group_id: Sequence[int] | None,
+    part_areas: Sequence[float] | None,
+    *,
+    empty_as_count: bool = False,
+) -> float:
+    if not group_id or not part_areas:
+        return float(len(idxs)) if empty_as_count else 0.0
+    total = 0.0
+    n_areas = len(part_areas)
+    n_gid = len(group_id)
+    for i in idxs:
+        gi = int(group_id[int(i)]) if 0 <= int(i) < n_gid else -1
+        if 0 <= gi < n_areas:
+            total += float(part_areas[gi])
+    return total
 
 
 def void_attractor_radius(
@@ -333,6 +370,7 @@ def apply_void_selection_boosts(
         "void_island": 0,
         "pocket_keys": 0,
         "motif_keys": 0,
+        "kind_keys": 0,
         "small_part": 0,
         "large_part": 0,
         "selection_geom": 0,
@@ -366,6 +404,19 @@ def apply_void_selection_boosts(
             transform,
             scores,
             keys,
+            weight=pocket_w,
+        )
+        kind_keys = propose_stats.get("kind_keys") or {}
+        motif_for_kind = propose_stats.get("motif_keys") or {}
+        void_kind: dict[int, set[tuple[float, float, float]]] = {}
+        for gid, kset in kind_keys.items():
+            gi = int(gid)
+            void_kind[gi] = set(kset or ()) - set(motif_for_kind.get(gi) or ())
+        hits["kind_keys"] = boost_keyed_proposal_scores(
+            group_id,
+            transform,
+            scores,
+            void_kind,
             weight=pocket_w,
         )
     if motif_w > 0.0 and propose_stats is not None:
@@ -623,22 +674,6 @@ def colonize_blocker_order(
     return sorted(unlocks.keys(), key=lambda ui: -int(unlocks[ui]))
 
 
-def _colonize_sel_area(
-    selected: Sequence[int],
-    group_id: Sequence[int] | None,
-    part_areas: Sequence[float] | None,
-) -> float:
-    if not group_id or not part_areas:
-        return float(len(selected))
-    total = 0.0
-    n_areas = len(part_areas)
-    for i in selected:
-        gi = int(group_id[int(i)]) if 0 <= int(i) < len(group_id) else -1
-        if 0 <= gi < n_areas:
-            total += float(part_areas[gi])
-    return total
-
-
 def _colonize_trial_better(
     trial: Sequence[int],
     cur: Sequence[int],
@@ -653,8 +688,8 @@ def _colonize_trial_better(
     """Accept unlock when area holds and void pins replace rim plugs."""
     if add <= 0:
         return False
-    t_area = _colonize_sel_area(trial, group_id, part_areas)
-    c_area = _colonize_sel_area(cur, group_id, part_areas)
+    t_area = _sel_area(trial, group_id, part_areas, empty_as_count=True)
+    c_area = _sel_area(cur, group_id, part_areas, empty_as_count=True)
     # Hybrid: allow a small dip when the unlock nets more void pins than plugs.
     area_floor = base_area
     if add > n_drop:
@@ -726,7 +761,7 @@ def colonize_void_onto_base(
     blocked = 0
     rim_drop = 0
     base_len = len(out)
-    base_area = _colonize_sel_area(out, group_id, part_areas)
+    base_area = _sel_area(out, group_id, part_areas, empty_as_count=True)
     if scores is not None and len(scores) >= len(collisions):
         candidates.sort(key=lambda v: float(scores[v]), reverse=True)
 

@@ -132,7 +132,8 @@ def test_note_macro_miss_and_tombstone():
     a.motif_id = -1
     agent.note_macro_miss(a)
     key = agent._action_key(a)
-    assert agent.amaf[key].misses == 1
+    region_i = int(key[0])
+    assert int(arena.amaf_misses(region_i, int(a.rule_id), int(a.motif_id))) == 1
     child = arena.add_node(0, a)
     agent.age_and_tombstone(spine_id=0, idle_t=1, force=True)
     # child visits=0 < 2 and forced → tombstoned

@@ -318,17 +318,8 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def(
             "add_attract",
             [](PoseGraph &g, int i, int j, float w) {
-                if (i == j || w <= 0.0f) {
+                if (w <= 0.0f || pose_pair_skip(g, i, j)) {
                     return;
-                }
-                const int n = static_cast<int>(g.size());
-                if (i < 0 || j < 0 || i >= n || j >= n) {
-                    return;
-                }
-                for (Tvertex c : g.collisions[static_cast<std::size_t>(i)]) {
-                    if (c == j) {
-                        return;
-                    }
                 }
                 g.attract[static_cast<std::size_t>(i)].push_back(
                     AttractEdge{static_cast<Tvertex>(j), w});

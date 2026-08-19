@@ -58,6 +58,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_se2.cc
     tests/test_contact_relation.cc
     tests/test_decision_motif.cc
+    tests/test_decision_graph.cc
   )
   target_link_libraries(elem_graph_cpp_tests PRIVATE
     elem_graph_core
@@ -73,5 +74,5 @@ if(NEST_GRAPH_BUILD_TESTS)
   add_test(NAME elem_graph.cpp.refine COMMAND elem_graph_cpp_tests "[refine]")
   add_test(NAME elem_graph.cpp.se2 COMMAND elem_graph_cpp_tests "[se2]")
   add_test(NAME elem_graph.cpp.contact COMMAND elem_graph_cpp_tests "[contact_relation]")
-  add_test(NAME elem_graph.cpp.decision COMMAND elem_graph_cpp_tests "[decision_arena],[motif_base],[node_signature]")
+  add_test(NAME elem_graph.cpp.decision COMMAND elem_graph_cpp_tests "[decision_arena],[motif_base],[node_signature],[decision_graph]")
 endif()

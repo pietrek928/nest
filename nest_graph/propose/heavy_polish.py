@@ -15,7 +15,8 @@ from nest_graph.elem_graph import (
     refine_selection,
     sort_graph,
 )
-from nest_graph.propose.block_replace import _sel_area, lex_count_area_better
+from nest_graph.propose.block_replace import lex_count_area_better
+from nest_graph.propose.void_selection import _sel_area
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.void_selection import count_selected_in_free
 

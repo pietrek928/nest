@@ -26,7 +26,7 @@ from .proposer_names import (
     ZONE_PROPOSERS,
     proposers_for_zone,
 )
-from .utils import normalize_poly
+from .utils import normalize_poly, transform_row_key
 
 
 class ScoreSelectMode(StrEnum):
@@ -1212,10 +1212,6 @@ def subsample_transforms_with_pinned(
     return dedupe_transforms(np.concatenate([pinned, rest[idx]], axis=0))
 
 
-def _transform_row_key4(row: np.ndarray | Sequence[float]) -> tuple[float, float, float]:
-    return (round(float(row[0]), 4), round(float(row[1]), 4), round(float(row[2]), 4))
-
-
 def _take_niche(
     rows: np.ndarray,
     quota: int,
@@ -1232,7 +1228,7 @@ def _take_niche(
         rng.shuffle(order)
     for i in order:
         row = rows[int(i)]
-        key = _transform_row_key4(row)
+        key = transform_row_key(row)
         if key in claimed:
             continue
         claimed.add(key)
@@ -1428,7 +1424,7 @@ def trim_history(
     claimed: set[tuple[float, float, float]] = set()
     kept: list[np.ndarray] = []
     for row in ordered:
-        key = _transform_row_key4(row)
+        key = transform_row_key(row)
         if key in claimed:
             continue
         claimed.add(key)
@@ -1459,7 +1455,7 @@ def cap_graph_valid_carry(
     claimed: set[tuple[float, float, float]] = set()
     kept: list[np.ndarray] = []
     for row in arr:
-        key = _transform_row_key4(row)
+        key = transform_row_key(row)
         if key in claimed:
             continue
         claimed.add(key)

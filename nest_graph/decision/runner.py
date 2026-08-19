@@ -8,21 +8,29 @@ from nest_graph.decision.mcts import MctsAgent
 from nest_graph.decision.niche_archive import MacroNicheArchive
 from nest_graph.decision.slave_pack import cheap_expand_slave
 from nest_graph.decision.types import BoardSnapshot
-from nest_graph.elem_graph import DecisionArena, MotifBase
+from nest_graph.elem_graph import DecisionGraph, MotifBase
 
 
 @dataclass
 class MacroMctsRunner:
-    arena: DecisionArena = field(default_factory=DecisionArena)
+    dg: DecisionGraph = field(default_factory=DecisionGraph)
     motif_base: MotifBase = field(default_factory=MotifBase)
     niche_archive: MacroNicheArchive = field(default_factory=MacroNicheArchive)
     agent: MctsAgent | None = None
     execute_fn: Callable[..., BoardSnapshot] | None = None
 
     def __post_init__(self) -> None:
-        self.agent = MctsAgent(arena=self.arena, motif_base=self.motif_base)
+        self.agent = MctsAgent(
+            arena=self.dg.macros(),
+            motif_base=self.motif_base,
+            niche_archive=self.niche_archive,
+        )
         root = int(self.arena.root_id())
         self.arena.set_snapshot(root, BoardSnapshot(arena_node_id=root))
+
+    @property
+    def arena(self):
+        return self.dg.macros()
 
     def snapshot_at(
         self,

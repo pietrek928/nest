@@ -435,7 +435,14 @@ def main() -> None:
                             f"cluster_copy={int(leak.get('cluster_copy_emitted', ebp.get('cluster_copy', 0)) or 0)} "
                             f"free_space_cloud={int(leak.get('free_space_cloud_emitted', ebp.get('free_space_cloud', 0)) or 0)} "
                             f"zones={leak.get('zones_used', [])} "
-                            f"densify={leak.get('densify_reason')}"
+                            f"densify={leak.get('densify_reason')} "
+                            f"attach_n={leak.get('attach_n', 0)} "
+                            f"kind_keys={leak.get('kind_keys_n', leak.get('kind_n', 0))} "
+                            f"member_hits={leak.get('member_hits', 0)} "
+                            f"mat_attach={leak.get('materialized_attach', 0)} "
+                            f"kind_survive={leak.get('kind_survive', 0)} "
+                            f"motif_credit={leak.get('motif_nest_credit', leak.get('motif_credit', 0))} "
+                            f"amaf_hits={leak.get('amaf_hits', 0)}"
                         )
 
                 avg_parts = np.mean([m.parts_final for m in case_metrics])

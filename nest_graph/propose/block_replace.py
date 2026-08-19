@@ -13,7 +13,7 @@ from nest_graph.propose.context import cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_elem_graph
 from nest_graph.propose.placement_common import as_geometry, is_board_adj, is_pose_clear
 from nest_graph.propose.placement_outline import outline_ring_geom
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
 
@@ -36,29 +36,6 @@ def _cohort_member_indices(
         if ix is not None:
             idxs.append(int(ix))
     return idxs
-
-
-def _key_map(
-    group_id: Sequence[int],
-    transform: Sequence,
-) -> dict[tuple[int, tuple[float, float, float]], int]:
-    out: dict[tuple[int, tuple[float, float, float]], int] = {}
-    for i, (gid, tr) in enumerate(zip(group_id, transform, strict=False)):
-        out[(int(gid), transform_row_key(tr))] = int(i)
-    return out
-
-
-def _sel_area(
-    idxs: Sequence[int],
-    group_id: Sequence[int],
-    part_areas: Sequence[float],
-) -> float:
-    total = 0.0
-    for i in idxs:
-        gi = int(group_id[i]) if int(i) < len(group_id) else -1
-        if 0 <= gi < len(part_areas):
-            total += float(part_areas[gi])
-    return total
 
 
 def lex_count_area_better(
@@ -129,7 +106,7 @@ def try_block_cohort_swap(
     locked = [int(i) for i in locked_motif]
     if not sel or not locked or not cohorts:
         return sel, locked, telem
-    key_map = _key_map(group_id, transform)
+    key_map = pose_key_to_index(group_id, transform)
     resolved: list[list[int]] = []
     for cohort in cohorts:
         idxs = _cohort_member_indices(cohort, key_map)

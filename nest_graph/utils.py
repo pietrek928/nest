@@ -12,6 +12,15 @@ def transform_poly(p: Polygon, transform_data: Tuple[float, float, float]):
     return translate(rotate(p, angle, origin=(0, 0), use_radians=True), x, y)
 
 
+def transform_row_key(t) -> tuple[float, float, float]:
+    """Round-4 (x, y, θ) join key. Propose SoT re-export: void_selection.transform_row_key.
+
+    Lives here so config can key subsample/history without importing propose
+    (propose/__init__ → pipeline → config).
+    """
+    return (round(float(t[0]), 4), round(float(t[1]), 4), round(float(t[2]), 4))
+
+
 def invert_transform(t: Tuple[float, float, float]) -> Tuple[float, float, float]:
     """Inverse of rotate-about-origin then translate (matches transform_poly).
 

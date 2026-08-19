@@ -69,6 +69,29 @@ def _niche_rows_from_indices(
     return tagged, in_free
 
 
+def _write_realized_kind_attach(
+    realized_out: dict | None,
+    *,
+    selected_n: int,
+    kind_survive: Sequence[int] | None,
+    materialized_attach: int,
+    member_hits: int,
+    telem: dict | None,
+) -> None:
+    """Q165: outer-leaf Kind/Attach scalars for `_amaf_pick_score` (not a second ledger)."""
+    if realized_out is None:
+        return
+    hist = [int(x) for x in (kind_survive or (0, 0, 0, 0))]
+    hist = (hist + [0, 0, 0, 0])[:4]
+    realized_out["kind"] = (hist[0], hist[1], hist[2], hist[3])
+    realized_out["attach"] = int(materialized_attach)
+    realized_out["member_hits"] = int(member_hits)
+    realized_out["sel_n"] = int(selected_n)
+    if telem is not None:
+        telem["kind_survive"] = int(sum(hist))
+        telem["materialized_attach"] = int(materialized_attach)
+
+
 def credit_motif_on_nest_survival(
     motif_base: Any,
     *,
@@ -78,9 +101,22 @@ def credit_motif_on_nest_survival(
     motif_keys: dict | None,
     ttl: int,
     telem: dict | None = None,
+    realized_out: dict | None = None,
+    kind_survive: Sequence[int] | None = None,
+    materialized_attach: int = 0,
+    member_hits: int = 0,
+    credit_motif: bool = True,
 ) -> int:
-    """Q116: accept_count++ when nest selection keeps Motif-keyed vertices."""
-    if motif_base is None or not selected_polys or not motif_keys:
+    """Q116 accept_count++ plus Q165 Kind/Attach scalars (outer leaf only)."""
+    _write_realized_kind_attach(
+        realized_out,
+        selected_n=len(selected_polys or ()),
+        kind_survive=kind_survive,
+        materialized_attach=int(materialized_attach),
+        member_hits=int(member_hits),
+        telem=telem,
+    )
+    if not credit_motif or motif_base is None or not selected_polys or not motif_keys:
         return 0
     credited = 0
     keys_by_gid = motif_keys or {}

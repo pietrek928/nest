@@ -3,6 +3,7 @@
 import math
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from nest_graph.decision.action_gen import generate_macros
 from nest_graph.decision.types import BoardSnapshot
@@ -12,23 +13,26 @@ from nest_graph.elem_graph import MacroRegion
 LAMBDA_MISS = 0.5
 
 
-@dataclass(slots=True)
-class MacroAmaf:
-    visits: int = 0
-    total_reward: float = 0.0
-    misses: int = 0
+def _empty_realized() -> dict:
+    return {
+        "kind": (0, 0, 0, 0),
+        "attach": 0,
+        "member_hits": 0,
+        "sel_n": 0,
+    }
 
 
 @dataclass
 class MctsAgent:
     arena: DecisionArena
     motif_base: MotifBase
-    amaf: dict[tuple, MacroAmaf] = field(default_factory=dict)
+    niche_archive: Any | None = None
     pw_c: float = 1.5
     pw_alpha: float = 0.5
     ucb_c: float = 1.4
     expand_frozen: bool = False
     telem: dict = field(default_factory=dict)
+    realized: dict = field(default_factory=_empty_realized)
     _tombstoned: set[int] = field(default_factory=set)
     _idle_age: dict[int, int] = field(default_factory=dict)
     _related_snaps: tuple = ()
@@ -58,30 +62,16 @@ class MctsAgent:
     def _ucb(self, node_id: int, parent_visits: int) -> float:
         if self._is_tombstoned(node_id):
             return -1e300
-        # C0 hybrid: Arena ucb_score when AMAF ledger populated; else Python AMAF.
         action = self.arena.action(node_id)
         region_i = int(getattr(action.region, "value", action.region))
         if int(self.arena.amaf_visits(region_i, int(action.rule_id), int(action.motif_id))) > 0:
             self.telem["amaf_hits"] = int(self.telem["amaf_hits"]) + 1
-            score = float(
-                self.arena.ucb_score(int(node_id), int(parent_visits), float(self.ucb_c))
-            )
-            if score == float("inf") or score > 1e299:
-                return float("inf")
-            return score
-        visits = int(self.arena.visits(node_id))
-        if visits <= 0:
+        score = float(
+            self.arena.ucb_score(int(node_id), int(parent_visits), float(self.ucb_c))
+        )
+        if score == float("inf") or score > 1e299:
             return float("inf")
-        mean = float(self.arena.total_reward(node_id)) / visits
-        explore = self.ucb_c * math.sqrt(math.log(max(parent_visits, 1) + 1) / visits)
-        key = self._action_key(action)
-        amaf = self.amaf.get(key)
-        if amaf is not None and amaf.visits > 0:
-            self.telem["amaf_hits"] = int(self.telem["amaf_hits"]) + 1
-            beta = amaf.visits / (amaf.visits + visits + 1e-9)
-            amaf_mean = amaf.total_reward / amaf.visits
-            mean = beta * amaf_mean + (1.0 - beta) * mean
-        return mean + explore
+        return score
 
     def select_leaf(self) -> int:
         node_id = int(self.arena.root_id())
@@ -129,10 +119,6 @@ class MctsAgent:
             self.arena.record_visit(cur, float(reward))
             self._idle_age[cur] = 0
             action = self.arena.action(cur)
-            key = self._action_key(action)
-            bucket = self.amaf.setdefault(key, MacroAmaf())
-            bucket.visits += 1
-            bucket.total_reward += float(reward)
             region_i = int(getattr(action.region, "value", action.region))
             self.arena.amaf_record(
                 region_i, int(action.rule_id), int(action.motif_id), float(reward), False,
@@ -142,14 +128,11 @@ class MctsAgent:
     def note_macro_miss(self, action: MacroAction | None) -> None:
         if action is None:
             return
-        key = self._action_key(action)
-        bucket = self.amaf.setdefault(key, MacroAmaf())
-        bucket.misses += 1
-        self.telem["amaf_miss"] = int(self.telem.get("amaf_miss", 0)) + 1
         region_i = int(getattr(action.region, "value", action.region))
         self.arena.amaf_record(
             region_i, int(action.rule_id), int(action.motif_id), 0.0, True,
         )
+        self.telem["amaf_miss"] = int(self.telem.get("amaf_miss", 0)) + 1
 
     def best_child(self, node_id: int | None = None) -> int:
         root = int(self.arena.root_id() if node_id is None else node_id)
@@ -300,26 +283,57 @@ class MctsAgent:
     ) -> float:
         """Q131 Progressive Bias; soft miss penalty (L1). Never use 1e9."""
         parent_visits = max(int(self.arena.visits(int(parent_id))), 0)
-        amaf = self.amaf.get(key)
+        region_i = int(key[0])
+        rule_id = int(key[1])
+        motif_id = int(key[2])
+        visits = int(self.arena.amaf_visits(region_i, rule_id, motif_id))
         c = float(self.ucb_c)
         pb = c / math.sqrt(float(parent_visits) + 1.0)
-        if amaf is None or amaf.visits <= 0:
+        if visits <= 0:
             score = pb  # AMAF_mean = 0
         else:
-            mean = float(amaf.total_reward) / float(amaf.visits)
-            miss_den = float(amaf.visits) + float(amaf.misses)
+            mean = float(self.arena.amaf_mean(region_i, rule_id, motif_id))
+            misses = int(self.arena.amaf_misses(region_i, rule_id, motif_id))
+            # C++ miss records also increment visits (U1 SoT); den is visits.
             miss_term = 0.0
-            if miss_den > 0.0 and amaf.misses > 0:
-                miss_term = LAMBDA_MISS * (float(amaf.misses) / miss_den)
+            if misses > 0:
+                miss_term = LAMBDA_MISS * (float(misses) / float(visits))
             score = mean - miss_term + pb
         # Prefer Void macros under large_void (anti hollow-rim).
-        region_i = int(key[0])
         void_i = int(getattr(MacroRegion.Void, "value", 1))
         rim_i = int(getattr(MacroRegion.Rim, "value", 0))
+        motif_i = int(getattr(MacroRegion.Motif, "value", 3))
         if str(free_kind) == "large_void" and region_i == void_i:
             score += 0.35
         if str(free_kind) == "large_void" and region_i == rim_i:
             score -= 0.15
+        realized = self.realized or {}
+        kind_t = tuple(int(x) for x in (realized.get("kind") or (0, 0, 0, 0)))
+        sel_n = max(int(realized.get("sel_n", 0) or 0), 1)
+        if 0 <= region_i < 4 and region_i < len(kind_t):
+            score += 0.2 * (float(kind_t[region_i]) / float(sel_n))
+        attach_n = int(realized.get("attach", 0) or 0)
+        if region_i in (void_i, motif_i, rim_i):
+            score += 0.1 * (float(attach_n) / float(sel_n))
+        if (
+            motif_id >= 0
+            and self.motif_base is not None
+            and motif_id < int(self.motif_base.size())
+        ):
+            rec = self.motif_base.at(motif_id)
+            score += 0.04 * min(float(int(rec.accept_count)), 8.0)
+            score += 0.12 * float(rec.gci)
+        arch = self.niche_archive
+        buckets = getattr(arch, "buckets", None) if arch is not None else None
+        raw = None
+        if buckets:
+            raw = buckets.get((region_i, rule_id, motif_id))
+            if raw is None:
+                raw = buckets.get((region_i, 0, motif_id))
+        if raw:
+            tot = int(raw.get("hits", 0) or 0) + int(raw.get("misses", 0) or 0)
+            if tot > 0:
+                score -= 0.2 * (float(raw.get("misses", 0) or 0) / float(tot))
         return score
 
     def pick_expand_action(
@@ -359,8 +373,8 @@ class MctsAgent:
                 best_score = score
                 best = a
         self.telem["amaf_pick"] = int(self.telem.get("amaf_pick", 0)) + 1
-        amaf = self.amaf.get(self._action_key(best))
-        if amaf is not None and amaf.visits > 0:
+        key = self._action_key(best)
+        if int(self.arena.amaf_visits(int(key[0]), int(key[1]), int(key[2]))) > 0:
             self.telem["amaf_hits"] = int(self.telem.get("amaf_hits", 0)) + 1
         return best
 

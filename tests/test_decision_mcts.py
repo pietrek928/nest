@@ -1,3 +1,5 @@
+import math
+
 from nest_graph.decision.mcts import MctsAgent, leaf_reward
 from nest_graph.geometry import nfp_lite_relative
 from nest_graph.decision.runner import MacroMctsRunner
@@ -151,6 +153,108 @@ def test_upsert_from_contacts_kissing_pair():
     assert base.size() >= 1
     assert base.at(0).gci > 0.0
     assert base.at(0).compactness >= 0.35
+
+
+def test_arena_amaf_is_ucb_and_pick_sot():
+    arena = DecisionArena()
+    agent = MctsAgent(arena=arena, motif_base=MotifBase())
+    a = MacroAction()
+    a.region = MacroRegion.Void
+    a.rule_id = 0
+    a.motif_id = -1
+    cid = arena.add_node(arena.root_id(), a)
+    agent.backprop(cid, 0.8)
+    region_i = int(getattr(a.region, "value", a.region))
+    assert int(arena.amaf_visits(region_i, 0, -1)) >= 1
+    assert abs(float(arena.amaf_mean(region_i, 0, -1)) - 0.8) < 1e-5
+    score = agent._ucb(cid, parent_visits=2)
+    assert math.isfinite(score)
+    assert int(agent.telem["amaf_hits"]) >= 1
+    key = agent._action_key(a)
+    pick = agent._amaf_pick_score(key, 0)
+    assert math.isfinite(pick)
+    assert pick < 1e8
+    agent.note_macro_miss(a)
+    assert int(arena.amaf_misses(region_i, 0, -1)) == 1
+    pick_miss = agent._amaf_pick_score(key, 0)
+    assert pick_miss < pick
+
+
+def test_stamp_arena_amaf_sets_hits():
+    from nest_graph.decision.execute import stamp_arena_amaf
+
+    runner = MacroMctsRunner()
+    stats: dict = {"free_kind": "large_void"}
+    parent, _action = stamp_arena_amaf(
+        runner,
+        selected_polys=[],
+        group_id=[],
+        transform=[],
+        ngroups=2,
+        coverage_pct=10.0,
+        propose_stats=stats,
+        parent_id=0,
+    )
+    assert parent >= 0
+    assert int(stats.get("amaf_hits", 0)) >= 1
+    # Packed-all-groups: remaining empty, still stamps a Void/Sheet action.
+    stats2: dict = {"free_kind": "large_void"}
+    runner2 = MacroMctsRunner()
+    parent2, _a2 = stamp_arena_amaf(
+        runner2,
+        selected_polys=[0],
+        group_id=[0, 1],
+        transform=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+        ngroups=2,
+        coverage_pct=20.0,
+        propose_stats=stats2,
+        parent_id=0,
+    )
+    # One group packed → remaining still has 1; also cover empty-remaining via both packed.
+    stats3: dict = {"free_kind": "large_void"}
+    runner3 = MacroMctsRunner()
+    parent3, _a3 = stamp_arena_amaf(
+        runner3,
+        selected_polys=[0, 1],
+        group_id=[0, 1],
+        transform=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+        ngroups=2,
+        coverage_pct=40.0,
+        propose_stats=stats3,
+        parent_id=0,
+    )
+    assert parent2 >= 0 and parent3 >= 0
+    assert int(stats3.get("amaf_hits", 0)) >= 1
+
+
+def test_amaf_pick_reads_realized_kind_attach():
+    from nest_graph.decision.motif_credit import credit_motif_on_nest_survival
+
+    arena = DecisionArena()
+    agent = MctsAgent(arena=arena, motif_base=MotifBase())
+    a = MacroAction()
+    a.region = MacroRegion.Void
+    a.rule_id = 0
+    a.motif_id = -1
+    key = agent._action_key(a)
+    base = agent._amaf_pick_score(key, 0, free_kind="")
+    credit_motif_on_nest_survival(
+        agent.motif_base,
+        selected_polys=[0, 1],
+        group_id=[0, 1],
+        transform=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+        motif_keys=None,
+        ttl=4,
+        telem={},
+        realized_out=agent.realized,
+        kind_survive=(0, 4, 0, 0),
+        materialized_attach=2,
+        member_hits=4,
+    )
+    assert int(agent.realized["sel_n"]) == 2
+    assert agent.realized["kind"][1] == 4
+    boosted = agent._amaf_pick_score(key, 0, free_kind="")
+    assert boosted > base
 
 
 def test_run_mcts_multi_sim_does_not_upsert_contacts():

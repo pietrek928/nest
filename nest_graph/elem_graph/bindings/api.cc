@@ -3,6 +3,7 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
+#include "decision_graph.h"
 #include "graph/graph.h"
 #include "rules/rules.h"
 #include "scoring/scoring.h"
@@ -38,6 +39,17 @@ void bind_elem_graph_api(nb::module_ &m) {
             return ::nest_by_scores(g, scores, select);
         },
         nb::arg("g"),
+        nb::arg("scores"),
+        nb::arg("select") = SelectOptions{});
+
+    m.def(
+        "nest_by_scores",
+        [](const DecisionGraph &dg,
+           const std::vector<Tscore> &scores,
+           const SelectOptions &select) {
+            return ::nest_by_scores(dg, scores, select);
+        },
+        nb::arg("dg"),
         nb::arg("scores"),
         nb::arg("select") = SelectOptions{});
 

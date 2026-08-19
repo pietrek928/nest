@@ -47,6 +47,7 @@ from .propose.post_pack import run_post_pack_passes
 from .propose.pattern_archive import (
     age_motif_library,
     motif_graph_hits,
+    merge_motif_hits,
     motif_patterns_for_inject,
     note_motif_hollow_miss,
 )
@@ -118,6 +119,7 @@ from .propose.transform_batch import (
 )
 from .propose.motif_lock import LargeVoidMotifPlateau
 from .decision.action_gen import region_to_zone
+from .decision.epoch import bind_epoch, materialize_selection
 from .decision.browse import (
     choose_browse_parent,
     packed_gids_compatible,
@@ -935,6 +937,7 @@ def _first_pass_layered_selection(
     selection: SelectionConfig,
     skip_guidance_refine: bool = False,
     propose_stats: dict | None = None,
+    dg=None,
 ) -> tuple[PoseGraph, list, list[int], list[np.ndarray], list[int]]:
     """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
     min_dist = cfg.board_min_dist(first_pass=True)
@@ -991,6 +994,7 @@ def _first_pass_layered_selection(
             attract_kiss_band_scale=float(cfg.propose.attract_kiss_band_scale),
             attract_max_degree=int(cfg.propose.attract_max_degree),
         )
+        bind_epoch(dg, graph2, propose_stats, group_id2, transform2)
         locked = _locked_graph_indices(
             transform2,
             [transform_cur[i] for i in sel_cur],
@@ -1236,15 +1240,7 @@ def compose_cached_selection(
     n_cc = 0
     if pats:
         motif_keys, cohorts, n_cc = motif_graph_hits(pats, group_id, transform)
-        if motif_keys:
-            merged_keys = dict(propose_stats_c.get("motif_keys") or {})
-            for gid, keys in motif_keys.items():
-                merged_keys.setdefault(int(gid), set()).update(keys)
-            propose_stats_c["motif_keys"] = merged_keys
-        if cohorts:
-            propose_stats_c["motif_cohorts"] = list(
-                propose_stats_c.get("motif_cohorts") or []
-            ) + cohorts
+        merge_motif_hits(propose_stats_c, motif_keys, cohorts)
     pack_cache["cheap_cluster_copy_n"] = int(n_cc)
     active_rules = active_rule_set(rule_sets)
     scores = list(score_elems(graph, active_rules))
@@ -1278,6 +1274,7 @@ def compose_cached_selection(
             packed_transform=pack_cache.get("packed_transform"),
             last_leaf=False,
             void_geoms=pack_cache.get("void_geoms"),
+            dg=pack_cache.get("dg"),
         )
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
@@ -1582,6 +1579,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         "place_motif_ok": 0,
         "expand_ms": 0.0,
         "from_shapely_count": 0,
+        "amaf_hits": 0,
+        "amaf_miss": 0,
     }
     _exec_last: dict = {"snap": mcts_root}
     # DgP: cache last outer compose/refine materials for multi-sim cheap_pack.
@@ -1912,6 +1911,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             attract_kiss_band_scale=float(cfg.propose.attract_kiss_band_scale),
             attract_max_degree=int(attract_deg),
         )
+        bind_epoch(mcts_runner.dg, graph, propose_stats, group_id, transform)
         carry_max = int(getattr(cfg.propose, "graph_valid_carry_max", 512) or 512)
         if bool(getattr(cfg.propose, "enable_graph_valid_carry", True)):
             graph_valid_carry = graph_valid_carry_by_group(
@@ -2002,6 +2002,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         scores=scores,
                         selection=sel,
                         propose_stats=propose_stats,
+                        dg=mcts_runner.dg,
                     )
                 )
             # R0: free_kind after first-pass rim (would Uh fire?).
@@ -2085,6 +2086,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             last_leaf=True,
                             void_geoms=void_geoms_uh,
                             locked_seed=kiss_lock or None,
+                            dg=mcts_runner.dg,
                         )
                     )
                     selected_polys = composed_uh.selected_nest
@@ -2153,6 +2155,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     packed_transform=packed_transform,
                     last_leaf=is_last_leaf,
                     void_geoms=void_geoms_compose,
+                    dg=mcts_runner.dg,
                 )
             )
             propose_stats["nest_dual"] = int(dual_nest)
@@ -2230,7 +2233,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             _pack_cache.clear()
             _pack_cache.update({
                 "ready": True,
-                "graph": graph,
+                "graph": mcts_runner.dg.poses(),
+                "dg": mcts_runner.dg,
                 "polys": polys,
                 "group_id": group_id,
                 "transform": transform,
@@ -2452,8 +2456,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     if j > i and j in sel_set:
                         attract_pairs_selected += 1
                         attract_bonus += float(e.w)
+            if mcts_runner.agent is not None:
+                mcts_telem["amaf_hits"] = int(
+                    mcts_runner.agent.telem.get("amaf_hits", 0) or 0
+                )
+                mcts_telem["amaf_miss"] = int(
+                    mcts_runner.agent.telem.get("amaf_miss", 0) or 0
+                )
             propose_stats["browse_jump"] = int(mcts_telem.get("browse_jump", 0) or 0)
             propose_stats["amaf_miss"] = int(mcts_telem.get("amaf_miss", 0) or 0)
+            propose_stats["amaf_hits"] = int(mcts_telem.get("amaf_hits", 0) or 0)
             propose_stats["motif_nest_credit"] = int(
                 mcts_telem.get("motif_nest_credit", 0) or 0
             )
@@ -2779,8 +2791,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             repack_m = int((propose_stats.get("repack") or {}).get("motif_accepted", 0))
             if motif_refine_n > 0 or repack_m > 0:
                 pattern_accept = True
-            # Q116: instant accept on nest Motif survival (before ContactGRG).
-            if motif_refine_n > 0:
+            materialize_selection(
+                mcts_runner.dg, selected_polys, propose_stats,
+            )
+            # Q116/Q165: Motif accept + Kind/Attach scalars (outer leaf only).
+            if mcts_runner.agent is not None:
                 credit_motif_on_nest_survival(
                     mcts_runner.motif_base,
                     selected_polys=selected_polys,
@@ -2789,6 +2804,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     motif_keys=motif_keys_arch,
                     ttl=motif_ttl,
                     telem=mcts_telem,
+                    realized_out=mcts_runner.agent.realized,
+                    kind_survive=propose_stats.get("kind_survive_hist"),
+                    materialized_attach=int(
+                        propose_stats.get("materialized_attach", 0) or 0
+                    ),
+                    member_hits=int(propose_stats.get("member_hits", 0) or 0),
+                    credit_motif=int(motif_refine_n) > 0,
+                )
+            if isinstance(propose_stats.get("void_leak"), dict):
+                propose_stats["void_leak"]["kind_survive"] = int(
+                    propose_stats.get("kind_survive", 0) or 0
+                )
+                propose_stats["void_leak"]["materialized_attach"] = int(
+                    propose_stats.get("materialized_attach", 0) or 0
                 )
         # Q142: one global age tick — Motif + niche + arena idle/tombstone.
         if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True)):

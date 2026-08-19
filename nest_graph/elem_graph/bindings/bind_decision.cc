@@ -12,6 +12,7 @@ namespace nb = nanobind;
 #include "bindings.h"
 #include "contact_edge.h"
 #include "decision_arena.h"
+#include "decision_graph.h"
 #include "macro_niche_archive.h"
 #include "motif_base.h"
 #include "node_signature.h"
@@ -327,6 +328,12 @@ void bind_elem_graph_decision(nb::module_ &m) {
             nb::arg("rule_id"),
             nb::arg("motif_id"))
         .def(
+            "amaf_misses",
+            &DecisionArena::amaf_misses,
+            nb::arg("region"),
+            nb::arg("rule_id"),
+            nb::arg("motif_id"))
+        .def(
             "ucb_score",
             &DecisionArena::ucb_score,
             nb::arg("node_id"),
@@ -356,6 +363,99 @@ void bind_elem_graph_decision(nb::module_ &m) {
             "action",
             [](const DecisionArena &a, int32_t id) { return a.node(id).action; },
             nb::arg("id"));
+
+    nb::class_<AttachNode>(m, "AttachNode")
+        .def(nb::init<>())
+        .def_rw("a", &AttachNode::a)
+        .def_rw("b", &AttachNode::b)
+        .def_rw("realized", &AttachNode::realized);
+
+    nb::class_<MotifJoin>(m, "MotifJoin")
+        .def(nb::init<>())
+        .def_rw("motif_id", &MotifJoin::motif_id)
+        .def_rw("a", &MotifJoin::a)
+        .def_rw("b", &MotifJoin::b)
+        .def_rw("realized", &MotifJoin::realized);
+
+    nb::class_<DecisionGraph>(m, "DecisionGraph")
+        .def(nb::init<>())
+        .def(
+            "macros",
+            static_cast<DecisionArena &(DecisionGraph::*)()>(&DecisionGraph::macros),
+            nb::rv_policy::reference_internal)
+        .def(
+            "poses",
+            static_cast<PoseGraph &(DecisionGraph::*)()>(&DecisionGraph::poses),
+            nb::rv_policy::reference_internal)
+        .def(
+            "replace_poses",
+            &DecisionGraph::replace_poses,
+            nb::arg("g"))
+        .def("set_pose_kind", &DecisionGraph::set_pose_kind, nb::arg("i"), nb::arg("kind"))
+        .def(
+            "set_pose_kinds",
+            [](DecisionGraph &dg, const std::vector<int> &kinds) {
+                std::vector<uint8_t> out;
+                out.reserve(kinds.size());
+                for (int k : kinds) {
+                    out.push_back(static_cast<uint8_t>(k));
+                }
+                dg.set_pose_kinds(out);
+            },
+            nb::arg("kinds"))
+        .def("add_attach", &DecisionGraph::add_attach, nb::arg("a"), nb::arg("b"))
+        .def(
+            "add_motif_join",
+            &DecisionGraph::add_motif_join,
+            nb::arg("motif_id"),
+            nb::arg("a"),
+            nb::arg("b"))
+        .def(
+            "attach_conflicts",
+            &DecisionGraph::attach_conflicts,
+            nb::arg("i"),
+            nb::arg("j"))
+        .def("mutex_n", &DecisionGraph::mutex_n)
+        .def("attach_n", &DecisionGraph::attach_n)
+        .def("motif_n", &DecisionGraph::motif_n)
+        .def("kind_tagged_n", &DecisionGraph::kind_tagged_n)
+        .def(
+            "materialize_selection",
+            [](DecisionGraph &dg, const std::vector<int> &selected) {
+                std::vector<Tvertex> verts;
+                verts.reserve(selected.size());
+                for (int v : selected) {
+                    verts.push_back(static_cast<Tvertex>(v));
+                }
+                const MaterializeStats st = dg.materialize_selection(verts);
+                nb::dict out;
+                out["materialized_attach"] = st.materialized_attach;
+                out["materialized_motif"] = st.materialized_motif;
+                out["member_hits"] = st.member_hits;
+                nb::list kind_survive;
+                for (int i = 0; i < 4; ++i) {
+                    kind_survive.append(st.kind_count[i]);
+                }
+                out["kind_survive"] = kind_survive;
+                return out;
+            },
+            nb::arg("selected"))
+        .def_prop_ro(
+            "pose_kind",
+            [](const DecisionGraph &dg) {
+                std::vector<int> out;
+                out.reserve(dg.pose_kind().size());
+                for (uint8_t k : dg.pose_kind()) {
+                    out.push_back(static_cast<int>(k));
+                }
+                return out;
+            })
+        .def_prop_ro(
+            "attach",
+            [](const DecisionGraph &dg) { return dg.attach(); })
+        .def_prop_ro(
+            "motifs",
+            [](const DecisionGraph &dg) { return dg.motifs(); });
 
     nb::class_<MotifRecord>(m, "MotifRecord")
         .def(nb::init<>())

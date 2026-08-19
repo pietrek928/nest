@@ -10,7 +10,7 @@ from shapely.geometry import Point
 
 from nest_graph.geometry import Geometry
 from nest_graph.propose.placement_common import as_geometry, is_pose_clear
-from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.void_selection import pose_key_to_index
 
 
 @dataclass
@@ -51,16 +51,6 @@ class LargeVoidMotifPlateau:
         return self.ready
 
 
-def _key_index_map(
-    group_id: Sequence[int],
-    transform: Sequence,
-) -> dict[tuple[int, tuple[float, float, float]], int]:
-    out: dict[tuple[int, tuple[float, float, float]], int] = {}
-    for i, (gid, tr) in enumerate(zip(group_id, transform, strict=False)):
-        out[(int(gid), transform_row_key(tr))] = int(i)
-    return out
-
-
 def sequential_accept_motif_cohorts(
     *,
     graph,
@@ -91,7 +81,7 @@ def sequential_accept_motif_cohorts(
     }
     if not cohorts:
         return [], telem
-    key_map = _key_index_map(group_id, transform)
+    key_map = pose_key_to_index(group_id, transform)
     pole_xy: tuple[float, float] | None = None
     if pole is not None and not getattr(pole, "is_empty", True):
         pole_xy = (float(pole.x), float(pole.y))

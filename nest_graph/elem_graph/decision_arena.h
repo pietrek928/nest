@@ -205,6 +205,15 @@ public:
         return it->second.visits;
     }
 
+    int32_t amaf_misses(int32_t region, int32_t rule_id, int32_t motif_id) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id);
+        auto it = amaf_.find(key);
+        if (it == amaf_.end()) {
+            return 0;
+        }
+        return it->second.misses;
+    }
+
     /** UCB1 + optional AMAF blend (C0). Returns -1e30 if visits==0 and not unvisited-inf. */
     float ucb_score(int32_t node_id, int32_t parent_visits, float ucb_c = 1.4f) const {
         const DecisionNode &n = node(node_id);

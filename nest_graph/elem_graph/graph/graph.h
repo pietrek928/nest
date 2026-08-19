@@ -31,6 +31,31 @@ typedef struct PoseGraph {
     auto size() const { return group_id.size(); }
 } PoseGraph;
 
+/** Shared skip for Attract / Attach: identity, OOB, or Collision (Q153). */
+inline bool pose_has_collision(const PoseGraph &g, Tvertex i, Tvertex j) {
+    const auto n = static_cast<Tvertex>(g.size());
+    if (i < 0 || j < 0 || i >= n || j >= n || i == j) {
+        return false;
+    }
+    for (Tvertex c : g.collisions[static_cast<std::size_t>(i)]) {
+        if (c == j) {
+            return true;
+        }
+    }
+    return false;
+}
+
+inline bool pose_pair_skip(const PoseGraph &g, Tvertex i, Tvertex j) {
+    if (i == j) {
+        return true;
+    }
+    const auto n = static_cast<Tvertex>(g.size());
+    if (i < 0 || j < 0 || i >= n || j >= n) {
+        return true;
+    }
+    return pose_has_collision(g, i, j);
+}
+
 enum class ScoreAggregation : int { Sum = 0, Max = 1 };
 enum class SelectMode : int { GreedyScore = 0, WeightedGreedy = 1 };
 

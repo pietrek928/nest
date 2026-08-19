@@ -7,6 +7,7 @@ from typing import Any, Callable, Sequence
 from nest_graph.decision.mcts import leaf_reward
 from nest_graph.decision.slave_pack import upsert_from_contacts
 from nest_graph.decision.types import BoardSnapshot
+from nest_graph.elem_graph import MacroAction, MacroRegion
 from nest_graph.propose.context import prep_free_space, void_ratio_threshold
 from nest_graph.propose.heavy_polish import (
     freeze_improve_rules,
@@ -307,6 +308,79 @@ def record_mcts_expand(
     return int(child_id)
 
 
+def stamp_arena_amaf(
+    runner: Any,
+    *,
+    selected_polys: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    coverage_pct: float,
+    propose_stats: dict,
+    parent_id: int,
+    action: Any | None = None,
+) -> tuple[int, Any | None]:
+    """Write DecisionArena AMAF from an outer pack; pick so ``amaf_hits`` can fire.
+
+    ContactGRG Motif upsert stays the last-leaf site (empty ``part_bases`` here).
+    """
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return int(parent_id), action
+    mcts_telem = dict(getattr(agent, "telem", None) or propose_stats.get("mcts") or {})
+    mcts_telem.setdefault("pw_expand", 0)
+    child_snap = board_snapshot_from_selection(
+        selected_polys=selected_polys,
+        group_id=group_id,
+        transform=transform,
+        ngroups=int(ngroups),
+        coverage_pct=float(coverage_pct),
+        propose_stats=propose_stats,
+        mcts_action=action,
+        mcts_telem=mcts_telem,
+        arena_node_id=int(parent_id),
+    )
+    rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+    if action is None and rem:
+        action = agent.pick_expand_action(
+            rem, rule_ids=(0,), parent_id=int(parent_id), snapshot=child_snap,
+        )
+    if action is None:
+        action = MacroAction()
+        free_kind = str(
+            getattr(child_snap, "free_kind", "") or propose_stats.get("free_kind") or ""
+        )
+        action.region = (
+            MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+        )
+        action.rule_id = 0
+        action.motif_id = -1
+    t0 = time.perf_counter()
+    new_id = record_mcts_expand(
+        runner,
+        parent_id=int(parent_id),
+        action=action,
+        child_snap=child_snap,
+        nest_state=None,
+        part_bases={},
+        part_areas=(),
+        min_dist=0.0,
+        t_expand0=t0,
+        mcts_telem=mcts_telem,
+        propose_stats=propose_stats,
+    )
+    parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
+    agent._ucb(int(new_id), parent_visits)
+    if rem:
+        agent.pick_expand_action(
+            rem, rule_ids=(0,), parent_id=int(new_id), snapshot=child_snap,
+        )
+    propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
+    propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+    propose_stats["mcts"] = dict(mcts_telem)
+    return int(new_id), action
+
+
 def make_execute_fn(
     pack_fn: Callable[..., BoardSnapshot],
 ) -> Callable[..., BoardSnapshot]:
@@ -474,4 +548,5 @@ __all__ = [
     "run_mcts_multi_sim",
     "run_pack_stages",
     "schedule_prep_selection_free",
+    "stamp_arena_amaf",
 ]

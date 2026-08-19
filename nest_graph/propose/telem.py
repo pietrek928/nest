@@ -74,7 +74,9 @@ def format_void_leak_line(
         f"elite={elite_seeded}->{elite_next} "
         f"arch_elite={int(propose_stats.get('archive_elite_n', 0))} "
         f"browse={int(propose_stats.get('browse_jump', 0))} "
+        f"amaf_hits={int(propose_stats.get('amaf_hits', 0) or (propose_stats.get('mcts') or {}).get('amaf_hits', 0) or 0)} "
         f"amaf_miss={int(propose_stats.get('amaf_miss', 0))} "
+        f"kind_survive={int(propose_stats.get('kind_survive', 0))} "
         f"motif_credit={int(propose_stats.get('motif_nest_credit', 0))} "
         f"hollow={int(propose_stats.get('hollow_miss', 0))} "
         f"cluster_copy={cc_e}/{cc_p} patterns={n_patterns} "
@@ -275,6 +277,25 @@ def build_void_leak_dict(
         "attract_edges": attract_edges,
         "attract_pairs_selected": attract_pairs_selected,
         "attract_bonus": attract_bonus,
+        "attach_n": int(propose_stats.get("attach_n", 0)),
+        "kind_n": int(propose_stats.get("kind_n", 0)),
+        "mutex_n": int(propose_stats.get("mutex_n", 0)),
+        "kind_keys_n": sum(
+            len(v) for v in (propose_stats.get("kind_keys") or {}).values()
+        ),
+        "member_hits": int(propose_stats.get("member_hits", 0)),
+        "materialized_attach": int(propose_stats.get("materialized_attach", 0)),
+        "kind_survive": int(
+            propose_stats.get("kind_survive", 0)
+            or (propose_stats.get("mcts") or {}).get("kind_survive", 0)
+            or 0
+        ),
+        "motif_nest_credit": int(propose_stats.get("motif_nest_credit", 0)),
+        "amaf_hits": int(
+            propose_stats.get("amaf_hits", 0)
+            or (propose_stats.get("mcts") or {}).get("amaf_hits", 0)
+            or 0
+        ),
         "block_cohort_accepted": int(propose_stats.get("block_cohort_accepted", 0)),
         "block_cohort_related": int(propose_stats.get("block_cohort_related", 0)),
         "block_hole_accepted": int(propose_stats.get("block_hole_accepted", 0)),

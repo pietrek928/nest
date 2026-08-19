@@ -13,7 +13,7 @@ Last split from root AGENTS.md: 2026-08-10.
 
 ### Proposer telemetry
 
-- Keys: `round(x,y,θ, 4)` — must match `build_graph._transform_row_key`.
+- Keys: `round(x,y,θ, 4)` — must match `propose/void_selection.transform_row_key`.
 - Emit order: `pocket_fit` → `cluster_copy` → … → `raycast` → `selection_expand` → `history_expand`.
 - Funnel: emit → pool → nest → refine per name; `void_leak` `prop_accept e/p/n/r`.
 - Gate: no zone/ranking OOS without `refine_by_proposer` visibility.
@@ -308,7 +308,7 @@ Live hollow-rim packs swung coverage when densify **replaced** the propose pool,
 |--|--|
 | **Verdict** | Keep densify/cloud as a pinned prefix union; void-stage XOR `side_pack`/`group_fit`; tight-pass rim gravity only inside a part-scale band; prefix-stable mix with one `n_props` cut; sequential RCL beam (≤4 Scene-clear lock-sets + unlocked) then incumbent lex-hold; refine restore vs `nest_before_refine` on rim drop **or** not lex-better. |
 | **Evidence** | Demo 2-iter: densify `void_yield_union`, `side_pack=0/0` on void, `mix_props` at void_seek floor, `rim_skip=1` at `rim≥0.9`, `sel_kept` = last packed, `incumbent_hold=1` prevents iter-2 collapse. `void_fill` seed 0 stays ≥0.9× shipped 44/0.494 with `independent_ok`. |
-| **Constraint** | Reuse `subsample_transforms_with_pinned`, `transform_row_key` / `_key_index_map`, `lex_count_area_better` / `_sel_area` / `_packing_independent`, `_apply_rim_gravity` + `part_extents`, `sequential_accept_motif_cohorts` (extend, no second pole-RCL). Permission stays `ZONE_PROPOSERS`; void XOR is staging only. No new prepend/key/gravity helpers; no `group_fit` in `ZONE_PROPOSERS[VOID_SEEK]`. |
+| **Constraint** | Reuse `subsample_transforms_with_pinned`, `transform_row_key` / `pose_key_to_index` / `pose_key_to_verts`, `lex_count_area_better` / `_sel_area` / `_packing_independent`, `_apply_rim_gravity` + `part_extents`, `sequential_accept_motif_cohorts` (extend, no second pole-RCL). Permission stays `ZONE_PROPOSERS`; void XOR is staging only. No new prepend/key/gravity helpers; no `group_fit` in `ZONE_PROPOSERS[VOID_SEEK]`. |
 
 ### Void colonization pull (follow-up)
 
@@ -473,6 +473,38 @@ Q86 reversed. Q89/Q93/Q102/Q104 kept. Letter pass = no drop vs snapshot (`indepe
 | Q147 | Keep Q104 Motif → `void_seek` | Rigid pairs need free space. |
 | Q148 | One `execute_pack` + flags | Calls `run_pack_stages`. No `cheap_pack_from_cache` / `run_pack_body`. |
 | Q149 | Evaluator = same execute | Delete `analyze_free_space` fork. |
+
+### Hybrid DecisionGraph (Q150–Q165, locked 2026-08-19)
+
+Q61 reopens as one C++ `DecisionGraph` owner (partitioned Pose + Arena). Not 4D product verts (Q62). Q30/Q33/Q63/Q70/Q90/Q141/Q144/Q148 stay in force. Do not lock these in AGENTS.md.
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q150 | YES one hybrid C++ owner | `DecisionGraph` owns partitions. `replace_poses` copy-in updates geometric arrays; **keeps** Sequence/AMAF/snapshots. Kind **identity** (MacroRegion 0–3) persists. **Reject** Python sidecar / orphaned PoseGraph aliases (`graphs` window keeps `make_polygon_graph` object). |
+| Q151 | Kind (MacroRegion) | MemberOf → stable Kind (`pose_kind[]`, 255=untagged). **Reject** arena node ids. |
+| Q152 | YES first-class Attach | Pair of Pose ids; not in `PoseGraph::elems`. |
+| Q153 | Derived Collision walk | Attach X Mutex Y iff some member pair Collides. **Reject** parallel intersection buffers. Mutex **query**, not a stored CSR. |
+| Q154 | Slice + materialize | `nest_by_scores` Pose-slice only; then `realized` flags on Attach/MotifJoin + Kind histogram. |
+| Q155 | Keep product-vertex ban | MemberOf, not `(x,y,θ)×Rim` MWIS verts. |
+| Q156 | G1b / overlay | Miss → Kind score overlay or mix quota. No 4D clones. |
+| Q157 | YES orthogonal | Motif boosts MotifJoin; Void boosts Kind. Same `void_seek` sample, different MCTS semantics. |
+| Q158 | Neutral unless tagged | History/elite default no region boost. |
+| Q159 | Sequence-OR only | No Macro–Macro packing Mutex. |
+| Q160 | Pairs only | Attach = 2 pose ids. |
+| Q161 | YES drop epoch overlays | `replace_poses` clears MemberOf / Attach. Rebuild that epoch. |
+| Q162 | Keep Q143 | Cheap key `(zone, motif_id)`. **Do not** hash MemberOf. |
+| Q163 | YES Pose only | Refine/finalize `const PoseGraph &`. |
+| Q164 | Keep type | `DecisionArena` public; `DecisionGraph` contains one. |
+| Q165 | YES fold survival | `_amaf_pick_score` reads **realized** Kind/Attach hits (outer leaf / Q144 cadence), not only Sequence commands. |
+
+**Q150 vs Q161:** Kind overlays in Q150 = the four Kind identities + arena. Epoch MemberOf/Attach still wipe (Q161).
+
+**N0 snapshot** (2026-08-19, seed 0, shipped, `--gate` fixture FAIL vs 0.585 is not a miss):
+
+| Tag / case | Area | Time | Indep |
+|------------|------|------|-------|
+| void_fill `demo_triangle_corner_cluster_s6` | 0.558 | 315.58s | True |
+| dense `dense_cluster_pockets_s8` | 0.581 | 403.63s | True |
 
 **N0 snapshot** (2026-08-17, seed 0, shipped, `--gate` fixture FAIL vs 0.585 is not a miss):
 

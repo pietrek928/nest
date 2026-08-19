@@ -668,6 +668,20 @@ def build_transform_batch(
         if allowed is not None and merged.shape[0] > 0:
             merged = project_angles_to_allowed(merged, allowed)
             merged = dedupe_transforms(merged)
+        if propose_stats_out is not None:
+            sel_arr = sel
+            hist_arr = hist_niche
+            if allowed is not None:
+                if sel_arr.shape[0] > 0:
+                    sel_arr = project_angles_to_allowed(sel_arr, allowed)
+                if hist_arr.shape[0] > 0:
+                    hist_arr = project_angles_to_allowed(hist_arr, allowed)
+            propose_stats_out.setdefault("sel_keys", {})[int(group_id)] = {
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in sel_arr
+            }
+            propose_stats_out.setdefault("hist_keys", {})[int(group_id)] = {
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in hist_arr
+            }
         return merged
 
     out = []
@@ -691,6 +705,14 @@ def build_transform_batch(
                 int(gid): set(keys) & mixed_keys.get(int(gid), set())
                 for gid, keys in raw.items()
             }
+        sel_keys_all = propose_stats_out.get("sel_keys") or {}
+        hist_keys_all = propose_stats_out.get("hist_keys") or {}
+        propose_stats_out["epoch_keys"] = {
+            int(gid): set(keys)
+            - set(sel_keys_all.get(int(gid)) or ())
+            - set(hist_keys_all.get(int(gid)) or ())
+            for gid, keys in mixed_keys.items()
+        }
     return mixed
 
 
