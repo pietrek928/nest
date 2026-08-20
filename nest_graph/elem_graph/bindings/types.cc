@@ -2,6 +2,7 @@
 
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
+#include <nanobind/stl/pair.h>
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
@@ -43,7 +44,10 @@ void bind_elem_graph_types(nb::module_ &m) {
         .def_rw("min_collisions", &RefineSelectionOptions::min_collisions)
         .def_rw("node_areas", &RefineSelectionOptions::node_areas)
         .def_rw("lexicographic_area", &RefineSelectionOptions::lexicographic_area)
-        .def_rw("locked_indices", &RefineSelectionOptions::locked_indices);
+        .def_rw("locked_indices", &RefineSelectionOptions::locked_indices)
+        .def_rw("dg_aware_refine", &RefineSelectionOptions::dg_aware_refine)
+        .def_rw("motif_fracture_penalty", &RefineSelectionOptions::motif_fracture_penalty)
+        .def_rw("motif_join_pairs", &RefineSelectionOptions::motif_join_pairs);
 
     nb::class_<FinalizeSelectionOptions>(m, "FinalizeSelectionOptions")
         .def(nb::init<>())

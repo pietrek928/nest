@@ -73,6 +73,9 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.BOARD_EDGE,
         ProposerName.SHEET_CORNERS,
         ProposerName.PERIMETER_WALK,
+        # Q179: permission includes explorers; emit gated by packed_n threshold.
+        ProposerName.RAYCASTING,
+        ProposerName.EROSION,
     }),
     PlaceZone.BORDER_GAP: frozenset({
         ProposerName.BOARD_EDGE,
@@ -87,6 +90,10 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.POCKET_FIT,
         ProposerName.SELECTION_EXPAND,
         ProposerName.HISTORY_EXPAND,
+        # Q180: unify annulus / non-annulus — explorers always permitted.
+        ProposerName.RAYCASTING,
+        ProposerName.VORONOI,
+        ProposerName.EROSION,
     }),
     PlaceZone.INTERIOR_POCKET: frozenset({
         ProposerName.EROSION,
@@ -151,8 +158,15 @@ CORRIDOR_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.POCKET_FIT,
 })
 
+# Q180: explorers live in BORDER_GAP baseline; annulus union is a no-op keep for API.
 ANNULUS_EXTRA_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.RAYCASTING,
+    ProposerName.EROSION,
+})
+
+_INWARD_BORDER_EXPLORERS: frozenset[ProposerName] = frozenset({
+    ProposerName.RAYCASTING,
+    ProposerName.VORONOI,
     ProposerName.EROSION,
 })
 
@@ -160,6 +174,10 @@ _FIRST_PASS_PACKED_EXCLUDE: frozenset[ProposerName] = frozenset({
     ProposerName.CLUSTER_COPY,
     ProposerName.POCKET_FIT,
     ProposerName.GUIDANCE_CAST_REFINE,
+    # Q183: first-pass stays rim-only — no inward explorers.
+    ProposerName.RAYCASTING,
+    ProposerName.VORONOI,
+    ProposerName.EROSION,
 })
 
 BATCH_FOLLOW_PROPOSERS: frozenset[ProposerName] = frozenset({
@@ -171,14 +189,31 @@ BATCH_FOLLOW_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.RIBBON_FREE,
 })
 
-FIRST_PASS_EMPTY_BORDER_PROPOSERS: frozenset[ProposerName] = (
-    ZONE_PROPOSERS[PlaceZone.EMPTY_BORDER]
-)
+# Q183: pin empty first-pass to rim snaps (not ZONE_PROPOSERS[EMPTY_BORDER]).
+FIRST_PASS_EMPTY_BORDER_PROPOSERS: frozenset[ProposerName] = frozenset({
+    ProposerName.BOARD_EDGE,
+    ProposerName.SHEET_CORNERS,
+    ProposerName.PERIMETER_WALK,
+})
 
 
 def first_pass_packed_border_proposers() -> frozenset[ProposerName]:
-    """BORDER_GAP minus motif/pocket/cast (explicit subtract)."""
+    """BORDER_GAP minus motif/pocket/cast/inward explorers (explicit subtract)."""
     return ZONE_PROPOSERS[PlaceZone.BORDER_GAP] - _FIRST_PASS_PACKED_EXCLUDE
+
+
+def strip_inward_border_explorers(
+    proposers: frozenset[ProposerName] | frozenset[str] | None,
+) -> frozenset[str] | None:
+    """Ablation helper: drop ray/voronoi/erosion from a zone allow-set (Q195)."""
+    if proposers is None:
+        return None
+    drop = {p.value for p in _INWARD_BORDER_EXPLORERS}
+    return frozenset(
+        (p.value if isinstance(p, ProposerName) else str(p))
+        for p in proposers
+        if (p.value if isinstance(p, ProposerName) else str(p)) not in drop
+    )
 
 
 def proposers_for_zone(

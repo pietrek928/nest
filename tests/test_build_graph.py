@@ -10,10 +10,9 @@ from nest_graph.build_graph import (
     Geometry,
     _append_selection_window,
     _base_geometries,
-    _first_pass_border_ring_selection,
-    _first_pass_layered_selection,
     _make_initial_rule_sets,
     _make_seed_rule_sets,
+    _native_geoms_from_transforms,
     _poly_and_transforms,
     _rule_region,
     active_rule_set,
@@ -27,6 +26,8 @@ from nest_graph.build_graph import (
 )
 from nest_graph.propose.first_pass_border import (
     border_pack_graph as _border_pack_graph,
+    first_pass_border_ring_selection,
+    first_pass_layered_selection,
     guidance_border_refine as _guidance_border_refine,
 )
 from nest_graph.propose.heavy_polish import apply_dfs_refinement
@@ -564,19 +565,18 @@ def test_first_pass_border_pack_footprints_inside_board():
     seed_rules = active_rule_set(_make_initial_rule_sets(cfg))
     scores = score_elems(graph, seed_rules)
     min_dist = cfg.board_min_dist(first_pass=True)
-    ring = _first_pass_border_ring_selection(
+    ring = first_pass_border_ring_selection(
         graph, polys, p_board, min_dist, scores,
     )
     assert ring
-    _, polys2, gid2, tr2, selected = _first_pass_layered_selection(
+    _, polys2, gid2, tr2, selected = first_pass_layered_selection(
         cfg, p_board, parts,
         graph=graph, p1=p1, p2=p2,
-        selected_t=selected_t, history=history, rng=rng,
-        selection_window=selection_window,
         polys=polys, group_id=group_id, transform=transform,
         phase1_selected=list(ring),
         rule_set=seed_rules, scores=scores,
-        selection=cfg.selection,
+        make_polygon_graph_fn=make_polygon_graph,
+        native_geoms_fn=_native_geoms_from_transforms,
     )
     assert selected
     for idx in selected:
@@ -640,7 +640,7 @@ def test_execute_pack_stage_telem():
 
 
 def test_cheap_pack_cache_key_motif_distinct():
-    from nest_graph.build_graph import cheap_pack_cache_key
+    from nest_graph.decision.cheap_pack import cheap_pack_cache_key
     from nest_graph.elem_graph import MacroAction, MacroRegion
 
     rim = MacroAction()

@@ -265,3 +265,34 @@ def test_run_mcts_multi_sim_does_not_upsert_contacts():
 
     assert "upsert_from_contacts(" not in inspect.getsource(run_mcts_multi_sim)
     assert "upsert_from_contacts(" not in inspect.getsource(cheap_expand_slave)
+
+
+def test_finalize_iter_mcts_cache_hit_damps_proposer_pb():
+    from nest_graph.decision.pack_loop import finalize_iter_mcts
+    from nest_graph.elem_graph import DecisionGraph, PoseGraph
+
+    runner = MacroMctsRunner()
+    g = PoseGraph()
+    g.reserve_elems(1)
+    g.append_elem_at(0, 0.5, 0.5, 0.0, 0.5, 0.5, 0.25)
+    runner.dg.replace_poses(g)
+    stats = {
+        "cache_hit": 1,
+        "proposal_count": 0,
+        "proposal_keys": {0: {(0.5, 0.5, 0.0)}},
+        "motif_keys": {},
+    }
+    finalize_iter_mcts(
+        runner,
+        selected_polys=[0],
+        group_id=[0],
+        transform=[(0.5, 0.5, 0.0)],
+        propose_stats=stats,
+        mcts_telem={},
+        motif_keys={},
+        motif_ttl=4,
+        credit_motif=False,
+        refine_bp={"cluster_copy": 1},
+        emitted_bp={"cluster_copy": 4},
+    )
+    assert abs(float(runner.agent.realized["proposer_pb"]) - 0.0625) < 1e-6

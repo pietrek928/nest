@@ -5,7 +5,7 @@ import inspect
 import numpy as np
 from shapely.geometry import Point, box
 
-from nest_graph.build_graph import archive_void_elite_transforms, void_elite_count
+from nest_graph.propose.telem import archive_void_elite_transforms, void_elite_count
 from nest_graph.config import ProposeConfig, subsample_transforms_with_pinned
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import (

@@ -6,7 +6,8 @@ proposer stack), and pack tightness uses ``ranking.pack_tightness_cost``.
 """
 
 import math
-from typing import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Callable, Mapping, Sequence
 
 import numpy as np
 from shapely import Polygon, unary_union
@@ -21,7 +22,9 @@ from nest_graph.board import (
 )
 from nest_graph.config import BuildGraphConfig, RankingMode, dedupe_transforms
 from nest_graph.elem_graph import (
+    PlacementRuleSet,
     PoseGraph,
+    score_elems,
     selection_is_independent,
 )
 from nest_graph.geometry import Geometry, GuidanceConfig, find_polygon_intersections, find_polygon_distances
@@ -57,6 +60,7 @@ from nest_graph.propose.placements_guidance import (
     sorted_guidance_propositions,
 )
 from nest_graph.propose.ranking import pack_tightness_cost, score_placement_tightness
+from nest_graph.propose.transform_batch import prepend_group_transforms
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
 
@@ -1047,4 +1051,191 @@ def sequential_border_augment(
         bases=bases,
     )
 
+
+def expand_border_selection(
+    graph: PoseGraph,
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+    scores: list[float],
+    initial: list[int],
+) -> list[int]:
+    """Greedy MIS on outline-kiss nodes, preserving ``initial``."""
+    from nest_graph.propose.selection_compose import nest_border_kiss_selection  # cycle: selection_compose → block_replace → first_pass_border
+    return nest_border_kiss_selection(
+        graph, polys, outline, min_dist, scores, locked=initial,
+    )
+
+
+def first_pass_border_ring_selection(
+    graph: PoseGraph,
+    polys: list,
+    outline: BaseGeometry,
+    min_dist: float,
+    scores: list[float],
+) -> list[int]:
+    """Pack as many outline-kiss nodes as possible (first-pass ring MIS)."""
+    from nest_graph.propose.selection_compose import nest_border_kiss_selection  # cycle: selection_compose → block_replace → first_pass_border
+    return nest_border_kiss_selection(
+        graph, polys, outline, min_dist, scores, locked=None,
+    )
+
+
+def locked_graph_indices(
+    transforms: list[np.ndarray],
+    phase1_transforms: list[np.ndarray],
+) -> list[int]:
+    keys = {transform_row_key(t) for t in phase1_transforms}
+    return [i for i, t in enumerate(transforms) if transform_row_key(t) in keys]
+
+
+@dataclass
+class _FirstPassNestSnapshot:
+    polys: list
+    group_id: list
+    transform: list
+    selected_indices: list
+    seed_count: int = 0
+    _native_geoms: list | None = None
+
+    @property
+    def native_geoms(self) -> list:
+        return self._native_geoms or []
+
+
+def first_pass_layered_selection(
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    parts: list[tuple[Polygon, int]],
+    *,
+    graph: PoseGraph,
+    p1: Polygon,
+    p2: Polygon,
+    polys: list,
+    group_id: list[int],
+    transform: list[np.ndarray],
+    phase1_selected: list[int],
+    rule_set: PlacementRuleSet,
+    scores: list[float],
+    skip_guidance_refine: bool = False,
+    propose_stats: dict | None = None,
+    dg=None,
+    make_polygon_graph_fn: Callable | None = None,
+    native_geoms_fn: Callable | None = None,
+) -> tuple[PoseGraph, list, list[int], list[np.ndarray], list[int]]:
+    """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
+    if make_polygon_graph_fn is None or native_geoms_fn is None:
+        raise ValueError("make_polygon_graph_fn and native_geoms_fn required")
+    from nest_graph.decision.epoch import bind_epoch  # cycle: epoch → execute → block_replace → first_pass_border
+
+    min_dist = cfg.board_min_dist(first_pass=True)
+    outline = board
+    sheet, voids = board_context_from_geometry(board)
+    board_geom = Geometry.from_shapely(sheet)
+    part_bases = (
+        {0: Geometry.from_shapely(parts[0][0]), 1: Geometry.from_shapely(parts[1][0])}
+        if len(parts) >= 2
+        else {gid: Geometry.from_shapely(poly) for poly, gid in parts}
+    )
+    polys_cur = polys
+    group_id_cur = group_id
+    transform_cur = transform
+    sel_cur = list(phase1_selected)
+    passes = max(cfg.propose.first_pass_border_saturation_passes, 0)
+
+    for _ in range(passes):
+        phase1_by_group: list[list[np.ndarray]] = [[], []]
+        for idx in sel_cur:
+            phase1_by_group[group_id_cur[idx]].append(transform_cur[idx])
+        phase1_t = tuple(
+            np.asarray(rows, dtype=np.float64) if rows else np.zeros((0, 3))
+            for rows in phase1_by_group
+        )
+        nest_snap = _FirstPassNestSnapshot(
+            polys=polys_cur,
+            group_id=group_id_cur,
+            transform=transform_cur,
+            selected_indices=list(sel_cur),
+            _native_geoms=native_geoms_fn(
+                group_id_cur,
+                transform_cur,
+                part_bases,
+            ),
+        )
+        batch2 = border_saturation_transform_batch(
+            cfg,
+            board,
+            parts,
+            nest_snap,
+        )
+        combined = (
+            prepend_group_transforms(phase1_t[0], batch2[0]),
+            prepend_group_transforms(phase1_t[1], batch2[1]),
+        )
+        graph2, polys2, group_id2, transform2 = make_polygon_graph_fn(
+            board,
+            [(p1, combined[0]), (p2, combined[1])],
+            min_dist=min_dist,
+            epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=True),
+            propose_stats=propose_stats,
+            attract_contact_weight=float(cfg.propose.attract_contact_weight),
+            attract_kiss_band_scale=float(cfg.propose.attract_kiss_band_scale),
+            attract_max_degree=int(cfg.propose.attract_max_degree),
+        )
+        bind_epoch(dg, graph2, propose_stats, group_id2, transform2)
+        locked = locked_graph_indices(
+            transform2,
+            [transform_cur[i] for i in sel_cur],
+        )
+        if not locked:
+            break
+        scores2 = list(score_elems(graph2, rule_set))
+        new_sel = expand_border_selection(
+            graph2, polys2, outline, min_dist, scores2, locked,
+        )
+        polys_cur = polys2
+        group_id_cur = group_id2
+        transform_cur = transform2
+        if len(new_sel) <= len(sel_cur):
+            sel_cur = new_sel
+            break
+        sel_cur = new_sel
+
+    if cfg.propose.first_pass_sequential_augment_max > 0:
+        return sequential_border_augment(
+            cfg,
+            board,
+            parts,
+            outline=outline,
+            polys=polys_cur,
+            group_id=group_id_cur,
+            transform=transform_cur,
+            selected=sel_cur,
+            skip_guidance_refine=skip_guidance_refine,
+            part_bases=part_bases,
+            board_geom=board_geom,
+        )
+
+    pack_polys = [polys_cur[i] for i in sel_cur]
+    pack_gids = [group_id_cur[i] for i in sel_cur]
+    pack_tr = [transform_cur[i] for i in sel_cur]
+    if not skip_guidance_refine:
+        pack_polys, pack_gids, pack_tr = guidance_border_refine(
+            cfg,
+            board,
+            parts,
+            outline=outline,
+            pack_polys=pack_polys,
+            pack_gids=pack_gids,
+            pack_tr=pack_tr,
+            part_bases=part_bases,
+            board_geom=board_geom,
+        )
+    return border_pack_graph(
+        pack_polys,
+        pack_gids,
+        pack_tr,
+        void_geoms=voids,
+        bases=part_bases,
+    )
 

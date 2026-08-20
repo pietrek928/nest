@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include "rules/rules.h"
@@ -88,6 +89,10 @@ struct RefineSelectionOptions {
     /** Prefer count, then area sum, then score sum when accepting refine results. */
     bool lexicographic_area = false;
     std::vector<Tvertex> locked_indices;
+    /** Q166/Q178: soft MotifJoin fracture + attract sub-lex tie-break in DFS. */
+    bool dg_aware_refine = false;
+    float motif_fracture_penalty = 0.0f;
+    std::vector<std::pair<Tvertex, Tvertex>> motif_join_pairs;
 };
 
 struct FinalizeSelectionOptions {

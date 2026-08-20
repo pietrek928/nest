@@ -444,6 +444,74 @@ def corridor_seed_coords_from_samples(
     return out
 
 
+def free_lobe_axis_samples(
+    free_poly: Polygon,
+    sheet: Polygon,
+    *,
+    part_min: float,
+    min_dist: float,
+    n: int = 12,
+) -> list[Point]:
+    """Q181: rim→void lobe medial samples when free touches exterior (not sheet-hole only).
+
+    Requires a polylabel deeper than ``1.5 * part_min`` from the free exterior.
+    Returns points along the segment from nearest exterior touch toward the pole.
+    """
+    if (
+        free_poly is None
+        or free_poly.is_empty
+        or sheet is None
+        or sheet.is_empty
+        or n <= 0
+        or part_min <= 0.0
+    ):
+        return []
+    try:
+        exterior_ring = sheet.exterior
+    except Exception:
+        return []
+    if exterior_ring is None or exterior_ring.is_empty:
+        return []
+    ring_w = max(2.0 * float(min_dist), 0.5 * float(part_min))
+    touch = free_poly.intersection(exterior_ring.buffer(ring_w))
+    if touch is None or touch.is_empty:
+        return []
+    from nest_graph.propose.void_topology import polylabel as void_polylabel
+
+    pole = Point(void_polylabel(free_poly, tolerance=max(float(min_dist), 1e-3)))
+    if pole is None or pole.is_empty:
+        return []
+    depth = float(pole.distance(free_poly.exterior))
+    if depth < 1.5 * float(part_min):
+        return []
+    rim_pt = free_poly.exterior.interpolate(
+        free_poly.exterior.project(pole)
+    )
+    # Prefer the free/exterior touch point nearest the pole for rim end.
+    try:
+        rim_pt = touch.representative_point()
+    except Exception:
+        pass
+    axis = LineString([(float(rim_pt.x), float(rim_pt.y)), (float(pole.x), float(pole.y))])
+    if axis.length <= 1e-9:
+        return [pole]
+    valid = axis.intersection(free_poly)
+    if valid is None or valid.is_empty:
+        return [pole]
+    if isinstance(valid, MultiLineString):
+        geoms = [g for g in valid.geoms if not g.is_empty and g.length > 0]
+        if not geoms:
+            return [pole]
+        valid = max(geoms, key=lambda g: g.length)
+    if not isinstance(valid, LineString) or valid.length <= 0:
+        return [pole]
+    samples: list[Point] = []
+    for i in range(n):
+        frac = (i + 0.5) / n
+        samples.append(valid.interpolate(frac, normalized=True))
+    return samples
+
+
 def nearest_channel_attract(
     samples: Sequence[Point],
     *,

@@ -8,12 +8,14 @@ from pathlib import Path
 
 import numpy as np
 
-from nest_graph.build_graph import (
-    _make_initial_rule_sets,
-    active_rule_set,
+from nest_graph.rules.evolve import (
+    make_initial_rule_sets as _make_initial_rule_sets,
     improve_rules,
-    make_polygon_graph,
     score_rule_sets_with_dfs,
+)
+from nest_graph.build_graph import (
+    active_rule_set,
+    make_polygon_graph,
 )
 from nest_graph.propose.heavy_polish import apply_dfs_refinement
 from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch

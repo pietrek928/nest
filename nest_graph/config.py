@@ -566,6 +566,10 @@ class ProposeConfig(BaseModel):
     """Mode A: force void_seek + polylabel seeds when largest free / part_area > late_border_void_override_ratio."""
     pocket_score_boost: float = 50.0
     """Add to DFS/nest scores for graph nodes matching pocket/motif propose keys (0 disables)."""
+    dg_aware_refine: bool = True
+    """Q178: MotifJoin fracture ε + attract sub-lex tie-break in C++ refine DFS only."""
+    motif_refine_fracture_penalty: float = 1.0
+    """Soft ε subtracted when DFS breaks a MotifJoin edge (Q166)."""
     small_part_void_score_boost: float = 40.0
     """On large_void: boost smaller catalog groups via (1 - area/max_area) * weight (0 disables)."""
     densify_clearance_floor_ratio: float = 1.0
@@ -611,6 +615,15 @@ class ProposeConfig(BaseModel):
     rim_saturated_skip_emitters: bool = False
     """When rim_progress >= threshold, skip side_pack; mute history_expand only for Rim/Sheet (Q145)."""
     rim_saturated_threshold: float = 0.9
+    # Q179–Q195: edge→center inward bridge (R1+R2 ablation).
+    enable_inward_bridge: bool = True
+    """Master flag: border inward explorers + Motif mix floors / soft override (Q195)."""
+    inward_empty_border_min_packed: int = 5
+    """Q179: EMPTY_BORDER ray/erosion emit only when packed_n >= this."""
+    rim_sat_side_pack_scale: float = 0.25
+    """Q182: under rim_sat keep side_pack but scale side_pack_top_n by this factor."""
+    cluster_copy_mix_floor: int = 12
+    """Q186: min cluster_copy/motif keys kept in stratified mix under plateau."""
     # Carry-forward of last-iter board-valid graph poses (pool refinement).
     enable_graph_valid_carry: bool = True
     """Seed next-iter expand_rest from last make_polygon_graph board-valid transforms."""

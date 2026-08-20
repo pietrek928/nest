@@ -7,6 +7,7 @@ policy (G22/G24) cannot drift. Propose ranking stays in ``ranking.py``.
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
+import numpy as np
 from shapely import Point
 from shapely.geometry.base import BaseGeometry
 
@@ -39,10 +40,29 @@ from nest_graph.propose.block_replace import (
 )
 from nest_graph.propose.motif_lock import sequential_accept_motif_cohorts
 from nest_graph.propose.first_pass_border import border_kiss_indices
+from nest_graph.propose.motif_keys import resolve_motif_keys
 from nest_graph.board import board_context_from_geometry
-from nest_graph.decision.epoch import materialize_selection
+from nest_graph.decision.epoch import bind_epoch
 from shapely.geometry import Polygon
 import math
+
+
+def _motif_key_density(
+    sel: Sequence[int],
+    transform: Sequence,
+    motif_key_set: set,
+) -> float:
+    """Fraction of selection poses whose transform key is in the motif set (Q187/Q198)."""
+    if not sel or not motif_key_set:
+        return 0.0
+    hits = 0
+    for i in sel:
+        ii = int(i)
+        if ii < 0 or ii >= len(transform):
+            continue
+        if transform_row_key(np.asarray(transform[ii], dtype=np.float64)) in motif_key_set:
+            hits += 1
+    return float(hits) / float(len(sel))
 
 
 def dual_nest_for(free_info: Any, *, last_leaf: bool = False, do_heavy: bool | None = None) -> bool:
@@ -385,6 +405,7 @@ def compose_and_nest_selection(
         min_dist=min_dist,
         sheet_area=sheet_area,
         geom_stats_out=geom_stats,
+        dg=dg,
     )
     if geom_stats and propose_stats is not None:
         propose_stats["geom_ms"] = geom_stats.get("geom_ms", 0.0)
@@ -628,12 +649,73 @@ def compose_and_nest_selection(
                         void_override = False
                 except Exception:
                     pass
-        if void_override:
-            void_override_flag = 1
-        else:
-            selected_nest = list(incumbent)
-            locked_motif = []
-            incumbent_hold = 1
+            if void_override:
+                void_override_flag = 1
+            else:
+                # Q187/Q198: motif soft override — key-hit fraction (not MotifBase GCI).
+                # Q199: if incumbent has 0 key-hit (stringy rim), allow cand with dens>0.
+                # Q220/Q221: must also pass void_override coverage drop_allow (OR accept).
+                motif_override = False
+                if bool(getattr(cfg.propose, "enable_inward_bridge", True)):
+                    motif_keys_map = resolve_motif_keys(
+                        propose_stats,
+                        densify=(propose_stats or {}).get("densify_stats"),
+                    )
+                    motif_key_set: set = set()
+                    for raw_set in motif_keys_map.values():
+                        for raw in raw_set or ():
+                            motif_key_set.add(
+                                tuple(raw) if not isinstance(raw, tuple) else raw
+                            )
+                    if motif_key_set and transform is not None:
+                        dens_cand = _motif_key_density(
+                            selected_nest, transform, motif_key_set,
+                        )
+                        dens_inc = _motif_key_density(
+                            incumbent, transform, motif_key_set,
+                        )
+                        count_ok = len(selected_nest) >= len(incumbent)
+                        if count_ok and (
+                            dens_cand > dens_inc + 1e-12
+                            or (dens_inc <= 1e-12 and dens_cand > 1e-12)
+                        ):
+                            motif_override = True
+                            drop_allow = 0.10 if fat_free else (
+                                0.08 if (void_inc <= 2 and void_gain >= 8) else (
+                                    0.06 if void_gain >= 3 else 0.02
+                                )
+                            )
+                            try:
+                                cov_cand = float(outline_coverage_ratio(
+                                    [
+                                        polys[i] for i in selected_nest
+                                        if 0 <= int(i) < len(polys)
+                                    ],
+                                    outline,
+                                    float(min_dist),
+                                ))
+                                cov_inc = float(outline_coverage_ratio(
+                                    [
+                                        polys[i] for i in incumbent
+                                        if 0 <= int(i) < len(polys)
+                                    ],
+                                    outline,
+                                    float(min_dist),
+                                ))
+                                if cov_cand + 1e-9 < cov_inc - drop_allow:
+                                    motif_override = False
+                            except Exception:
+                                motif_override = False
+                if motif_override:
+                    void_override_flag = 1
+                    if propose_stats is not None:
+                        propose_stats["motif_override"] = 1
+                else:
+                    selected_nest = list(incumbent)
+                    locked_motif = []
+                    incumbent_hold = 1
+                    if propose_stats is not None:
+                        propose_stats["motif_override"] = 0
     # One colonize walk onto the held/MIS base (rim density + void pins).
     if (
         free_info is not None
@@ -728,7 +810,7 @@ def compose_and_nest_selection(
 
 
     refine_scores = list(scores)
-    # Term already on nest scores under large_void; refine inherits via copy.
+    # Q175 exception: first-pass border boost is refine-only rim bias (nest already ran).
     if (
         first_pass
         and should_use_border_focus(Polygon(), cfg.propose)
@@ -739,8 +821,6 @@ def compose_and_nest_selection(
             polys, refine_scores, outline, min_dist,
             weight=cfg.propose.border_selection_score_boost,
         )
-
-    materialize_selection(dg, selected_nest, propose_stats)
 
     return ComposedSelection(
         scores=scores,

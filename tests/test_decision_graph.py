@@ -120,6 +120,37 @@ def test_nest_by_scores_on_decision_graph():
     assert list(sel) == [0]
 
 
+def test_motif_graph_hits_cohort_carries_motif_id():
+    from nest_graph.propose.pattern_archive import motif_graph_hits
+    from nest_graph.propose.placements_pattern import ClusterPattern
+
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)), (1, (1.1, 0.0, 0.0))),
+        part_count=2,
+        ref_transform=(0.0, 0.0, 0.0),
+        motif_id=42,
+    )
+    group_id = [0, 1]
+    transform = [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)]
+    _, cohorts, _n = motif_graph_hits([pat], group_id, transform)
+    assert cohorts
+    assert cohorts[0]["motif_id"] == 42
+
+
+def test_merge_motif_hits_preserves_motif_id():
+    from nest_graph.propose.pattern_archive import merge_motif_hits
+
+    stats: dict = {}
+    cohorts = [{
+        "leader_gid": 0,
+        "leader_key": (0.5, 0.5, 0.0),
+        "member_keys": [(0, (0.5, 0.5, 0.0))],
+        "motif_id": 9,
+    }]
+    merge_motif_hits(stats, {}, cohorts)
+    assert stats["motif_cohorts"][0]["motif_id"] == 9
+
+
 def test_runner_arena_is_dg_macros():
     runner = MacroMctsRunner()
     a = MacroAction()

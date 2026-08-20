@@ -21,6 +21,29 @@ from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.void_selection import count_selected_in_free
 
 
+def apply_dg_refine_options(
+    opts: RefineSelectionOptions,
+    dg,
+    propose_cfg,
+) -> RefineSelectionOptions:
+    """Q166/Q167/Q178: optional DG-aware C++ refine semantics."""
+    if propose_cfg is None or not bool(getattr(propose_cfg, "dg_aware_refine", True)):
+        return opts
+    opts.dg_aware_refine = True
+    opts.motif_fracture_penalty = float(
+        getattr(propose_cfg, "motif_refine_fracture_penalty", 1.0) or 0.0
+    )
+    pairs: list[tuple[int, int]] = []
+    if dg is not None:
+        for m in getattr(dg, "motifs", ()) or ():
+            a = int(getattr(m, "a", -1))
+            b = int(getattr(m, "b", -1))
+            if a >= 0 and b >= 0:
+                pairs.append((a, b))
+    opts.motif_join_pairs = pairs
+    return opts
+
+
 @dataclass(frozen=True, slots=True)
 class PolishBudget:
     """Iteration budgets for one polish pass (mid vs last)."""
@@ -79,25 +102,36 @@ def polish_budget_for_iter(
     large_void: bool = False,
     cheap_expand: bool = False,
     near_last: bool = False,
+    on_plateau: bool = False,
+    free_remaining: bool = False,
 ) -> PolishBudget:
     """Hybrid schedule: last → full; cheap → mid no-3b; mid+large_void → mid+3b near last.
 
-    Keeps Q69 cheap expand speed; mid large_void 3b only on near-last (time/scrap).
+    Q190: plateau + residual free → force 3b (dual lex first elsewhere; 3b when stuck).
     """
     if is_last_leaf and not cheap_expand:
         return polish_budget_last(sel)
     mid = polish_budget_mid(sel)
     if cheap_expand or not large_void:
+        if on_plateau and free_remaining and large_void:
+            return PolishBudget(
+                dfs_passes=mid.dfs_passes,
+                dfs_mode=mid.dfs_mode,
+                dfs_max_tries=mid.dfs_max_tries,
+                run_3b=True,
+                run_post_pack=False,
+                freeze_improve_rules=mid.freeze_improve_rules,
+            )
         return mid
     tries = mid.dfs_max_tries
     if sel is not None:
         tries = min(int(sel.dfs_max_tries), max(int(tries or 2), 3))
+    run_3b = bool(near_last) or bool(on_plateau and free_remaining)
     return PolishBudget(
         dfs_passes=mid.dfs_passes,
         dfs_mode=mid.dfs_mode,
         dfs_max_tries=tries,
-        # G1 hybrid: mid void 3b only near last (every mid-iter 3b blew time).
-        run_3b=bool(near_last),
+        run_3b=run_3b,
         run_post_pack=False,
         freeze_improve_rules=mid.freeze_improve_rules,
     )
@@ -186,6 +220,8 @@ def apply_refine_with_restore(
     native_geoms_from_transforms_fn,
     free_info: Any | None = None,
     free_poly: Any | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> list[int]:
     """
     DFS refine (always when budget.dfs_passes > 0) then **one** restore if
@@ -216,6 +252,8 @@ def apply_refine_with_restore(
         "locked_indices": list(locked_indices),
         "dfs_passes": int(budget.dfs_passes),
         "mode": budget.dfs_mode,
+        "dg": dg,
+        "propose_cfg": propose_cfg,
     }
     if budget.dfs_max_tries is not None:
         dfs_kwargs["dfs_max_tries"] = int(budget.dfs_max_tries)
@@ -251,6 +289,9 @@ def apply_refine_with_restore(
         rim_drop = float(max(0.0, rim_before - rim_after))
         if rim_before - rim_after > rim_reject:
             restore_refine = True
+            # Q192: rim drop alone must not undo a count-winning refine.
+            if len(selected_polys) > len(nest_before_refine):
+                restore_refine = False
 
     refine_lex_better = lex_count_area_better(
         old_count=len(nest_before_refine),
@@ -258,8 +299,25 @@ def apply_refine_with_restore(
         new_count=len(selected_polys),
         new_area=_sel_area(selected_polys, group_id, part_areas),
     )
+    # Q192: do not restore solely for rim loss when count rises, or on count-tie
+    # when void-fill rises.
+    void_fill_rise = False
+    count_rise = len(selected_polys) > len(nest_before_refine)
+    count_tie = len(selected_polys) == len(nest_before_refine)
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        nv_nest0 = count_selected_in_free(polys, nest_before_refine, free_poly)
+        nv_ref0 = count_selected_in_free(polys, selected_polys, free_poly)
+        void_fill_rise = int(nv_ref0) > int(nv_nest0)
     if not refine_lex_better:
-        restore_refine = True
+        if count_rise or (count_tie and void_fill_rise):
+            restore_refine = False
+        else:
+            restore_refine = True
 
     # U1/R0: void shed without lex win → restore; also hold if refine empties void.
     if (
@@ -270,10 +328,16 @@ def apply_refine_with_restore(
     ):
         nv_nest = count_selected_in_free(polys, nest_before_refine, free_poly)
         nv_ref = count_selected_in_free(polys, selected_polys, free_poly)
-        if nv_nest > 0 and nv_ref < nv_nest:
-            if (not refine_lex_better) or nv_ref <= 0 or nv_ref < max(1, int(0.5 * nv_nest)):
-                restore_refine = True
-                void_refine_hold = 1
+        refine_count_better = len(selected_polys) > len(nest_before_refine)
+        if (
+            nv_nest > 0
+            and nv_ref < nv_nest
+            and (nv_nest - nv_ref) >= 1
+            and not refine_count_better
+            and not (count_tie and void_fill_rise)
+        ):
+            restore_refine = True
+            void_refine_hold = 1
 
     if restore_refine:
         selected_polys = list(nest_before_refine)
@@ -313,6 +377,8 @@ def refine_options(
     max_tries: int | None = None,
     node_areas: Sequence[float] | None = None,
     seed: int | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> RefineSelectionOptions:
     opts = RefineSelectionOptions()
     opts.max_tries = sel.dfs_max_tries if max_tries is None else max_tries
@@ -332,7 +398,7 @@ def refine_options(
     else:
         opts.min_collisions = 1
         opts.max_root_collisions = 1
-    return opts
+    return apply_dg_refine_options(opts, dg, propose_cfg)
 
 
 def finalize_options(
@@ -352,9 +418,12 @@ def loose_refine_options(
     *,
     node_areas: Sequence[float] | None = None,
     seed: int | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> RefineSelectionOptions:
     return refine_options(
         sel, loose=True, node_areas=node_areas, seed=seed,
+        dg=dg, propose_cfg=propose_cfg,
     )
 
 
@@ -363,9 +432,12 @@ def tight_refine_options(
     *,
     node_areas: Sequence[float] | None = None,
     seed: int | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> RefineSelectionOptions:
     return refine_options(
         sel, loose=False, node_areas=node_areas, seed=seed,
+        dg=dg, propose_cfg=propose_cfg,
     )
 
 
@@ -374,9 +446,12 @@ def strict_refine_options(
     *,
     node_areas: Sequence[float] | None = None,
     seed: int | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> RefineSelectionOptions:
     opts = refine_options(
         sel, loose=False, node_areas=node_areas, seed=seed,
+        dg=dg, propose_cfg=propose_cfg,
     )
     opts.min_collisions = 0
     opts.max_root_collisions = 0
@@ -388,10 +463,13 @@ def head_loose_refine_options(
     *,
     node_areas: Sequence[float] | None = None,
     seed: int | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> RefineSelectionOptions:
     """HEAD-style score DFS: allow transient overlaps during search."""
     return refine_options(
         sel, loose=True, node_areas=node_areas, seed=seed,
+        dg=dg, propose_cfg=propose_cfg,
     )
 
 
@@ -422,6 +500,8 @@ def apply_dfs_refinement(
     node_areas: Sequence[float] | None = None,
     refine_seed: int | None = None,
     locked_indices: Sequence[int] | None = None,
+    dg=None,
+    propose_cfg=None,
 ) -> tuple[list[int], list[int], float]:
     """Refine selection; return (pre_finalize, final, score_sum_final).
 
@@ -461,13 +541,14 @@ def apply_dfs_refinement(
         return pre_finalize, final, selection_score_sum(scores, final)
 
     if mode == DfsMode.HEAD_PIPELINE:
-        loose = head_loose_refine_options(sel)
+        loose = head_loose_refine_options(sel, dg=dg, propose_cfg=propose_cfg)
         tight = RefineSelectionOptions()
         tight.min_collisions = 1
         tight.max_root_collisions = 2
         tight.max_passes = sel.dfs_refine_max_passes
         tight.max_stagnant_passes = sel.dfs_refine_max_stagnant_passes
         tight.beam_width = sel.dfs_refine_beam_width
+        apply_dg_refine_options(tight, dg, propose_cfg)
         for _ in range(passes):
             selected = list(increase_selection_dfs(
                 graph_sorted_rev, selected, max_tries,
@@ -487,6 +568,7 @@ def apply_dfs_refinement(
         for pass_i in range(passes):
             strict = strict_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+                dg=dg, propose_cfg=propose_cfg,
             )
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
@@ -497,6 +579,7 @@ def apply_dfs_refinement(
         for pass_i in range(passes):
             strict = strict_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+                dg=dg, propose_cfg=propose_cfg,
             )
             selected = list(refine_selection(graph_sorted_rev, selected, scores, strict))
             selected = list(refine_selection(graph, selected, scores, strict))
@@ -509,6 +592,7 @@ def apply_dfs_refinement(
         for pass_i in range(passes):
             loose = loose_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+                dg=dg, propose_cfg=propose_cfg,
             )
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             pre_finalize = selected
@@ -519,6 +603,7 @@ def apply_dfs_refinement(
         for pass_i in range(passes):
             loose = loose_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+                dg=dg, propose_cfg=propose_cfg,
             )
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         pre_finalize = selected
@@ -529,9 +614,11 @@ def apply_dfs_refinement(
         for pass_i in range(passes):
             loose = loose_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+                dg=dg, propose_cfg=propose_cfg,
             )
             tight = tight_refine_options(
                 sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i + 1),
+                dg=dg, propose_cfg=propose_cfg,
             )
             selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
             selected = list(refine_selection(graph, selected, scores, tight))
@@ -543,9 +630,11 @@ def apply_dfs_refinement(
     for pass_i in range(passes):
         loose = loose_refine_options(
             sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i),
+            dg=dg, propose_cfg=propose_cfg,
         )
         tight = tight_refine_options(
             sel, node_areas=areas, seed=dfs_refine_seed(seed0, pass_i + 1),
+            dg=dg, propose_cfg=propose_cfg,
         )
         selected = list(refine_selection(graph_sorted_rev, selected, scores, loose))
         selected = list(refine_selection(graph, selected, scores, tight))

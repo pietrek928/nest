@@ -32,6 +32,7 @@ class ClusterPattern:
     members: tuple[tuple[int, tuple[float, float, float]], ...]
     part_count: int
     ref_transform: tuple[float, float, float]
+    motif_id: int = -1
 
 
 def _as_native_geom(p) -> Geometry | None:
@@ -719,6 +720,7 @@ def stamp_motif_leader_follower(
                         "leader_gid": int(group_id),
                         "member_keys": emitted_members,
                         "pattern_sig": _pattern_signature(pat),
+                        "motif_id": int(getattr(pat, "motif_id", -1)),
                         "anchor": (
                             float(t_anchor[0]),
                             float(t_anchor[1]),

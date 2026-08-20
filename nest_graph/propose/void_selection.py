@@ -24,6 +24,7 @@ from nest_graph.geometry import (
     batch_score_placed_contact_hybrid,
 )
 from nest_graph.utils import transform_row_key
+from nest_graph.propose.motif_keys import resolve_motif_keys
 
 
 def pose_key_to_index(
@@ -345,6 +346,53 @@ def boost_selection_geom_quality(
     return n
 
 
+_UNTAGGED_KIND = 255
+_RIM_KIND = 0
+_VOID_KIND = 1
+_SHEET_KIND = 2
+_MOTIF_KIND = 3
+
+
+def boost_scores_by_pose_kind(
+    dg,
+    scores: list[float],
+    *,
+    pocket_w: float,
+    mcts_zone: str,
+    free_info,
+) -> int:
+    """G1b (Q175): Kind CSR overlay — one predicate with bind_epoch pose_kind[]."""
+    if dg is None or pocket_w <= 0.0:
+        return 0
+    try:
+        kinds = list(dg.pose_kind())
+    except Exception:
+        return 0
+    if len(kinds) != len(scores):
+        return 0
+    large_void = (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+    )
+    void_zone = str(mcts_zone or "") in ("void_seek", "void") or large_void
+    rim_zone = str(mcts_zone or "") in ("cluster_edge", "empty_border")
+    hits = 0
+    for i, raw in enumerate(kinds):
+        k = int(raw)
+        if k == _UNTAGGED_KIND:
+            continue
+        if k == _VOID_KIND and void_zone:
+            scores[i] += float(pocket_w)
+            hits += 1
+        elif k == _RIM_KIND and rim_zone:
+            scores[i] += float(pocket_w)
+            hits += 1
+        elif k == _SHEET_KIND:
+            scores[i] += float(pocket_w) * 0.5
+            hits += 1
+    return hits
+
+
 def apply_void_selection_boosts(
     *,
     polys: list,
@@ -364,6 +412,7 @@ def apply_void_selection_boosts(
     min_dist: float = 0.0,
     sheet_area: float = 0.0,
     geom_stats_out: dict | None = None,
+    dg=None,
 ) -> dict[str, int]:
     """Apply void-island, pocket-key, small-part, and selection-geom score boosts."""
     hits = {
@@ -374,6 +423,7 @@ def apply_void_selection_boosts(
         "small_part": 0,
         "large_part": 0,
         "selection_geom": 0,
+        "pose_kind": 0,
     }
     pole_w = float(cfg.propose.void_island_score_boost)
     pocket_w = float(getattr(cfg.propose, "pocket_score_boost", 0.0) or 0.0)
@@ -406,31 +456,32 @@ def apply_void_selection_boosts(
             keys,
             weight=pocket_w,
         )
-        kind_keys = propose_stats.get("kind_keys") or {}
-        motif_for_kind = propose_stats.get("motif_keys") or {}
-        void_kind: dict[int, set[tuple[float, float, float]]] = {}
-        for gid, kset in kind_keys.items():
-            gi = int(gid)
-            void_kind[gi] = set(kset or ()) - set(motif_for_kind.get(gi) or ())
-        hits["kind_keys"] = boost_keyed_proposal_scores(
-            group_id,
-            transform,
+        pose_kind_hits = boost_scores_by_pose_kind(
+            dg,
             scores,
-            void_kind,
-            weight=pocket_w,
+            pocket_w=pocket_w,
+            mcts_zone=mcts_zone,
+            free_info=free_info,
         )
-    if motif_w > 0.0 and propose_stats is not None:
-        motif_keys = propose_stats.get("motif_keys") or {}
-        if not motif_keys:
-            # Fallback: cluster_copy keys from densify/proposer telemetry.
+        hits["pose_kind"] = int(pose_kind_hits)
+        if pose_kind_hits <= 0:
+            kind_keys = propose_stats.get("kind_keys") or {}
             densify = propose_stats.get("densify_stats") or {}
-            pk = propose_stats.get("proposer_keys") or densify.get("proposer_keys") or {}
-            cc = pk.get("cluster_copy") or densify.get("motif_keys") or set()
-            if cc:
-                # Keys lack group — apply to all groups via matching transform keys.
-                motif_keys = {
-                    int(gid): set(cc) for gid in set(int(g) for g in group_id)
-                }
+            motif_for_kind = resolve_motif_keys(propose_stats, densify=densify)
+            void_kind: dict[int, set[tuple[float, float, float]]] = {}
+            for gid, kset in kind_keys.items():
+                gi = int(gid)
+                void_kind[gi] = set(kset or ()) - set(motif_for_kind.get(gi) or ())
+            hits["kind_keys"] = boost_keyed_proposal_scores(
+                group_id,
+                transform,
+                scores,
+                void_kind,
+                weight=pocket_w,
+            )
+    if motif_w > 0.0 and propose_stats is not None:
+        densify = propose_stats.get("densify_stats") or {}
+        motif_keys = resolve_motif_keys(propose_stats, densify=densify)
         hits["motif_keys"] = boost_keyed_proposal_scores(
             group_id,
             transform,

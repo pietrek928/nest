@@ -1,5 +1,5 @@
 import math
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from shapely import LineString, LinearRing, MultiLineString, MultiPoint, Point, Polygon
@@ -116,6 +116,7 @@ def propose_placements_raycasting(
     border_focus: bool = False,
     propose_geom: ProposeGeometry,
     pt_push: Point,
+    rim_anchor_geoms: Sequence[BaseGeometry] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements by casting rays from boundary vertices into the interior.
@@ -151,6 +152,13 @@ def propose_placements_raycasting(
     anchors = []
     for line in get_shape_exteriors(anchor_source):
         anchors.extend([Point(pt) for pt in line.coords])
+    # Q184: also cast from packed rim part exteriors (inner boundary of the shell).
+    if rim_anchor_geoms:
+        for geom in rim_anchor_geoms:
+            if geom is None or getattr(geom, "is_empty", True):
+                continue
+            for line in get_shape_exteriors(geom):
+                anchors.extend([Point(pt) for pt in line.coords])
 
     # Limit anchors to avoid explosion on complex shapes
     max_anchors = 200

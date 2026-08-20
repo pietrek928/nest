@@ -842,3 +842,7 @@ best leaf ── DFS refine + 3b + local_se2 + finalize ──► PoseGraph
 After each letter: bench → if miss (quality <0.9× best-so-far or time >1.5× w/o gain or missing telem) → ≤2 research cycles → re-bench. Never restore old outer loop (Q85). Hard stop if independence fails (Q84).
 
 Full Q61–Q89 table: [agent-domain-notes.md](agent-domain-notes.md#macro-mcts--posegraph-q61q89-shipped-2026-08-15).
+
+### Refine vs DecisionGraph boundary (Q166–Q178)
+
+Refine search stays **PoseGraph-only** (Q163): C++ `refine_selection_dfs` / `finalize_selection` never mutate `DecisionGraph` structure mid-epoch. DG semantics reach refine through (1) **one score SoT** — `apply_void_selection_boosts` plus G1b `pose_kind[]` overlay, then `refine_scores = list(scores)` at compose; (2) optional **DG-aware DFS** (`dg_aware_refine`: MotifJoin fracture ε + attract sub-lex tie-break); (3) **one survival readback** — `materialize_selection` only after post-pack 3b/pin on the outer leaf (`finalize_iter_mcts`, Q169). Locked verdicts and duplication audit: [agent-domain-notes.md — Q166–Q178](agent-domain-notes.md#refine-vs-decisiongraph-q166q178--locked-2026-08-19).

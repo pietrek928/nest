@@ -26,14 +26,26 @@ from nest_graph.propose.placements_selection_expand import (
     selection_expand_arrays,
 )
 from nest_graph.propose.void_selection import transform_row_key
+from nest_graph.propose.motif_keys import resolve_motif_keys
 
 
-def rim_sat_proposer_updates(mcts_zone: str) -> dict:
-    """Q145: rim-sat mute. ``use_side_pack`` always; ``use_history_expand`` only Rim/Sheet.
+def rim_sat_proposer_updates(
+    mcts_zone: str,
+    *,
+    soft_side_pack: bool = False,
+    side_pack_scale: float = 0.25,
+    side_pack_top_n: int = 256,
+) -> dict:
+    """Q145/Q182: rim-sat mute. Soft-scale side_pack when inward bridge on.
 
     Void/Motif map to ``void_seek`` (Q104). ``cluster_copy`` is never muted here.
     """
-    updates: dict = {"use_side_pack": False}
+    updates: dict = {}
+    if soft_side_pack:
+        scale = max(0.0, min(1.0, float(side_pack_scale)))
+        updates["side_pack_top_n"] = max(1, int(float(side_pack_top_n) * scale))
+    else:
+        updates["use_side_pack"] = False
     zone = str(mcts_zone or "")
     if zone in ("cluster_edge", "interior_pocket"):
         updates["use_history_expand"] = False
@@ -250,11 +262,22 @@ def build_transform_batch(
             mcts_zone = ""
             if propose_stats_out is not None:
                 mcts_zone = str(propose_stats_out.get("mcts_zone") or "")
+            soft_side = bool(getattr(propose_cfg, "enable_inward_bridge", True))
             propose_cfg = propose_cfg.model_copy(
-                update=rim_sat_proposer_updates(mcts_zone),
+                update=rim_sat_proposer_updates(
+                    mcts_zone,
+                    soft_side_pack=soft_side,
+                    side_pack_scale=float(
+                        getattr(propose_cfg, "rim_sat_side_pack_scale", 0.25) or 0.25
+                    ),
+                    side_pack_top_n=int(
+                        getattr(propose_cfg, "side_pack_top_n", 256) or 256
+                    ),
+                ),
             )
             if propose_stats_out is not None:
-                propose_stats_out["rim_saturated_skip"] = True
+                propose_stats_out["rim_saturated_skip"] = not soft_side
+                propose_stats_out["rim_sat_soft_side_pack"] = int(soft_side)
         seeded = bool(nest_state is not None and nest_state.seed_count > 0)
         empty_border_only = (
             empty_sheet and cfg.propose.first_pass_empty_border_only
@@ -584,6 +607,15 @@ def build_transform_batch(
             if densify_hit
             else max(int(cfg.propose.max_proposals), 1)
         )
+        # Q191: plateau + free remaining → expand void/inward propose budget.
+        # Last leaf also boosts when short fixtures never reach plateau.
+        on_plateau = bool((propose_stats_out or {}).get("on_plateau", False))
+        last_leaf = bool((propose_stats_out or {}).get("is_last_leaf", False))
+        free_kind = str((propose_stats_out or {}).get("free_kind", "") or "")
+        if free_kind == "large_void" and (on_plateau or last_leaf):
+            n_props = max(n_props, int(n_props * 1.35) + 32)
+            if propose_stats_out is not None and group_id == 0:
+                propose_stats_out["plateau_props_boost"] = 1
         # P1: DG / Motif soft steer — raise mix floors under void_seek or Motif gids.
         mcts_zone = str((propose_stats_out or {}).get("mcts_zone") or "")
         motif_gids_pre = (propose_stats_out or {}).get("mcts_motif_gids") or []
@@ -642,6 +674,42 @@ def build_transform_batch(
             propose_stats_out["hist_q"] = int(hist_q)
             propose_stats_out["mix_props"] = int(n_props)
             propose_stats_out["rim_skip"] = int(bool(rim_sat))
+        # Q186: under plateau (or last leaf) + inward bridge, hard floor
+        # motif/cluster_copy keys in mix. Short fixtures (iters < flat_iters) never
+        # reach PlateauTracker; last leaf still needs structure reuse.
+        motif_floor_n = 0
+        last_leaf = bool((propose_stats_out or {}).get("is_last_leaf", False))
+        if (
+            bool(getattr(cfg.propose, "enable_inward_bridge", True))
+            and (on_plateau or last_leaf)
+        ):
+            motif_floor_n = int(
+                getattr(cfg.propose, "cluster_copy_mix_floor", 12) or 12
+            )
+        motif_pin = np.zeros((0, 3), dtype=np.float64)
+        if motif_floor_n > 0 and proposal_pins.shape[0] > 0:
+            resolved = resolve_motif_keys(
+                propose_stats_out, densify=(propose_stats_out or {}).get("densify_stats"),
+                gid=int(group_id),
+            )
+            motif_key_set = set(resolved.get(int(group_id)) or ())
+            if motif_key_set:
+                rows = []
+                for r in proposal_pins:
+                    if transform_row_key(np.asarray(r, dtype=np.float64)) in motif_key_set:
+                        rows.append(np.asarray(r, dtype=np.float64))
+                        if len(rows) >= motif_floor_n:
+                            break
+                if rows:
+                    motif_pin = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+                    if propose_stats_out is not None:
+                        propose_stats_out["cluster_copy_mix_floor_hits"] = int(
+                            propose_stats_out.get("cluster_copy_mix_floor_hits", 0)
+                        ) + int(motif_pin.shape[0])
+        if motif_pin.shape[0] > 0:
+            proposal_pins = dedupe_transforms(
+                np.concatenate([motif_pin, proposal_pins], axis=0)
+            )
         merged = subsample_transforms_stratified(
             selection=sel,
             proposals=proposal_pins,

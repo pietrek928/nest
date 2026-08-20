@@ -8,16 +8,19 @@ import time
 import numpy as np
 
 from nest_graph.propose.ranking import pack_tightness_cost
+from nest_graph.propose.first_pass_border import (
+    first_pass_border_ring_selection,
+    first_pass_layered_selection,
+    guidance_border_refine as _guidance_border_refine,
+)
+from nest_graph.rules.evolve import make_initial_rule_sets as _make_initial_rule_sets
 from nest_graph.build_graph import (
-    _first_pass_border_ring_selection,
-    _first_pass_layered_selection,
-    _make_initial_rule_sets,
+    _native_geoms_from_transforms,
     _selection_coverage_pct,
     active_rule_set,
     make_polygon_graph,
     score_elems,
 )
-from nest_graph.propose.first_pass_border import guidance_border_refine as _guidance_border_refine
 from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import BuildGraphConfig, SamplingConfig
 
@@ -58,19 +61,18 @@ def _run_pre_refine(cfg: BuildGraphConfig) -> dict:
     seed_rules = active_rule_set(_make_initial_rule_sets(cfg))
     scores = score_elems(graph, seed_rules)
     min_dist = cfg.board_min_dist(first_pass=True)
-    ring = _first_pass_border_ring_selection(
+    ring = first_pass_border_ring_selection(
         graph, polys, p_board, min_dist, scores,
     )
-    _, polys2, gid2, tr2, selected = _first_pass_layered_selection(
+    _, polys2, gid2, tr2, selected = first_pass_layered_selection(
         cfg, p_board, parts,
         graph=graph, p1=p1, p2=p2,
-        selected_t=selected_t, history=history, rng=rng,
-        selection_window=selection_window,
         polys=polys, group_id=group_id, transform=transform,
         phase1_selected=list(ring),
         rule_set=seed_rules, scores=scores,
-        selection=cfg.selection,
         skip_guidance_refine=True,
+        make_polygon_graph_fn=make_polygon_graph,
+        native_geoms_fn=_native_geoms_from_transforms,
     )
     pack_polys = [polys2[i] for i in selected]
     pack_gids = [gid2[i] for i in selected]

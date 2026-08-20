@@ -36,8 +36,10 @@ from nest_graph.proposer_names import (
     BATCH_FOLLOW_PROPOSERS,
     CORRIDOR_PROPOSERS,
     FIRST_PASS_EMPTY_BORDER_PROPOSERS,
+    PlaceZone,
     ProposerName,
     first_pass_packed_border_proposers,
+    strip_inward_border_explorers,
 )
 from nest_graph.utils import transform_poly
 
@@ -51,6 +53,7 @@ from nest_graph.propose.context import (
     corridor_channel_samples,
     corridor_channel_target,
     corridor_seed_coords_from_samples,
+    free_lobe_axis_samples,
     effective_ranking_mode,
     focal_shape_for_propose,
     FreeSpaceSnapshot,
@@ -93,6 +96,7 @@ from nest_graph.propose.types import (
     ProposeContext,
     make_propose_context,
 )
+from nest_graph.propose.motif_keys import fold_emit_motif_keys
 from nest_graph.propose.placements_pattern import (
     extract_cluster_patterns,
     merge_cluster_patterns,
@@ -999,6 +1003,8 @@ class _CollectState:
         self.skip_explorers = False
         self.explorer_scale = 1.0
         self.board_edge_reserved = False
+        self.inward_bridge_emitted = False
+        self.cascade_zone: str | None = None
         if cascade_stats_out is not None:
             cascade_stats_out.setdefault("cascade_stopped_after", "none")
             cascade_stats_out.setdefault("cascade_skipped_proposers", [])
@@ -1335,7 +1341,7 @@ def _collect_explorer_candidates(
                 ),
                 max_items=neighbor_top,
             )
-    if _proposer_enabled("erosion", ctx.enabled_proposers):
+    if _proposer_enabled("erosion", ctx.enabled_proposers) and not state.inward_bridge_emitted:
         er_cap = state.explorer_cap(pool)
         if er_cap > 0:
             state.ext(
@@ -1356,9 +1362,18 @@ def _collect_explorer_candidates(
                 ),
                 max_items=er_cap,
             )
-    if _proposer_enabled("raycasting", ctx.enabled_proposers):
+    if _proposer_enabled("raycasting", ctx.enabled_proposers) and not state.inward_bridge_emitted:
         rc_cap = state.explorer_cap(pool)
         if rc_cap > 0:
+            rim_anchors = None
+            # Q219: rim-anchored rays match F3 ON regressor on void_seek; keep for
+            # border early-bridge only (explorer stage on void uses unanchored rays).
+            if (
+                bool(getattr(cfg, "enable_inward_bridge", True))
+                and state.cascade_zone
+                not in (PlaceZone.VOID_SEEK.value, "void_seek")
+            ):
+                rim_anchors = extras.packed_polys
             state.ext(
                 "raycasting",
                 propose_placements_raycasting(
@@ -1375,9 +1390,14 @@ def _collect_explorer_candidates(
                     border_focus=border_focus,
                     propose_geom=ctx.propose_geom,
                     pt_push=ctx.pt_push,
+                    rim_anchor_geoms=rim_anchors,
                 ),
             )
-    if _proposer_enabled("voronoi", ctx.enabled_proposers) and cfg.use_voronoi:
+    if (
+        _proposer_enabled("voronoi", ctx.enabled_proposers)
+        and cfg.use_voronoi
+        and not state.inward_bridge_emitted
+    ):
         vo_cap = state.explorer_cap(pool)
         if vo_cap > 0:
             state.ext(
@@ -1652,6 +1672,22 @@ def _collect_candidates(
         proposer_keys=proposer_keys,
         cascade_stats_out=cascade_stats_out,
     )
+    state.cascade_zone = cascade_zone
+
+    # Q179/Q184: rim→center explorers before snipers claim keys (inward bridge).
+    # Q219/D3: VOID_SEEK already free-orders explorers after pocket; early bridge
+    # before cluster_copy is the residual ON regressor (rim anchors soft-gated
+    # separately in explorer collect).
+    early_inward = (
+        bool(getattr(ctx.propose_cfg, "enable_inward_bridge", True))
+        and cascade_zone in (
+            PlaceZone.EMPTY_BORDER.value,
+            PlaceZone.BORDER_GAP.value,
+        )
+    )
+    if early_inward:
+        _collect_inward_bridge_explorers(ctx, extras, state)
+        state.inward_bridge_emitted = True
 
     pocket_reserve, motif_reserve = _collect_pocket_candidates(
         ctx,
@@ -1710,6 +1746,96 @@ def _collect_candidates(
     _collect_cast_refine_candidates(ctx, state)
     _collect_expand_candidates(ctx, extras, state, group_id=group_id)
     return _filter_distant_collisions(state.candidates, ctx.propose_geom)
+
+
+def _collect_inward_bridge_explorers(
+    ctx: ProposeContext,
+    extras: PackedProposeExtras,
+    state: _CollectState,
+) -> None:
+    """Emit raycasting (+ erosion) before snipers so rim→center keys survive (Q184)."""
+    cfg = ctx.propose_cfg
+    pool = ctx.pool
+    if state.cascade_stats_out is not None:
+        state.cascade_stats_out["inward_bridge_attempt"] = 1
+        state.cascade_stats_out["inward_enabled"] = int(
+            _proposer_enabled("raycasting", ctx.enabled_proposers)
+        )
+        state.cascade_stats_out["inward_pool"] = int(pool)
+    if _proposer_enabled("raycasting", ctx.enabled_proposers):
+        rc_cap = state.explorer_cap(pool)
+        if state.cascade_stats_out is not None:
+            state.cascade_stats_out["inward_rc_cap"] = int(rc_cap)
+        if rc_cap > 0:
+            rim_anchors = extras.packed_polys
+            before = len((state.proposer_keys or {}).get("raycasting") or ())
+            raw = propose_placements_raycasting(
+                ctx.base_shape,
+                ctx.shape_to_place,
+                ctx.sheet,
+                ctx.min_dist,
+                use_free_region=ctx.use_free_region,
+                top_n=rc_cap,
+                num_rays=cfg.raycast_num_rays,
+                num_angles=cfg.raycast_num_angles,
+                anchor_stride=cfg.raycast_anchor_stride,
+                focal_shape=ctx.focal_shape,
+                border_focus=ctx.border_focus,
+                propose_geom=ctx.propose_geom,
+                pt_push=ctx.pt_push,
+                rim_anchor_geoms=rim_anchors,
+            )
+            if state.cascade_stats_out is not None:
+                state.cascade_stats_out["inward_ray_raw"] = int(len(raw))
+            state.ext(
+                "raycasting",
+                raw,
+            )
+            after = len((state.proposer_keys or {}).get("raycasting") or ())
+            if state.cascade_stats_out is not None:
+                state.cascade_stats_out["inward_ray_keys"] = int(after - before)
+    if _proposer_enabled("erosion", ctx.enabled_proposers):
+        er_cap = state.explorer_cap(pool)
+        if er_cap > 0:
+            state.ext(
+                "erosion",
+                propose_placements_erosion(
+                    ctx.base_shape,
+                    ctx.shape_to_place,
+                    ctx.sheet,
+                    ctx.min_dist,
+                    propose_geom=ctx.propose_geom,
+                    pt_push=ctx.pt_push,
+                    use_free_region=ctx.use_free_region,
+                    border_focus=ctx.border_focus,
+                    focal_shape=ctx.focal_shape,
+                    num_angles=ctx.n_angles,
+                    top_n=er_cap,
+                    placement_angles=ctx.placement_angles,
+                ),
+                max_items=er_cap,
+            )
+    if _proposer_enabled("voronoi", ctx.enabled_proposers) and cfg.use_voronoi:
+        vo_cap = state.explorer_cap(pool)
+        if vo_cap > 0:
+            state.ext(
+                "voronoi",
+                propose_placements_voronoi(
+                    ctx.base_shape,
+                    ctx.shape_to_place,
+                    ctx.sheet,
+                    ctx.min_dist,
+                    use_free_region=ctx.use_free_region,
+                    top_n=vo_cap,
+                    num_angles=cfg.voronoi_num_angles,
+                    densify_divisor=cfg.voronoi_densify_divisor,
+                    max_sites=cfg.voronoi_max_sites,
+                    focal_shape=ctx.focal_shape,
+                    border_focus=ctx.border_focus,
+                    propose_geom=ctx.propose_geom,
+                    pt_push=ctx.pt_push,
+                ),
+            )
 
 
 def collect_propose_candidates(
@@ -3136,6 +3262,37 @@ def proposed_transforms_for_groups(
                 primary_target,
                 num_angles=min(4, int(cfg.placement_num_angles) if cfg.placement_num_angles else 4),
             )
+        # Q181: rim→void lobe spine (generic free, not sheet-hole only). Prefer when
+        # samples exist; does not replace sheet-hole corridor above.
+        # Q219: skip on VOID_SEEK — void_pole seeds already cover attract; lobe spine
+        # was an F3 ON-only path that gutted coverage vs OFF.
+        if (
+            corridor_guidance_seeds is None
+            and bool(getattr(propose_cfg, "enable_inward_bridge", True))
+            and zone in (
+                PlaceZone.EMPTY_BORDER.value,
+                PlaceZone.BORDER_GAP.value,
+            )
+            and free_snap is not None
+            and free_snap.analysis is not None
+            and getattr(free_snap.analysis, "target_poly", None) is not None
+        ):
+            part_min, _ = part_extents(part_poly)
+            lobe_samples = free_lobe_axis_samples(
+                free_snap.analysis.target_poly,
+                sheet,
+                part_min=float(part_min),
+                min_dist=float(min_dist),
+                n=12,
+            )
+            if lobe_samples:
+                corridor_guidance_seeds = corridor_seed_coords_from_samples(
+                    lobe_samples,
+                    num_angles=min(
+                        4,
+                        int(cfg.placement_num_angles) if cfg.placement_num_angles else 4,
+                    ),
+                )
 
         use_full = use_full_packed_obstacle
         if zone is not None:
@@ -3214,6 +3371,27 @@ def proposed_transforms_for_groups(
             else:
                 annulus = bool(zone_info is not None and zone_info.is_annulus)
                 enabled = ProposeConfig.proposers_for_place(zone, annulus=annulus)
+            # Q195 ablation: strip inward explorers from border zones when flag off.
+            if (
+                enabled is not None
+                and not bool(getattr(propose_cfg, "enable_inward_bridge", True))
+                and zone in (
+                    PlaceZone.EMPTY_BORDER.value,
+                    PlaceZone.BORDER_GAP.value,
+                )
+            ):
+                enabled = strip_inward_border_explorers(enabled)
+            # Q179: EMPTY_BORDER explorers only after packed_n threshold (staging).
+            if (
+                enabled is not None
+                and zone == PlaceZone.EMPTY_BORDER.value
+                and bool(getattr(propose_cfg, "enable_inward_bridge", True))
+            ):
+                min_packed = int(
+                    getattr(propose_cfg, "inward_empty_border_min_packed", 5) or 5
+                )
+                if len(placed) < min_packed:
+                    enabled = strip_inward_border_explorers(enabled)
         if void_hijack_from is not None:
             cfg = cfg.model_copy(update={"use_group_edge_seeds": True})
             if enabled is not None:
@@ -3321,14 +3499,25 @@ def proposed_transforms_for_groups(
             motif_cohorts_agg.append(cohort)
         for pk in pocket_stats.get("pocket_keys") or []:
             pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
-        for hk in pocket_stats.get("motif_hole_keys") or []:
-            motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(hk))
-        for key in group_proposer_keys.get("cluster_copy") or ():
-            motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(key))
+        fold_emit_motif_keys(
+            motif_keys_by_group,
+            group_id=int(group_id),
+            motif_hole_keys=pocket_stats.get("motif_hole_keys") or (),
+            cluster_copy_keys=group_proposer_keys.get("cluster_copy") or (),
+        )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n
         for name, keys in group_proposer_keys.items():
             proposer_keys_agg.setdefault(name, set()).update(keys)
+            # Primary collect emit must surface in densify_stats / void_leak (Q179 telem).
+            emitted_by_proposer[name] = max(
+                int(emitted_by_proposer.get(name, 0)),
+                len(keys),
+            )
+            pool_by_proposer[name] = max(
+                int(pool_by_proposer.get(name, 0)),
+                len(keys),
+            )
         _union_sniper_keys(sniper_keys_by_group, group_id, group_proposer_keys)
         if group_cascade.get("cascade_stopped_after") not in (None, "none"):
             cascade_agg["cascade_stopped_after"] = group_cascade.get(
@@ -3339,6 +3528,20 @@ def proposed_transforms_for_groups(
                 if n not in skipped:
                     skipped.append(n)
             cascade_agg["cascade_skipped_proposers"] = skipped
+        if int(group_cascade.get("inward_bridge_attempt", 0) or 0):
+            cascade_agg["inward_bridge_attempt"] = 1
+        cascade_agg["inward_ray_keys"] = int(cascade_agg.get("inward_ray_keys", 0) or 0) + int(
+            group_cascade.get("inward_ray_keys", 0) or 0
+        )
+        cascade_agg["inward_ray_raw"] = int(cascade_agg.get("inward_ray_raw", 0) or 0) + int(
+            group_cascade.get("inward_ray_raw", 0) or 0
+        )
+        if int(group_cascade.get("inward_enabled", 0) or 0):
+            cascade_agg["inward_enabled"] = 1
+        cascade_agg["inward_rc_cap"] = max(
+            int(cascade_agg.get("inward_rc_cap", 0) or 0),
+            int(group_cascade.get("inward_rc_cap", 0) or 0),
+        )
         for k, v in group_diversity.items():
             if isinstance(v, (int, float)):
                 diversity_agg[k] = diversity_agg.get(k, 0) + v
@@ -3449,10 +3652,14 @@ def proposed_transforms_for_groups(
             pocket_accepted += int(densify_telem["pocket_accepted"])
             for pk in densify_telem["pocket_keys"]:
                 pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
-            for hk in densify_telem.get("motif_hole_keys") or []:
-                motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(hk))
-            for key in densify_telem.get("proposer_keys", {}).get("cluster_copy") or ():
-                motif_keys_by_group.setdefault(int(group_id), set()).add(tuple(key))
+            fold_emit_motif_keys(
+                motif_keys_by_group,
+                group_id=int(group_id),
+                motif_hole_keys=densify_telem.get("motif_hole_keys") or (),
+                cluster_copy_keys=(
+                    densify_telem.get("proposer_keys", {}).get("cluster_copy") or ()
+                ),
+            )
             pocket_skips_all.extend(densify_telem["pocket_skips"])
             for mk, mv in (densify_telem.get("motif_skip") or {}).items():
                 motif_skip_agg[str(mk)] = motif_skip_agg.get(str(mk), 0) + int(mv)
@@ -3514,6 +3721,21 @@ def proposed_transforms_for_groups(
         )
         densify_stats_out["cascade_skipped_proposers"] = list(
             cascade_agg.get("cascade_skipped_proposers") or []
+        )
+        densify_stats_out["inward_bridge_attempt"] = int(
+            cascade_agg.get("inward_bridge_attempt", 0) or 0
+        )
+        densify_stats_out["inward_ray_keys"] = int(
+            cascade_agg.get("inward_ray_keys", 0) or 0
+        )
+        densify_stats_out["inward_ray_raw"] = int(
+            cascade_agg.get("inward_ray_raw", 0) or 0
+        )
+        densify_stats_out["inward_enabled"] = int(
+            cascade_agg.get("inward_enabled", 0) or 0
+        )
+        densify_stats_out["inward_rc_cap"] = int(
+            cascade_agg.get("inward_rc_cap", 0) or 0
         )
         densify_stats_out["nms_kept"] = int(diversity_agg.get("nms_kept", 0))
         densify_stats_out["nms_dropped"] = int(diversity_agg.get("nms_dropped", 0))

@@ -10,10 +10,15 @@ from typing import Any, Mapping, Sequence
 from nest_graph.geometry import nfp_lite_pair_relative
 from nest_graph.propose.placements_pattern import ClusterPattern, extract_cluster_patterns
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
+from nest_graph.propose.motif_keys import (
+    fold_emit_motif_keys,
+    pose_in_motif_keys,
+    resolve_motif_keys,
+)
 from nest_graph.utils import compose_transforms
 
 
-def record_to_cluster_pattern(rec: Any) -> ClusterPattern:
+def record_to_cluster_pattern(rec: Any, *, motif_id: int = -1) -> ClusterPattern:
     """One MotifRecord → pair ClusterPattern."""
     members = (
         (int(rec.gid_a), (0.0, 0.0, 0.0)),
@@ -26,6 +31,7 @@ def record_to_cluster_pattern(rec: Any) -> ClusterPattern:
         members=members,
         part_count=2,
         ref_transform=(0.0, 0.0, 0.0),
+        motif_id=int(motif_id),
     )
 
 
@@ -33,7 +39,8 @@ def motif_to_cluster_patterns(motif_base: Any, action: Any) -> list[ClusterPatte
     """PLACE_MOTIF action → ClusterPattern list (single MotifBase record)."""
     if int(action.motif_id) < 0 or int(action.motif_id) >= int(motif_base.size()):
         return []
-    return [record_to_cluster_pattern(motif_base.at(int(action.motif_id)))]
+    mid = int(action.motif_id)
+    return [record_to_cluster_pattern(motif_base.at(mid), motif_id=mid)]
 
 
 def motif_graph_hits(
@@ -50,9 +57,12 @@ def motif_graph_hits(
     motif_keys: dict[int, set[tuple[float, float, float]]] = {}
     cohorts: list[dict] = []
     n_hits = 0
-    for pat in patterns:
+    for idx, pat in enumerate(patterns):
         if len(getattr(pat, "members", ()) or ()) < 2:
             continue
+        mid = int(getattr(pat, "motif_id", -1))
+        if mid < 0:
+            mid = int(idx)
         gid_a, _t_a = pat.members[0]
         gid_b, t_b = pat.members[1]
         rel_b = (float(t_b[0]), float(t_b[1]), float(t_b[2]))
@@ -74,6 +84,7 @@ def motif_graph_hits(
                     (int(gid_a), key_a),
                     (int(gid_b), key_b),
                 ],
+                "motif_id": mid,
             })
             n_hits += 1
     return motif_keys, cohorts, n_hits
@@ -84,12 +95,15 @@ def merge_motif_hits(
     motif_keys: dict[int, set[tuple[float, float, float]]] | None,
     cohorts: Sequence[dict] | None,
 ) -> None:
-    """Cheap Motif inject: union motif_keys / append cohorts (Q143)."""
+    """Cheap Motif inject: union motif_graph_keys / append cohorts (Q143/Q200).
+
+    Writes ``motif_graph_keys`` only — never ``motif_keys`` (emit SoT / Q196).
+    """
     if motif_keys:
-        merged = dict(propose_stats.get("motif_keys") or {})
+        merged = dict(propose_stats.get("motif_graph_keys") or {})
         for gid, keys in motif_keys.items():
             merged.setdefault(int(gid), set()).update(keys or ())
-        propose_stats["motif_keys"] = merged
+        propose_stats["motif_graph_keys"] = merged
     if cohorts:
         propose_stats["motif_cohorts"] = list(
             propose_stats.get("motif_cohorts") or []
@@ -244,6 +258,7 @@ def note_motif_hollow_miss(motif_base: Any, motif_id: int) -> bool:
 __all__ = [
     "age_motif_library",
     "extract_cluster_patterns",
+    "fold_emit_motif_keys",
     "motif_graph_hits",
     "merge_motif_hits",
     "motif_patterns_for_inject",
@@ -251,5 +266,7 @@ __all__ = [
     "note_motif_hollow_miss",
     "patterns_from_motif_base",
     "polish_patterns_at_inject",
+    "pose_in_motif_keys",
     "record_to_cluster_pattern",
+    "resolve_motif_keys",
 ]

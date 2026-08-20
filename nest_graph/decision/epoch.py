@@ -2,7 +2,10 @@
 
 from typing import Sequence
 
+import numpy as np
+
 from nest_graph.elem_graph import DecisionGraph, MacroRegion
+from nest_graph.propose.transform_batch import graph_valid_carry_by_group
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 
 _UNTAGGED = 255
@@ -139,6 +142,11 @@ def bind_epoch(
         propose_stats.update(stats)
 
 
+def materialize_final_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
+    """Single post-3b/pin survival readback (Q169). Alias for ``materialize_selection``."""
+    return materialize_selection(dg, selected, propose_stats)
+
+
 def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
     """Flag Attach/MotifJoin whose members survived MWIS (Q154)."""
     out = {
@@ -170,3 +178,30 @@ def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | Non
         propose_stats["attach_n"] = out["attach_n"]
         propose_stats["mutex_n"] = out["mutex_n"]
     return out
+
+
+def bind_graph_epoch(
+    dg,
+    graph,
+    group_id: Sequence[int],
+    transform: Sequence,
+    propose_stats: dict,
+    cfg,
+) -> tuple:
+    """bind_epoch + graph_valid_carry_by_group (single bind site)."""
+    bind_epoch(dg, graph, propose_stats, group_id, transform)
+    ngroups = int(getattr(cfg.rules, "ngroups", 0) or len(group_id))
+    carry_max = int(getattr(cfg.propose, "graph_valid_carry_max", 512) or 512)
+    if bool(getattr(cfg.propose, "enable_graph_valid_carry", True)):
+        carry = graph_valid_carry_by_group(
+            group_id, transform, ngroups=ngroups, max_keep=carry_max,
+        )
+    else:
+        carry = tuple(
+            np.zeros((0, 3), dtype=np.float64) for _ in range(ngroups)
+        )
+    propose_stats["graph_valid_n"] = int(len(transform))
+    propose_stats["carry_n_next"] = int(
+        sum(int(a.shape[0]) for a in carry)
+    )
+    return carry

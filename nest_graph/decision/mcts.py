@@ -334,6 +334,11 @@ class MctsAgent:
             tot = int(raw.get("hits", 0) or 0) + int(raw.get("misses", 0) or 0)
             if tot > 0:
                 score -= 0.2 * (float(raw.get("misses", 0) or 0) / float(tot))
+        prop_h = float((realized or {}).get("proposer_pb", 0.0) or 0.0)
+        prop_h = max(0.0, min(1.0, prop_h))
+        if prop_h > 0.0:
+            den = float(visits) + 1.0 if visits > 0 else float(parent_visits) + 1.0
+            score += prop_h / den
         return score
 
     def pick_expand_action(

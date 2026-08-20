@@ -5,10 +5,9 @@ from shapely.geometry import box
 
 from nest_graph.build_graph import (
     NestState,
-    archive_void_elite_transforms,
-    void_elite_count,
     void_elite_tuple_from_archive,
 )
+from nest_graph.propose.telem import archive_void_elite_transforms, void_elite_count
 from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import (
     ProposeConfig,

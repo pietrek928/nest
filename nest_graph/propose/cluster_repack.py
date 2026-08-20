@@ -18,6 +18,7 @@ from nest_graph.propose.placement_common import (
     dual_pose_from_base,
     is_pose_clear,
     part_base_geoms,
+    part_void_adj,
     selection_pairwise_independent,
 )
 from nest_graph.propose.selection_edit import SelectionEditCtx
@@ -105,15 +106,8 @@ def _part_void_adj(
     void_poly: Polygon | None,
     min_dist: float,
 ) -> bool:
-    if void_poly is None or void_poly.is_empty or poly is None or poly.is_empty:
-        return False
-    try:
-        return (
-            poly.intersects(void_poly)
-            or float(poly.distance(void_poly)) <= float(min_dist) * 2.0
-        )
-    except Exception:
-        return False
+    """Alias for shared SoT ``part_void_adj`` (peel + 3b board_adj gate)."""
+    return part_void_adj(poly, void_poly, min_dist)
 
 
 def bfs_peel_victim(
@@ -467,6 +461,7 @@ def cluster_repack_selection(
     pt_push: Point | None = None,
     free_space=None,
     victim_indices: Sequence[int] | None = None,
+    repair_patterns: Sequence | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
     void_geoms = None
@@ -556,22 +551,26 @@ def cluster_repack_selection(
         pole if pole is not None else sheet.centroid
     )
 
-    # Patterns: peel motif first, then capped subpatterns from kept.
+    # Patterns: prefer RepairCohort list (Q205/Q207); else peel + capped locally.
+    # Q208: hardcap attempts = 1 (config default; ignore multi-stamp DFS loops).
     patterns: list[ClusterPattern] = []
-    peel_pat = pattern_from_indices(victim, out_polys, group_ids, out_tr)
-    if peel_pat is not None:
-        patterns.append(peel_pat)
-    if kept:
-        patterns.extend(
-            extract_capped_subpatterns(
-                [out_polys[i] for i in kept],
-                [int(group_ids[i]) for i in kept],
-                [out_tr[i] for i in kept],
-                min_dist=min_dist,
-                max_members=len(victim),
-                sheet=sheet,
+    if repair_patterns:
+        patterns = list(repair_patterns)
+    else:
+        peel_pat = pattern_from_indices(victim, out_polys, group_ids, out_tr)
+        if peel_pat is not None:
+            patterns.append(peel_pat)
+        if kept:
+            patterns.extend(
+                extract_capped_subpatterns(
+                    [out_polys[i] for i in kept],
+                    [int(group_ids[i]) for i in kept],
+                    [out_tr[i] for i in kept],
+                    min_dist=min_dist,
+                    max_members=len(victim),
+                    sheet=sheet,
+                )
             )
-        )
 
     void_facing = any(_part_void_adj(out_polys[i], void_poly, min_dist) for i in victim)
     stamped = None

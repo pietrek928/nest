@@ -381,6 +381,95 @@ def stamp_arena_amaf(
     return int(new_id), action
 
 
+def record_outer_iter_expand(
+    runner: Any,
+    *,
+    parent_id: int,
+    action: Any | None,
+    selected_polys: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    coverage_pct: float,
+    propose_stats: dict,
+    mcts_telem: dict,
+    nest_state: Any | None = None,
+    part_bases: dict | None = None,
+    part_areas: Sequence[float] = (),
+    min_dist: float = 0.0,
+    t_expand0: float | None = None,
+    motif_min_compactness: float = 0.35,
+    motif_ttl: int = 0,
+    motif_max_keep: int = 4,
+) -> tuple[int, BoardSnapshot | None]:
+    """Outer-leaf expand: snapshot + record_mcts_expand + void_leak upsert telem (Q144)."""
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return int(parent_id), None
+    t0 = float(t_expand0) if t_expand0 is not None else time.perf_counter()
+    mcts_telem.setdefault("pw_expand", 0)
+    child_snap = board_snapshot_from_selection(
+        selected_polys=selected_polys,
+        group_id=group_id,
+        transform=transform,
+        ngroups=int(ngroups),
+        coverage_pct=float(coverage_pct),
+        propose_stats=propose_stats,
+        mcts_action=action,
+        mcts_telem=mcts_telem,
+        arena_node_id=int(parent_id),
+    )
+    act = action
+    if act is None:
+        rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+        if rem:
+            act = agent.pick_expand_action(
+                rem, rule_ids=(0,), parent_id=int(parent_id), snapshot=child_snap,
+            )
+        if act is None:
+            act = MacroAction()
+            free_kind = str(
+                getattr(child_snap, "free_kind", "")
+                or propose_stats.get("free_kind")
+                or ""
+            )
+            act.region = (
+                MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+            )
+            act.rule_id = 0
+            act.motif_id = -1
+    new_id = record_mcts_expand(
+        runner,
+        parent_id=int(parent_id),
+        action=act,
+        child_snap=child_snap,
+        nest_state=nest_state,
+        part_bases=part_bases or {},
+        part_areas=part_areas,
+        min_dist=float(min_dist),
+        t_expand0=t0,
+        mcts_telem=mcts_telem,
+        propose_stats=propose_stats,
+        motif_min_compactness=float(motif_min_compactness),
+        motif_ttl=int(motif_ttl),
+        motif_max_keep=int(motif_max_keep),
+    )
+    parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
+    agent._ucb(int(new_id), parent_visits)
+    rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+    if rem:
+        agent.pick_expand_action(
+            rem, rule_ids=(0,), parent_id=int(new_id), snapshot=child_snap,
+        )
+    if isinstance(propose_stats.get("void_leak"), dict):
+        propose_stats["void_leak"]["contact_grg_upserts"] = int(
+            mcts_telem.get("contact_grg_upserts", 0) or 0
+        )
+    propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
+    propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+    return int(new_id), child_snap
+
+
 def make_execute_fn(
     pack_fn: Callable[..., BoardSnapshot],
 ) -> Callable[..., BoardSnapshot]:
@@ -545,6 +634,7 @@ __all__ = [
     "prep_selection_free",
     "prep_selection_freeze",
     "record_mcts_expand",
+    "record_outer_iter_expand",
     "run_mcts_multi_sim",
     "run_pack_stages",
     "schedule_prep_selection_free",

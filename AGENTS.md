@@ -54,11 +54,12 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 - **Stage + bench.** Split the plan into letters. After each: smallest relevant `pytest`; `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate`; if propose/mix/nest changed, `NEST_BUILD_GRAPH_ITERS=2 uv run python -m nest_graph.build_graph`. Snapshot a baseline before the first letter.
 - **Bench the letter's component.** Gate tags/cases must actually run the helper you changed (letter telem present, e.g. `niche_pos` / `contact_grg_upserts` / `pin_added` / `dfs_passes` / `refine_ms` / `history_expand` / `cluster_copy` / `free_space_cloud`). Do not declare pass from a tag that never hit that path. To isolate vs other stages, mute unrelated existing `use_*` / `enable_*` flags — `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --cfg enable_lns_rebuild=false enable_cluster_repack=false enable_gravity_compaction=false` — and compare muted vs shipped on the **same** fixture. Prefix `selection.` for SelectionConfig (e.g. `--cfg selection.dfs_passes=1`). Do not add a second pack/credit/pin just to turn something off. Muted runs are compare-only; letter pass is still shipped vs snapshot.
 - **Miss → improvement loop (same letter).** Hard stop only if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. On miss: **loop** — research → patch → re-gate — until the letter passes or the user redirects. Do **not** start the next letter or pile a new parallel mechanism while looping.
+- **Degradation → research loop (same letter).** Any drop vs the letter’s snapshot / best-so-far (area, parts, or indep) is a **fail to improve**, not a soft OK. Even if still ≥0.9× the floor, **do not lock the letter or move on** while degraded: research (telem + named hot path) → one unify patch → re-bench until quality is **≥ snapshot** (or the user redirects). Reverting a harmful patch counts as a loop step; “within noise / gate still green” does **not** excuse stopping below baseline when the task is to improve.
 - Historical Qs stay in [docs/agent-domain-notes.md](docs/agent-domain-notes.md). Do not lock one-off Q-numbers in this file.
 
 ### Improvement loop (research + unify)
 
-During each miss cycle and while a letter is still open:
+During each miss cycle, **degradation cycle**, and while a letter is still open:
 
 - **Stuck → research, then unify.** Do not stack another special case. Read telem + the named hot-path functions; look for a better existing lever or a **hybrid** of two winners (shared helper, lex pick, soft scale). Optimize / simplify the current path before inventing a third.
 - **Do not alter the problem.** Never make a gate easier by changing the fixture: no larger/smaller board, no catalog/demand/mix/iters retune, no lowered floors. Restore any such edits. Work the algorithm on the original case.
@@ -69,6 +70,7 @@ During each miss cycle and while a letter is still open:
 - **Unsure what hurts → telemetry first.** If the failure mode is opaque, add the smallest bench/telem that names the stage (void props/graph/nest/refine, cascade stop, pin add, rim drop, …), re-run, then patch from evidence — not from guess stacks.
 - **Unify as you iterate.** Every loop is also a cleanup pass: fold duplicates into one gate, flatten nested branches, delete dead flags.
 - **Keep logic clean and consistent.** Same predicate → same helper; same SoT → same call site family; comments must match code. Prefer one readable path over clever special cases.
+- **Improve is the bar.** Letter success is indep OK **and** quality ≥ snapshot (prefer gain). Telem-only / structural ships that leave area below the letter baseline stay in the degradation loop.
 
 ## Nesting invariants
 
@@ -102,9 +104,13 @@ During each miss cycle and while a letter is still open:
 | `propose/heavy_polish.py` | polish budget + DFS dispatcher (`apply_dfs_refinement`) |
 | `propose/telem.py` | void_leak assembly (`assemble_void_leak`) |
 | `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / repack / relocate |
-| `propose/post_pack.py` | repack → relocate → local_se2 runner |
-| `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest |
+| `propose/post_pack.py` | repack → relocate → local_se2; `prepare_post_pack` / `apply_post_pack_and_telem` |
+| `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest (`maybe_block_hole_renest`) |
 | `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
+| `decision/pack_loop.py` | `PackIterCtx`, `run_mid_pack_stages`, `run_post_pack_stage`, `run_first_pass_border_pack`, `run_void_leak_and_niche_credit`, `finalize_iter_mcts` |
+| `decision/cheap_pack.py` | `pack_execute_snapshot`, cheap cache key + compose/refine adapters |
+| `decision/execute.py` | `record_outer_iter_expand`, `execute_pack`, MCTS multi-sim |
+| `rules/evolve.py` | `improve_rules`, `dedupe_rule_sets`, demo/seed rule factories |
 | `decision/` | Macro-MCTS policy (UCB1/PW/AMAF); `execute_pack` / `run_pack_stages` |
 | `elem_graph/pose_graph.*` | Pose MIS (replaces ElemGraph) |
 | `elem_graph/decision_arena.*` / `motif_base.*` / `se2.*` / `contact_relation.*` | C++ arena + `BoardSnapshot` + `MacroNicheArchive`, motifs, SE2, ContactGRG+GCI |

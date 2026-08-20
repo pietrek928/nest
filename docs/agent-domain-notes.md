@@ -499,6 +499,54 @@ Q61 reopens as one C++ `DecisionGraph` owner (partitioned Pose + Arena). Not 4D 
 
 **Q150 vs Q161:** Kind overlays in Q150 = the four Kind identities + arena. Epoch MemberOf/Attach still wipe (Q161).
 
+## Refine vs DecisionGraph (Q166–Q178 — locked 2026-08-19)
+
+Refine operates on **`const PoseGraph &` only** (Q163). DecisionGraph influences refine through **one score SoT** (`apply_void_selection_boosts` → `refine_scores = list(scores)`), **soft MotifJoin ε** and **attract sub-lex tie-breaks** in C++ DFS (when `dg_aware_refine`), and **one materialize readback** post-3b/pin (`finalize_iter_mcts`). No compound vertices, mid-epoch re-bind, or DFS growth locks.
+
+### Score SoT (unified)
+
+```
+bind_epoch → pose_kind[] / Attach / MotifJoin
+apply_void_selection_boosts (+ G1b pose_kind when dg present)
+apply_void_centroid_score_term
+nest_by_scores(scores)
+refine_scores = list(scores)   # after 3a swap; no second boost at refine entry
+refine_selection_dfs(refine_scores)
+materialize_selection once post-3b/pin
+```
+
+Duplication removed: compose mid-refine and pack_loop mid-refine `materialize_selection` calls; kind bias merged into `apply_void_selection_boosts` via `pose_kind[]` (skip duplicate `kind_keys` keyed boost when CSR tagged).
+
+### Local convergence (DFS / Motif / Attract)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q166 | YES soft MotifJoin ε | Subtract tiny ε from DFS `path_delta` when breaking a MotifJoin edge; Pose-only search (Q163/Q47). |
+| Q167 | YES attract sub-lex | Count → Area → score sum → attract pairs; attract never beats count/area (Q30). Shared helper: `selected_attract_pairs` in finalize + DFS. |
+| Q170 | YES mirror nest scores | Single boosted `scores[]` copied to `refine_scores` at compose boundary; no refine-entry re-boost. |
+| Q171 | NO CC-local refine | Keep global conflict-resolution sweep. |
+| Q173 | NO DFS motif locks | Soft ε (Q166) + finalize re-insert; no growth locks (Q47). |
+
+### Global convergence (DG readback & MCTS)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q168 | NO mid-epoch re-bind | `bind_epoch` propose-only (Q161). |
+| Q169 | YES materialize post-3b/pin | Single `materialize_selection` in `finalize_iter_mcts`; AMAF sees final vertices (Q165). |
+| Q172 | NO cheap materialize | Cheap expand stays DG-free (Q143). |
+| Q174 | NO refine-delta reward | Leaf reward = absolute final state only. |
+
+### MWIS interaction
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q175 | YES G1b Kind overlay | Extend `apply_void_selection_boosts` with `dg.pose_kind[]`; not a second overlay module. |
+| Q176 | NO dual refine on large_void | Single DFS pass per iter. |
+| Q177 | YES void shed gate | `apply_refine_with_restore`: void count drop ≥1 → restore unless refine wins **count** lex. |
+| Q178 | YES ablation flag | `ProposeConfig.dg_aware_refine` toggles **C++ DFS only** (Q166+Q167); Q169/Q175/Q177 ship without flag. |
+
+Cross-link: [decision_graph.md — Refine boundary](decision_graph.md#refine-vs-decisiongraph-boundary-q166q178).
+
 **N0 snapshot** (2026-08-19, seed 0, shipped, `--gate` fixture FAIL vs 0.585 is not a miss):
 
 | Tag / case | Area | Time | Indep |
@@ -515,3 +563,182 @@ Q61 reopens as one C++ `DecisionGraph` owner (partitioned Pose + Arena). Not 4D 
 | mid_pack `border_then_fill_s13` | 0.538 | 189.46s | True |
 | mid_pack `loose_cluster_compact_s9` | 0.462 | 241.35s | True |
 | mid_pack `dense_cluster_pockets_s8` | 0.558 | 153.61s | True |
+
+## Edge→center bridge + local-minima escape (Q179–Q195 — locked 2026-08-20)
+
+Structural gap: rigid outer rim (`EMPTY_BORDER` / `board_edge`) without geometric connectivity into the interior; accidental Motif structures under-reused; plateau tapers budgets instead of repairing. Fix by extending `ZONE_PROPOSERS`, `corridor_seed_coords_from_samples`, MotifBase/`cluster_copy`, plateau→3b, and softer restore — **not** a second proposer stack. Master ablation: `ProposeConfig.enable_inward_bridge` (R1+R2).
+
+### Edge→center bridge (R1)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q179 | HYBRID (threshold) | Add `RAYCASTING`+`EROSION` to `EMPTY_BORDER` only if `packed_n >=` threshold (e.g. 5). Early placements stay rim-snap. |
+| Q180 | YES unify | Baseline `BORDER_GAP` always includes `RAYCASTING`+`VORONOI`+`EROSION` (annulus = non-annulus). Cull via `valid_at`, not permission split. |
+| Q181 | HYBRID both | Rim-anchored raycasting primary; if distinct free lobe, extend `corridor_seed_coords_from_samples` for generic lobes (not sheet-hole only). |
+| Q182 | YES soft scale | Under `rim_sat`, do not hard-mute `side_pack`; soft-scale (e.g. ~75% cut of `max_proposals`) and keep active. |
+| Q183 | NO | `first_pass_border` stays rim-only; no inward seeds. |
+| Q184 | YES | Extend `propose_placements_raycasting` anchors to include inner-boundary vertices of packed rim parts. No new proposer name. |
+
+### Structure reuse (R2)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q185 | Nest survival | Extract to MotifBase only after island survives `nest_by_scores` + final DFS refine (align Q144/Q165). |
+| Q186 | Floor mandatory | Hard minimum quota for `cluster_copy` keys in `transform_batch` under plateau; “do not mute” alone is insufficient. |
+| Q187 | YES soft override | Motif-keyed set overrides incumbent hold if strictly higher contact density **and** equal/greater part count. |
+| Q188 | MotifJoin only | Reuse via MotifBase→`cluster_copy` rigid inject; not `history_expand` jitter. |
+| Q189 | Density + refine hits | Cap archive by contact density / refine hits; never by DecisionGraph Attach/Kind. |
+
+### Local-minima escape (R3)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q190 | 3b first | Plateau + residual free → trigger `maybe_block_hole_renest` first; not `cluster_repack` / `local_se2` as primary. |
+| Q191 | YES explore | Plateau + free remaining → **increase** `max_proposals` for `void_seek` + inward explorers (do not only taper). |
+| Q192 | YES carefully | Extend Q177: accept refine if count rises; on count-tie accept if void-fill rises. Do not restore solely for rim loss. |
+| Q193 | NO | Poles once per outer iter in post_pack only. |
+| Q194 | Dual lex enough | Q105 dual lex for shallow minima; plateau **3b** only if dual lex fails / still stuck. No new repair flag. |
+| Q195 | One master flag | `ProposeConfig.enable_inward_bridge` (default True) bundles R1 zone permissions + R2 archive floors. R3 wires to existing plateau/3b paths. |
+
+**R0 snapshot** (2026-08-20, seed 0, shipped; `--gate` fixture FAIL vs 0.585 is not a miss):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill `demo_triangle_corner_cluster_s6` | 0.542 | 168.72s | True | zones void_seek; cluster_copy=0 |
+| dense `dense_cluster_pockets_s8` | 0.559 | 143.04s | True | zones void_seek; cluster_copy=173 |
+
+**R0 telem confirm** (3-iter-style full run, void_fill): `rim=0.887 rim_sat=0 side_pack=0/0 ray=0/0 voronoi=0/0 erosion=0/0 bottleneck=graph_to_nest zones=['void_seek',…]` — hollow shell: late iters void_seek without inward explorer emit on rim bridge.
+
+**R1 snapshot** (2026-08-20, seed 0, shipped, `enable_inward_bridge=true`):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill `demo_triangle_corner_cluster_s6` | 0.548 | 183.12s | True | peak_ray=1075 peak_ero=56 (≥0.9×R0); mid-iter inward bridge |
+| dense `dense_cluster_pockets_s8` | 0.549 | 141.23s | True | peak_ero=1688 cluster_copy=303 (≥0.9×R0) |
+
+R1 miss-loop note: peak emit must persist across iters (`inward_peak` in evaluator); last-iter void_seek alone under-reports explorers.
+
+**R2 snapshot** (seed 0, shipped ON):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill | 0.573 | 202.32s | True | arch_n=4 motif_ref=9 plat_boost=1; mix_floor=0 (no cluster_copy emit) |
+| dense | 0.556 | 234.08s | True | mix_floor=24 arch_n=4 motif_ref=27 (≥0.9×R0/R1) |
+
+**R3 snapshot** (same runs): `run_3b=1` both tags; dense `restore=1`; void `restore=0`. Plateau→3b via polish budget; Q192 softer restore live. `3b_ok` often 0 (attempt without accept is enough for telem gate).
+
+**R4 ablation** (`enable_inward_bridge=false` vs ON):
+
+| Case | ON area | OFF area | ON signals | OFF signals |
+|------|---------|----------|------------|-------------|
+| dense | 0.556 | 0.559 | inward_att=1 mix_floor=24 | inward_att=0 mix_floor=0 |
+| void_fill | 0.573 | 0.551 | inward_att=1 | inward_att=0 mix_floor=0 |
+
+Master flag gates R1 early bridge + R2 mix floor/override. R3 (`run_3b` / `plat_boost` on last leaf) remains active with flag off (Q195). Void_seek explorers still emit when off (pre-existing zone permission); ablation SoT is `inward_att` + `mix_floor`.
+
+## Motif key SoT + RepairCohort (Q196–Q212 — locked 2026-08-20)
+
+Structural blindness: 3b ruin/recreate and peel/stamp used separate pattern lists and victim picks, so repair heuristics fought instead of escaping local minima together. Follow-up unifies **orchestration only** — one `resolve_motif_keys` SoT + one `RepairCohort` vocabulary — while keeping Q58/Q59 victim policies, Q24 sterility, Q190/Q193 last-leaf stamp, and no second stacks.
+
+Q182 letter gate does **not** apply on late `void_seek` (`side_pack` XOR-off by design). Ablation SoT remains `inward_att` + `mix_floor`, not `peak_ray`.
+
+### Locked research (Q196–Q212)
+
+#### Motif keys (F1)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q196 | YES | One `resolve_motif_keys` in `motif_keys.py`. Prefer: (1) projected propose_stats → (2) densify fold → (3) `cluster_copy` ∪ `motif_hole`. Collapse floor/override/MIS readers; no parallel rebuilds. |
+| Q197 | YES | `fold_emit_motif_keys` unifies primary+densify; round-4 keys via `transform_row_key`. |
+| Q198 | Key-hit fraction | Q187 override = key-hit only. GCI/`accept_count` = MotifBase truncation (Q189) only. |
+| Q199 | YES hybrid | If `dens_inc==0`, allow override when `dens_cand>0` ∧ count≥incumbent ∧ `enable_inward_bridge`. |
+| Q200 | NO | Cheap `motif_graph_hits` → `motif_graph_keys` only; never poison emit `motif_keys` (Q143). |
+| Q201 | YES | Emit keys from densify/`cluster_copy` must reach mix when present; floor cannot invent keys. Letter gate: peaked `cluster_copy_emitted` or `mix_floor` when `arch_n>0`. |
+
+#### Repair cohort (F2)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q202 | YES | Thin `RepairCohort(victim, patterns, mode)` mid→post; no recompute between stages. |
+| Q203 | NO | Facade `pick_repair_victim`: `pick_block_hole_victim` first; only if empty → `bfs_peel_victim`. |
+| Q204 | YES | If no interior CC, fallback `board_adj` CC size [3,6] inside `pick_block_hole_victim`. |
+| Q205 | YES | `build_repair_patterns` → peel+capped ∪ archived via `merge_cluster_patterns`; 3b+stamp share list. |
+| Q206 | superseded by Q214 | Stamp iff sterile (`emit_in_hull==0`); hull reject clears cohort only — keep `allow_repack` for BFS peel (Q213/Q214). |
+| Q207 | YES | Sterile handoff passes exact `cohort.patterns`; never rebuild if populated. |
+| Q208 | Wire to 1 | `cluster_repack_max_attempts` default/hardcap **1**. |
+
+#### Telem / ablation (F3)
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q209 | `inward_att` + `mix_floor` | Not `peak_ray` (VOID_SEEK explorers fire with bridge off). |
+| Q210 | NO | No void_seek `side_pack` letter gate; soft-scale only on border_gap/cluster_edge. |
+| Q211 | YES | Letter gates use `repair_mode` / `repair_patterns_n` SoT; keep `block_hole_*` aliases. |
+| Q212 | NO | No mid-iter post_pack on plateau (Q190/Q193). |
+
+**Pin+3b independence:** after 3b hole appends, pin merge keeps extras and drops colliding graph rows (`pack_loop`).
+
+### Snapshots (seed 0, shipped)
+
+**F0** (observe-only telem):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill | 0.566 | 249.74s | True | 3b_try=0 arch_n=4 mix_floor=0 |
+| dense | 0.556 | 266.16s | True | mix_floor=24 cluster_copy=303; 3b_try=0 |
+
+**F1+F2 shipped** (key SoT + RepairCohort):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill | 0.557 | 168.40s | True | cluster_copy=170 arch_n=4 mix_floor=0; 3b_try=1 repair=1/2 |
+| dense | 0.607 | 90.67s | True | mix_floor=24 cluster_copy=270; 3b_try=1 repair=3/2 |
+
+**F3 ablation** (`enable_inward_bridge=false`):
+
+| Case | ON area | OFF area | ON signals | OFF signals |
+|------|---------|----------|------------|-------------|
+| void_fill | 0.557 | 0.571 | inward_att=1 mix_floor=0 cluster_copy=170 | inward_att=0 mix_floor=0 (peak_ray stays) |
+| dense | 0.607 | 0.620 | inward_att=1 mix_floor=24 | inward_att=0 mix_floor=0 (peak_ray stays) |
+
+### Void_fill degrade loop (D0–D3) — Q213–Q228
+
+Bar: match F3 OFF **≥ 0.571**; dense ≥ **0.9× 0.607**; indep OK. Strict D0→D1→D2→D3.
+
+#### Locked net-only
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| Q213 | YES | Hull reject → restore BFS peel (`allow_repack` + `victim_indices=None`); do not retarget rejected cohort. |
+| Q214 | Cohort-only | Clear `stamp_victim` + `_repair_patterns`; **do not** set global `allow_repack=False`. |
+| Q215 | Void-facing only | Board_adj fallback in `pick_block_hole_victim` only if some member `part_void_adj`; no second helper. |
+| Q216 | Interior first | Keep interior CC preferred; board_adj secondary. Protects dense. |
+| Q217 | Absorb ∪ fold | Delete exclusive early-return in `resolve_motif_keys`; densify + emit `cluster_copy` same map. |
+| Q218 | YES fall through | Densify keys disjoint from `proposal_pins` → treat no-hit, fold emit into mix keys. |
+| Q219 | Soft emit + soft Q187 | Soft Q187 coverage + soft-gate void_seek early-bridge / rim-anchored rays / lobe seeds (border keeps early bridge). |
+| Q220 | YES hybrid | Wrap motif override in same `outline_coverage_ratio` / `drop_allow` as `void_override`. |
+| Q221 | OR accept | Motif key-hit **and** coverage within drop_allow → accept (with void_override family). |
+| Q222 | Extras-first | Keep pin merge preferring 3b extras. |
+| Q223 | YES clear patterns | Hull reject clears `_repair_patterns` before BFS stamp. |
+| Q224 | Sterile then BFS | Sterile cohort stamp first; if non-sterile → global BFS (`victim=None`). |
+| Q225 | Plateau\|last_leaf only | No large_void-always mix floor. |
+| Q226 | Match OFF ≥0.571 | Stretch bar; do not ship at 0.566-only if still below historical F3 OFF. |
+| Q227 | Dense interior 3b | D0 mute must confirm dense still accepts interior 3b. |
+| Q228 | Telem required | D1 gate needs `repack.attempted > 0` after hull reject — area alone insufficient. |
+
+#### D-loop snapshots (seed 0, shipped)
+
+**D0** (confirm): dense interior `3b_ok=1` under shipped; mute LNS void telem recorded.
+
+**D1–D2** (stamp decouple + motif absorb∪fold): `prepare_post_pack` hull-reject clears cohort/keeps `allow_repack`; `resolve_motif_keys` always ∪-folds emit; dense `mix_floor=24` proves floor path.
+
+**D3 shipped** (soft Q187 + void_seek emit soft-gate):
+
+| Tag / case | Area | Time | Indep | Notes |
+|------------|------|------|-------|-------|
+| void_fill ON | **0.587** | 167.21s | True | ≥0.571; inward_att=0 (no void_seek early-bridge); 3b_ok=1 repair=3/2; motif_ov=0; mix_floor=0 |
+| dense ON | **0.620** | 94.99s | True | ≥0.9×0.607; mix_floor=24; 3b_ok=1; inward_att=0 |
+| void_fill OFF | 0.602 | 168.33s | True | inward_att=0 mix_floor=0 (Q209); peak_ray stays |
+
+Miss loop: post-lex board_adj accept ban regressed dense/void — removed; Q215 stays in pick only. Residual ON gap closed by soft-gating void_seek early-bridge + rim-anchored explorer rays + lobe seeds (border early-bridge kept).
+

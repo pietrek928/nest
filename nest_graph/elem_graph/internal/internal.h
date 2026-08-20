@@ -96,6 +96,31 @@ inline float selected_attract_pairs(
     return pair;
 }
 
+inline float motif_fracture_penalty_on_remove(
+    Tvertex removed,
+    const unsigned char *selected,
+    const std::vector<std::pair<Tvertex, Tvertex>> &pairs,
+    float penalty,
+    int n
+) {
+    if (penalty <= 0.0f || pairs.empty()) {
+        return 0.0f;
+    }
+    float delta = 0.0f;
+    for (const std::pair<Tvertex, Tvertex> &p : pairs) {
+        const Tvertex a = p.first;
+        const Tvertex b = p.second;
+        if (a != removed && b != removed) {
+            continue;
+        }
+        const Tvertex other = a == removed ? b : a;
+        if (vertex_in_graph(other, n) && selected[static_cast<std::size_t>(other)]) {
+            delta -= penalty;
+        }
+    }
+    return delta;
+}
+
 inline float sum_selected_objective(
     const PoseGraph &g,
     const Tscore *scores,

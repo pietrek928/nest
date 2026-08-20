@@ -116,7 +116,10 @@ bool refine_lex_better(
     float old_area,
     float old_sum,
     float min_delta,
-    bool use_area
+    bool use_area,
+    float new_attract,
+    float old_attract,
+    bool use_attract
 ) {
     if (new_count != old_count) {
         return new_count > old_count;
@@ -124,7 +127,35 @@ bool refine_lex_better(
     if (use_area && std::fabs(new_area - old_area) > 1e-6f) {
         return new_area > old_area;
     }
-    return new_sum > old_sum + min_delta;
+    if (new_sum > old_sum + min_delta) {
+        return true;
+    }
+    if (new_sum + min_delta < old_sum) {
+        return false;
+    }
+    if (use_attract) {
+        return new_attract > old_attract + 1e-6f;
+    }
+    return false;
+}
+
+bool path_beats_best(
+    int count,
+    float area,
+    float score_sum,
+    float attract,
+    int best_count,
+    float best_area,
+    float best_sum,
+    float best_attract,
+    float min_delta,
+    bool use_area,
+    bool use_attract
+) {
+    return refine_lex_better(
+        count, area, score_sum, attract,
+        best_count, best_area, best_sum, best_attract,
+        min_delta, use_area, use_attract);
 }
 
 void select_node(
@@ -291,14 +322,21 @@ float score_path_dfs(
     int beam_width,
     float &best_delta,
     int &best_count,
+    float &best_area,
+    float &best_attract,
     std::vector<unsigned char> &best_selected,
     unsigned char *selected,
     int *mark,
     int *selected_collisions,
     int n,
-    const unsigned char *locked
+    const unsigned char *locked,
+    const RefineSelectionOptions &options
 ) {
     const std::vector<Tvertex> *collisions = &g.collisions[0];
+    const bool use_area =
+        options.lexicographic_area
+        && options.node_areas.size() == static_cast<std::size_t>(n);
+    const bool use_attract = options.dg_aware_refine;
     if (depth > max_depth || mark[node]) {
         return best_delta;
     }
@@ -328,10 +366,22 @@ float score_path_dfs(
                     count++;
                 }
             }
-            if (count > best_count
-                || (count == best_count && path_delta > best_delta)) {
+            const float path_area = use_area
+                ? selected_area_sum(
+                    std::vector<unsigned char>(selected, selected + n),
+                    options.node_areas, n)
+                : 0.0f;
+            const float path_attract = use_attract
+                ? selected_attract_pairs(g, selected, n)
+                : 0.0f;
+            if (path_beats_best(
+                    count, path_area, path_delta, path_attract,
+                    best_count, best_area, best_delta, best_attract,
+                    options.min_score_delta, use_area, use_attract)) {
                 best_count = count;
                 best_delta = path_delta;
+                best_area = path_area;
+                best_attract = path_attract;
                 best_selected.assign(selected, selected + n);
             }
         }
@@ -355,6 +405,11 @@ float score_path_dfs(
         if (vertex_is_locked(locked, v)) {
             continue;
         }
+        if (options.dg_aware_refine && options.motif_fracture_penalty > 0.0f) {
+            path_delta += motif_fracture_penalty_on_remove(
+                v, selected, options.motif_join_pairs,
+                options.motif_fracture_penalty, n);
+        }
         unselect_node(v, collisions, selected, selected_collisions, n);
         const float delta_after_remove = path_delta - scores[v];
 
@@ -376,8 +431,8 @@ float score_path_dfs(
             score_path_dfs(
                 candidates[static_cast<std::size_t>(ci)], g, scores,
                 delta_after_remove, depth + 1, max_depth, beam_width, best_delta,
-                best_count, best_selected, selected, mark, selected_collisions,
-                n, locked);
+                best_count, best_area, best_attract, best_selected, selected, mark,
+                selected_collisions, n, locked, options);
         }
 
         select_node(v, collisions, selected, selected_collisions, n);
@@ -415,20 +470,30 @@ bool try_refine_root(
     backup = selected;
     float best_delta = -1e30f;
     int best_count = -1;
+    float best_area = -1e30f;
+    float best_attract = -1e30f;
     score_path_dfs(
         v, g, scores.data(), 0.0f, 0, options.max_depth, beam,
-        best_delta, best_count, best_selected, selected.data(), mark.data(),
-        selected_collisions.data(), n, locked);
+        best_delta, best_count, best_area, best_attract, best_selected,
+        selected.data(), mark.data(), selected_collisions.data(), n, locked,
+        options);
 
     const float new_sum = sum_selected_scores(scores.data(), best_selected.data(), n);
     const int new_count = selected_count(best_selected, n);
     const float new_area = use_area
         ? selected_area_sum(best_selected, options.node_areas, n)
         : 0.0f;
+    const float baseline_attract = options.dg_aware_refine
+        ? selected_attract_pairs(g, backup.data(), n)
+        : 0.0f;
+    const float new_attract = options.dg_aware_refine
+        ? selected_attract_pairs(g, best_selected.data(), n)
+        : 0.0f;
     if (refine_lex_better(
             new_count, new_area, new_sum,
             baseline_count, baseline_area, baseline_sum,
-            options.min_score_delta, use_area)) {
+            options.min_score_delta, use_area,
+            new_attract, baseline_attract, options.dg_aware_refine)) {
         selected = best_selected;
         recompute_selected_collisions(
             g.collisions, selected.data(), selected_collisions.data(), n);

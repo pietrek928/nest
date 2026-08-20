@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from nest_graph.build_graph import dedupe_rule_sets, improve_rules
+from nest_graph.rules.evolve import dedupe_rule_sets, improve_rules, rule_region
 from nest_graph.config import (
     BuildGraphConfig,
     RulesConfig,
@@ -16,7 +16,8 @@ from nest_graph.elem_graph import (
     augment_rules,
     score_rules,
 )
-from nest_graph.build_graph import make_polygon_graph, _rule_region
+from nest_graph.build_graph import make_polygon_graph
+from nest_graph.rules.evolve import rule_region as _rule_region
 
 
 @pytest.fixture

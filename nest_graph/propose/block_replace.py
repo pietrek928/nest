@@ -11,7 +11,13 @@ from nest_graph.elem_graph import SelectMode, SelectOptions, nest_by_scores
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_elem_graph
-from nest_graph.propose.placement_common import as_geometry, is_board_adj, is_pose_clear
+from nest_graph.propose.placement_common import (
+    as_geometry,
+    is_board_adj,
+    is_pose_clear,
+    part_void_adj,
+    selection_pairwise_independent,
+)
 from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
@@ -190,18 +196,22 @@ def pick_block_hole_victim(
     min_dist: float,
     sheet: Polygon,
     pole: Point | None,
+    void_poly=None,
     min_size: int = 3,
     max_size: int = 6,
+    allow_board_adj_fallback: bool = True,
 ) -> list[int] | None:
-    """Contact CC of size [3,6], skip board_adj; nearest centroid to void pole."""
+    """Contact CC of size [3,6]; prefer non-board_adj; Q215 void-facing board_adj only."""
     sel = [int(i) for i in selected if 0 <= int(i) < len(polys)]
     placed = [polys[i] for i in sel]
     if len(sel) < min_size:
         return None
     groups = cluster_packed_indices(placed, min_dist, sheet=sheet)
     ring = outline_ring_geom(sheet)
-    best: list[int] | None = None
-    best_d = float("inf")
+    best_interior: list[int] | None = None
+    best_interior_d = float("inf")
+    best_rim: list[int] | None = None
+    best_rim_d = float("inf")
     for local in groups:
         if not (min_size <= len(local) <= max_size):
             continue
@@ -214,8 +224,6 @@ def pick_block_hole_victim(
             ):
                 board_hit = True
                 break
-        if board_hit:
-            continue
         members = [polys[i] for i in global_idxs if polys[i] is not None]
         if not members:
             continue
@@ -226,10 +234,24 @@ def pick_block_hole_victim(
             dist = 0.0
         else:
             dist = float(blob.centroid.distance(pole))
-        if dist < best_d:
-            best_d = dist
-            best = list(global_idxs)
-    return best
+        if not board_hit:
+            if dist < best_interior_d:
+                best_interior_d = dist
+                best_interior = list(global_idxs)
+        elif allow_board_adj_fallback and dist < best_rim_d:
+            # Q215: board_adj only if void-facing (pure rim peel is waste on void_fill).
+            void_facing = any(
+                part_void_adj(polys[i], void_poly, min_dist) for i in global_idxs
+            )
+            if not void_facing:
+                continue
+            best_rim_d = dist
+            best_rim = list(global_idxs)
+    if best_interior is not None:
+        return best_interior
+    if allow_board_adj_fallback:
+        return best_rim
+    return None
 
 
 def _emit_hole_candidates(
@@ -328,6 +350,7 @@ def try_block_hole_renest(
     void_geoms: Sequence | None,
     free_space=None,
     cluster_patterns=None,
+    victim_override: Sequence[int] | None = None,
 ) -> tuple[list[int], list, list, list, list | None, dict]:
     """3b: peel contact CC, re-emit into the hole, nest_by_scores locked=kept.
 
@@ -344,9 +367,12 @@ def try_block_hole_renest(
         "block_hole_darea": 0.0,
     }
     sel = [int(i) for i in selected]
-    victim = pick_block_hole_victim(
-        sel, polys, min_dist=min_dist, sheet=sheet, pole=pole,
-    )
+    if victim_override:
+        victim = [int(i) for i in victim_override]
+    else:
+        victim = pick_block_hole_victim(
+            sel, polys, min_dist=min_dist, sheet=sheet, pole=pole, void_poly=void_poly,
+        )
     if not victim:
         return sel, polys, transforms, group_id, candidate_geoms, telem
     telem["block_hole_victim"] = list(victim)
@@ -465,7 +491,108 @@ def try_block_hole_renest(
         new_area=new_area,
     ):
         return sel, polys, transforms, group_id, candidate_geoms, telem
+    if not selection_pairwise_independent(new_polys, new_sel):
+        return sel, polys, transforms, group_id, candidate_geoms, telem
+    # Q215/Q216: board_adj soft-gate lives in pick_block_hole_victim (void-facing
+    # fallback only; interior CC preferred). Do not reject after lex+indep — that
+    # killed dense interior 3b and still lost void vs F3 OFF (which keeps 3b_ok).
     telem["block_hole_accepted"] = 1
     telem["block_hole_dcount"] = len(new_sel) - len(sel)
     telem["block_hole_darea"] = float(new_area - old_area)
     return new_sel, new_polys, new_tr, new_gid, new_cgeoms, telem
+
+
+def maybe_block_hole_renest(
+    *,
+    selected: Sequence[int],
+    polys: list,
+    transforms: list,
+    group_id: list,
+    candidate_geoms: list | None,
+    refine_scores: Sequence[float],
+    part_areas: Sequence[float],
+    part_by_group: dict[int, Polygon],
+    sheet: Polygon,
+    min_dist: float,
+    propose_cfg,
+    free_info,
+    free_poly,
+    void_geoms: Sequence | None,
+    cluster_patterns=None,
+    polish_budget,
+    propose_stats: dict,
+) -> tuple[list[int], list, list, list, list | None, dict]:
+    """Gate + call 3b hole re-nest (mid-pack, after refine)."""
+    propose_stats.setdefault("block_hole_accepted", 0)
+    propose_stats.setdefault("block_hole_emit_in_hull", 0)
+    propose_stats.setdefault("block_hole_victim", None)
+    propose_stats.setdefault("block_hole_tried", 0)
+    skip_3b = int(propose_stats.get("block_cohort_accepted", 0) or 0) > 0
+    if (
+        not bool(getattr(polish_budget, "run_3b", False))
+        or skip_3b
+        or not bool(getattr(propose_cfg, "enable_lns_rebuild", True))
+        or not selected
+        or free_info is None
+        or getattr(free_info, "kind", None) != "large_void"
+    ):
+        return list(selected), polys, transforms, group_id, candidate_geoms, {}
+    from nest_graph.propose.repair_cohort import (
+        REPAIR_EMIT,
+        REPAIR_EMIT_OK,
+        REPAIR_STAMP,
+        begin_repair_cohort,
+    )
+
+    cohort = begin_repair_cohort(
+        selected,
+        list(polys),
+        list(group_id),
+        list(transforms),
+        min_dist=float(min_dist),
+        sheet=sheet,
+        pole=getattr(free_info, "target_pt", None),
+        void_poly=free_poly,
+        archived=list(cluster_patterns or ()),
+        max_patterns=int(getattr(propose_cfg, "cluster_copy_max_patterns", 8) or 8),
+        min_size=3,
+        max_size=6,
+    )
+    patterns_for_emit = cohort.patterns if cohort.patterns else cluster_patterns
+    (
+        sel_out,
+        polys_out,
+        tr_out,
+        gid_out,
+        cgeom_out,
+        hole_telem,
+    ) = try_block_hole_renest(
+        selected=selected,
+        polys=list(polys),
+        transforms=list(transforms),
+        group_id=list(group_id),
+        candidate_geoms=list(candidate_geoms) if candidate_geoms is not None else None,
+        scores=refine_scores,
+        part_areas=part_areas,
+        part_by_group=part_by_group,
+        sheet=sheet,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        pole=getattr(free_info, "target_pt", None),
+        void_poly=free_poly,
+        void_geoms=void_geoms,
+        cluster_patterns=patterns_for_emit,
+        victim_override=cohort.victim,
+    )
+    propose_stats.update(hole_telem)
+    cohort.emit_in_hull = int(hole_telem.get("block_hole_emit_in_hull", 0) or 0)
+    cohort.accepted = int(hole_telem.get("block_hole_accepted", 0) or 0) > 0
+    if cohort.accepted:
+        cohort.mode = REPAIR_EMIT_OK
+    elif cohort.victim is not None and cohort.emit_in_hull <= 0:
+        cohort.mode = REPAIR_STAMP
+    elif cohort.victim is not None:
+        cohort.mode = REPAIR_EMIT
+    cohort.telem_into(propose_stats)
+    propose_stats["_repair_patterns"] = list(cohort.patterns)
+    return list(sel_out), polys_out, tr_out, gid_out, cgeom_out, hole_telem

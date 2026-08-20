@@ -88,6 +88,25 @@ def is_board_adj(
         return False
 
 
+def part_void_adj(
+    poly: BaseGeometry | None,
+    void_poly: Polygon | None,
+    min_dist: float,
+) -> bool:
+    """True if part intersects or is within 2·min_dist of the free void poly."""
+    if void_poly is None or getattr(void_poly, "is_empty", True):
+        return False
+    if poly is None or getattr(poly, "is_empty", True):
+        return False
+    try:
+        return (
+            poly.intersects(void_poly)
+            or float(poly.distance(void_poly)) <= float(min_dist) * 2.0
+        )
+    except Exception:
+        return False
+
+
 def placement_obstacles(voids, packed) -> list[Geometry]:
     """Assemble voids + packed into one obstacle list (board membership + packing)."""
     obs: list[Geometry] = []

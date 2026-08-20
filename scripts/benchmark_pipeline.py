@@ -415,6 +415,9 @@ def main() -> None:
                     )
                     leak = (evaluator.last_result or {}).get("void_leak") or {}
                     ebp = leak.get("emitted_by_proposer") or {}
+                    pbp = leak.get("pool_by_proposer") or {}
+                    inward = leak.get("inward") or {}
+                    funnel = leak.get("funnel") or {}
                     if (
                         leak.get("niche_pos") is not None
                         or leak.get("contact_grg_upserts")
@@ -423,6 +426,8 @@ def main() -> None:
                         or leak.get("free_space_cloud_emitted")
                         or leak.get("cluster_copy_emitted")
                         or ebp.get("history_expand")
+                        or leak.get("rim_progress") is not None
+                        or inward
                     ):
                         print(
                             f"     letter telem niche_pos={leak.get('niche_pos', 0)} "
@@ -434,6 +439,38 @@ def main() -> None:
                             f"history_expand={int(ebp.get('history_expand', 0) or 0)} "
                             f"cluster_copy={int(leak.get('cluster_copy_emitted', ebp.get('cluster_copy', 0)) or 0)} "
                             f"free_space_cloud={int(leak.get('free_space_cloud_emitted', ebp.get('free_space_cloud', 0)) or 0)} "
+                            f"rim={float(leak.get('rim_progress', 0.0) or 0.0):.3f} "
+                            f"rim_sat={int(bool(leak.get('rim_saturated_skip', False)))} "
+                            f"side_pack={int(leak.get('side_pack_emitted', ebp.get('side_pack', 0)) or 0)}/"
+                            f"{int(pbp.get('side_pack', 0) or 0)} "
+                            f"ray={int(inward.get('raycasting_emitted', ebp.get('raycasting', 0)) or 0)}/"
+                            f"{int(inward.get('raycasting_pool', pbp.get('raycasting', 0)) or 0)} "
+                            f"voronoi={int(inward.get('voronoi_emitted', ebp.get('voronoi', 0)) or 0)}/"
+                            f"{int(inward.get('voronoi_pool', pbp.get('voronoi', 0)) or 0)} "
+                            f"erosion={int(inward.get('erosion_emitted', ebp.get('erosion', 0)) or 0)}/"
+                            f"{int(inward.get('erosion_pool', pbp.get('erosion', 0)) or 0)} "
+                            f"peak_ray={int((leak.get('inward_peak') or {}).get('raycasting', 0) or 0)} "
+                            f"peak_ero={int((leak.get('inward_peak') or {}).get('erosion', 0) or 0)} "
+                            f"peak_sp={int((leak.get('inward_peak') or {}).get('side_pack', 0) or 0)} "
+                            f"inward_ray_keys={int(leak.get('inward_ray_keys', 0) or 0)} "
+                            f"inward_att={int(leak.get('inward_bridge_attempt', 0) or 0)} "
+                            f"mix_floor={int(leak.get('cluster_copy_mix_floor_hits', 0) or 0)} "
+                            f"motif_ov={int(leak.get('motif_override', 0) or 0)} "
+                            f"plat_boost={int(leak.get('plateau_props_boost', 0) or 0)} "
+                            f"run_3b={int(leak.get('run_3b', 0) or 0)} "
+                            f"3b_ok={int(leak.get('block_hole_accepted', 0) or 0)} "
+                            f"3b_try={int(leak.get('block_hole_tried', 0) or 0)} "
+                            f"3b_hull={int(leak.get('block_hole_emit_in_hull', 0) or 0)} "
+                            f"repair={int(leak.get('repair_mode', 0) or 0)}/"
+                            f"{int(leak.get('repair_patterns_n', 0) or 0)} "
+                            f"repack={int(leak.get('repack_attempted', 0) or 0)}/"
+                            f"{int(leak.get('repack_accepted', 0) or 0)}/"
+                            f"{int(leak.get('repack_motif_accepted', 0) or 0)}/"
+                            f"{int(leak.get('repack_pattern_fallback', 0) or 0)} "
+                            f"arch_n={int(leak.get('accepted_patterns_archived', 0) or 0)} "
+                            f"motif_ref={int(leak.get('motif_refine_hits', 0) or 0)} "
+                            f"restore={int(leak.get('refine_rejected', 0) or 0)} "
+                            f"bottleneck={funnel.get('bottleneck', '-')} "
                             f"zones={leak.get('zones_used', [])} "
                             f"densify={leak.get('densify_reason')} "
                             f"attach_n={leak.get('attach_n', 0)} "
