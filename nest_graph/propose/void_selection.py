@@ -88,6 +88,156 @@ def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
     return float(ratio) * float(sheet_diag)
 
 
+def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
+    """Shared radius for densify pole_near accept and void_leak props_pole telem.
+
+    Densify measures placed *centroid* distance; props_pole measures transform
+    *(x, y)* — same radius, different measure.
+    """
+    if float(sheet_diag) <= 1e-12 or float(ratio) <= 0.0:
+        return 0.0
+    return float(ratio) * float(sheet_diag)
+
+
+_CLEARANCE_EPS = 1e-9
+
+
+class FreeCentroidPredicate:
+    """One SoT for part-centroid and anchor point membership in free void."""
+
+    __slots__ = (
+        "_free_poly", "_margin", "_boundary", "_free_geom", "_geoms",
+        "_buffer_collapsed",
+    )
+
+    def __init__(
+        self,
+        free_poly: BaseGeometry | None,
+        interior_margin: float = 0.0,
+        *,
+        free_geom: Geometry | None = None,
+        geoms: Sequence[Geometry] | None = None,
+        buffer_collapsed: bool | None = None,
+    ) -> None:
+        self._free_poly = free_poly
+        self._margin = float(interior_margin)
+        self._boundary: BaseGeometry | None = None
+        self._free_geom = free_geom
+        self._geoms = geoms
+        if buffer_collapsed is not None:
+            self._buffer_collapsed = bool(buffer_collapsed)
+        else:
+            self._buffer_collapsed = _free_buffer_collapsed(
+                free_poly, self._margin,
+            )
+
+    @classmethod
+    def from_shapely(
+        cls,
+        free_poly: BaseGeometry | None,
+        interior_margin: float = 0.0,
+        *,
+        geoms: Sequence[Geometry] | None = None,
+    ) -> "FreeCentroidPredicate":
+        free_geom = None
+        margin = float(interior_margin)
+        collapsed = _free_buffer_collapsed(free_poly, margin)
+        if free_poly is not None and not getattr(free_poly, "is_empty", True):
+            try:
+                free_geom = Geometry.from_shapely(free_poly)
+            except Exception:
+                free_geom = None
+        return cls(
+            free_poly,
+            interior_margin,
+            free_geom=free_geom,
+            geoms=geoms,
+            buffer_collapsed=collapsed,
+        )
+
+    def _effective_margin(self) -> float:
+        if self._margin <= 1e-12 or self._buffer_collapsed:
+            return 0.0
+        return self._margin
+
+    def _boundary_geom(self) -> BaseGeometry | None:
+        if self._boundary is None and self._free_poly is not None:
+            try:
+                self._boundary = self._free_poly.boundary
+            except Exception:
+                self._boundary = None
+        return self._boundary
+
+    def _covers_point(self, x: float, y: float) -> bool:
+        free_poly = self._free_poly
+        if free_poly is None or getattr(free_poly, "is_empty", True):
+            return False
+        margin = self._effective_margin()
+        if self._free_geom is not None:
+            if not self._free_geom.contains_point(x, y):
+                return False
+            if margin <= 1e-12:
+                return True
+            clearance = float(self._free_geom.boundary_clearance(x, y))
+            return clearance >= margin - _CLEARANCE_EPS
+        p = Point(float(x), float(y))
+        if not free_poly.covers(p):
+            return False
+        if margin <= 1e-12:
+            return True
+        boundary = self._boundary_geom()
+        if boundary is None or getattr(boundary, "is_empty", True):
+            return False
+        return float(p.distance(boundary)) >= margin - _CLEARANCE_EPS
+
+    def covers_part(self, poly, *, index: int | None = None) -> bool:
+        if poly is None or getattr(poly, "is_empty", True):
+            return False
+        if (
+            self._geoms is not None
+            and index is not None
+            and 0 <= int(index) < len(self._geoms)
+        ):
+            cx, cy = self._geoms[int(index)].centroid()
+            return self._covers_point(float(cx), float(cy))
+        c = poly.centroid
+        return self._covers_point(float(c.x), float(c.y))
+
+    def covers_anchor(self, x: float, y: float) -> bool:
+        return self._covers_point(float(x), float(y))
+
+    def __call__(self, poly, *, index: int | None = None) -> bool:
+        return self.covers_part(poly, index=index)
+
+    def with_margin(self, interior_margin: float) -> "FreeCentroidPredicate":
+        collapsed = _free_buffer_collapsed(self._free_poly, float(interior_margin))
+        return FreeCentroidPredicate(
+            self._free_poly,
+            interior_margin,
+            free_geom=self._free_geom,
+            geoms=self._geoms,
+            buffer_collapsed=collapsed,
+        )
+
+
+def _free_buffer_collapsed(
+    free_poly: BaseGeometry | None,
+    margin: float,
+) -> bool:
+    """Legacy: when ``buffer(-margin)`` vanishes, old code used full free (margin=0)."""
+    if (
+        free_poly is None
+        or getattr(free_poly, "is_empty", True)
+        or float(margin) <= 1e-12
+    ):
+        return False
+    try:
+        core = free_poly.buffer(-float(margin))
+        return core is None or getattr(core, "is_empty", True)
+    except Exception:
+        return True
+
+
 def apply_void_centroid_score_term(
     polys: Sequence,
     scores: list[float],
@@ -108,14 +258,13 @@ def apply_void_centroid_score_term(
         or getattr(free_poly, "is_empty", True)
     ):
         return 0
+    pred = FreeCentroidPredicate(free_poly, 0.0)
     hits = 0
     for i, poly in enumerate(polys):
         if i >= len(scores):
             break
         try:
-            if poly is not None and not poly.is_empty and (
-                free_poly.contains(poly.centroid) or free_poly.intersects(poly.centroid)
-            ):
+            if pred.covers_part(poly):
                 scores[i] = float(scores[i]) + float(void_term)
                 hits += 1
         except Exception:
@@ -156,6 +305,11 @@ def boost_void_island_scores(
     """
     if weight <= 0.0 or not scores:
         return 0
+    pred = (
+        FreeCentroidPredicate(free_poly, 0.0)
+        if free_poly is not None and not free_poly.is_empty
+        else None
+    )
     diag = float(sheet_diag)
     if diag <= 1e-12 and free_poly is not None and not free_poly.is_empty:
         minx, miny, maxx, maxy = free_poly.bounds
@@ -173,11 +327,7 @@ def boost_void_island_scores(
         if poly is None or poly.is_empty:
             continue
         c = poly.centroid
-        in_free = (
-            free_poly is not None
-            and not free_poly.is_empty
-            and (free_poly.contains(c) or free_poly.intersects(c))
-        )
+        in_free = pred is not None and pred.covers_part(poly)
         near_pole = (
             pole is not None
             and pole_radius > 0.0
@@ -530,28 +680,26 @@ def centroid_in_free(
     free_poly: BaseGeometry | None,
     *,
     interior_margin: float = 0.0,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> bool:
-    """Centroid in free; optional eroded core for true-interior colonize (V2)."""
-    if free_poly is None or free_poly.is_empty or poly is None or poly.is_empty:
-        return False
-    c = poly.centroid
-    region = free_poly
-    margin = float(interior_margin)
-    if margin > 1e-12:
-        try:
-            core = free_poly.buffer(-margin)
-            if core is not None and not getattr(core, "is_empty", True):
-                region = core
-        except Exception:
-            region = free_poly
-    return bool(region.contains(c) or region.intersects(c))
+    """Centroid in free; optional eroded core via boundary distance (not buffer)."""
+    if predicate is not None:
+        return predicate.covers_part(poly)
+    return FreeCentroidPredicate(
+        free_poly, interior_margin,
+    ).covers_part(poly)
 
 
-def xy_in_free(x: float, y: float, free_poly: BaseGeometry | None) -> bool:
-    if free_poly is None or free_poly.is_empty:
-        return False
-    p = Point(float(x), float(y))
-    return bool(free_poly.contains(p) or free_poly.intersects(p))
+def xy_in_free(
+    x: float,
+    y: float,
+    free_poly: BaseGeometry | None,
+    *,
+    predicate: FreeCentroidPredicate | None = None,
+) -> bool:
+    if predicate is not None:
+        return predicate.covers_anchor(x, y)
+    return FreeCentroidPredicate(free_poly, 0.0).covers_anchor(x, y)
 
 
 def count_selected_in_free(
@@ -560,11 +708,13 @@ def count_selected_in_free(
     free_poly: BaseGeometry | None,
     *,
     interior_margin: float = 0.0,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
+    pred = predicate or FreeCentroidPredicate(free_poly, interior_margin)
     return sum(
         1
         for i in selected
-        if centroid_in_free(polys[i], free_poly, interior_margin=interior_margin)
+        if pred.covers_part(polys[i], index=int(i))
     )
 
 
@@ -573,25 +723,30 @@ def count_graph_in_free(
     free_poly: BaseGeometry | None,
     *,
     interior_margin: float = 0.0,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
+    pred = predicate or FreeCentroidPredicate(free_poly, interior_margin)
     return sum(
-        1 for p in polys
-        if centroid_in_free(p, free_poly, interior_margin=interior_margin)
+        1 for i, p in enumerate(polys)
+        if pred.covers_part(p, index=int(i))
     )
 
 
 def count_props_in_free(
     proposed_by_group: Sequence[np.ndarray] | None,
     free_poly: BaseGeometry | None,
+    *,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
     if not proposed_by_group or free_poly is None or free_poly.is_empty:
         return 0
+    pred = predicate or FreeCentroidPredicate(free_poly, 0.0)
     n = 0
     for arr in proposed_by_group:
         if arr is None or len(arr) == 0:
             continue
         for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
-            if xy_in_free(float(row[0]), float(row[1]), free_poly):
+            if pred.covers_anchor(float(row[0]), float(row[1])):
                 n += 1
     return n
 
@@ -701,16 +856,23 @@ def colonize_blocker_order(
     polys: list,
     free_poly: BaseGeometry | None,
     margin: float,
+    *,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> list[int]:
     """Prefer rim plugs; protect free-core residents; fall back to any plug."""
-    unlocks: dict[int, int] = {}
     core_m = float(margin) if float(margin) > 1e-12 else 1e-6
+    pred_core = (
+        predicate.with_margin(core_m)
+        if predicate is not None
+        else FreeCentroidPredicate(free_poly, core_m)
+    )
+    unlocks: dict[int, int] = {}
     for v in list(candidates)[:64]:
         hit = [int(u) for u in collisions[int(v)] if int(u) in out_set]
         if not hit:
             continue
         for ui in hit:
-            if centroid_in_free(polys[ui], free_poly, interior_margin=core_m):
+            if pred_core.covers_part(polys[ui], index=int(ui)):
                 continue
             unlocks[ui] = int(unlocks.get(ui, 0)) + 1
     if not unlocks:
@@ -770,6 +932,7 @@ def colonize_void_onto_base(
     max_rim_drop: int = 16,
     group_id: Sequence[int] | None = None,
     part_areas: Sequence[float] | None = None,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> list[int]:
     """Pin free-centroid graph nodes onto ``base`` if collision-clear.
 
@@ -784,6 +947,10 @@ def colonize_void_onto_base(
     out_set = set(int(i) for i in out)
     collisions = getattr(graph, "collisions", None)
     margin = float(interior_margin)
+    pred = predicate or FreeCentroidPredicate.from_shapely(free_poly, margin)
+    pred_zero = pred.with_margin(0.0) if margin > 1e-12 else pred
+    core_m = margin if margin > 1e-12 else 1e-6
+    pred_core = pred.with_margin(core_m)
     if collisions is None or free_poly is None or getattr(free_poly, "is_empty", True):
         if stats_out is not None:
             stats_out["colonize_candidates"] = 0
@@ -797,7 +964,7 @@ def colonize_void_onto_base(
         for i in range(len(collisions))
         if i not in out_set
         and i < len(polys)
-        and centroid_in_free(polys[i], free_poly, interior_margin=margin)
+        and pred.covers_part(polys[i], index=int(i))
     ]
     # Fallback to full free if eroded core empties candidates.
     if not candidates and margin > 1e-12:
@@ -806,7 +973,7 @@ def colonize_void_onto_base(
             for i in range(len(collisions))
             if i not in out_set
             and i < len(polys)
-            and centroid_in_free(polys[i], free_poly, interior_margin=0.0)
+            and pred_zero.covers_part(polys[i], index=int(i))
         ]
     pinned = 0
     blocked = 0
@@ -820,7 +987,6 @@ def colonize_void_onto_base(
         candidates, collisions, out, out_set,
     )
     drop_budget = max(0, int(max_rim_drop))
-    core_m = float(margin) if float(margin) > 1e-12 else 1e-6
     tried_victims: set[frozenset[int]] = set()
     while drop_budget > 0 and blocked > 0 and candidates:
         # Map still-blocked cands → rim plugs (protect free-core residents).
@@ -834,9 +1000,7 @@ def colonize_void_onto_base(
                 continue
             rim_plugs = [
                 ui for ui in plugs
-                if not centroid_in_free(
-                    polys[ui], free_poly, interior_margin=core_m,
-                )
+                if not pred_core.covers_part(polys[ui], index=int(ui))
             ]
             if not rim_plugs:
                 rim_plugs = list(plugs)
@@ -844,6 +1008,7 @@ def colonize_void_onto_base(
         if not blocked_plugs:
             ordered = colonize_blocker_order(
                 candidates, collisions, out_set, polys, free_poly, margin,
+                predicate=pred,
             )
             if not ordered:
                 break
@@ -918,6 +1083,7 @@ def colonize_void_onto_base(
     if drop_budget >= 2 and blocked > 0:
         ordered = colonize_blocker_order(
             candidates, collisions, out_set, polys, free_poly, margin,
+            predicate=pred,
         )
         k = min(4, int(drop_budget), len(ordered))
         if k >= 2:
@@ -959,6 +1125,7 @@ def void_core_then_rim(
     *,
     interior_margin: float = 0.0,
     stats_out: dict | None = None,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> list[int]:
     """Void-first MIS then rim fill (hybrid complement to rim-first colonize)."""
     t0 = time.perf_counter()
@@ -970,18 +1137,20 @@ def void_core_then_rim(
             stats_out["void_core_ms"] = (time.perf_counter() - t0) * 1000.0
         return []
     margin = float(interior_margin)
+    pred = predicate or FreeCentroidPredicate.from_shapely(free_poly, margin)
+    pred_zero = pred.with_margin(0.0) if margin > 1e-12 else pred
     void_cands = [
         i
         for i in range(len(collisions))
         if i < len(polys)
-        and centroid_in_free(polys[i], free_poly, interior_margin=margin)
+        and pred.covers_part(polys[i], index=int(i))
     ]
     if not void_cands and margin > 1e-12:
         void_cands = [
             i
             for i in range(len(collisions))
             if i < len(polys)
-            and centroid_in_free(polys[i], free_poly, interior_margin=0.0)
+            and pred_zero.covers_part(polys[i], index=int(i))
         ]
     if scores is not None and len(scores) >= len(collisions):
         void_cands.sort(key=lambda v: float(scores[v]), reverse=True)

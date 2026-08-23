@@ -337,6 +337,8 @@ def _count_transforms_in_void(
     arr: np.ndarray,
     target_poly: Polygon | None,
     part_poly: Polygon,
+    *,
+    predicate: "FreeCentroidPredicate | None" = None,
 ) -> int:
     """Count SE(2) rows whose placed centroid lies in ``target_poly`` (iv)."""
     if (
@@ -348,12 +350,18 @@ def _count_transforms_in_void(
         or part_poly.is_empty
     ):
         return 0
+    from nest_graph.propose.void_selection import FreeCentroidPredicate
+
+    pred = predicate or FreeCentroidPredicate(target_poly, 0.0)
+    c0 = part_poly.centroid
+    cx0, cy0 = float(c0.x), float(c0.y)
     n = 0
     for row in np.asarray(arr, dtype=np.float64).reshape(-1, 3):
-        placed = transform_poly(
-            part_poly, (float(row[0]), float(row[1]), float(row[2])),
-        )
-        if target_poly.covers(placed.centroid):
+        x, y, theta = float(row[0]), float(row[1]), float(row[2])
+        c, s = math.cos(theta), math.sin(theta)
+        cx = c * cx0 - s * cy0 + x
+        cy = s * cx0 + c * cy0 + y
+        if pred.covers_anchor(cx, cy):
             n += 1
     return n
 

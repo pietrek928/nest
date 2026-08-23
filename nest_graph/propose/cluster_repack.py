@@ -101,15 +101,6 @@ def cluster_indices_with_board(
     return [([placed_idx[j] for j in members], board_adj) for members, board_adj in comps]
 
 
-def _part_void_adj(
-    poly: BaseGeometry,
-    void_poly: Polygon | None,
-    min_dist: float,
-) -> bool:
-    """Alias for shared SoT ``part_void_adj`` (peel + 3b board_adj gate)."""
-    return part_void_adj(poly, void_poly, min_dist)
-
-
 def bfs_peel_victim(
     selected_indices: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -125,6 +116,7 @@ def bfs_peel_victim(
 
     Returns ``(global_indices, board_adj)`` or None.
     """
+    void_geom = _as_geometry(void_poly) if void_poly is not None else None
     idxs = [int(i) for i in selected_indices if polys[i] is not None and not polys[i].is_empty]
     if len(idxs) < min_size:
         return None
@@ -140,7 +132,8 @@ def bfs_peel_victim(
             continue
         # Prefer void∧board, then void, then board, then largest.
         void_hits = sum(
-            1 for i in global_comp if _part_void_adj(polys[i], void_poly, min_dist)
+            1 for i in global_comp
+            if part_void_adj(polys[i], void_poly, min_dist, void_geom=void_geom)
         )
         prefer = 0.0
         if void_hits and board_adj:
@@ -154,7 +147,7 @@ def bfs_peel_victim(
         # Seed: void_adj preferably board-touching; else board closest to pole.
         seeds = [
             i for i in global_comp
-            if _part_void_adj(polys[i], void_poly, min_dist)
+            if part_void_adj(polys[i], void_poly, min_dist, void_geom=void_geom)
         ]
         if not seeds and board_adj:
             seeds = list(global_comp)
@@ -214,33 +207,6 @@ def _priority_bfs_peel(
                 heapq.heappush(heap, (_prio(n), counter, n))
                 counter += 1
     return peel
-
-
-# Back-compat alias used by older tests.
-def select_void_adjacent_victim(
-    selected_indices: Sequence[int],
-    polys: Sequence[BaseGeometry],
-    *,
-    min_dist: float,
-    sheet: Polygon | None,
-    pole: Point | None,
-    void_poly: Polygon | None,
-    min_size: int = 3,
-    max_size: int = 6,
-) -> list[int] | None:
-    if sheet is None or sheet.is_empty:
-        return None
-    got = bfs_peel_victim(
-        selected_indices,
-        polys,
-        min_dist=min_dist,
-        sheet=sheet,
-        pole=pole,
-        void_poly=void_poly,
-        min_size=min_size,
-        max_size=max_size,
-    )
-    return None if got is None else got[0]
 
 
 def _selection_area(
@@ -572,7 +538,11 @@ def cluster_repack_selection(
                 )
             )
 
-    void_facing = any(_part_void_adj(out_polys[i], void_poly, min_dist) for i in victim)
+    void_geom = _as_geometry(void_poly) if void_poly is not None else None
+    void_facing = any(
+        part_void_adj(out_polys[i], void_poly, min_dist, void_geom=void_geom)
+        for i in victim
+    )
     stamped = None
     max_stamp_rounds = max(int(getattr(propose_cfg, "cluster_copy_max_patterns", 2) or 2), 1)
     remaining = list(patterns)

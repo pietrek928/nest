@@ -89,20 +89,43 @@ def is_board_adj(
 
 
 def part_void_adj(
-    poly: BaseGeometry | None,
-    void_poly: Polygon | None,
+    part: BaseGeometry | Geometry | None,
+    void: BaseGeometry | Polygon | None,
     min_dist: float,
+    *,
+    void_geom: Geometry | None = None,
+    part_geom: Geometry | None = None,
 ) -> bool:
-    """True if part intersects or is within 2·min_dist of the free void poly."""
-    if void_poly is None or getattr(void_poly, "is_empty", True):
+    """True if part intersects or is within 2·min_dist of the free void region."""
+    if void is None and void_geom is None:
         return False
-    if poly is None or getattr(poly, "is_empty", True):
+    if part is None:
+        return False
+    pg = part_geom
+    if pg is None:
+        if isinstance(part, Geometry):
+            pg = part
+        else:
+            if getattr(part, "is_empty", True):
+                return False
+            pg = as_geometry(part)
+    if pg is None or getattr(pg, "is_empty", False):
+        return False
+    vg = void_geom
+    if vg is None:
+        if void is None:
+            return False
+        if isinstance(void, Geometry):
+            vg = void
+        else:
+            if getattr(void, "is_empty", True):
+                return False
+            vg = as_geometry(void)
+    if vg is None:
         return False
     try:
-        return (
-            poly.intersects(void_poly)
-            or float(poly.distance(void_poly)) <= float(min_dist) * 2.0
-        )
+        thr = 2.0 * float(min_dist) + 1e-9
+        return pg.intersects(vg) or float(pg.distance(vg)) <= thr
     except Exception:
         return False
 

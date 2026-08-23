@@ -23,10 +23,10 @@ from nest_graph.propose.void_selection import (
     apply_void_centroid_score_term,
     apply_void_selection_boosts,
     boost_border_scores,
-    centroid_in_free,
     colonize_void_onto_base,
     count_graph_in_free,
     count_selected_in_free,
+    FreeCentroidPredicate,
     pose_key_to_index,
     transform_row_key,
     void_attractor_radius,
@@ -518,6 +518,7 @@ def compose_and_nest_selection(
 
     # Beam void-core MIS before incumbent hold so fat-basin void packs can
     # survive S0 via the same void_override path (one prefer helper).
+    free_predicate: FreeCentroidPredicate | None = None
     if (
         free_info is not None
         and getattr(free_info, "kind", None) == "large_void"
@@ -525,6 +526,10 @@ def compose_and_nest_selection(
         and not getattr(free_poly, "is_empty", True)
     ):
         interior_m = float(min_dist) * 0.25
+        free_predicate = FreeCentroidPredicate.from_shapely(
+            free_poly,
+            interior_m,
+        )
         core_stats: dict = {}
         void_first = void_core_then_rim(
             graph,
@@ -533,6 +538,7 @@ def compose_and_nest_selection(
             scores,
             interior_margin=interior_m,
             stats_out=core_stats,
+            predicate=free_predicate,
         )
         if not void_first and interior_m > 1e-12:
             void_first = void_core_then_rim(
@@ -542,6 +548,7 @@ def compose_and_nest_selection(
                 scores,
                 interior_margin=0.0,
                 stats_out=core_stats,
+                predicate=free_predicate.with_margin(0.0),
             )
         if propose_stats is not None:
             propose_stats.update(core_stats)
@@ -718,23 +725,31 @@ def compose_and_nest_selection(
                         propose_stats["motif_override"] = 0
     # One colonize walk onto the held/MIS base (rim density + void pins).
     if (
-        free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        free_predicate is not None
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     ):
         interior_m = float(min_dist) * 0.25
         void_base = count_selected_in_free(
             polys, selected_nest, free_poly, interior_margin=interior_m,
+            predicate=free_predicate,
         )
         n_void_graph = count_graph_in_free(
             polys, free_poly, interior_margin=interior_m,
+            predicate=free_predicate,
         )
         use_margin = interior_m
+        pred_use = free_predicate
         if n_void_graph <= void_base:
-            void_base = count_selected_in_free(polys, selected_nest, free_poly)
-            n_void_graph = count_graph_in_free(polys, free_poly)
+            pred_zero = free_predicate.with_margin(0.0)
+            void_base = count_selected_in_free(
+                polys, selected_nest, free_poly, predicate=pred_zero,
+            )
+            n_void_graph = count_graph_in_free(
+                polys, free_poly, predicate=pred_zero,
+            )
             use_margin = 0.0
+            pred_use = pred_zero
         if n_void_graph > void_base:
             colonize_stats: dict = {}
             colonized = colonize_void_onto_base(
@@ -748,6 +763,7 @@ def compose_and_nest_selection(
                 max_rim_drop=20,
                 group_id=group_id,
                 part_areas=part_areas,
+                predicate=pred_use,
             )
             if propose_stats is not None:
                 propose_stats.update(colonize_stats)
@@ -767,9 +783,7 @@ def compose_and_nest_selection(
             void_pins = [
                 int(i) for i in selected_nest
                 if 0 <= int(i) < len(polys)
-                and centroid_in_free(
-                    polys[int(i)], free_poly, interior_margin=use_margin,
-                )
+                and pred_use.covers_part(polys[int(i)], index=int(i))
             ][:12]
             if void_pins:
                 locked_motif = list(dict.fromkeys(list(locked_motif) + void_pins))

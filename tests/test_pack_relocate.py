@@ -13,7 +13,6 @@ from nest_graph.propose.cluster_repack import (
     cluster_repack_selection,
     pattern_fits_peeled,
     pattern_from_indices,
-    select_void_adjacent_victim,
 )
 from nest_graph.propose.placement_common import selection_pairwise_independent
 from nest_graph.propose.context import FreeSpaceSnapshot, analyze_free_space
@@ -138,7 +137,7 @@ def test_victim_selector_size_3_to_6():
     ]
     void = box(2, 0, 4, 2)
     pole = Point(3, 1)
-    victim = select_void_adjacent_victim(
+    got = bfs_peel_victim(
         [0, 1, 2, 3],
         polys,
         min_dist=0.05,
@@ -148,7 +147,8 @@ def test_victim_selector_size_3_to_6():
         min_size=3,
         max_size=6,
     )
-    assert victim is not None
+    assert got is not None
+    victim, _board_adj = got
     assert 3 <= len(victim) <= 6
 
 

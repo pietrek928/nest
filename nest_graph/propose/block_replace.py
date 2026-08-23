@@ -212,6 +212,7 @@ def pick_block_hole_victim(
     best_interior_d = float("inf")
     best_rim: list[int] | None = None
     best_rim_d = float("inf")
+    void_geom = as_geometry(void_poly) if void_poly is not None else None
     for local in groups:
         if not (min_size <= len(local) <= max_size):
             continue
@@ -241,7 +242,10 @@ def pick_block_hole_victim(
         elif allow_board_adj_fallback and dist < best_rim_d:
             # Q215: board_adj only if void-facing (pure rim peel is waste on void_fill).
             void_facing = any(
-                part_void_adj(polys[i], void_poly, min_dist) for i in global_idxs
+                part_void_adj(
+                    polys[i], void_poly, min_dist, void_geom=void_geom,
+                )
+                for i in global_idxs
             )
             if not void_facing:
                 continue

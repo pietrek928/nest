@@ -137,6 +137,21 @@ TEST_CASE("Geometry API: contains_point donut hole", "[geometry_api][holes]") {
     REQUIRE_FALSE(is_point_inside_solid_space(PolyTestVec2({3.0, 3.0}), donut));
 }
 
+TEST_CASE("Geometry API: boundary_clearance rectangle", "[geometry_api]") {
+    SolidGeometry2 rect = polygon_from_quad({
+        {0, 0},
+        {10, 0},
+        {10, 10},
+        {0, 10},
+    });
+    REQUIRE(point_boundary_clearance(PolyTestVec2({5.0, 5.0}), rect)
+            == Catch::Approx(5.0).margin(kTol));
+    REQUIRE(point_boundary_clearance(PolyTestVec2({0.5, 5.0}), rect)
+            == Catch::Approx(0.5).margin(kTol));
+    REQUIRE(point_boundary_clearance(PolyTestVec2({11.0, 5.0}), rect)
+            == Catch::Approx(0.0).margin(kTol));
+}
+
 TEST_CASE("Geometry API: footprint_inside rectangle", "[geometry_api]") {
     SolidGeometry2 board = polygon_from_quad({
         {0, 0},

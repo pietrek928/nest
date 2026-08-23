@@ -322,6 +322,14 @@ void bind_geometry_class(nb::module_ &m) {
             nb::arg("x"),
             nb::arg("y"))
         .def(
+            "boundary_clearance",
+            [](const GeometryHolder &g, double x, double y) {
+                return static_cast<double>(
+                    point_boundary_clearance(Vec2d({x, y}), g.solid));
+            },
+            nb::arg("x"),
+            nb::arg("y"))
+        .def(
             "footprint_inside",
             [](const GeometryHolder &inner, const GeometryHolder &outer) {
                 return solid_footprint_inside(inner.solid, outer.solid);
