@@ -11,6 +11,40 @@ from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_k
 _UNTAGGED = 255
 
 
+def _elem_area_proxy(graph, idx: int) -> float:
+    coords = getattr(graph, "coords", None)
+    if coords is not None and 0 <= int(idx) < len(coords):
+        c = coords[int(idx)]
+        r = float(getattr(c, "radius", getattr(c, "r", 0.0)) or 0.0)
+        return r * r
+    return 0.0
+
+
+def _cohort_leader_idx(idxs: Sequence[int], graph) -> int:
+    """Q241: dynamic leader = max bbox-area proxy (tie → highest contact degree)."""
+    if not idxs:
+        return -1
+    best_i = int(idxs[0])
+    best_area = _elem_area_proxy(graph, best_i)
+    best_deg = 0
+    collisions = getattr(graph, "collisions", None)
+    if collisions is not None and best_i < len(collisions):
+        best_deg = sum(1 for u in collisions[best_i] if int(u) in idxs)
+    for ix in idxs[1:]:
+        i = int(ix)
+        area = _elem_area_proxy(graph, i)
+        deg = 0
+        if collisions is not None and i < len(collisions):
+            deg = sum(1 for u in collisions[i] if int(u) in idxs)
+        if area > best_area + 1e-12 or (
+            abs(area - best_area) <= 1e-12 and deg > best_deg
+        ):
+            best_i = i
+            best_area = area
+            best_deg = deg
+    return best_i
+
+
 def _zone_kind(zone: str | None) -> int | None:
     z = str(zone or "")
     if z in ("cluster_edge", "empty_border"):
@@ -117,6 +151,7 @@ def bind_epoch(
 
     verts = pose_key_to_verts(group_id, transform)
     cohorts = stats.get("motif_cohorts") or densify.get("motif_cohorts") or ()
+    motif_join_n = 0
     for cohort in cohorts:
         if not isinstance(cohort, dict):
             continue
@@ -131,8 +166,17 @@ def bind_epoch(
             hits = verts.get((gid_m, key_t)) or ()
             if hits:
                 idxs.append(int(hits[0]))
-        if len(idxs) >= 2:
-            dg.add_motif_join(mid, idxs[0], idxs[1])
+        if len(idxs) < 2:
+            continue
+        leader = _cohort_leader_idx(idxs, graph)
+        if leader < 0:
+            continue
+        for ix in idxs:
+            if int(ix) == int(leader):
+                continue
+            dg.add_motif_join(mid, int(leader), int(ix))
+            motif_join_n += 1
+    stats["motif_join_n"] = int(motif_join_n)
 
     stats["kind_keys"] = kind_keys
     stats["attach_n"] = int(dg.attach_n())
@@ -172,6 +216,7 @@ def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | Non
     out["mutex_n"] = int(dg.mutex_n())
     if propose_stats is not None:
         propose_stats["materialized_attach"] = out["materialized_attach"]
+        propose_stats["materialized_motif"] = out["materialized_motif"]
         propose_stats["member_hits"] = out["member_hits"]
         propose_stats["kind_survive"] = out["kind_survive"]
         propose_stats["kind_survive_hist"] = list(hist)

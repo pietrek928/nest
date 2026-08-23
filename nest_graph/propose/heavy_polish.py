@@ -319,6 +319,31 @@ def apply_refine_with_restore(
         else:
             restore_refine = True
 
+    score_before = selection_score_sum(list(refine_scores), list(nest_before_refine))
+    score_after = selection_score_sum(list(refine_scores), list(selected_polys))
+    sel_n = max(len(nest_before_refine), 1)
+    norm_score_delta = (score_after - score_before) / float(sel_n)
+    score_eps = 1e-4
+    if (
+        restore_refine
+        and free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and norm_score_delta > score_eps
+    ):
+        restore_refine = False
+        propose_stats["refine_score_accept"] = int(
+            propose_stats.get("refine_score_accept", 0)
+        ) + 1
+    elif (
+        restore_refine
+        and count_tie
+        and norm_score_delta > score_eps
+    ):
+        restore_refine = False
+        propose_stats["refine_score_accept"] = int(
+            propose_stats.get("refine_score_accept", 0)
+        ) + 1
+
     # U1/R0: void shed without lex win → restore; also hold if refine empties void.
     if (
         free_info is not None

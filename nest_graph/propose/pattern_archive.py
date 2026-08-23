@@ -43,10 +43,42 @@ def motif_to_cluster_patterns(motif_base: Any, action: Any) -> list[ClusterPatte
     return [record_to_cluster_pattern(motif_base.at(mid), motif_id=mid)]
 
 
+def _pattern_full_clique_hit(
+    pat: ClusterPattern,
+    group_id: Sequence[int],
+    transform: Sequence,
+    key_map: dict,
+) -> bool:
+    """True when all pattern members match world poses on the graph."""
+    members = tuple(getattr(pat, "members", ()) or ())
+    if len(members) < 2:
+        return False
+    gid_a, _t_a = members[0]
+    for gid, t in zip(group_id, transform, strict=False):
+        if int(gid) != int(gid_a):
+            continue
+        world_a = (float(t[0]), float(t[1]), float(t[2]))
+        key_a = transform_row_key(world_a)
+        if (int(gid_a), key_a) not in key_map:
+            continue
+        ok = True
+        for gid_m, t_m in members[1:]:
+            rel = (float(t_m[0]), float(t_m[1]), float(t_m[2]))
+            world_m = compose_transforms(world_a, rel)
+            key_m = transform_row_key(world_m)
+            if (int(gid_m), key_m) not in key_map:
+                ok = False
+                break
+        if ok:
+            return True
+    return False
+
+
 def motif_graph_hits(
     patterns: Sequence[ClusterPattern],
     group_id: Sequence[int],
     transform: Sequence,
+    telem: dict | None = None,
 ) -> tuple[dict[int, set[tuple[float, float, float]]], list[dict], int]:
     """Match Motif-local ClusterPatterns onto graph world poses (cheap inject).
 
@@ -57,16 +89,22 @@ def motif_graph_hits(
     motif_keys: dict[int, set[tuple[float, float, float]]] = {}
     cohorts: list[dict] = []
     n_hits = 0
+    clique_pairs_n = 0
+    clique_full_hits = 0
     for idx, pat in enumerate(patterns):
-        if len(getattr(pat, "members", ()) or ()) < 2:
+        members = tuple(getattr(pat, "members", ()) or ())
+        if len(members) < 2:
             continue
+        clique_pairs_n += len(members) - 1
+        if _pattern_full_clique_hit(pat, group_id, transform, key_map):
+            clique_full_hits += 1
         mid = int(getattr(pat, "motif_id", -1))
         if mid < 0:
             mid = int(idx)
-        gid_a, _t_a = pat.members[0]
-        gid_b, t_b = pat.members[1]
+        gid_a, _t_a = members[0]
+        gid_b, t_b = members[1]
         rel_b = (float(t_b[0]), float(t_b[1]), float(t_b[2]))
-        for i, (gid, t) in enumerate(zip(group_id, transform)):
+        for i, (gid, t) in enumerate(zip(group_id, transform, strict=False)):
             if int(gid) != int(gid_a):
                 continue
             world_a = (float(t[0]), float(t[1]), float(t[2]))
@@ -87,6 +125,13 @@ def motif_graph_hits(
                 "motif_id": mid,
             })
             n_hits += 1
+    if telem is not None:
+        telem["motif_clique_pairs_n"] = int(
+            telem.get("motif_clique_pairs_n", 0)
+        ) + int(clique_pairs_n)
+        telem["motif_clique_full_hits"] = int(
+            telem.get("motif_clique_full_hits", 0)
+        ) + int(clique_full_hits)
     return motif_keys, cohorts, n_hits
 
 

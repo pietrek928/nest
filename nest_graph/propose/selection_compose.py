@@ -469,6 +469,9 @@ def compose_and_nest_selection(
         boost_hits["motif_sequential"] = int(seq_telem.get("motif_sequential_full", 0))
         if propose_stats is not None:
             propose_stats.update(seq_telem)
+            lock_sizes = [len(s) for s in lock_sets if s]
+            if lock_sizes:
+                propose_stats["motif_compose_accepted_size"] = max(lock_sizes)
 
     seed_lock = [int(i) for i in (locked_seed or ()) if 0 <= int(i) < n_graph]
     # L2: always beam unlocked dual when dual_nest (locks kill dual inside one call).
@@ -719,7 +722,8 @@ def compose_and_nest_selection(
                         propose_stats["motif_override"] = 1
                 else:
                     selected_nest = list(incumbent)
-                    locked_motif = []
+                    if int((propose_stats or {}).get("motif_sequential_full", 0) or 0) <= 0:
+                        locked_motif = []
                     incumbent_hold = 1
                     if propose_stats is not None:
                         propose_stats["motif_override"] = 0

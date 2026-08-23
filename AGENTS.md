@@ -72,6 +72,19 @@ During each miss cycle, **degradation cycle**, and while a letter is still open:
 - **Keep logic clean and consistent.** Same predicate → same helper; same SoT → same call site family; comments must match code. Prefer one readable path over clever special cases.
 - **Improve is the bar.** Letter success is indep OK **and** quality ≥ snapshot (prefer gain). Telem-only / structural ships that leave area below the letter baseline stay in the degradation loop.
 
+### Cross-track synergy
+
+When a plan spans propose, post-pack, compose, DecisionGraph, and MCTS, **tracks should complement through existing one-gates** — not parallel stores, beams, or credit ledgers.
+
+- **One SoT per concern.** Motif cross-iter → MotifBase pairs (`pattern_archive`, `upsert_from_contacts`); same-iter N-way → `ClusterPattern` + `merge_cluster_patterns`; compose locks → `sequential_accept_motif_cohorts` → `_nest_with_locks`; refine restore → `apply_refine_with_restore`; MCTS cache → `cheap_pack_cache_key`. Extend the named path; grep before adding a second.
+- **Downstream consumes upstream.** Example chain: stamp/repack accept → pair upsert → next-iter `motif_patterns_for_inject` → `cluster_copy` / repair patterns → cohort beam → `bind_epoch` MotifJoin → refine fracture. A later letter should not invent storage the earlier letter was meant to feed.
+- **Hybrid over either-or when predicates differ.** Clearance-valid stamp poses may fail contact upsert; archive pair relatives from the accepted pattern **and** masked contact upsert. Leader-star MotifJoin (k−1 edges) over full clique when refine budget matters. Score-sum tie in restore over count-only when C++ lex already uses score.
+- **Wire prerequisites before dependents.** Extend cache keys before enabling new AMAF dimensions (`rule_id`, `cohort_sig`). Prove M2 `member_hits` / compose telem before N-way MCTS macros. Conditional letters stay gated on telem from the prior letter — do not ship both blindly.
+- **Orthogonal layers stack; duplicate gates don't.** `pose_kind` spatial bias and `rule_id` preset selection are separate — OK to combine with telem. Two merge helpers, two motif archives, or two refine restore predicates are not.
+- **Cross-track regressions need cross-track telem.** Handoff keys include `repack_motif_upserts`, `motif_clique_*`, `motif_compose_*`, `member_hits`, `refine_score_accept`, `mcts_rule_id`. A miss in track B after track A shipped often means A's output never reached B's gate — research the named hot path, don't add track C.
+
+Open Q-table for multi-track work: [docs/agent-domain-notes.md](docs/agent-domain-notes.md) (net-only Q&A).
+
 ## Nesting invariants
 
 - **Output** must be collision-free (independent set). Transient DFS overlaps OK; `refine_selection` / `finalize_selection` must not return overlaps to Python.

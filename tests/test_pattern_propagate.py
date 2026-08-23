@@ -73,9 +73,13 @@ def test_motif_base_ttl_reset_and_age():
     assert base.at(0).ttl_remaining == 3
     assert base.at(0).accept_count == 2
     assert base.age(1) == 0
+    assert base.at(0).ttl_remaining == 2
     assert base.age(1) == 0
-    assert base.age(1) == 1
-    assert base.size() == 0
+    assert base.at(0).ttl_remaining == 1
+    # Q113: accept_count > 0 floors TTL at 1 (proven motifs are not dropped by age).
+    assert base.age(1) == 0
+    assert base.size() == 1
+    assert base.at(0).ttl_remaining == 1
 
 
 def test_merge_prefers_contact_then_archive_then_synth():

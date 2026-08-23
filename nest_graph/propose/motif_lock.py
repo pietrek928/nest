@@ -199,6 +199,12 @@ def sequential_accept_motif_cohorts(
         if not clear_ok:
             telem["motif_sequential_clear_fail"] += 1
             continue
+        accepted_idxs = list(idxs)
+        if accepted_idxs and not telem.get("motif_beam_seeded"):
+            if accepted_idxs not in lock_sets:
+                lock_sets.insert(0, accepted_idxs)
+            telem["motif_beam_seeded"] = 1
+            lock_sets[:] = lock_sets[:beam_cap]
         for i in idxs:
             locked.append(i)
             locked_set.add(i)

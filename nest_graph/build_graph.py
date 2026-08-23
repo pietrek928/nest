@@ -143,6 +143,7 @@ from .decision.execute import (
     run_mcts_multi_sim,
     schedule_prep_selection_free,
 )
+from .decision.slave_pack import upsert_from_repack_accept
 from .decision.motif_credit import (
     credit_motif_on_nest_survival,
     credit_void_niche_from_iter,
@@ -918,6 +919,14 @@ class PlateauTracker:
         return self.on_plateau
 
 
+def _mcts_rule_ids(rule_sets: Sequence, k: int = 3) -> tuple[int, ...]:
+    """Q247: top-K rule_id indices for MCTS expand (baseline uses rule_id=0)."""
+    n = len(rule_sets or ())
+    if n <= 0:
+        return (0,)
+    return tuple(range(min(n, max(int(k), 1))))
+
+
 def _selection_budget_for_iter(
     sel: SelectionConfig,
     *,
@@ -1225,10 +1234,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_action = mcts_runner.agent.pick_expand_action(
                 parent_snap.remaining_gids
                 or tuple(range(int(cfg.rules.ngroups))),
-                rule_ids=(0,),
+                rule_ids=_mcts_rule_ids(rule_sets),
                 parent_id=mcts_parent_id,
                 snapshot=parent_snap,
             )
+            if mcts_action is not None:
+                mcts_telem["mcts_rule_id"] = int(getattr(mcts_action, "rule_id", 0) or 0)
         mcts_force_zone = None
         if mcts_action is not None:
             mcts_force_zone = region_to_zone(mcts_action.region)
@@ -1455,6 +1466,26 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         seed_rules = active_rule_set(_make_seed_rule_sets(cfg))
         free_info = None
         # Ua: one improve call above first_pass / mid-pack fork.
+        if (
+            plateau.on_plateau
+            and int(mcts_telem.get("plateau_rule_boost", 0) or 0) > 0
+            and rule_sets
+        ):
+            rid = int(mcts_telem.get("last_rule_id", 0) or 0)
+            if 0 <= rid < len(rule_sets):
+                rule_sets = improve_rules(
+                    graphs,
+                    rule_sets,
+                    sel_iter.rules_kept,
+                    p_sheet,
+                    mutation_presets=cfg.rules.mutation_presets(),
+                    rule_score_penalty=sel_iter.rule_score_penalty,
+                    elite_count=max(int(sel_iter.improve_rules_elite_count), 1),
+                    seed=int(rng.integers(0, 2**31)) + int(rid) * 997,
+                    score_options=score_rules_options(sel_iter),
+                    max_rules_per_set=cfg.rules.max_rules_per_set,
+                )
+            mcts_telem["plateau_rule_boost"] = 0
         rule_sets = run_improve_rules_rounds(
             improve_rules,
             graphs=graphs,
@@ -1612,6 +1643,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "sheet_area": float(sheet.area) if sheet is not None else 0.0,
                 "board_area": float(board_area),
                 "selected": list(selected_polys),
+                "motif_locked": list(propose_stats.get("motif_locked") or ()),
             })
             mcts_telem["last_graph_n"] = int(len(transform))
             mcts_telem["last_nest_n"] = int(len(selected_polys))
@@ -1779,6 +1811,29 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "motif_accepted": 0,
                 "skipped_refine_zero": int(not post_prep.allow_repack),
             }
+            if int(repack_stats.get("motif_accepted", 0) or 0) > 0:
+                seed_n = nest_state.seed_count if nest_state is not None else 0
+                pack_geoms = _native_geoms_from_transforms(
+                    group_id,
+                    transform,
+                    part_bases,
+                    seed_polys=nest_state.polys[:seed_n] if nest_state is not None and seed_n else None,
+                    seed_count=seed_n,
+                )
+                upsert_from_repack_accept(
+                    mcts_runner.motif_base,
+                    repack_stats,
+                    pack_geoms,
+                    group_id,
+                    transform,
+                    gap=float(min_dist),
+                    min_compactness=float(
+                        getattr(cfg.propose, "motif_min_compactness", 0.35) or 0.35
+                    ),
+                    ttl=int(getattr(cfg.propose, "accepted_pattern_ttl", 4) or 4),
+                    max_keep=int(getattr(cfg.propose, "accepted_pattern_max", 4) or 4),
+                    telem=propose_stats,
+                )
             reloc_stats = pack_stats.get("relocate") or {
                 "attempted": 0, "accepted": 0, "moved": 0,
             }
@@ -1847,7 +1902,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 mcts_telem=mcts_telem,
                 motif_keys=motif_keys_arch,
                 motif_ttl=motif_ttl,
-                credit_motif=int(motif_refine_n) > 0,
+                credit_motif=int(motif_refine_n) > 0 or int(repack_m) > 0,
                 refine_bp=refine_bp_credit if mcts_runner.agent is not None else None,
                 emitted_bp=emitted_bp_credit if mcts_runner.agent is not None else None,
             )
@@ -1927,6 +1982,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 ),
             )
             _exec_last["snap"] = child_snap
+            if plateau.on_plateau and float(cov) >= float(plateau.last_cov or 0.0):
+                mcts_telem["plateau_rule_boost"] = 1
+                mcts_telem["last_rule_id"] = int(
+                    getattr(mcts_action, "rule_id", 0) or 0
+                )
         plateau.update(cov, len(selected_polys))
         refine_bp_plateau = {}
         if isinstance(propose_stats.get("void_leak"), dict):

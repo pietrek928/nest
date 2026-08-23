@@ -246,7 +246,10 @@ def record_mcts_expand(
 ) -> int:
     """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id."""
     del part_areas  # areas come from contact solids
-    reward = leaf_reward(child_snap)
+    reward = leaf_reward(
+        child_snap,
+        rule_id=int(getattr(action, "rule_id", 0) or 0),
+    )
     agent = runner.agent
     if agent is None:
         return int(parent_id)

@@ -971,14 +971,25 @@ def finalize_iter_mcts(
             materialized_attach=int(propose_stats.get("materialized_attach", 0) or 0),
             member_hits=int(propose_stats.get("member_hits", 0) or 0),
             credit_motif=bool(credit_motif),
+            upsert_patterns=(
+                (propose_stats.get("repack") or {}).get("upsert_patterns")
+            ),
         )
     if isinstance(propose_stats.get("void_leak"), dict):
-        propose_stats["void_leak"]["kind_survive"] = int(
-            propose_stats.get("kind_survive", 0) or 0
-        )
-        propose_stats["void_leak"]["materialized_attach"] = int(
+        leak = propose_stats["void_leak"]
+        leak["kind_survive"] = int(propose_stats.get("kind_survive", 0) or 0)
+        leak["materialized_attach"] = int(
             propose_stats.get("materialized_attach", 0) or 0
         )
+        leak["member_hits"] = int(propose_stats.get("member_hits", 0) or 0)
+        leak["materialized_motif"] = int(
+            propose_stats.get("materialized_motif", 0) or 0
+        )
+        leak["motif_compose_accepted_size"] = int(
+            propose_stats.get("motif_compose_accepted_size", 0) or 0
+        )
+        leak["motif_beam_sets"] = int(propose_stats.get("motif_beam_sets", 0) or 0)
+        leak["motif_join_n"] = int(propose_stats.get("motif_join_n", 0) or 0)
 
 
 __all__ = [

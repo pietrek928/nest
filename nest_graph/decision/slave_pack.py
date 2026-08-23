@@ -60,6 +60,57 @@ def motif_floor_compactness(
     return floor
 
 
+def _upsert_leader_star_patterns(
+    motif_base: MotifBase,
+    patterns: Sequence,
+    geoms: Sequence,
+    gids: Sequence[int],
+    *,
+    floor: float,
+    ttl: int,
+) -> int:
+    """Q229/Q254: leader-star pair upsert from ClusterPattern relatives."""
+    n_up = 0
+    n = len(geoms)
+    gid_to_indices: dict[int, list[int]] = {}
+    for idx in range(n):
+        gid_to_indices.setdefault(int(gids[idx]), []).append(idx)
+
+    for pat in patterns or ():
+        members = tuple(getattr(pat, "members", ()) or ())
+        if len(members) < 2:
+            continue
+        gid_a, t_a = members[0]
+        for gid_b, t_b in members[1:]:
+            rel = (
+                float(t_b[0]),
+                float(t_b[1]),
+                float(t_b[2]),
+            )
+            ia_list = gid_to_indices.get(int(gid_a), ())
+            ib_list = gid_to_indices.get(int(gid_b), ())
+            if not ia_list or not ib_list:
+                compactness = 0.5
+                area_a = area_b = 1.0
+            else:
+                ia, ib = ia_list[0], ib_list[0]
+                ga, gb = geoms[ia], geoms[ib]
+                compactness = _pair_compactness(ga, gb)
+                area_a = abs(float(ga.area()))
+                area_b = abs(float(gb.area()))
+            edge = ContactEdge()
+            edge.gid_a = int(gid_a)
+            edge.gid_b = int(gid_b)
+            edge.relative_pose = Se2(rel[0], rel[1], rel[2])
+            edge.contact_score = 1.0
+            edge.compactness = float(compactness)
+            edge.gci = float(gci_surrogate(float(compactness), 1.0))
+            mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
+            if mid >= 0:
+                n_up += 1
+    return n_up
+
+
 def upsert_from_contacts(
     motif_base: MotifBase,
     geoms: Sequence,
@@ -72,6 +123,7 @@ def upsert_from_contacts(
     max_keep: int = 0,
     telem: dict | None = None,
     selection_mask: Sequence[bool] | None = None,
+    patterns: Sequence | None = None,
 ) -> int:
     """ContactGRG → MotifBase via bound ContactEdge + gci_surrogate (C1).
 
@@ -95,6 +147,20 @@ def upsert_from_contacts(
 
     floor = motif_floor_compactness(motif_base, min_compactness)
     n_up = 0
+    if patterns:
+        n_pat = _upsert_leader_star_patterns(
+            motif_base,
+            patterns,
+            geoms,
+            gids,
+            floor=floor,
+            ttl=int(ttl),
+        )
+        n_up += int(n_pat)
+        if telem is not None:
+            telem["repack_motif_upserts"] = int(
+                telem.get("repack_motif_upserts", 0)
+            ) + int(n_pat)
     for r in results:
         i = int(r.polyA_idx)
         j = int(r.polyB_idx)
@@ -150,6 +216,49 @@ def upsert_from_contacts(
         telem["contact_grg_upserts"] = int(telem.get("contact_grg_upserts", 0)) + n_up
         telem["motif_floor"] = float(floor)
     return n_up
+
+
+def upsert_from_repack_accept(
+    motif_base: MotifBase,
+    repack_stats: dict,
+    geoms: Sequence,
+    gids: Sequence[int],
+    transforms: Sequence,
+    *,
+    gap: float,
+    min_compactness: float = 0.35,
+    ttl: int = 0,
+    max_keep: int = 0,
+    telem: dict | None = None,
+) -> int:
+    """Q229–Q230: stamp-neighborhood hybrid upsert from repack stats."""
+    if not int(repack_stats.get("motif_accepted", 0) or 0):
+        return 0
+    patterns = repack_stats.get("upsert_patterns") or ()
+    placed = list(repack_stats.get("placed_idxs") or ())
+    kept = list(repack_stats.get("kept_idxs") or ())
+    indices = sorted(set(placed) | set(kept))
+    if len(indices) < 1:
+        return 0
+    sub_geoms = [geoms[i] for i in indices if i < len(geoms)]
+    sub_gids = [int(gids[i]) for i in indices if i < len(gids)]
+    sub_tr = [transforms[i] for i in indices if i < len(transforms)]
+    if len(sub_geoms) < 1:
+        return 0
+    mask = [True] * len(sub_geoms)
+    return upsert_from_contacts(
+        motif_base,
+        sub_geoms,
+        sub_gids,
+        sub_tr,
+        gap=float(gap),
+        min_compactness=float(min_compactness),
+        ttl=int(ttl),
+        max_keep=int(max_keep),
+        telem=telem,
+        selection_mask=mask,
+        patterns=list(patterns),
+    )
 
 
 def cheap_expand_slave(

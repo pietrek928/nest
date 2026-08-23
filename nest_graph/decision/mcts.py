@@ -391,6 +391,7 @@ def leaf_reward(
     lam_comp: float = 0.05,
     lam_void: float = 0.5,
     lam_rim: float = 0.1,
+    rule_id: int = -1,
 ) -> float:
     """Coverage + void/rim fills (Dg1) + optional kiss/comp.
 
@@ -403,13 +404,16 @@ def leaf_reward(
     if str(snapshot.free_kind or "") == "large_void":
         void_w = max(void_w, 0.75)
         rim_w = min(rim_w, 0.05)
-    return (
+    base = (
         float(snapshot.coverage)
         + void_w * float(snapshot.void_fill)
         + rim_w * float(snapshot.rim_fill)
         + lam_kiss * (float(snapshot.kiss_pairs) / packed)
         + lam_comp * float(snapshot.mean_compactness)
     )
+    if int(rule_id) > 0:
+        base += 0.02 * min(float(int(rule_id)), 3.0)
+    return base
 
 
 def timed_expand_ms(telem: dict, t0: float) -> None:

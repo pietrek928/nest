@@ -649,11 +649,13 @@ def test_cheap_pack_cache_key_motif_distinct():
     motif = MacroAction()
     motif.region = MacroRegion.Motif
     motif.motif_id = 3
-    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1)
-    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3)
+    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1, 0)
+    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 0)
     assert cheap_pack_cache_key("void_seek", rim) != cheap_pack_cache_key(
         "void_seek", motif
     )
+    motif.rule_id = 2
+    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 2)
 
 
 def test_motif_graph_hits_cluster_copy_emit():

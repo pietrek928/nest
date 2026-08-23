@@ -742,3 +742,60 @@ Bar: match F3 OFF **≥ 0.571**; dense ≥ **0.9× 0.607**; indep OK. Strict D0�
 
 Miss loop: post-lex board_adj accept ban regressed dense/void — removed; Q215 stays in pick only. Residual ON gap closed by soft-gating void_seek early-bridge + rim-anchored explorer rays + lobe seeds (border early-bridge kept).
 
+---
+
+### Repack + DG cohort tracks (Q229–Q254 — locked 2026-08-23)
+
+R→P→M→S plan: pair upsert, clique telem, leader-star MotifJoin, score-by-rules MCTS. Cross-track synergy: [AGENTS.md](../AGENTS.md) Planning § Cross-track synergy.
+
+#### R track — repack & Motif learning (Q229–Q234)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q229 | Hybrid (relative primary, contact secondary) | Decompose `ClusterPattern` relative poses for stamp intent. Masked contact fallback only. |
+| Q230 | `placed_idxs ∪ kept` only | Confine upsert mask to stamp neighborhood. No full-board mid-iter upsert. |
+| Q231 | YES (widen gate) | `credit_motif = motif_refine_n > 0 or repack_m > 0`. TTL reset on stamp accept. |
+| Q232 | Max native-centroid-to-pole | No Shapely `unary_union` on peel hot path. |
+| Q233 | Cap victims/coords | Fallback N=1 or skip after motif_accepted budget exhausted. |
+| Q234 | Bench first (`reserve_archived=1`) | Do not raise `cluster_copy_max_patterns` blindly. |
+
+#### P track — pattern persistence (Q235–Q238)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q235 | τ ≈ 0.5 on void_fill stamp iters | `< 50%` motif_clique_full_hits → P2 cohort_sig. |
+| Q236 | Optional `int32_t` on `MotifRecord` | Do NOT alter `motif_key`. |
+| Q237 | Leader-star stitch for inject | k−1 pairs reconstruct k-part island. |
+| Q238 | NO UNIFY (keep Q95) | `cohort_sig` semantic tag at inject rank. |
+
+#### M track — compose, MotifJoin, M3 (Q239–Q244)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q239 | Keep 4 (in-place truncate) | Hard-truncate motif_lock_sets to 4. |
+| Q240 | Lex first, density soft tie | Count → Area → density when area Δ ≤ ε. |
+| Q241 | Leader-star (k−1) | No full-clique MotifJoin. Dynamic leader = max bbox area. |
+| Q242 | Preserve locks on override | Do not wipe locks on incumbent hold when motif_sequential_full > 0. |
+| Q243 | Both required for M3 | member_hits > 0 AND motif_compose_accepted_size ≥ 2. |
+| Q244 | Seed beam seeds | Feed growing-accept as Seed #1 into M1 beam. |
+
+#### S track — score-by-rules & MCTS (Q245–Q250)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q245 | Normalized Δscore / sel_n | Per-vertex score with floor ε. |
+| Q246 | YES if score δ large (void/large_void) | Small rim drop OK when interior score δ strong. |
+| Q247 | K ≤ 3 initially | Cap rule_id exploration at 3. |
+| Q248 | Defer (monitor telem) | Cheap MotifJoin parity only if telem diverges. |
+| Q249 | Plateau + reward ≥ parent best | One improve_rules mutation per iter max on plateau. |
+| Q250 | Telem first; 1.25× cap if needed | Combined void boost cap if debris clustering. |
+
+#### Cross-track integration (Q251–Q254)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q251 | Keep both upsert paths | Stamp upsert + end-of-iter full-board contact upsert. |
+| Q252 | Extend AMAF tuple (M3) | `(region, rule_id, motif_id, cohort_sig)` when M3 ships. |
+| Q253 | Monitor refine_rejected | No special restore for member_hits until telem proves regression. |
+| Q254 | Extend upsert_from_contacts | Optional `patterns` for leader-star + contact in one gate. |
+

@@ -101,6 +101,24 @@ def cluster_indices_with_board(
     return [([placed_idx[j] for j in members], board_adj) for members, board_adj in comps]
 
 
+def _max_centroid_dist_to_pole(
+    indices: Sequence[int],
+    polys: Sequence[BaseGeometry],
+    pole: Point | None,
+) -> float:
+    """Q232: farthest member centroid to pole (no unary_union)."""
+    if pole is None or pole.is_empty:
+        return 0.0
+    px, py = float(pole.x), float(pole.y)
+    best = 0.0
+    for i in indices:
+        c = polys[i].centroid
+        d = math.hypot(float(c.x) - px, float(c.y) - py)
+        if d > best:
+            best = d
+    return best
+
+
 def bfs_peel_victim(
     selected_indices: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -162,11 +180,7 @@ def bfs_peel_victim(
         if len(peel) < min_size:
             continue
         peel = peel[:max_size]
-        blob_dist = (
-            float(unary_union([polys[i] for i in peel]).centroid.distance(pole))
-            if pole is not None and not pole.is_empty
-            else 0.0
-        )
+        blob_dist = _max_centroid_dist_to_pole(peel, polys, pole)
         candidates.append((prefer * 1e6 + blob_dist, peel, board_adj))
 
     if not candidates:
@@ -428,6 +442,7 @@ def cluster_repack_selection(
     free_space=None,
     victim_indices: Sequence[int] | None = None,
     repair_patterns: Sequence | None = None,
+    archived_patterns: Sequence[ClusterPattern] = (),
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
     void_geoms = None
@@ -517,26 +532,22 @@ def cluster_repack_selection(
         pole if pole is not None else sheet.centroid
     )
 
-    # Patterns: prefer RepairCohort list (Q205/Q207); else peel + capped locally.
-    # Q208: hardcap attempts = 1 (config default; ignore multi-stamp DFS loops).
-    patterns: list[ClusterPattern] = []
+    # Patterns: RepairCohort SoT (Q205) — one merge_cluster_patterns gate.
+    from nest_graph.propose.repair_cohort import build_repair_patterns
+
     if repair_patterns:
         patterns = list(repair_patterns)
     else:
-        peel_pat = pattern_from_indices(victim, out_polys, group_ids, out_tr)
-        if peel_pat is not None:
-            patterns.append(peel_pat)
-        if kept:
-            patterns.extend(
-                extract_capped_subpatterns(
-                    [out_polys[i] for i in kept],
-                    [int(group_ids[i]) for i in kept],
-                    [out_tr[i] for i in kept],
-                    min_dist=min_dist,
-                    max_members=len(victim),
-                    sheet=sheet,
-                )
-            )
+        patterns = build_repair_patterns(
+            victim=victim,
+            polys=out_polys,
+            group_ids=group_ids,
+            transforms=out_tr,
+            kept=kept,
+            min_dist=min_dist,
+            sheet=sheet,
+            archived=list(archived_patterns or ()),
+        )
 
     void_geom = _as_geometry(void_poly) if void_poly is not None else None
     void_facing = any(
@@ -549,6 +560,7 @@ def cluster_repack_selection(
     for _round in range(max_stamp_rounds):
         if not remaining:
             break
+        trial_pat = remaining[0]
         stamped = _motif_stamp_attempt(
             remaining,
             victim,
@@ -584,12 +596,15 @@ def cluster_repack_selection(
             stats["accepted"] = 1
             stats["placed"] = len(placed_idxs)
             stats["motif_accepted"] = 1
+            stats["placed_idxs"] = list(placed_idxs)
+            stats["kept_idxs"] = list(kept)
+            stats["upsert_patterns"] = [trial_pat]
             return trial_polys, trial_tr, new_sel, stats
         # Multi-try: drop the leading pattern and continue with remaining.
         remaining = remaining[1:] if remaining else []
         stamped = None
 
-    # Per-part ranked fallback.
+    # Q233: cap fallback — at most one victim when stamp path exhausted.
     stats["pattern_fallback"] = 1
     # Void-facing peel always routes void_seek (even when component is board_adj).
     zone = "void_seek" if void_facing or not board_adj else "border_gap"
@@ -600,7 +615,7 @@ def cluster_repack_selection(
         victim,
         key=lambda i: float(part_by_group.get(int(group_ids[i]), Polygon()).area),
         reverse=True,
-    )
+    )[:1]
     working_kept_geoms = list(kept_geoms)
     working_base = kept_union
     working_tr: dict[int, np.ndarray] = {}

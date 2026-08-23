@@ -17,12 +17,16 @@ from nest_graph.propose.selection_compose import (
 )
 
 
-def cheap_pack_cache_key(zone, action) -> tuple[str, int]:
-    """Q143: cheap cache is (zone, motif_id); motif_id=-1 when not Motif."""
+def cheap_pack_cache_key(zone, action) -> tuple[str, int, int]:
+    """Q143/S2a: cheap cache is (zone, motif_id, rule_id)."""
     motif_id = -1
-    if action is not None and int(getattr(action, "motif_id", -1) or -1) >= 0:
-        motif_id = int(action.motif_id)
-    return (str(zone or ""), motif_id)
+    rule_id = 0
+    if action is not None:
+        if int(getattr(action, "motif_id", -1) or -1) >= 0:
+            motif_id = int(action.motif_id)
+        rid = int(getattr(action, "rule_id", 0) or 0)
+        rule_id = rid if rid >= 0 else 0
+    return (str(zone or ""), motif_id, rule_id)
 
 
 def compose_cached_selection(
@@ -53,7 +57,9 @@ def compose_cached_selection(
     pats = list(patterns or [])
     n_cc = 0
     if pats:
-        motif_keys, cohorts, n_cc = motif_graph_hits(pats, group_id, transform)
+        motif_keys, cohorts, n_cc = motif_graph_hits(
+            pats, group_id, transform, telem=propose_stats_c,
+        )
         merge_motif_hits(propose_stats_c, motif_keys, cohorts)
     pack_cache["cheap_cluster_copy_n"] = int(n_cc)
     active_rules = active_rule_set(rule_sets)
@@ -92,6 +98,7 @@ def compose_cached_selection(
         )
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
+    pack_cache["motif_locked"] = list(propose_stats_c.get("motif_locked") or ())
     pack_cache["compose_scores"] = composed.refine_scores
     pack_cache["compose_rules"] = composed.refine_rules
     pack_cache["compose_polys"] = polys
@@ -146,7 +153,7 @@ def refine_cached_selection(
         sel_iter=sel,
         node_areas=node_areas,
         refine_seed=0,
-        locked_indices=[],
+        locked_indices=list(pack_cache.get("motif_locked") or ()),
         polys=polys,
         group_id=group_id,
         transform=transform,

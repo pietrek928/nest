@@ -1,5 +1,6 @@
 """Motif / niche credit helpers for Macro-MCTS expand bookkeep."""
 
+from itertools import combinations
 from typing import Any, Sequence
 
 import numpy as np
@@ -92,6 +93,34 @@ def _write_realized_kind_attach(
         telem["materialized_attach"] = int(materialized_attach)
 
 
+def _credit_motif_pair(
+    motif_base: Any,
+    *,
+    gid_a: int,
+    gid_b: int,
+    rel: tuple[float, float, float],
+    ttl: int,
+) -> int:
+    mid = int(
+        motif_base.find_exact_id(
+            int(gid_a),
+            int(gid_b),
+            Se2(float(rel[0]), float(rel[1]), float(rel[2])),
+        )
+    )
+    if mid < 0:
+        mid = int(
+            motif_base.find_nearest_id(
+                int(gid_a),
+                int(gid_b),
+                Se2(float(rel[0]), float(rel[1]), float(rel[2])),
+            )
+        )
+    if mid >= 0 and motif_base.credit_accept(mid, int(ttl)):
+        return 1
+    return 0
+
+
 def credit_motif_on_nest_survival(
     motif_base: Any,
     *,
@@ -106,6 +135,7 @@ def credit_motif_on_nest_survival(
     materialized_attach: int = 0,
     member_hits: int = 0,
     credit_motif: bool = True,
+    upsert_patterns: Sequence | None = None,
 ) -> int:
     """Q116 accept_count++ plus Q165 Kind/Attach scalars (outer leaf only)."""
     _write_realized_kind_attach(
@@ -119,6 +149,25 @@ def credit_motif_on_nest_survival(
     if not credit_motif or motif_base is None or not selected_polys or not motif_keys:
         return 0
     credited = 0
+    seen_pairs: set[tuple[int, int, tuple[float, float, float]]] = set()
+    for pat in upsert_patterns or ():
+        members = tuple(getattr(pat, "members", ()) or ())
+        if len(members) < 2:
+            continue
+        gid_a, t_a = members[0]
+        for gid_b, t_b in members[1:]:
+            rel = (float(t_b[0]), float(t_b[1]), float(t_b[2]))
+            sig = (int(gid_a), int(gid_b), rel)
+            if sig in seen_pairs:
+                continue
+            seen_pairs.add(sig)
+            credited += _credit_motif_pair(
+                motif_base,
+                gid_a=int(gid_a),
+                gid_b=int(gid_b),
+                rel=rel,
+                ttl=int(ttl),
+            )
     keys_by_gid = motif_keys or {}
     motif_idxs: list[int] = []
     for i in selected_polys:
@@ -132,30 +181,24 @@ def credit_motif_on_nest_survival(
         key = transform_row_key(np.asarray(transform[gi], dtype=np.float64))
         if key in owned:
             motif_idxs.append(gi)
-    for a, b in zip(motif_idxs, motif_idxs[1:]):
+    for a, b in combinations(motif_idxs, 2):
         ga, gb = int(group_id[a]), int(group_id[b])
         ta, tb = transform[a], transform[b]
         rel = relative_transform(
             (float(ta[0]), float(ta[1]), float(ta[2])),
             (float(tb[0]), float(tb[1]), float(tb[2])),
         )
-        mid = int(
-            motif_base.find_exact_id(
-                ga,
-                gb,
-                Se2(float(rel[0]), float(rel[1]), float(rel[2])),
-            )
+        sig = (ga, gb, (float(rel[0]), float(rel[1]), float(rel[2])))
+        if sig in seen_pairs:
+            continue
+        seen_pairs.add(sig)
+        credited += _credit_motif_pair(
+            motif_base,
+            gid_a=ga,
+            gid_b=gb,
+            rel=(float(rel[0]), float(rel[1]), float(rel[2])),
+            ttl=int(ttl),
         )
-        if mid < 0:
-            mid = int(
-                motif_base.find_nearest_id(
-                    ga,
-                    gb,
-                    Se2(float(rel[0]), float(rel[1]), float(rel[2])),
-                )
-            )
-        if mid >= 0 and motif_base.credit_accept(mid, int(ttl)):
-            credited += 1
     if telem is not None:
         telem["motif_nest_credit"] = int(telem.get("motif_nest_credit", 0)) + credited
     return credited
