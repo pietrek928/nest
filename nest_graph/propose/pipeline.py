@@ -12,7 +12,7 @@ loop, not a proposer. Stage-extracting that loop (plan phase 3) is the split
 worth doing; do it before carving up the collect stages.
 """
 
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Tuple, Union
 import logging
 import math
 from dataclasses import replace
@@ -130,6 +130,7 @@ from nest_graph.propose.pose_diversity import (
     apply_pose_nms,
 )
 from nest_graph.propose.void_selection import (
+    FreeCentroidPredicate,
     transform_row_key,
     void_pole_near_radius,
     xy_in_free,
@@ -1576,7 +1577,7 @@ def _collect_expand_candidates(
         for gid, tr in zip(extras.packed_group_ids, extras.packed_transforms, strict=False):
             if int(gid) != int(group_id):
                 continue
-            t = tuple(float(x) for x in tr[:3])
+            t = (float(tr[0]), float(tr[1]), float(tr[2]))
             seeds.append(t)
     if (
         seeds
@@ -2024,7 +2025,7 @@ def propose_coords_from_candidates(
     void_pole: Point | None = None,
     diversity_stats_out: dict | None = None,
     propose_geom: ProposeGeometry | None = None,
-    full_packed_geoms: list[Geometry] | None = None,
+    full_packed_geoms: Sequence[Geometry] | None = None,
 ) -> List[Tuple[float, float, float]]:
     if propose_geom is not None:
         if full_packed_geoms is not None:
@@ -2227,7 +2228,7 @@ def propose_coords_with_strategy(
     rules=None,
     group_id: int = 0,
     proposer_counts: dict[str, int] | None = None,
-    full_packed_geoms: list[Geometry] | None = None,
+    full_packed_geoms: Sequence[Geometry] | None = None,
     cluster_patterns: Sequence | None = None,
     placement_angles_override: np.ndarray | None = None,
     guidance_seed_coords: Sequence[tuple[float, float, float]] | None = None,
@@ -2318,7 +2319,7 @@ def propose_coords_with_strategy(
     # Keep corridor / pocket seeds by skipping clearance pool trim; force hybrid
     # when pocket teleports are present so clearance ranking cannot discard them.
     if guidance_seed_coords or pocket_reserve:
-        hybrid_update = {
+        hybrid_update: dict[str, Any] = {
             "trim_candidates_by_clearance": False,
         }
         if rank_mode == RankingMode.CLEARANCE:
@@ -2492,7 +2493,10 @@ def _batch_top_seed_coords(
     if arr.shape[0] == 0 or n <= 0:
         return []
     take = min(n, arr.shape[0])
-    return [tuple(float(x) for x in row) for row in arr[:take]]
+    return [
+        (float(row[0]), float(row[1]), float(row[2]))
+        for row in arr[:take]
+    ]
 
 
 def _as_batch_geometry(g) -> Geometry | None:
@@ -3366,7 +3370,7 @@ def proposed_transforms_for_groups(
             min_dist=min_dist,
             use_border_focus=border_focus,
         )
-        enabled = None
+        enabled: frozenset[ProposerName] | frozenset[str] | None = None
         if border_only_propose:
             if should_use_border_focus(obstacle_shape, cfg):
                 enabled = FIRST_PASS_EMPTY_BORDER_PROPOSERS
@@ -3511,7 +3515,7 @@ def proposed_transforms_for_groups(
             motif_keys_by_group,
             group_id=int(group_id),
             motif_hole_keys=pocket_stats.get("motif_hole_keys") or (),
-            cluster_copy_keys=group_proposer_keys.get("cluster_copy") or (),
+            cluster_copy_keys=tuple(group_proposer_keys.get("cluster_copy") or ()),
         )
         for name, n in group_counts.items():
             total_counts[name] = total_counts.get(name, 0) + n

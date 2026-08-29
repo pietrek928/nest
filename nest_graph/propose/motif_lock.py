@@ -123,8 +123,6 @@ def _rank_cohorts(
         pole_xy = (float(pole.x), float(pole.y))
     ranked: list[tuple[float, float, dict]] = []
     for cohort in cohorts:
-        if not isinstance(cohort, dict):
-            continue
         leader_key = cohort.get("leader_key")
         leader_gid = int(cohort.get("leader_gid", -1))
         if leader_key is None:
@@ -732,7 +730,7 @@ def sequential_accept_motif_cohorts(
 
     Skip cohorts with missing in-graph followers. Deterministic pole top-k (v1).
     """
-    telem = {
+    telem: dict[str, Any] = {
         "motif_sequential_full": 0,
         "motif_sequential_skipped_missing": 0,
         "motif_sequential_partial": 0,

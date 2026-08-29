@@ -193,7 +193,8 @@ def board_snapshot_from_selection(
     )
     packed_set = set(packed_gids)
     del mcts_telem  # Q131: telem stays on the Python mcts_telem dict
-    leak = propose_stats.get("void_leak") if isinstance(propose_stats.get("void_leak"), dict) else {}
+    leak_raw = propose_stats.get("void_leak")
+    leak = leak_raw if isinstance(leak_raw, dict) else {}
     free_kind = str(
         leak.get("free_kind")
         or propose_stats.get("post_rim_free_kind")

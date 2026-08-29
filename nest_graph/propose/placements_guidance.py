@@ -1,6 +1,6 @@
 import math
 from enum import StrEnum
-from typing import List, Sequence, Tuple
+from typing import Any, List, Sequence, Tuple
 
 import numpy as np
 from shapely import Point, Polygon
@@ -85,7 +85,7 @@ def _merged_guidance_propositions(
     xy: tuple[float, float],
     pt_push: Point,
     theta: float,
-) -> tuple[list, object]:
+) -> tuple[list[Any], Any]:
     """Dual-pass guidance: tight cast menu plus attractor pass when not border-focused."""
     if propose_geom._border_focus:
         g = propose_geom.placement_guidance(

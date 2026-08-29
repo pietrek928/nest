@@ -285,9 +285,8 @@ def motif_graph_hits(
                 gid_a = int(ref_cohort["leader_gid"])
                 motif_keys.setdefault(gid_a, set()).add(lk)
                 for gid_m, key_m in ref_cohort["member_keys"]:
-                    motif_keys.setdefault(int(gid_m), set()).add(
-                        tuple(key_m) if isinstance(key_m, tuple) else key_m
-                    )
+                    mk = transform_row_key(key_m) if not isinstance(key_m, tuple) else key_m
+                    motif_keys.setdefault(int(gid_m), set()).add(mk)
                 cohorts.append(ref_cohort)
                 cohort_sigs.add(sig)
                 n_hits += 1
@@ -335,8 +334,6 @@ def merge_motif_hits(
                 seen.add((int(c.get("motif_id", -1) or -1), key_t))
         added = 0
         for c in cohorts:
-            if not isinstance(c, dict):
-                continue
             lk = c.get("leader_key")
             key_t = tuple(lk) if isinstance(lk, tuple) else None
             sig = (int(c.get("motif_id", -1) or -1), key_t)

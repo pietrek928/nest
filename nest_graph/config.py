@@ -1,7 +1,7 @@
 """Configuration for nest_graph build / nesting loops."""
 
 import os
-from enum import StrEnum
+from enum import Enum, StrEnum
 from typing import Any, Optional, Sequence
 
 import numpy as np
@@ -63,9 +63,10 @@ def _coerce_nb_enum(enum_type: type, value: Any):
         return value
     if isinstance(value, str):
         key = value.strip()
-        members = enum_type.__members__
-        if key in members:
-            return members[key]
+        if isinstance(enum_type, type) and issubclass(enum_type, Enum):
+            members = enum_type.__members__
+            if key in members:
+                return members[key]
         raise ValueError(f"invalid {enum_type.__name__}: {value!r}")
     if isinstance(value, int):
         return enum_type(value)
@@ -442,7 +443,6 @@ class ProposeConfig(BaseModel):
     use_contact_clearance_hybrid: bool = True
     """Blend contact fit with clearance so valid pocket poses are not discarded."""
     contact_clearance_hybrid_weight: float = 0.25
-    contact_tightness_hybrid_weight: float = 0.15
     edge_free_weight: float = 6.0
     """Harmonic dual-proximity (board+pack) term in contact_hybrid rank_score / quality."""
     edge_free_band_min_dist_mult: float = 3.5
@@ -1131,8 +1131,10 @@ class BuildGraphConfig(BaseModel):
                 score_rules_local_swap=_env_bool(
                     "NEST_SCORE_RULES_LOCAL_SWAP", True,
                 ),
-                select_mode=os.environ.get(
-                    "NEST_SELECT_MODE", ScoreSelectMode.WEIGHTED_GREEDY,
+                select_mode=ScoreSelectMode(
+                    os.environ.get(
+                        "NEST_SELECT_MODE", ScoreSelectMode.WEIGHTED_GREEDY.value,
+                    )
                 ),
                 dfs_max_tries=_env_int("NEST_DFS_MAX_TRIES", 4),
                 dfs_passes=_env_int("NEST_DFS_PASSES", 3),
@@ -1146,8 +1148,10 @@ class BuildGraphConfig(BaseModel):
                 dfs_finalize_repair_passes=_env_int("NEST_DFS_FINALIZE_REPAIR", 6),
                 dfs_finalize_max_component=_env_int("NEST_DFS_FINALIZE_COMPONENT", 18),
                 nest_rule_sets_used=_env_int("NEST_NEST_RULE_SETS", 1),
-                dfs_mode=os.environ.get(
-                    "NEST_DFS_MODE", DfsMode.MERGED_LOOSE_TIGHT,
+                dfs_mode=DfsMode(
+                    os.environ.get(
+                        "NEST_DFS_MODE", DfsMode.MERGED_LOOSE_TIGHT.value,
+                    )
                 ),
             ),
             output=OutputConfig(
@@ -1426,12 +1430,12 @@ def trim_history(
     empty = np.zeros((0, 3), dtype=np.float64)
     hist = (
         np.asarray(history, dtype=np.float64).reshape(-1, 3)
-        if history is not None and getattr(history, "size", 0)
+        if history is not None and np.asarray(history).size > 0
         else empty
     )
     sel = (
         np.asarray(selected, dtype=np.float64).reshape(-1, 3)
-        if selected is not None and getattr(selected, "size", 0)
+        if selected is not None and np.asarray(selected).size > 0
         else empty
     )
     if sel.shape[0] == 0 and hist.shape[0] == 0:
@@ -1461,7 +1465,7 @@ def cap_graph_valid_carry(
     empty = np.zeros((0, 3), dtype=np.float64)
     arr = (
         np.asarray(transforms, dtype=np.float64).reshape(-1, 3)
-        if transforms is not None and getattr(transforms, "size", 0)
+        if transforms is not None and np.asarray(transforms).size > 0
         else empty
     )
     if arr.shape[0] == 0:

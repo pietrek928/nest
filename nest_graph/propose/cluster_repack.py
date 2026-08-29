@@ -291,7 +291,7 @@ def assign_peeled_to_pattern(
     group_ids: Sequence[int],
 ) -> list[tuple[int, tuple[float, float, float]]] | None:
     """Map each pattern member to a distinct peeled index with matching gid."""
-    pool = {g: [] for g in set(int(group_ids[i]) for i in peeled_indices)}
+    pool: dict[int, list[int]] = {g: [] for g in set(int(group_ids[i]) for i in peeled_indices)}
     for i in peeled_indices:
         pool.setdefault(int(group_ids[i]), []).append(int(i))
     assigned: list[tuple[int, tuple[float, float, float]]] = []
@@ -617,8 +617,9 @@ def cluster_repack_selection(
     # Void-facing peel always routes void_seek (even when component is board_adj).
     zone = "void_seek" if void_facing or not board_adj else "border_gap"
     zone_cfg = ProposeConfig.for_place(zone, base=propose_cfg)
+    zone_proposers = ProposeConfig.proposers_for_place(zone) or frozenset()
     enabled = frozenset(
-        p for p in ProposeConfig.proposers_for_place(zone)
+        p for p in zone_proposers
         if p != ProposerName.CLUSTER_COPY
     )
     seeds = void_pole_seed_coords(pole) if pole is not None and zone == "void_seek" else None
@@ -631,7 +632,7 @@ def cluster_repack_selection(
     working_base = kept_union
     working_tr: dict[int, np.ndarray] = {}
     working_poly: dict[int, BaseGeometry] = {}
-    placed_idxs: list[int] = []
+    fallback_placed: list[int] = []
     obs: list[Geometry] = []
     for p in locked + working_kept_geoms:
         og = _as_geometry(p)
@@ -644,9 +645,9 @@ def cluster_repack_selection(
             continue
         packed_polys = list(working_kept_geoms)
         packed_gids = [int(group_ids[i]) for i in kept] + [
-            int(group_ids[j]) for j in placed_idxs
+            int(group_ids[j]) for j in fallback_placed
         ]
-        packed_trs = [out_tr[i] for i in kept] + [working_tr[j] for j in placed_idxs]
+        packed_trs = [out_tr[i] for i in kept] + [working_tr[j] for j in fallback_placed]
         try:
             coords = propose_coords_with_strategy(
                 working_base,
@@ -697,9 +698,9 @@ def cluster_repack_selection(
             if not working_base.is_empty
             else best_poly
         )
-        placed_idxs.append(vi)
+        fallback_placed.append(vi)
 
-    new_sel = list(kept) + list(placed_idxs)
+    new_sel = list(kept) + list(fallback_placed)
     new_area = _selection_area(new_sel, group_ids, part_by_group)
     accept_ratio = float(propose_cfg.cluster_repack_area_accept_ratio)
     if void_facing:
@@ -708,7 +709,7 @@ def cluster_repack_selection(
         return out_polys, out_tr, sel, stats
     trial_polys = list(out_polys)
     trial_tr = list(out_tr)
-    for vi in placed_idxs:
+    for vi in fallback_placed:
         trial_polys[vi] = working_poly[vi]
         trial_tr[vi] = working_tr[vi]
     if not (
@@ -717,7 +718,7 @@ def cluster_repack_selection(
     ):
         return out_polys, out_tr, sel, stats
     stats["accepted"] = 1
-    stats["placed"] = len(placed_idxs)
+    stats["placed"] = len(fallback_placed)
     stats["stamp_anchor_rebuilds"] = int(anchor_rebuilds)
     stats["repack_ms"] = int((time.perf_counter() - t0) * 1000)
     return trial_polys, trial_tr, new_sel, stats

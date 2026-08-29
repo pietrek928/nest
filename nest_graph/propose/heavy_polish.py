@@ -7,11 +7,11 @@ from typing import Any, Sequence
 from nest_graph.config import DfsMode, SelectionConfig
 from nest_graph.graph import (
     DfsDispatcherConfig,
+    DfsMode as GraphDfsMode,
     FinalizeSelectionOptions,
     PoseGraph,
     RefineSelectionOptions,
     apply_dfs_refinement as _apply_dfs_refinement_native,
-    dfs_mode_from_string,
     finalize_selection,
     prune_selection_to_independent_set as _prune_selection_native,
 )
@@ -496,10 +496,23 @@ def _dfs_dispatcher_config(sel: SelectionConfig, *, propose_cfg=None) -> DfsDisp
     return cfg
 
 
-def _native_dfs_mode(mode: DfsMode | str) -> object:
-    if isinstance(mode, DfsMode):
-        return dfs_mode_from_string(str(mode.value))
-    return dfs_mode_from_string(str(mode))
+_CONFIG_TO_GRAPH_DFS: dict[str, GraphDfsMode] = {
+    "nest_only": GraphDfsMode.NestOnly,
+    "head_pipeline": GraphDfsMode.HeadPipeline,
+    "strict_no_prune": GraphDfsMode.StrictNoPrune,
+    "strict_prune": GraphDfsMode.StrictPrune,
+    "legacy_alternating": GraphDfsMode.LegacyAlternating,
+    "merged_loose_tight": GraphDfsMode.MergedLooseTight,
+    "merged_loose_finalize_end": GraphDfsMode.MergedLooseFinalizeEnd,
+    "merged_loose_tight_finalize_end": GraphDfsMode.MergedLooseTightFinalizeEnd,
+    "merged_single_pass": GraphDfsMode.MergedSinglePass,
+    "high_pass_loose": GraphDfsMode.HighPassLoose,
+}
+
+
+def _native_dfs_mode(mode: DfsMode | str) -> GraphDfsMode:
+    key = str(mode.value) if isinstance(mode, DfsMode) else str(mode)
+    return _CONFIG_TO_GRAPH_DFS.get(key, GraphDfsMode.MergedLooseTight)
 
 
 def refine_options(

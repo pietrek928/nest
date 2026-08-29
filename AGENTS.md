@@ -15,6 +15,9 @@ cmake --build build --target geometry graph
 # Python tests
 uv run pytest tests/ -q
 
+# Type check (needs: uv sync --extra test)
+uv run mypy
+
 # C++ tests (configure once with -DNEST_GRAPH_BUILD_TESTS=ON)
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
 cmake --build build --target geometry_cpp_tests graph_cpp_tests

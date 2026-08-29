@@ -265,6 +265,7 @@ def local_se2_selection(
                                 out_polys[idx] = prev_p
                                 out_tr[idx] = prev_t
         else:
+            assert pull_pole is not None
             cx, cy = float(poly.centroid.x), float(poly.centroid.y)
             dx, dy = float(pull_pole.x) - cx, float(pull_pole.y) - cy
             dist0 = math.hypot(dx, dy)
@@ -303,7 +304,11 @@ def local_se2_selection(
             max_t=float(max_t),
             min_dist=float(min_dist),
             mode="pole" if use_pole_metric else "slide",
-            pole=(float(pull_pole.x), float(pull_pole.y)) if use_pole_metric else None,
+            pole=(
+                (float(pull_pole.x), float(pull_pole.y))
+                if use_pole_metric and pull_pole is not None
+                else None
+            ),
         )
         if polished is None:
             continue
@@ -334,7 +339,7 @@ def local_se2_selection(
         stats["se2_native_accepted"] += 1
         if is_rim:
             stats["tangent_moves"] += 1
-        elif use_pole_metric:
+        elif use_pole_metric and pull_pole is not None:
             d1 = math.hypot(
                 float(cand.centroid.x) - float(pull_pole.x),
                 float(cand.centroid.y) - float(pull_pole.y),

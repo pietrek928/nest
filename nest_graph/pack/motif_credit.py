@@ -240,7 +240,7 @@ def merge_void_elite_with_archive(
     else:
         n_cur = max(1, int(round(0.6 * q)))
         n_arch = max(0, q - n_cur)
-    out: dict[int, list] = {}
+    merged_by_gid: dict[int, list] = {}
     gids = set(int(g) for g in (current or {})) | set(int(g) for g in archive_by_group)
     for gid in gids:
         cur_rows = list((current or {}).get(gid) or [])[:n_cur]
@@ -262,8 +262,8 @@ def merge_void_elite_with_archive(
             if len(kept) >= q:
                 break
         if kept:
-            out[int(gid)] = kept
-    return out
+            merged_by_gid[int(gid)] = kept
+    return merged_by_gid
 
 
 def credit_void_niche_from_iter(

@@ -70,6 +70,7 @@ from nest_graph.pack.cheap import (
     invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
     pack_execute_snapshot,
+    with_isolated_pack_cache,
 )
 from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
 from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
@@ -2038,7 +2039,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 transform, selected_polys, pk,
             )
         free_kind_plateau = None
-        if "free_post" in locals() and free_post is not None:
+        free_post = getattr(post_prep, "free_post", None)
+        if free_post is not None:
             free_kind_plateau = getattr(free_post, "kind", None)
         elif free_info is not None:
             free_kind_plateau = getattr(free_info, "kind", None)

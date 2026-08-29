@@ -514,7 +514,7 @@ def build_transform_batch(
         and not empty_sheet
     )
     zones_used: list[str] = []
-    densify_stats: dict = {}
+    densify_stats: dict[str, Any] = {}
     full_packed_geoms = None
     if (
         board is not None
@@ -559,9 +559,9 @@ def build_transform_batch(
             empty_border_only
             or (border_saturation and cfg.propose.first_pass_border_pack)
         )
-        zones_used: list[str] = []
+        zones_used = []
         pocket_keys_raw: dict[int, set[tuple[float, float, float]]] = {}
-        densify_stats: dict = {}
+        densify_stats = {}
         if nest_state is not None and selected:
             native = nest_state.native_geoms
             full_packed_geoms = [
@@ -985,8 +985,8 @@ def build_transform_batch(
                 motif_key_set=motif_key_set,
                 archived_patterns=archived_patterns or (),
                 nest_state=nest_state,
-                part_bases=part_bases,
-                parts=parts,
+                part_bases=part_bases or {},
+                parts=parts or [],
                 min_dist=min_dist,
                 proposal_pins=proposal_pins,
                 propose_stats_out=propose_stats_out,
@@ -1058,12 +1058,12 @@ def build_transform_batch(
                 transform_row_key(np.asarray(r, dtype=np.float64)) for r in arr
             }
         for name in ("sniper_keys", "proposal_keys"):
-            raw = propose_stats_out.get(name) or {}
-            if not raw:
+            raw_stats = propose_stats_out.get(name)
+            if not isinstance(raw_stats, dict) or not raw_stats:
                 continue
             propose_stats_out[name] = {
                 int(gid): set(keys) & mixed_keys.get(int(gid), set())
-                for gid, keys in raw.items()
+                for gid, keys in raw_stats.items()
             }
         sel_keys_all = propose_stats_out.get("sel_keys") or {}
         hist_keys_all = propose_stats_out.get("hist_keys") or {}

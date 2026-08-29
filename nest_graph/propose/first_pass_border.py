@@ -7,7 +7,10 @@ proposer stack), and pack tightness uses ``ranking.pack_tightness_cost``.
 
 import math
 from dataclasses import dataclass
-from typing import Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Sequence
+
+if TYPE_CHECKING:
+    from nest_graph.build_graph import NestState
 
 import numpy as np
 from shapely import Polygon, unary_union
@@ -150,7 +153,7 @@ def nest_outline_boundary(outline: BaseGeometry):
 
 
 def border_kiss_indices(
-    polys: list,
+    polys: Sequence,
     outline: BaseGeometry,
     min_dist: float,
 ) -> list[int]:
@@ -172,7 +175,7 @@ def border_saturation_transform_batch(
     cfg: BuildGraphConfig,
     board: BaseGeometry,
     parts: list[tuple[Polygon, int]],
-    nest_state: "NestState",
+    nest_state: "NestState | _FirstPassNestSnapshot",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Propose-only batch for outline saturation (no random/history noise).
 
@@ -196,11 +199,12 @@ def border_saturation_transform_batch(
     for idx in selected:
         phase1_by_group[group_id[idx]].append(transform[idx])
     native = nest_state.native_geoms
-    full_packed_geoms = [
+    packed_list = [
         native[i] for i in selected if 0 <= i < len(native)
     ]
-    if len(full_packed_geoms) != len(selected):
-        full_packed_geoms = None
+    full_packed_geoms: list | None = (
+        packed_list if len(packed_list) == len(selected) else None
+    )
     propose_cfg = cfg.first_pass_propose_config()
     propose_by_group = proposed_transforms_for_groups(
         board,
@@ -790,18 +794,18 @@ def border_pack_graph(
             ]
         else:
             placed_geoms = []
-            kept_polys: list = []
-            kept_gids: list[int] = []
-            kept_tr: list[np.ndarray] = []
+            fallback_polys: list = []
+            fallback_gids: list[int] = []
+            fallback_tr: list[np.ndarray] = []
             for p, gid, tr in zip(pack_polys, pack_gids, pack_tr, strict=True):
                 g = as_geometry(p)
                 if g is None:
                     continue
                 placed_geoms.append(g)
-                kept_polys.append(p)
-                kept_gids.append(gid)
-                kept_tr.append(tr)
-            pack_polys, pack_gids, pack_tr = kept_polys, kept_gids, kept_tr
+                fallback_polys.append(p)
+                fallback_gids.append(gid)
+                fallback_tr.append(tr)
+            pack_polys, pack_gids, pack_tr = fallback_polys, fallback_gids, fallback_tr
     angles = [
         float(np.asarray(tr, dtype=np.float64).reshape(-1)[2])
         if np.asarray(tr).size > 2 else 0.0

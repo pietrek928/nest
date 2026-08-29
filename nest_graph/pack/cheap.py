@@ -194,7 +194,11 @@ def refine_cached_selection(
         propose_stats=telem,
         native_geoms_from_transforms_fn=native_geoms_fn,
         dg=pack_cache.get("dg"),
-        propose_cfg=pack_cache.get("cfg").propose if pack_cache.get("cfg") else None,
+        propose_cfg=(
+            cache_cfg.propose
+            if (cache_cfg := pack_cache.get("cfg")) is not None
+            else None
+        ),
     )
     coverage_out = 0.0
     try:
@@ -340,7 +344,7 @@ def pack_execute_snapshot(
         or getattr(snap, "free_kind", "")
         or ""
     )
-    motif_used = ()
+    motif_used: tuple[int, ...] = ()
     if cache_key[1] >= 0:
         motif_used = (int(cache_key[1]),)
     out = BoardSnapshot(

@@ -102,7 +102,7 @@ def board_sheet_from_outline(
         return Polygon(list(outline.exterior.coords), holes=user_hole_rings)
     if isinstance(outline, Polygon):
         return outline
-    return Polygon(outline)  # type: ignore[arg-type]
+    return Polygon(outline)
 
 
 def sheet_hole_polygons(sheet: Polygon) -> list[Polygon]:
@@ -146,7 +146,7 @@ def board_context_from_geometry(
     user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
 ) -> tuple[Polygon, list[Geometry]]:
     if not isinstance(board, Polygon):
-        board = Polygon(board)  # type: ignore[arg-type]
+        board = Polygon(board)
     pad = default_sheet_padding(
         board, extra=padding, ratio=min_padding_ratio,
     ) if min_padding_ratio > 0.0 else float(padding)

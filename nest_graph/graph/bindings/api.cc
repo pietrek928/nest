@@ -1,5 +1,10 @@
+#include <optional>
+
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "bindings.h"
@@ -60,9 +65,11 @@ void bind_graph_api(nb::module_ &m) {
            DfsMode mode,
            const DfsDispatcherConfig &cfg,
            const FinalizeSelectionOptions &finalize_opts,
-           const std::vector<float> *node_areas,
+           std::optional<std::vector<float>> node_areas,
            int refine_seed,
            const DecisionGraph *dg) {
+            const std::vector<float> *areas_ptr =
+                node_areas.has_value() ? &node_areas.value() : nullptr;
             const ApplyDfsResult result = apply_dfs_refinement(
                 graph,
                 rule_set,
@@ -73,7 +80,7 @@ void bind_graph_api(nb::module_ &m) {
                 mode,
                 cfg,
                 finalize_opts,
-                node_areas,
+                areas_ptr,
                 refine_seed,
                 dg);
             return std::make_tuple(

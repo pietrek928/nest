@@ -62,6 +62,8 @@ class MacroMctsRunner:
         for _ in range(max(int(n_sims), 1)):
             leaf = self.agent.select_leaf()
             parent_snap = self.snapshot_at(leaf, root_snapshot)
+            if parent_snap is None:
+                break
             if not parent_snap.has_remaining:
                 self.agent.backprop(leaf, float(parent_snap.coverage))
                 continue

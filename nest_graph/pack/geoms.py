@@ -32,9 +32,9 @@ def native_geoms_from_transforms(
 
 
 def selection_coverage_pct(
-    selected_indices: list[int],
-    group_id: list[int],
-    part_areas: tuple[float, ...],
+    selected_indices: Sequence[int],
+    group_id: Sequence[int],
+    part_areas: Sequence[float],
     board_area: float,
 ) -> float:
     if board_area <= 0:

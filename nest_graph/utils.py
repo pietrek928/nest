@@ -1,13 +1,17 @@
 import math
-from typing import Tuple
+from typing import Tuple, Union
 
+import numpy as np
 from shapely import Polygon
 from shapely.affinity import rotate, translate
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 
-def transform_poly(p: Polygon, transform_data: Tuple[float, float, float]):
+def transform_poly(
+    p: Polygon,
+    transform_data: Tuple[float, float, float] | np.ndarray,
+):
     x, y, angle = transform_data[:3]
     return translate(rotate(p, angle, origin=(0, 0), use_radians=True), x, y)
 

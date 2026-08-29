@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 test = [
     "pytest",
+    "mypy",
 ]
 
 [build-system]
@@ -25,6 +26,24 @@ build-backend = "scikit_build_core.build"
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["nest_graph"]
+exclude = ["build", "dist"]
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+show_error_codes = true
+check_untyped_defs = true
+disable_error_code = ["import-untyped"]
+
+[[tool.mypy.overrides]]
+module = [
+    "cv2",
+    "shapely.*",
+]
+ignore_missing_imports = true
 
 [tool.scikit-build]
 minimum-version = "0.9"

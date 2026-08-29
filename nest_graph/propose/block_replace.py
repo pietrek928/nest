@@ -1,6 +1,6 @@
 """Block replace: 3a motif-cohort lock-swap and 3b contact-CC hole re-nest."""
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from shapely import Point, Polygon
@@ -347,7 +347,7 @@ def try_block_hole_renest(
     On reject, inputs are unchanged. ``block_hole_victim`` is set whenever a
     victim was chosen so stamp can reuse it.
     """
-    telem = {
+    telem: dict[str, Any] = {
         "block_hole_tried": 0,
         "block_hole_accepted": 0,
         "block_hole_emit_in_hull": 0,
@@ -359,9 +359,10 @@ def try_block_hole_renest(
     if victim_override:
         victim = [int(i) for i in victim_override]
     else:
-        victim = pick_block_hole_victim(
+        picked = pick_block_hole_victim(
             sel, polys, min_dist=min_dist, sheet=sheet, pole=pole, void_poly=void_poly,
         )
+        victim = picked if picked is not None else []
     if not victim:
         return sel, polys, transforms, group_id, candidate_geoms, telem
     telem["block_hole_victim"] = list(victim)

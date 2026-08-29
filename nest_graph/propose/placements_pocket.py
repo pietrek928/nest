@@ -420,7 +420,7 @@ def propose_placements_pocket_fit(
     if n_bays_raw > 0 and not bays:
         skips.append("hull_bays_oversized")
     pockets = [p for p in (voids + bays) if float(p.area) >= part_area * area_ratio]
-    if large_void and not voids and not pockets and analysis.target_poly is not None:
+    if large_void and not voids and not pockets and analysis is not None and analysis.target_poly is not None:
         # no_trapped is expected for exterior-connected voids; route via open-void.
         skips.append("large_void_no_trapped")
     pockets.sort(key=lambda p: float(p.area), reverse=True)

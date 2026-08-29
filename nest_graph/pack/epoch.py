@@ -85,7 +85,7 @@ def bind_epoch(
     dg.replace_poses(graph)
     stats = propose_stats if propose_stats is not None else {}
     n = int(len(group_id)) if group_id is not None else 0
-    if transform is None or n == 0 or n != len(transform):
+    if group_id is None or transform is None or n == 0 or n != len(transform):
         stats["attach_n"] = int(dg.attach_n())
         stats["kind_n"] = int(dg.kind_tagged_n())
         stats["mutex_n"] = int(dg.mutex_n())
@@ -208,8 +208,9 @@ def realize_selection(dg, selected: Sequence[int], propose_stats: dict | None = 
     out["kind_survive"] = int(sum(hist))
     out["attach_n"] = int(dg.attach_n())
     out["mutex_n"] = int(dg.mutex_n())
-    sc = dg.survive_counts() if hasattr(dg, "survive_counts") else {}
-    out["survive_by_motif"] = {int(k): int(v) for k, v in dict(sc).items()}
+    sc_raw = dg.survive_counts() if hasattr(dg, "survive_counts") else {}
+    sc = sc_raw if isinstance(sc_raw, dict) else {}
+    out["survive_by_motif"] = {int(k): int(v) for k, v in sc.items()}
     if propose_stats is not None:
         propose_stats["materialized_attach"] = out["materialized_attach"]
         propose_stats["materialized_motif"] = out["materialized_motif"]
@@ -218,10 +219,8 @@ def realize_selection(dg, selected: Sequence[int], propose_stats: dict | None = 
         propose_stats["kind_survive_hist"] = list(hist)
         propose_stats["attach_n"] = out["attach_n"]
         propose_stats["mutex_n"] = out["mutex_n"]
-        propose_stats["survive_by_motif"] = dict(out["survive_by_motif"])
-        propose_stats["survive_motif_n"] = int(
-            sum(int(v) for v in out["survive_by_motif"].values())
-        )
+        propose_stats["survive_by_motif"] = sc
+        propose_stats["survive_motif_n"] = int(sum(int(v) for v in sc.values()))
         motif_locked = propose_stats.get("motif_locked") or ()
         sel_set = {int(i) for i in selected}
         propose_stats["lock_n_materialize"] = len(

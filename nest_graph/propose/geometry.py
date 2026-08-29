@@ -31,7 +31,7 @@ class ProposeGeometry:
         *,
         epsilon_ratio: float = PLACEMENT_EPSILON_RATIO,
         propose_cfg: ProposeConfig | None = None,
-        full_packed_geoms: list[Geometry] | None = None,
+        full_packed_geoms: Sequence[Geometry] | None = None,
         border_focus: bool | None = None,
     ):
         from nest_graph.propose.context import should_use_border_focus

@@ -1,5 +1,6 @@
 import numpy as np
 
+from nest_graph.geometry import Geometry
 from nest_graph.placement_scene import (
     best_proposition,
     guidance_ray_direction_candidates,
@@ -53,12 +54,17 @@ def propose_placements_point_cloud(
     ribbon_pts = sample_placement_points_ribbon(base_shape, shape_to_place, boundary, min_dist)
 
     # 1. Initialize Particles: [x, y, theta, phi]
-    particles = []
+    particle_rows: list[list[float]] = []
     for i in range(num_particles):
         pt = ribbon_pts[i % len(ribbon_pts)] if ribbon_pts else bound_centroid
-        particles.append([pt.x, pt.y, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)])
+        particle_rows.append([
+            float(pt.x),
+            float(pt.y),
+            float(np.random.uniform(0, 2 * np.pi)),
+            float(np.random.uniform(0, 2 * np.pi)),
+        ])
 
-    particles = np.array(particles)
+    particles = np.array(particle_rows, dtype=np.float64)
     velocities = np.random.uniform(-0.5, 0.5, (num_particles, 4))
     p_best_pos = particles.copy()
     p_best_score = np.full(num_particles, float('inf'))
@@ -117,7 +123,12 @@ def propose_placements_point_cloud(
         for i in range(num_particles):
             if stagnation_counters[i] > stagnation_limit:
                 new_pt = ribbon_pts[np.random.randint(len(ribbon_pts))] if ribbon_pts else bound_centroid
-                particles[i] = [new_pt.x, new_pt.y, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+                particles[i] = np.array([
+                    float(new_pt.x),
+                    float(new_pt.y),
+                    float(np.random.uniform(0, 2 * np.pi)),
+                    float(np.random.uniform(0, 2 * np.pi)),
+                ], dtype=np.float64)
                 stagnation_counters[i] = 0
                 velocities[i] = np.random.uniform(-0.2, 0.2, 4)
 

@@ -11,7 +11,7 @@ from nest_graph.propose.cluster_repack import (
     cluster_repack_selection,
     cluster_relocate_selection,
 )
-from nest_graph.propose.context import prep_free_space, void_ratio_threshold
+from nest_graph.propose.context import FreeSpaceSnapshot, prep_free_space, void_ratio_threshold
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.propose.pipeline import allow_void_repack
 from nest_graph.propose.placement_common import post_pack_overlap_ok
@@ -131,19 +131,21 @@ def run_post_pack_passes(
             pack_geoms=pack_geoms,
             snapshot=True,
         )
+        assert isinstance(free_snap, FreeSpaceSnapshot)
+        free_analysis = free_snap.analysis
         reloc_pole = (
-            free_snap.analysis.target_pt
-            if free_snap.analysis.target_pt is not None
+            free_analysis.target_pt
+            if free_analysis.target_pt is not None
             else poles_list[min(1, len(poles_list) - 1)]
         )
         refresh_poles: list = []
         if (
             bool(propose_cfg.use_multi_pole_void)
-            and free_snap.analysis.target_poly is not None
-            and not free_snap.analysis.target_poly.is_empty
+            and free_analysis.target_poly is not None
+            and not free_analysis.target_poly.is_empty
         ):
             xy_poles = iterative_multi_poles(
-                free_snap.analysis.target_poly,
+                free_analysis.target_poly,
                 min_dist=min_dist,
                 max_poles=int(propose_cfg.multi_pole_max_poles),
             )

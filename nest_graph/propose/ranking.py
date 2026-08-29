@@ -1,5 +1,5 @@
 import math
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 from shapely import MultiPoint, Point, Polygon
@@ -122,7 +122,7 @@ def _batch_rank_results(
     *,
     mode: str,
     focal_shape: Optional[BaseGeometry] = None,
-) -> dict[tuple[float, float, float], object]:
+) -> dict[tuple[float, float, float], Any]:
     """One C++ batch for geometry modes; keyed by round-4 transform."""
     if not candidates:
         return {}
@@ -299,7 +299,7 @@ def calculate_excess_and_kiss(
     return excess, kiss
 
 
-def pack_neighbor_excess_gap(geoms: list[Geometry], min_dist: float) -> float:
+def pack_neighbor_excess_gap(geoms: Sequence[Geometry], min_dist: float) -> float:
     """Sum of per-part excess gaps vs nearest neighbor in a pack."""
     if len(geoms) < 2:
         return 0.0
@@ -1020,7 +1020,7 @@ def _trim_candidates_by_clearance(
     limit: int,
     propose_cfg: ProposeConfig | None = None,
     min_dist: float = 0.0,
-    rank_map: dict | None = None,
+    rank_map: dict[tuple[float, float, float], Any] | None = None,
     feedback_cache: dict | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Keep up to limit candidates with highest placement clearance."""

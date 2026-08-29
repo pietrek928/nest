@@ -95,17 +95,6 @@ def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
     return float(ratio) * float(sheet_diag)
 
 
-def void_pole_near_radius(sheet_diag: float, ratio: float = 0.25) -> float:
-    """Shared radius for densify pole_near accept and void_leak props_pole telem.
-
-    Densify measures placed *centroid* distance; props_pole measures transform
-    *(x, y)* — same radius, different measure.
-    """
-    if float(sheet_diag) <= 1e-12 or float(ratio) <= 0.0:
-        return 0.0
-    return float(ratio) * float(sheet_diag)
-
-
 _CLEARANCE_EPS = 1e-9
 
 
@@ -773,7 +762,7 @@ def xy_in_free(
 
 
 def count_selected_in_free(
-    polys: list,
+    polys: Sequence,
     selected: Sequence[int],
     free_poly: BaseGeometry | None,
     *,
