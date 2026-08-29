@@ -1,6 +1,6 @@
-from nest_graph.decision.macro_path import ancestors
-from nest_graph.decision.runner import MacroMctsRunner
-from nest_graph.elem_graph import MacroAction, MacroRegion
+from nest_graph.pack.macro_path import ancestors
+from nest_graph.pack.runner import MacroMctsRunner
+from nest_graph.graph import MacroAction, MacroRegion
 
 
 def test_runner_ancestors_root_only():
@@ -28,10 +28,10 @@ def test_active_rule_set_index():
 
 
 def test_macro_increase_path_rejects_overlap_fail():
-    from nest_graph.decision.macro_path import macro_increase_path
-    from nest_graph.decision.runner import MacroMctsRunner
-    from nest_graph.decision.types import BoardSnapshot
-    from nest_graph.elem_graph import MacroAction, MacroRegion
+    from nest_graph.pack.macro_path import macro_increase_path
+    from nest_graph.pack.runner import MacroMctsRunner
+    from nest_graph.graph import BoardSnapshot
+    from nest_graph.graph import MacroAction, MacroRegion
 
     runner = MacroMctsRunner()
     root = int(runner.arena.root_id())
@@ -70,7 +70,7 @@ def test_record_to_cluster_pattern_ref_anchor():
         record_to_cluster_pattern,
     )
     from nest_graph.build_graph import NestState
-    from nest_graph.elem_graph import MotifBase, MotifRecord, Se2
+    from nest_graph.graph import MotifBase, MotifRecord, Se2
 
     mb = MotifBase()
     r = MotifRecord()

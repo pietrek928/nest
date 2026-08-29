@@ -66,7 +66,22 @@ from .propose.telem import (
     archive_void_elite_transforms,
     void_elite_count,
 )
-from nest_graph.decision.cheap_pack import pack_execute_snapshot
+from nest_graph.pack.cheap import (
+    invalidate_cheap_cache,
+    maybe_invalidate_cheap_cache,
+    pack_execute_snapshot,
+)
+from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
+from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
+from nest_graph.pack.geoms import (
+    native_geoms_from_transforms as _native_geoms_from_transforms,
+    selection_coverage_pct as _selection_coverage_pct,
+)
+from nest_graph.pack.stages import (
+    run_first_pass_border_pack,
+    run_mid_pack_stages,
+    run_post_pack_stage,
+)
 from nest_graph.rules.evolve import (
     dedupe_rule_sets,
     improve_rules,
@@ -76,17 +91,6 @@ from nest_graph.rules.evolve import (
     rule_region as _rule_region,
     score_rule_sets_with_dfs,
     truncate_rule_set,
-)
-from nest_graph.decision.pack_loop import (
-    PackIterCtx,
-    RefinePackBox,
-    finalize_iter_mcts,
-    invalidate_cheap_cache,
-    maybe_invalidate_cheap_cache,
-    run_first_pass_border_pack,
-    run_mid_pack_stages,
-    run_post_pack_stage,
-    run_void_leak_and_niche_credit,
 )
 from .propose.heavy_polish import (
     apply_dfs_refinement,
@@ -98,7 +102,7 @@ from .propose.context import (
     late_border_saturation_info,
 )
 from .propose.first_pass_border import (
-    build_elem_graph,
+    build_pose_graph,
     join_attract_pairs,
 )
 from .propose.void_selection import (
@@ -132,17 +136,14 @@ from .propose.telem import (
     best_pack_geom_sig,
     maybe_restore_best_pack,
 )
-from .decision.cheap_pack import with_isolated_pack_cache
-from .decision.action_gen import region_to_zone
-from .decision.epoch import bind_epoch, inject_cohorts_and_bind_graph
-from .decision.browse import (
+from nest_graph.graph import region_to_zone, BoardSnapshot
+from nest_graph.pack.browse import (
     choose_browse_parent,
     packed_gids_compatible,
     should_browse_tip,
 )
-from .decision.macro_path import ancestors, macro_increase_path
-from .decision.mcts import leaf_reward, path_reward_beats
-from .decision.execute import (
+from nest_graph.pack.epoch import bind_epoch, inject_cohorts_and_bind_graph
+from nest_graph.pack.execute import (
     execute_pack,
     make_execute_fn,
     prep_selection_free,
@@ -151,17 +152,18 @@ from .decision.execute import (
     run_mcts_multi_sim,
     schedule_prep_selection_free,
 )
-from .decision.slave_pack import upsert_from_contacts, upsert_from_repack_accept
-from .decision.motif_credit import (
+from nest_graph.pack.macro_path import ancestors, macro_increase_path
+from nest_graph.graph import leaf_reward, path_reward_beats
+from nest_graph.pack.motif_credit import (
     credit_motif_on_nest_survival,
     credit_void_niche_from_iter,
     merge_void_elite_with_archive,
     niche_amaf_key,
 )
-from .decision.ram_budget import evaluate_ram_band
-from .decision.runner import MacroMctsRunner
-from .decision.types import BoardSnapshot
-from .elem_graph import (
+from nest_graph.pack.ram_budget import evaluate_ram_band
+from nest_graph.pack.runner import MacroMctsRunner
+from nest_graph.pack.slave_pack import upsert_from_contacts, upsert_from_repack_accept
+from .graph import (
     PoseGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
     RuleMutationSettings,
@@ -327,45 +329,11 @@ def nest_state_extra_voids(nest_state: NestState | None) -> list[Geometry] | Non
     return list(nest_state.native_geoms[:n])
 
 
-def _native_geoms_from_transforms(
-    group_id: Sequence[int],
-    transform: Sequence,
-    bases: dict[int, Geometry],
-    *,
-    seed_polys: Sequence | None = None,
-    seed_count: int = 0,
-) -> list[Geometry]:
-    """SE2 solids from part bases (no re-decomp of transformed Shapely)."""
-    out: list[Geometry] = []
-    n = len(group_id)
-    for i in range(n):
-        if seed_count > 0 and i < seed_count and seed_polys is not None and i < len(seed_polys):
-            g = as_geometry(seed_polys[i])
-            if g is None:
-                raise ValueError("seed poly empty")
-            out.append(g)
-            continue
-        gid = int(group_id[i])
-        out.append(bases[gid].apply_transform(np.asarray(transform[i], dtype=np.float64)))
-    return out
-
-
 def _poly_and_transforms(item):
     if len(item) == 2:
         return item[0], item[1], 1.0
     return item[0], item[2], item[1]
 
-
-def _selection_coverage_pct(
-    selected_indices: list[int],
-    group_id: list[int],
-    part_areas: tuple[float, ...],
-    board_area: float,
-) -> float:
-    if board_area <= 0:
-        return 0.0
-    parts_area = sum(part_areas[group_id[i]] for i in selected_indices)
-    return 100.0 * parts_area / board_area
 
 
 def _base_geometries(polygons) -> list[Geometry]:
@@ -585,7 +553,7 @@ def make_polygon_graph(
             kiss_band_scale=attract_kiss_band_scale,
             max_degree=attract_max_degree,
         )
-    graph = build_elem_graph(gids, pending_geoms, angles, attract_pairs=attract_pairs)
+    graph = build_pose_graph(gids, pending_geoms, angles, attract_pairs=attract_pairs)
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -1607,7 +1575,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 sel=sel,
                 propose_stats=propose_stats,
                 dg=mcts_runner.dg,
-                nest_state=nest_state,
                 sheet=p_sheet,
                 min_dist=min_dist,
                 rule_sets=rule_sets,
@@ -1624,11 +1591,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 is_last_leaf=is_last_leaf,
                 near_last=near_last,
                 refine_seed=int(rng.integers(0, 2**31)),
-                locked_indices=list(propose_stats.get("motif_locked") or []),
                 first_pass=first_pass,
                 native_geoms_fn=_native_geoms_from_transforms,
-                apply_dfs_fn=apply_dfs_refinement,
-                coverage_pct_fn=_selection_coverage_pct,
             )
             pack_ctx.enable_3b = True
             mid_result, pin_all_blocked_streak = run_mid_pack_stages(

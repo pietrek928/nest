@@ -4,13 +4,13 @@ import math
 
 import numpy as np
 
-from nest_graph.decision.browse import should_browse_tip
-from nest_graph.decision.mcts import MctsAgent
-from nest_graph.decision.motif_credit import merge_void_elite_with_archive
-from nest_graph.decision.niche_archive import MacroNicheArchive, NICHE_RING_H
-from nest_graph.decision.ram_budget import evaluate_ram_band, ram_budget_mb
-from nest_graph.decision.types import BoardSnapshot
-from nest_graph.elem_graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
+from nest_graph.pack.browse import should_browse_tip
+from nest_graph.graph import MctsAgent
+from nest_graph.pack.motif_credit import merge_void_elite_with_archive
+from nest_graph.graph import MacroNicheArchive, NICHE_RING_H
+from nest_graph.pack.ram_budget import evaluate_ram_band, ram_budget_mb
+from nest_graph.graph import BoardSnapshot
+from nest_graph.graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
 
 
 def test_progressive_bias_no_1e9():

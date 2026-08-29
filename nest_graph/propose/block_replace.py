@@ -7,10 +7,10 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from nest_graph.elem_graph import SelectMode, SelectOptions, nest_by_scores
+from nest_graph.graph import SelectMode, SelectOptions, nest_by_scores
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import cluster_packed_indices
-from nest_graph.propose.first_pass_border import build_elem_graph
+from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.propose.placement_common import (
     as_geometry,
     is_board_adj,
@@ -420,7 +420,7 @@ def try_block_hole_renest(
     mini_angles = kept_angles + hole_angles
     if len(mini_geoms) < 2:
         return sel, polys, transforms, group_id, candidate_geoms, telem
-    graph = build_elem_graph(mini_gids, mini_geoms, mini_angles, attract_pairs=[])
+    graph = build_pose_graph(mini_gids, mini_geoms, mini_angles, attract_pairs=[])
     n_kept = len(kept_native)
     mini_scores = []
     for i, gid in enumerate(mini_gids):

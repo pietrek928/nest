@@ -223,7 +223,7 @@ def prepare_post_pack(
     void_leak_stats: dict | None,
     propose_stats: dict | None,
 ) -> PostPackPrep:
-    from nest_graph.decision.execute import schedule_prep_selection_free  # cycle: execute→heavy_polish→post_pack
+    from nest_graph.pack.execute import schedule_prep_selection_free  # cycle: execute→heavy_polish→post_pack
     sel_geoms = [
         polys[i] for i in selected_polys
         if polys[i] is not None and not polys[i].is_empty

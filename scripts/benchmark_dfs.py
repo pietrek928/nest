@@ -10,7 +10,7 @@ import numpy as np
 
 from nest_graph.config import BuildGraphConfig, DfsMode, SelectionConfig
 from nest_graph.propose.heavy_polish import apply_dfs_refinement
-from nest_graph.elem_graph import selection_is_independent
+from nest_graph.graph import selection_is_independent
 from scripts.nesting_evaluator import NestingPipelineEvaluator
 from scripts.nesting_fixtures import resolve_cases
 

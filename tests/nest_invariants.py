@@ -5,7 +5,7 @@ from typing import Sequence
 import numpy as np
 from shapely.geometry.base import BaseGeometry
 
-from nest_graph.elem_graph import PoseGraph
+from nest_graph.graph import PoseGraph
 from nest_graph.geometry import Geometry, find_polygon_intersections_bipartite
 from nest_graph.utils import transform_poly
 

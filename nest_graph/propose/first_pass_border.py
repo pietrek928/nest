@@ -21,7 +21,7 @@ from nest_graph.board import (
     padded_board_bounds,
 )
 from nest_graph.config import BuildGraphConfig, RankingMode, dedupe_transforms
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     PlacementRuleSet,
     PoseGraph,
     score_elems,
@@ -570,7 +570,7 @@ def guidance_border_refine(
     return polys, gids, trs
 
 
-def build_elem_graph(
+def build_pose_graph(
     gids: Sequence[int],
     geoms: Sequence[Geometry],
     angles: Sequence[float],
@@ -807,7 +807,7 @@ def border_pack_graph(
         if np.asarray(tr).size > 2 else 0.0
         for tr in pack_tr
     ]
-    graph = build_elem_graph(pack_gids, placed_geoms, angles, attract_pairs=[])
+    graph = build_pose_graph(pack_gids, placed_geoms, angles, attract_pairs=[])
     selected_out = list(range(len(pack_polys)))
     assert selection_is_independent(graph, selected_out)
     return graph, pack_polys, pack_gids, pack_tr, selected_out
@@ -1126,7 +1126,7 @@ def first_pass_layered_selection(
     """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
     if make_polygon_graph_fn is None or native_geoms_fn is None:
         raise ValueError("make_polygon_graph_fn and native_geoms_fn required")
-    from nest_graph.decision.epoch import bind_epoch  # cycle: epoch → execute → block_replace → first_pass_border
+    from nest_graph.pack.epoch import bind_epoch  # cycle: epoch → execute → block_replace → first_pass_border
 
     min_dist = cfg.board_min_dist(first_pass=True)
     outline = board

@@ -823,11 +823,12 @@ best leaf ── DFS refine + 3b + local_se2 + finalize ──► PoseGraph
 
 | Path | Role |
 |------|------|
-| `nest_graph/decision/` | `MctsAgent`, `MacroMctsRunner`, `BoardSnapshot`, NFP-lite, action gen |
-| `nest_graph/elem_graph/decision_arena.h` | Node visits / reward / PW cap |
-| `nest_graph/elem_graph/motif_base.h` | Geometric motif library |
-| `nest_graph/elem_graph/pose_graph.h` | Pose MIS (was ElemGraph) |
-| `nest_graph/elem_graph/se2.h` / `contact_relation.h` | SE2 SoT + ContactGRG/GCI |
+| `nest_graph/pack/` | `MacroMctsRunner`, `execute_pack`, pack stages / cheap expand |
+| `nest_graph/graph/decision/mcts_agent.h` | `MctsAgent`, `leaf_reward`, `path_reward_beats` (UCB1/PW/AMAF) |
+| `nest_graph/graph/decision_arena.h` | Node visits / reward / PW cap |
+| `nest_graph/graph/motif_base.h` | Geometric motif library |
+| `nest_graph/graph/pose/pose_graph.h` | Pose MIS (was ElemGraph) |
+| `nest_graph/graph/se2.h` / `contact_relation.h` | SE2 SoT + ContactGRG/GCI |
 | `nest_graph/build_graph.py` | Outer MCTS loop; Q69 expand vs heavy polish |
 
 ### Propose wrap knobs (Q70–Q75)

@@ -27,4 +27,4 @@ if(NEST_GRAPH_BUILD_TESTS)
 endif()
 
 add_subdirectory(nest_graph/geometry)
-add_subdirectory(nest_graph/elem_graph)
+add_subdirectory(nest_graph/graph)

@@ -7,7 +7,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig, RankingMode, as_ranking_mode
-from nest_graph.elem_graph import score_transform
+from nest_graph.graph import score_transform
 from nest_graph.geometry import (
     Geometry,
     PlacementRankConfig,

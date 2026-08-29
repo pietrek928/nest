@@ -53,7 +53,7 @@ def test_compactness_prefers_dense_over_stringy():
 
 
 def test_motif_base_ttl_reset_and_age():
-    from nest_graph.elem_graph import MotifBase, MotifRecord, Se2
+    from nest_graph.graph import MotifBase, MotifRecord, Se2
 
     base = MotifBase()
     r = MotifRecord()
@@ -154,7 +154,7 @@ def test_lattice_offsets_and_pole_sort_top_k():
 
 
 def test_nest_by_scores_keeps_locks():
-    from nest_graph.elem_graph import (
+    from nest_graph.graph import (
         Circle,
         PoseGraph,
         SelectMode,
@@ -310,7 +310,7 @@ def test_sequential_accept_partial_scene_subset():
 
 
 def test_refine_keeps_independent_locks():
-    from nest_graph.elem_graph import (
+    from nest_graph.graph import (
         PoseGraph,
         RefineSelectionOptions,
         Circle,

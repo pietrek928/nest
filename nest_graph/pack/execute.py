@@ -1,0 +1,679 @@
+"""One-iter execute helpers for Macro-MCTS (snapshot + expand bookkeep)."""
+
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Sequence
+
+from nest_graph.graph import leaf_reward
+from nest_graph.pack.slave_pack import upsert_from_contacts
+from nest_graph.graph import BoardSnapshot
+from nest_graph.graph import MacroAction, MacroRegion
+from nest_graph.propose.context import prep_free_space, void_ratio_threshold
+from nest_graph.propose.pattern_archive import note_motif_ref_anchors
+from nest_graph.propose.heavy_polish import (
+    freeze_improve_rules,
+    run_improve_rules_rounds,
+    should_freeze_improve_rules,
+)
+
+
+def prep_selection_freeze(
+    sel_iter,
+    *,
+    freeze_cheap_expand: bool,
+    on_plateau: bool,
+    plateau_streak: int,
+    flat_iters: int,
+    enable_incumbent_loop: bool,
+):
+    """One freeze gate for cheap expand / plateau; returns (sel_iter, reason)."""
+    freeze, reason = should_freeze_improve_rules(
+        freeze_cheap_expand=freeze_cheap_expand,
+        on_plateau=on_plateau,
+        plateau_streak=plateau_streak,
+        flat_iters=flat_iters,
+        enable_incumbent_loop=enable_incumbent_loop,
+    )
+    return freeze_improve_rules(sel_iter, freeze=freeze), reason
+
+
+@dataclass(slots=True)
+class SelectionFreePrep:
+    free_result: Any
+    packed_geoms: list
+    packed_group_id: list[int] | None
+    packed_transform: list | None
+    packed_shapely: list
+    void_thr: float
+    mean_part: float
+
+    @property
+    def free_info(self):
+        """Analysis view (unwraps FreeSpaceSnapshot when snapshot=True)."""
+        r = self.free_result
+        return getattr(r, "analysis", r)
+
+    @property
+    def free_snap(self):
+        """Full snapshot when snapshot=True; else None."""
+        r = self.free_result
+        return r if hasattr(r, "analysis") else None
+
+
+def schedule_prep_selection_free(
+    *,
+    phase: str,
+    sheet,
+    part_areas: Sequence[float],
+    min_dist: float,
+    cfg_propose,
+    packed_shapely: Sequence | None = None,
+    pack_geoms: Sequence | None = None,
+    packed_group_id: Sequence[int] | None = None,
+    packed_transform: Sequence | None = None,
+    prior: SelectionFreePrep | None = None,
+    selection_changed: bool = True,
+    run_uh: bool = False,
+    nest_state=None,
+) -> SelectionFreePrep | None:
+    """Hybrid free-prep schedule (G3): Uh when needed; reuse mid when safe.
+
+    phase: ``uh`` | ``mid`` | ``post``.
+    """
+    if phase == "uh" and not run_uh:
+        return None
+    if (
+        phase == "post"
+        and prior is not None
+        and not selection_changed
+        and prior.free_info is not None
+        and prior.free_snap is not None
+    ):
+        return prior
+    snap = phase == "post"
+    return prep_selection_free(
+        sheet=sheet,
+        part_areas=part_areas,
+        min_dist=min_dist,
+        cfg_propose=cfg_propose,
+        nest_state=nest_state,
+        packed_shapely=packed_shapely,
+        pack_geoms=pack_geoms,
+        packed_group_id=packed_group_id,
+        packed_transform=packed_transform,
+        snapshot=snap,
+    )
+
+
+def prep_selection_free(
+    *,
+    sheet,
+    part_areas: Sequence[float],
+    min_dist: float,
+    cfg_propose,
+    nest_state=None,
+    packed_shapely: Sequence | None = None,
+    pack_geoms: Sequence | None = None,
+    packed_group_id: Sequence[int] | None = None,
+    packed_transform: Sequence | None = None,
+    snapshot: bool = False,
+) -> SelectionFreePrep:
+    """One free/board prep for mid-pack, post-DFS, and post-rim (Ua)."""
+    mean_part = float(sum(part_areas) / len(part_areas)) if part_areas else 1.0
+    void_thr = void_ratio_threshold(cfg_propose)
+    geoms: list = list(pack_geoms) if pack_geoms is not None else []
+    shapely_list: list = list(packed_shapely) if packed_shapely is not None else []
+    gids: list[int] | None = (
+        [int(g) for g in packed_group_id] if packed_group_id is not None else None
+    )
+    tfs: list | None = list(packed_transform) if packed_transform is not None else None
+    if nest_state is not None and nest_state.selected_indices:
+        if not shapely_list:
+            shapely_list = [
+                nest_state.polys[i] for i in nest_state.selected_indices
+            ]
+        if not geoms:
+            native = nest_state.native_geoms
+            geoms = [
+                native[i] for i in nest_state.selected_indices if i < len(native)
+            ]
+        if gids is None or tfs is None:
+            seed_n = int(nest_state.seed_count or 0)
+            gids = []
+            tfs = []
+            for i in nest_state.selected_indices:
+                if int(i) < seed_n:
+                    continue
+                if int(i) >= len(nest_state.group_id) or int(i) >= len(
+                    nest_state.transform
+                ):
+                    continue
+                gids.append(int(nest_state.group_id[i]))
+                tfs.append(nest_state.transform[i])
+    free_result = prep_free_space(
+        sheet,
+        shapely_list,
+        mean_part,
+        min_dist,
+        void_ratio_threshold=void_thr,
+        pack_geoms=geoms or None,
+        snapshot=snapshot,
+    )
+    return SelectionFreePrep(
+        free_result=free_result,
+        packed_geoms=geoms,
+        packed_group_id=gids,
+        packed_transform=tfs,
+        packed_shapely=shapely_list,
+        void_thr=void_thr,
+        mean_part=mean_part,
+    )
+
+
+def board_snapshot_from_selection(
+    *,
+    selected_polys: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    coverage_pct: float,
+    propose_stats: dict,
+    mcts_action: Any | None,
+    mcts_telem: dict,
+    arena_node_id: int = 0,
+) -> BoardSnapshot:
+    """Thin BoardSnapshot ledger from a nest selection (no polygon blobs)."""
+    packed_gids = tuple(
+        int(group_id[i]) for i in selected_polys if int(i) < len(group_id)
+    )
+    packed_tf = tuple(
+        tuple(float(x) for x in transform[i][:3])
+        for i in selected_polys
+        if int(i) < len(transform)
+    )
+    packed_set = set(packed_gids)
+    del mcts_telem  # Q131: telem stays on the Python mcts_telem dict
+    leak = propose_stats.get("void_leak") if isinstance(propose_stats.get("void_leak"), dict) else {}
+    free_kind = str(
+        leak.get("free_kind")
+        or propose_stats.get("post_rim_free_kind")
+        or propose_stats.get("free_kind")
+        or ""
+    )
+    rim_fill = float(propose_stats.get("rim_progress", leak.get("rim_progress", 0.0)) or 0.0)
+    max_void_ratio = float(leak.get("max_void_ratio", 0.0) or 0.0)
+    void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
+    if free_kind == "large_void" and max_void_ratio <= 0.0:
+        void_fill = 0.0
+    elif free_kind and free_kind != "large_void" and max_void_ratio <= 0.0:
+        void_fill = float(propose_stats.get("outline_cov", 0.0) or 0.0)
+    return BoardSnapshot(
+        packed_gids=packed_gids,
+        packed_transforms=packed_tf,
+        remaining_gids=tuple(g for g in range(int(ngroups)) if g not in packed_set),
+        coverage=float(coverage_pct) / 100.0,
+        arena_node_id=int(arena_node_id),
+        kiss_pairs=int(propose_stats.get("kiss_pairs", 0) or 0),
+        mean_compactness=float(propose_stats.get("mean_compactness", 0.0) or 0.0),
+        rim_fill=rim_fill,
+        void_fill=void_fill,
+        free_kind=free_kind,
+        motif_ids_used=(
+            (int(mcts_action.motif_id),)
+            if mcts_action is not None and int(mcts_action.motif_id) >= 0
+            else ()
+        ),
+    )
+
+
+def record_mcts_expand(
+    runner: Any,
+    *,
+    parent_id: int,
+    action: Any,
+    child_snap: BoardSnapshot,
+    nest_state: Any | None,
+    part_bases: dict,
+    part_areas: Sequence[float],
+    min_dist: float,
+    t_expand0: float,
+    mcts_telem: dict,
+    propose_stats: dict,
+    motif_min_compactness: float = 0.35,
+    motif_ttl: int = 4,
+    motif_max_keep: int = 0,
+) -> int:
+    """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id."""
+    del part_areas
+    agent = runner.agent
+    realized = (getattr(agent, "realized", None) or {}) if agent is not None else {}
+    reward = leaf_reward(
+        child_snap,
+        rule_id=int(getattr(action, "rule_id", 0) or 0),
+        member_hits=int(propose_stats.get("member_hits", 0) or 0),
+        materialized_motif=int(propose_stats.get("materialized_motif", 0) or 0),
+        survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+        macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+    )
+    if agent is None:
+        return int(parent_id)
+    if agent.may_expand_node(parent_id):
+        child_id = agent.expand(parent_id, action, reward)
+        mcts_telem["pw_expand"] = int(mcts_telem["pw_expand"]) + 1
+    else:
+        child_id = parent_id
+        agent.backprop(parent_id, reward)
+    child_snap.arena_node_id = int(child_id)
+    runner.store_snapshot(int(child_id), child_snap)
+    hollow = bool(propose_stats.get("hollow_miss", False))
+    agent.remember_related(child_snap, allow=not hollow)
+
+    packed_gids = child_snap.packed_gids
+    packed_tf = child_snap.packed_transforms
+    if len(packed_gids) >= 2 and len(packed_tf) >= 2 and part_bases:
+        geoms = []
+        gids_ok = []
+        tfs_ok = []
+        for gid, tf in zip(packed_gids, packed_tf):
+            base = part_bases.get(int(gid))
+            if base is None:
+                continue
+            try:
+                geoms.append(base.apply_transform(float(tf[0]), float(tf[1]), float(tf[2])))
+                gids_ok.append(int(gid))
+                tfs_ok.append(
+                    (float(tf[0]), float(tf[1]), float(tf[2]))
+                )
+            except Exception:
+                continue
+        if len(geoms) >= 2:
+            upsert_from_contacts(
+                runner.motif_base,
+                geoms,
+                gids_ok,
+                tfs_ok,
+                gap=float(min_dist),
+                min_compactness=float(motif_min_compactness),
+                ttl=int(motif_ttl),
+                max_keep=int(motif_max_keep),
+                telem=mcts_telem,
+            )
+            note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
+    mcts_telem["expand_ms"] = float(mcts_telem.get("expand_ms", 0.0)) + (
+        time.perf_counter() - t_expand0
+    ) * 1000.0
+    propose_stats["mcts"] = dict(mcts_telem)
+    propose_stats["mcts"]["arena_size"] = int(runner.arena.size())
+    propose_stats["mcts"]["motif_library"] = int(runner.motif_base.size())
+    propose_stats["mcts"].update(
+        {
+            k: agent.telem.get(k)
+            for k in ("amaf_hits", "related_warm", "from_shapely_count")
+            if k in agent.telem
+        }
+    )
+    act_rid = int(getattr(action, "rule_id", 0) or 0)
+    region_i = int(getattr(action.region, "value", action.region))
+    motif_id = int(getattr(action, "motif_id", -1) or -1)
+    for rid in range(max(act_rid + 1, 2)):
+        visits = int(agent.arena.amaf_visits(region_i, rid, motif_id))
+        if visits > 0:
+            mcts_telem[f"rule_id_amaf_{rid}"] = visits
+            propose_stats[f"rule_id_amaf_{rid}"] = visits
+    return int(child_id)
+
+
+def stamp_arena_amaf(
+    runner: Any,
+    *,
+    selected_polys: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    coverage_pct: float,
+    propose_stats: dict,
+    parent_id: int,
+    action: Any | None = None,
+    rule_ids: tuple[int, ...] = (0,),
+) -> tuple[int, Any | None]:
+    """Write DecisionArena AMAF from an outer pack; pick so ``amaf_hits`` can fire."""
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return int(parent_id), action
+    mcts_telem = dict(getattr(agent, "telem", None) or propose_stats.get("mcts") or {})
+    mcts_telem.setdefault("pw_expand", 0)
+    child_snap = board_snapshot_from_selection(
+        selected_polys=selected_polys,
+        group_id=group_id,
+        transform=transform,
+        ngroups=int(ngroups),
+        coverage_pct=float(coverage_pct),
+        propose_stats=propose_stats,
+        mcts_action=action,
+        mcts_telem=mcts_telem,
+        arena_node_id=int(parent_id),
+    )
+    rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+    if action is None and rem:
+        action = agent.pick_expand_action(
+            rem, rule_ids=rule_ids, parent_id=int(parent_id), snapshot=child_snap,
+        )
+    if action is None:
+        action = MacroAction()
+        free_kind = str(
+            getattr(child_snap, "free_kind", "") or propose_stats.get("free_kind") or ""
+        )
+        action.region = (
+            MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+        )
+        action.rule_id = 0
+        action.motif_id = -1
+    t0 = time.perf_counter()
+    new_id = record_mcts_expand(
+        runner,
+        parent_id=int(parent_id),
+        action=action,
+        child_snap=child_snap,
+        nest_state=None,
+        part_bases={},
+        part_areas=(),
+        min_dist=0.0,
+        t_expand0=t0,
+        mcts_telem=mcts_telem,
+        propose_stats=propose_stats,
+    )
+    parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
+    agent._ucb(int(new_id), parent_visits)
+    if rem:
+        agent.pick_expand_action(
+            rem, rule_ids=rule_ids, parent_id=int(new_id), snapshot=child_snap,
+        )
+    propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
+    propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+    propose_stats["mcts"] = dict(mcts_telem)
+    return int(new_id), action
+
+
+def record_outer_iter_expand(
+    runner: Any,
+    *,
+    parent_id: int,
+    action: Any | None,
+    selected_polys: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    ngroups: int,
+    coverage_pct: float,
+    propose_stats: dict,
+    mcts_telem: dict,
+    nest_state: Any | None = None,
+    part_bases: dict | None = None,
+    part_areas: Sequence[float] = (),
+    min_dist: float = 0.0,
+    t_expand0: float | None = None,
+    motif_min_compactness: float = 0.35,
+    motif_ttl: int = 0,
+    motif_max_keep: int = 4,
+    rule_ids: tuple[int, ...] = (0,),
+) -> tuple[int, BoardSnapshot | None]:
+    """Outer-leaf expand: snapshot + record_mcts_expand + void_leak upsert telem (Q144)."""
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return int(parent_id), None
+    t0 = float(t_expand0) if t_expand0 is not None else time.perf_counter()
+    mcts_telem.setdefault("pw_expand", 0)
+    child_snap = board_snapshot_from_selection(
+        selected_polys=selected_polys,
+        group_id=group_id,
+        transform=transform,
+        ngroups=int(ngroups),
+        coverage_pct=float(coverage_pct),
+        propose_stats=propose_stats,
+        mcts_action=action,
+        mcts_telem=mcts_telem,
+        arena_node_id=int(parent_id),
+    )
+    act = action
+    if act is None:
+        rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+        if rem:
+            act = agent.pick_expand_action(
+                rem, rule_ids=rule_ids, parent_id=int(parent_id), snapshot=child_snap,
+            )
+        if act is None:
+            act = MacroAction()
+            free_kind = str(
+                getattr(child_snap, "free_kind", "")
+                or propose_stats.get("free_kind")
+                or ""
+            )
+            act.region = (
+                MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+            )
+            act.rule_id = 0
+            act.motif_id = -1
+    new_id = record_mcts_expand(
+        runner,
+        parent_id=int(parent_id),
+        action=act,
+        child_snap=child_snap,
+        nest_state=nest_state,
+        part_bases=part_bases or {},
+        part_areas=part_areas,
+        min_dist=float(min_dist),
+        t_expand0=t0,
+        mcts_telem=mcts_telem,
+        propose_stats=propose_stats,
+        motif_min_compactness=float(motif_min_compactness),
+        motif_ttl=int(motif_ttl),
+        motif_max_keep=int(motif_max_keep),
+    )
+    parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
+    agent._ucb(int(new_id), parent_visits)
+    rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+    if rem:
+        agent.pick_expand_action(
+            rem, rule_ids=rule_ids, parent_id=int(new_id), snapshot=child_snap,
+        )
+    if isinstance(propose_stats.get("void_leak"), dict):
+        propose_stats["void_leak"]["contact_grg_upserts"] = int(
+            mcts_telem.get("contact_grg_upserts", 0) or 0
+        )
+    propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
+    propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+    return int(new_id), child_snap
+
+
+def make_execute_fn(
+    pack_fn: Callable[..., BoardSnapshot],
+) -> Callable[..., BoardSnapshot]:
+    """Wrap a pack body as MacroMctsRunner / cheap_expand_slave execute_fn."""
+
+    def execute_fn(parent: BoardSnapshot, *, zone=None, action=None, patterns=None):
+        return pack_fn(parent, zone=zone, action=action, patterns=patterns or [])
+
+    return execute_fn
+
+
+def run_mcts_multi_sim(
+    runner: Any,
+    parent_snap: BoardSnapshot,
+    *,
+    n_sims: int,
+    parent_id: int,
+    execute_fn: Callable[..., BoardSnapshot] | None,
+    mcts_telem: dict,
+    rule_ids: tuple[int, ...] = (0,),
+) -> tuple[Any | None, int]:
+    """Q107: K cheap expands; return (tip MacroAction, tip leaf id)."""
+    from nest_graph.pack.slave_pack import cheap_expand_slave
+
+    agent = runner.agent
+    tip_leaf = int(parent_id)
+    tip_action = None
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
+    if agent is None or int(n_sims) <= 0 or agent.expand_frozen:
+        mcts_telem["multi_sim"] = 0
+        return None, tip_leaf
+    for _ in range(max(int(n_sims), 1)):
+        leaf = int(agent.select_leaf())
+        tip_leaf = leaf
+        leaf_snap = runner.snapshot_at(leaf, parent_snap)
+        if not leaf_snap.has_remaining:
+            agent.backprop(leaf, float(leaf_snap.coverage))
+            continue
+        action = agent.pick_expand_action(
+            leaf_snap.remaining_gids,
+            rule_ids=rule_ids,
+            parent_id=leaf,
+            snapshot=leaf_snap,
+        )
+        if action is None:
+            break
+        tip_action = action
+        if not agent.may_expand_node(leaf):
+            agent.backprop(leaf, float(leaf_snap.coverage))
+            continue
+        result = cheap_expand_slave(
+            leaf_snap,
+            action,
+            motif_base=runner.motif_base,
+            execute_fn=execute_fn,
+            telem=agent.telem,
+        )
+        child = agent.expand(leaf, action, result.reward)
+        mcts_telem["last_cheap_reward"] = float(result.reward)
+        result.snapshot.arena_node_id = int(child)
+        runner.store_snapshot(int(child), result.snapshot)
+        mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1
+        tip_leaf = int(child)
+        tip_action = action
+    if tip_action is None:
+        tip_leaf = int(agent.deepest_best_child())
+        tip_snap = runner.snapshot_at(tip_leaf, parent_snap)
+        if tip_snap.has_remaining:
+            tip_action = agent.pick_expand_action(
+                tip_snap.remaining_gids,
+                rule_ids=rule_ids,
+                parent_id=tip_leaf,
+                snapshot=tip_snap,
+            )
+    mcts_telem["multi_sim"] = int(n_sims)
+    mcts_telem["expand_ms"] = float(agent.telem.get("expand_ms", 0.0) or 0.0)
+    mcts_telem["tip_leaf"] = int(tip_leaf)
+    return tip_action, int(tip_leaf)
+
+
+def stamp_pack_stage(stats: dict, **flags) -> dict:
+    """Run pack stage work and stamp telem into stats (Ub/Q148)."""
+    telem = {
+        "execute_wired": 1,
+        "rim_only": int(flags.get("rim_only", False)),
+        "mcts_heavy": int(flags.get("heavy", False)),
+        "improve_ran": 0,
+        "rim_ran": 0,
+        "compose_ran": 0,
+        "uh_ran": 0,
+        "refine_ran": 0,
+        "post_pack_ran": 0,
+    }
+    run_improve_fn = flags.get("run_improve_fn")
+    rim_fn = flags.get("rim_fn")
+    compose_fn = flags.get("compose_fn")
+    refine_fn = flags.get("refine_fn")
+    post_pack_fn = flags.get("post_pack_fn")
+    uh_void_fn = flags.get("uh_void_fn")
+    rim_only = bool(flags.get("rim_only", False))
+    heavy = bool(flags.get("heavy", False))
+
+    if run_improve_fn is not None:
+        run_improve_fn()
+        telem["improve_ran"] = 1
+    if rim_only:
+        if rim_fn is not None:
+            rim_fn()
+            telem["rim_ran"] = 1
+        if uh_void_fn is not None:
+            uh_void_fn()
+            telem["uh_ran"] = 1
+        stats.update(telem)
+        return telem
+    if compose_fn is not None:
+        compose_fn()
+        telem["compose_ran"] = 1
+    if refine_fn is not None:
+        refine_fn()
+        telem["refine_ran"] = 1
+    if heavy and post_pack_fn is not None:
+        post_pack_fn()
+        telem["post_pack_ran"] = 1
+    stats.update(telem)
+    return telem
+
+
+def execute_pack(
+    *,
+    rim_only: bool = False,
+    heavy: bool = False,
+    run_improve_fn: Callable[..., Any] | None = None,
+    rim_fn: Callable[..., Any] | None = None,
+    compose_fn: Callable[..., Any] | None = None,
+    refine_fn: Callable[..., Any] | None = None,
+    post_pack_fn: Callable[..., Any] | None = None,
+    uh_void_fn: Callable[..., Any] | None = None,
+) -> dict:
+    """Flags API for cheap / Uh / last pack."""
+    stats: dict = {}
+    return stamp_pack_stage(
+        stats,
+        rim_only=rim_only,
+        heavy=heavy,
+        run_improve_fn=run_improve_fn,
+        rim_fn=rim_fn,
+        compose_fn=compose_fn,
+        refine_fn=refine_fn,
+        post_pack_fn=post_pack_fn,
+        uh_void_fn=uh_void_fn,
+    )
+
+
+def run_pack_stages(
+    *,
+    rim_only: bool = False,
+    heavy: bool = False,
+    run_improve_fn: Callable[..., Any] | None = None,
+    rim_fn: Callable[..., Any] | None = None,
+    compose_fn: Callable[..., Any] | None = None,
+    refine_fn: Callable[..., Any] | None = None,
+    post_pack_fn: Callable[..., Any] | None = None,
+    uh_void_fn: Callable[..., Any] | None = None,
+) -> dict:
+    """Alias for execute_pack (backward compat)."""
+    return execute_pack(
+        rim_only=rim_only,
+        heavy=heavy,
+        run_improve_fn=run_improve_fn,
+        rim_fn=rim_fn,
+        compose_fn=compose_fn,
+        refine_fn=refine_fn,
+        post_pack_fn=post_pack_fn,
+        uh_void_fn=uh_void_fn,
+    )
+
+
+__all__ = [
+    "board_snapshot_from_selection",
+    "execute_pack",
+    "make_execute_fn",
+    "prep_selection_free",
+    "prep_selection_freeze",
+    "record_mcts_expand",
+    "record_outer_iter_expand",
+    "run_mcts_multi_sim",
+    "run_pack_stages",
+    "schedule_prep_selection_free",
+    "stamp_arena_amaf",
+    "stamp_pack_stage",
+]

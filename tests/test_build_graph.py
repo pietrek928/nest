@@ -38,7 +38,7 @@ from nest_graph.propose.transform_batch import (
 from nest_graph.board import board_context_from_geometry
 from nest_graph.propose.ranking import pack_tightness_cost
 from nest_graph.config import BuildGraphConfig, SamplingConfig, SelectionConfig
-from nest_graph.elem_graph import PlacementRuleSet, nest_by_graph
+from nest_graph.graph import PlacementRuleSet, nest_by_graph
 from nest_graph.geometry import find_polygon_intersections_bipartite
 from nest_graph.placement_scene import (
     board_placement_valid,
@@ -623,7 +623,7 @@ def test_empty_corridor_first_pass_uses_place_profiles():
 
 
 def test_execute_pack_stage_telem():
-    from nest_graph.decision.execute import execute_pack
+    from nest_graph.pack.execute import execute_pack
 
     ran: list[str] = []
     telem = execute_pack(
@@ -640,8 +640,8 @@ def test_execute_pack_stage_telem():
 
 
 def test_cheap_pack_cache_key_motif_distinct():
-    from nest_graph.decision.cheap_pack import cheap_pack_cache_key
-    from nest_graph.elem_graph import MacroAction, MacroRegion
+    from nest_graph.pack.cheap import cheap_pack_cache_key
+    from nest_graph.graph import MacroAction, MacroRegion
 
     rim = MacroAction()
     rim.region = MacroRegion.Rim
@@ -691,13 +691,13 @@ def test_r4_split_homes_not_reexported():
     assert "noqa: F401" not in src
     assert "def apply_dfs_refinement" not in src
     assert "def assemble_void_leak" not in src
-    assert apply_dfs_refinement.__module__.endswith("heavy_polish")
+    assert apply_dfs_refinement.__module__ == "nest_graph.propose.heavy_polish"
     assert build_transform_batch.__module__.endswith("transform_batch")
     assert assemble_void_leak.__module__.endswith("telem")
 
 
 def test_with_isolated_pack_cache_restores():
-    from nest_graph.decision.cheap_pack import with_isolated_pack_cache
+    from nest_graph.pack.cheap import with_isolated_pack_cache
 
     cache: dict = {"ready": True, "compose_sel": [1, 2], "nested": {"a": 1}}
     with with_isolated_pack_cache(cache):
@@ -708,8 +708,8 @@ def test_with_isolated_pack_cache_restores():
 
 
 def test_path_reward_beats_coverage_delta():
-    from nest_graph.decision.mcts import path_reward_beats
-    from nest_graph.decision.types import BoardSnapshot
+    from nest_graph.graph import path_reward_beats
+    from nest_graph.graph import BoardSnapshot
 
     parent = BoardSnapshot(coverage=0.50)
     child = BoardSnapshot(coverage=0.506)

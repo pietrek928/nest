@@ -12,7 +12,7 @@ from nest_graph.propose.void_selection import (
     transform_row_key,
 )
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import PoseGraph
+from nest_graph.graph import PoseGraph
 from nest_graph.propose.context import classify_propose_zone
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import _extend_counted, _proposal_key
@@ -148,7 +148,7 @@ def test_oos4_void_pole_bonus_prefers_deeper_and_larger():
 
 
 def test_p3_pin_adds_independent_nest_void_only():
-    from nest_graph.elem_graph import Circle, Vec2
+    from nest_graph.graph import Circle, Vec2
 
     graph = PoseGraph()
     for i in range(3):
@@ -191,9 +191,9 @@ def test_pin_nest_void_independent_is_colonize_pin_clear():
 
 
 def test_credit_void_niche_uses_current_amaf_key_not_void_dump():
-    from nest_graph.decision.motif_credit import credit_void_niche_from_iter, niche_amaf_key
-    from nest_graph.decision.niche_archive import MacroNicheArchive
-    from nest_graph.elem_graph import MacroAction, MacroRegion
+    from nest_graph.pack.motif_credit import credit_void_niche_from_iter, niche_amaf_key
+    from nest_graph.graph import MacroNicheArchive
+    from nest_graph.graph import MacroAction, MacroRegion
 
     free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
     polys = [
@@ -240,9 +240,9 @@ def test_credit_void_niche_uses_current_amaf_key_not_void_dump():
 
 
 def test_credit_void_niche_rescue_on_void_seek_key():
-    from nest_graph.decision.motif_credit import credit_void_niche_from_iter, niche_amaf_key
-    from nest_graph.decision.niche_archive import MacroNicheArchive
-    from nest_graph.elem_graph import MacroAction, MacroRegion
+    from nest_graph.pack.motif_credit import credit_void_niche_from_iter, niche_amaf_key
+    from nest_graph.graph import MacroNicheArchive
+    from nest_graph.graph import MacroAction, MacroRegion
 
     free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
     polys = [Polygon([(1, 1), (2, 1), (2, 2), (1, 2)])]
@@ -276,8 +276,8 @@ def test_credit_void_niche_rescue_on_void_seek_key():
 
 
 def test_credit_void_niche_pos_from_proposer_keys():
-    from nest_graph.decision.motif_credit import credit_void_niche_from_iter
-    from nest_graph.decision.niche_archive import MacroNicheArchive
+    from nest_graph.pack.motif_credit import credit_void_niche_from_iter
+    from nest_graph.graph import MacroNicheArchive
     from nest_graph.propose.void_selection import transform_row_key
 
     free = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])

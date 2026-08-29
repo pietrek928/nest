@@ -236,8 +236,8 @@ def test_all_place_zones_have_zone_proposers():
 
 
 def test_rim_sat_mutes_history_expand_only_for_rim_sheet():
-    from nest_graph.decision.action_gen import region_to_zone
-    from nest_graph.elem_graph import MacroRegion
+    from nest_graph.graph import region_to_zone
+    from nest_graph.graph import MacroRegion
     from nest_graph.propose.transform_batch import rim_sat_proposer_updates
 
     void_u = rim_sat_proposer_updates("void_seek")

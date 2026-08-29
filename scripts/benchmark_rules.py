@@ -26,7 +26,7 @@ from nest_graph.config import (
     SelectionConfig,
     score_rules_options,
 )
-from nest_graph.elem_graph import nest_by_graph, score_elems, score_rules
+from nest_graph.graph import nest_by_graph, score_elems, score_rules
 
 
 @dataclass

@@ -8,7 +8,7 @@ from nest_graph.config import (
     _make_rule_mutation_settings,
     score_rules_options,
 )
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     Circle,
     PlacementRuleSet,
     ScoreRulesOptions,

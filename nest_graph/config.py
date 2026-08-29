@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from shapely.geometry import Polygon
 
 from .board import board_sheet_from_outline, board_void_geometries, default_sheet_padding
-from .elem_graph import (
+from .graph import (
     Circle,
     RuleMutationSettings,
     ScoreAggregation,
@@ -1390,7 +1390,7 @@ def _make_select_options(
     local_swap: bool,
     aggregation: str = "sum",
 ):
-    """Build SelectOptions for elem_graph tests and benchmarks."""
+    """Build SelectOptions for graph tests and benchmarks."""
     opts = SelectOptions()
     opts.mode = _coerce_select_mode(mode)
     opts.local_swap = local_swap

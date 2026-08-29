@@ -1,10 +1,10 @@
 import math
 
-from nest_graph.decision.mcts import MctsAgent, leaf_reward
+from nest_graph.graph import MctsAgent, leaf_reward
 from nest_graph.geometry import nfp_lite_relative
-from nest_graph.decision.runner import MacroMctsRunner
-from nest_graph.decision.types import BoardSnapshot
-from nest_graph.elem_graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
+from nest_graph.pack.runner import MacroMctsRunner
+from nest_graph.graph import BoardSnapshot
+from nest_graph.graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
 from nest_graph.geometry import Geometry
 from shapely.geometry import box
 
@@ -135,7 +135,7 @@ def test_nfp_lite_does_not_flee_anchor():
 
 
 def test_upsert_from_contacts_kissing_pair():
-    from nest_graph.decision.slave_pack import upsert_from_contacts
+    from nest_graph.pack.slave_pack import upsert_from_contacts
 
     a = Geometry.from_shapely(box(0, 0, 1, 1))
     b = Geometry.from_shapely(box(1.0, 0, 2.0, 1))
@@ -181,7 +181,7 @@ def test_arena_amaf_is_ucb_and_pick_sot():
 
 
 def test_stamp_arena_amaf_sets_hits():
-    from nest_graph.decision.execute import stamp_arena_amaf
+    from nest_graph.pack.execute import stamp_arena_amaf
 
     runner = MacroMctsRunner()
     stats: dict = {"free_kind": "large_void"}
@@ -228,7 +228,7 @@ def test_stamp_arena_amaf_sets_hits():
 
 
 def test_amaf_pick_reads_realized_kind_attach():
-    from nest_graph.decision.motif_credit import credit_motif_on_nest_survival
+    from nest_graph.pack.motif_credit import credit_motif_on_nest_survival
 
     arena = DecisionArena()
     agent = MctsAgent(arena=arena, motif_base=MotifBase())
@@ -260,16 +260,16 @@ def test_amaf_pick_reads_realized_kind_attach():
 def test_run_mcts_multi_sim_does_not_upsert_contacts():
     import inspect
 
-    from nest_graph.decision.execute import run_mcts_multi_sim
-    from nest_graph.decision.slave_pack import cheap_expand_slave
+    from nest_graph.pack.execute import run_mcts_multi_sim
+    from nest_graph.pack.slave_pack import cheap_expand_slave
 
     assert "upsert_from_contacts(" not in inspect.getsource(run_mcts_multi_sim)
     assert "upsert_from_contacts(" not in inspect.getsource(cheap_expand_slave)
 
 
 def test_finalize_iter_mcts_cache_hit_damps_proposer_pb():
-    from nest_graph.decision.pack_loop import finalize_iter_mcts
-    from nest_graph.elem_graph import DecisionGraph, PoseGraph
+    from nest_graph.pack.credit import finalize_iter_mcts
+    from nest_graph.graph import DecisionGraph, PoseGraph
 
     runner = MacroMctsRunner()
     g = PoseGraph()

@@ -17,7 +17,7 @@ from nest_graph.propose.transform_batch import (
     transform_history,
     transform_selection,
 )
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     PlacementRuleSet,
     PointAngleRule,
     PointPlaceRule,

@@ -4,7 +4,7 @@ import numpy as np
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import BuildGraphConfig, SelectionConfig, score_rules_options
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     Circle,
     PlacementRuleSet,
     PointAngleRule,

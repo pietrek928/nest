@@ -10,14 +10,14 @@ Human docs: [README.md](README.md). Deeper domain archive (not always-on): [docs
 uv pip install -e .
 
 # Or targeted native rebuild
-cmake --build build --target geometry elem_graph
+cmake --build build --target geometry graph
 
 # Python tests
 uv run pytest tests/ -q
 
 # C++ tests (configure once with -DNEST_GRAPH_BUILD_TESTS=ON)
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build build --target geometry_cpp_tests elem_graph_cpp_tests
+cmake --build build --target geometry_cpp_tests graph_cpp_tests
 ```
 
 Native sources are listed in `tool.uv.cache-keys`.
@@ -101,7 +101,7 @@ Open Q-table for multi-track work: [docs/agent-domain-notes.md](docs/agent-domai
 
 ## Propose / post-pack
 
-- **`ProposeContext`** is propose-only (emit/rank). Do **not** widen it or import it from `build_graph` / `elem_graph`. Post-pack edits use **`SelectionEditCtx`**.
+- **`ProposeContext`** is propose-only (emit/rank). Do **not** widen it or import it from `build_graph` / `graph`. Post-pack edits use **`SelectionEditCtx`**.
 - Emit order is static (not a registry). Poles → `pocket_fit` → `cluster_copy` precede sweepers. Funnel keys: `round(x,y,θ, 4)` = `propose/void_selection.transform_row_key`.
 - Mid-pack rim: `board_edge` reserve before `side_pack` key claims; late kiss in `local_se2` (cached exterior ring).
 - **`enable_gravity_compaction`** gates `local_se2` floater pole SE(2) toward an explicit void pole (default on). Ban corner / min-x+y sheet gravity (`compact_selection` deleted). Distinct from propose `border_focus`.
@@ -120,13 +120,17 @@ Open Q-table for multi-track work: [docs/agent-domain-notes.md](docs/agent-domai
 | `propose/post_pack.py` | repack → relocate → local_se2; `prepare_post_pack` / `apply_post_pack_and_telem` |
 | `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest (`maybe_block_hole_renest`) |
 | `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
-| `decision/pack_loop.py` | `PackIterCtx`, `run_mid_pack_stages`, `run_post_pack_stage`, `run_first_pass_border_pack`, `run_void_leak_and_niche_credit`, `finalize_iter_mcts` |
-| `decision/cheap_pack.py` | `pack_execute_snapshot`, cheap cache key + compose/refine adapters |
-| `decision/execute.py` | `record_outer_iter_expand`, `execute_pack`, MCTS multi-sim |
+| `pack/ctx.py` | `PackIterCtx`, `RefinePackBox`, stage result types |
+| `pack/stages.py` | compose/refine, mid_pack, first_pass, post_pack, rim_before |
+| `pack/credit.py` | `run_void_leak_and_niche_credit`, `finalize_iter_mcts` |
+| `pack/cheap.py` | `pack_execute_snapshot`, cheap cache key + compose/refine adapters |
+| `pack/execute.py` | `record_outer_iter_expand`, `execute_pack`, MCTS multi-sim |
 | `rules/evolve.py` | `improve_rules`, `dedupe_rule_sets`, demo/seed rule factories |
-| `decision/` | Macro-MCTS policy (UCB1/PW/AMAF); `execute_pack` / `run_pack_stages` |
-| `elem_graph/pose_graph.*` | Pose MIS (replaces ElemGraph) |
-| `elem_graph/decision_arena.*` / `motif_base.*` / `se2.*` / `contact_relation.*` | C++ arena + `BoardSnapshot` + `MacroNicheArchive`, motifs, SE2, ContactGRG+GCI |
+| `pack/` | Macro-MCTS orchestration (cheap expand vs best-leaf polish) |
+| `graph/pose/pose_graph.h` | Pose MIS (replaces ElemGraph) |
+| `graph/decision_arena.h` / `motif_base.h` / `se2.h` / `contact_relation.h` | C++ arena + `BoardSnapshot` + `MacroNicheArchive`, motifs, SE2, ContactGRG+GCI |
+| `graph/decision/mcts_agent.h` | `MctsAgent`, `leaf_reward`, `path_reward_beats` (UCB1/PW/AMAF) |
+| `graph/decision/action_gen.h` | `generate_macros`, `region_to_zone` / `zone_to_region` |
 | `geometry/common/nfp_lite.h` | Motif inject polish (`nfp_lite_relative`); not a MotifBase miner |
 
 `build_graph` owns graph/selection + Macro-MCTS outer loop (cheap expand vs best-leaf polish). Do not re-export moved names from `build_graph`.

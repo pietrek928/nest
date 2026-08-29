@@ -2,7 +2,7 @@ import numpy as np
 from shapely.geometry import Point, Polygon
 
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import PlacementRuleSet, PointPlaceRule, Vec2, score_transform
+from nest_graph.graph import PlacementRuleSet, PointPlaceRule, Vec2, score_transform
 from nest_graph.propose.context import effective_ranking_mode
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import proposed_transforms_for_groups

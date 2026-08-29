@@ -2,7 +2,7 @@
 
 Extracted from ``build_graph`` so the demo loop and ``nesting_evaluator`` share
 one implementation. Graph objects are duck-typed (``collisions`` / ``group_id``)
-so this module stays free of ``elem_graph`` imports.
+so this module stays free of ``graph`` imports.
 """
 
 import time

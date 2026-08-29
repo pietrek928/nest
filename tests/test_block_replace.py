@@ -3,7 +3,7 @@
 from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     Circle,
     PoseGraph,
     Vec2,

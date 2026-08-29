@@ -6,7 +6,7 @@ from nest_graph.build_graph import (
     truncate_rule_set,
 )
 from nest_graph.config import BuildGraphConfig, RulesConfig
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     PlacementRuleSet,
     PointPlaceRule,
     Vec2,

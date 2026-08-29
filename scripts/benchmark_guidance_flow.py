@@ -25,7 +25,7 @@ from nest_graph.propose.heavy_polish import apply_dfs_refinement
 from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.config import score_rules_options
-from nest_graph.elem_graph import nest_by_graph, score_elems, selection_is_independent
+from nest_graph.graph import nest_by_graph, score_elems, selection_is_independent
 from nest_graph.propose import (
     ProposeGeometry,
     base_shape_from_selection,

@@ -1,0 +1,32 @@
+#pragma once
+
+#include <vector>
+
+#include "pose/pose_graph.h"
+
+float circle_gap_sq(const Circle2f &a, const Circle2f &b);
+
+Tscore compute_score(const PointPlaceRule &p, const Vec2f &v);
+Tscore compute_score(const CirclePlaceRule &p, const Circle2f &circle);
+Tscore compute_score(const PointAngleRule &p, const Vec2f &v, float a);
+Tscore compute_score(const CircleAngleRule &p, const Circle2f &circle, float a);
+
+void compute_scores(
+    const PoseGraph &g,
+    const std::vector<std::vector<Tvertex>> &elems_by_group,
+    std::vector<Tscore> &scores_out,
+    const PlacementRuleSet &rules,
+    ScoreAggregation aggregation);
+
+std::vector<Tscore> score_elems(
+    const PoseGraph &g,
+    const PlacementRuleSet &rules,
+    ScoreAggregation aggregation);
+
+Tscore score_transform(
+    const PlacementRuleSet &rules,
+    Tvertex group,
+    Vec2f pos,
+    float angle_rad,
+    ScoreAggregation aggregation = ScoreAggregation::Sum,
+    float radius = 0.5f);

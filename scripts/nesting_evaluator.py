@@ -25,19 +25,21 @@ from nest_graph.build_graph import (
     make_polygon_graph,
     void_elite_tuple_from_archive,
 )
-from nest_graph.decision.action_gen import region_to_zone
-from nest_graph.decision.cheap_pack import pack_execute_snapshot, with_isolated_pack_cache
-from nest_graph.decision.execute import (
+from nest_graph.graph import region_to_zone, BoardSnapshot, MacroRegion
+from nest_graph.pack.cheap import pack_execute_snapshot, with_isolated_pack_cache
+from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
+from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
+from nest_graph.pack.epoch import inject_cohorts_and_bind_graph
+from nest_graph.pack.execute import (
     board_snapshot_from_selection,
     make_execute_fn,
     prep_selection_freeze,
     record_outer_iter_expand,
     schedule_prep_selection_free,
 )
-from nest_graph.decision.mcts import leaf_reward, path_reward_beats
-from nest_graph.decision.macro_path import ancestors, macro_increase_path
-from nest_graph.decision.types import BoardSnapshot
-from nest_graph.elem_graph import MacroRegion
+from nest_graph.pack.macro_path import ancestors, macro_increase_path
+from nest_graph.graph import leaf_reward, path_reward_beats
+from nest_graph.pack.stages import run_mid_pack_stages, run_post_pack_stage
 from nest_graph.propose.placement_common import post_pack_overlap_ok
 from nest_graph.propose.telem import (
     BestPackSnapshot,
@@ -47,20 +49,11 @@ from nest_graph.propose.telem import (
     maybe_restore_best_pack,
     void_elite_count,
 )
-from nest_graph.decision.epoch import inject_cohorts_and_bind_graph
-from nest_graph.decision.pack_loop import (
-    PackIterCtx,
-    RefinePackBox,
-    finalize_iter_mcts,
-    run_mid_pack_stages,
-    run_post_pack_stage,
-    run_void_leak_and_niche_credit,
-)
-from nest_graph.decision.motif_credit import (
+from nest_graph.pack.motif_credit import (
     credit_void_niche_from_iter,
     merge_void_elite_with_archive,
 )
-from nest_graph.decision.runner import MacroMctsRunner
+from nest_graph.pack.runner import MacroMctsRunner
 from nest_graph.propose.pattern_archive import (
     motif_patterns_for_inject,
     note_motif_ref_anchors_from_nest,
@@ -95,7 +88,7 @@ from nest_graph.propose.selection_compose import (
     sheet_diag_from,
 )
 from nest_graph.config import BuildGraphConfig, ProposeConfig, score_rules_options
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     FinalizeSelectionOptions,
     finalize_selection,
     score_elems,
@@ -1144,7 +1137,6 @@ class NestingPipelineEvaluator:
                 sel=sel,
                 propose_stats=propose_stats,
                 dg=mcts_runner.dg,
-                nest_state=nest_state,
                 sheet=self.sheet,
                 min_dist=min_dist,
                 rule_sets=rule_sets,
@@ -1161,10 +1153,8 @@ class NestingPipelineEvaluator:
                 is_last_leaf=is_last_leaf,
                 near_last=near_last,
                 refine_seed=int(rng.integers(1, 2**31)),
-                locked_indices=list(propose_stats.get("motif_locked") or []),
                 first_pass=first_pass,
                 native_geoms_fn=_native_geoms_from_transforms,
-                apply_dfs_fn=apply_dfs_refinement,
             )
             pack_ctx.enable_3b = True
             mid_result, pin_all_blocked_streak = run_mid_pack_stages(

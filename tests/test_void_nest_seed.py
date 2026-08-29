@@ -9,7 +9,7 @@ from nest_graph.propose.void_selection import (
     zones_have_void_hijack as _zones_have_void_hijack,
 )
 from nest_graph.config import ProposeConfig
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     Circle,
     PoseGraph,
     SelectMode,

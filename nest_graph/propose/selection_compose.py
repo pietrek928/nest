@@ -11,7 +11,7 @@ import numpy as np
 from shapely import Point
 from shapely.geometry.base import BaseGeometry
 
-from nest_graph.elem_graph import (
+from nest_graph.graph import (
     PlacementRuleSet,
     SelectMode,
     SelectOptions,
@@ -49,7 +49,7 @@ from nest_graph.propose.motif_lock import (
 from nest_graph.propose.first_pass_border import border_kiss_indices
 from nest_graph.propose.motif_keys import merge_motif_cohorts, resolve_motif_keys
 from nest_graph.board import board_context_from_geometry
-from nest_graph.decision.epoch import bind_epoch
+from nest_graph.pack.epoch import bind_epoch
 from shapely.geometry import Polygon
 import math
 

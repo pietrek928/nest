@@ -44,7 +44,7 @@ Outputs `test.mp4` and `test.jpg` in the current directory by default.
 
 ### Recommended: editable install with uv
 
-Scikit-build runs CMake and installs `geometry` and `elem_graph` extensions into the package tree — no manual copying of `.so` files.
+Scikit-build runs CMake and installs `geometry` and `graph` extensions into the package tree — no manual copying of `.so` files.
 
 ```bash
 uv sync --extra test
@@ -61,7 +61,7 @@ uv pip install -e . --no-build-isolation
 For a faster incremental C++ rebuild (same CMake tree), prefer:
 
 ```bash
-cmake --build build --target geometry elem_graph
+cmake --build build --target geometry graph
 ```
 
 (`build/` may be under `build/{wheel_tag}/` when using scikit-build’s `build-dir`; plain `build/` is the manual CMake layout below.)
@@ -86,15 +86,15 @@ sudo apt install python3.12-dev   # match your Python minor version
 # Or configure CMake manually:
 mkdir -p build && cd build
 cmake .. -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build . --target geometry elem_graph
+cmake --build . --target geometry graph
 cd ..
 ```
 
 For a one-off run without reinstalling, copy artifacts into the tree:
 
 ```bash
-cmake --build build --target geometry elem_graph
-# Extensions land in nest_graph/ (nest_graph/geometry*.so, nest_graph/elem_graph*.so)
+cmake --build build --target geometry graph
+# Extensions land in nest_graph/ (nest_graph/geometry*.so, nest_graph/graph*.so)
 ```
 
 Prefer fixing `python3-dev` and using `uv pip install -e .` so paths stay consistent.
@@ -127,15 +127,15 @@ Not built by `pip install -e .` by default. Enable once:
 
 ```bash
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
-cmake --build build --target geometry_cpp_tests elem_graph_cpp_tests
+cmake --build build --target geometry_cpp_tests graph_cpp_tests
 ./build/nest_graph/geometry/geometry_cpp_tests
-./build/nest_graph/elem_graph/elem_graph_cpp_tests
+./build/nest_graph/graph/graph_cpp_tests
 ```
 
 | Target | Location | Covers |
 |--------|----------|--------|
 | `geometry_cpp_tests` | `nest_graph/geometry/tests/` | Intersect, distance, solids |
-| `elem_graph_cpp_tests` | `nest_graph/elem_graph/tests/` | Selection, DFS refine |
+| `graph_cpp_tests` | `nest_graph/graph/tests/` | Selection, DFS refine, decision arena |
 
 Or via CTest:
 
@@ -197,8 +197,9 @@ nest_graph/
   utils.py            # Shapely helpers, transform_poly
   geometry*.so        # C++ extension (import nest_graph.geometry)
   geometry/           # C++ sources: solid/, convex/, intersect/, distance/, sweep/, guide/, bindings/
-  elem_graph*.so      # C++ extension (import nest_graph.elem_graph)
-  elem_graph/         # C++ sources: rules/, graph/, scoring/, selection/, refine/, bindings/, tests/
+  graph*.so           # C++ extension (import nest_graph.graph)
+  graph/              # C++ sources: pose/, decision/, rules/, scoring/, selection/, refine/, bindings/, tests/
+  pack/               # Python pack orchestration (execute, stages, MCTS runner)
 docs/
   nest_config.md      # env var reference
   first_pass_tuning.md
@@ -234,7 +235,7 @@ flowchart LR
 ## Debugging
 
 - Geometry engine notes and matplotlib snippets: [docs/debugging_guide.md](docs/debugging_guide.md)
-- Stale `.so` after C++ edits → `uv pip install -e .` (cache-keys cover native sources) or `cmake --build build --target geometry elem_graph`
+- Stale `.so` after C++ edits → `uv pip install -e .` (cache-keys cover native sources) or `cmake --build build --target geometry graph`
 
 ## License
 

@@ -14,7 +14,7 @@ from nest_graph.config import (
     expand_structured_transforms,
     subsample_transforms_stratified,
 )
-from nest_graph.elem_graph import PlacementRuleSet
+from nest_graph.graph import PlacementRuleSet
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import sheet_has_narrow_corridor
 from nest_graph.propose.pipeline import (
