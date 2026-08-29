@@ -79,6 +79,23 @@ class ProposeGeometry:
             tuple[float, float, bool, float, float],
             GuidanceConfig,
         ] = {}
+        self._region_g: Geometry | None = None
+        self._last_raycast_ms: float = 0.0
+        self._last_from_shapely_count: int = 0
+
+    def ingest_region(self, region: BaseGeometry) -> Geometry | None:
+        """Q315: one from_shapely per proposer invocation for search_region."""
+        if region is None or getattr(region, "is_empty", True):
+            self._region_g = None
+            return None
+        self._region_g = Geometry.from_shapely(region)
+        self._last_from_shapely_count = int(self._last_from_shapely_count or 0) + 1
+        return self._region_g
+
+    def region_geometry(self, region: BaseGeometry) -> Geometry | None:
+        if self._region_g is not None:
+            return self._region_g
+        return self.ingest_region(region)
 
     def _propose_guidance_cfg(
         self,

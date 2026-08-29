@@ -1,0 +1,7 @@
+improve repack efficiency
+compose motifs on higher level
+try decision graph logic to search fro good solution also on higher level - by motifs and other rules
+try by refine not only to increase coverage, but also imrpove score by rules - improve rules as part of decision graph
+dfs and graph refinement should work well on both lower and higher level - decision graph + motifs
+propose_placements_raycasting - maybe c++? are other proposers movable ?
+benchmark methods by performance and time, and based on results plan imrpovements and optimizations

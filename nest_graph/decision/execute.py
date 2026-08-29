@@ -9,6 +9,7 @@ from nest_graph.decision.slave_pack import upsert_from_contacts
 from nest_graph.decision.types import BoardSnapshot
 from nest_graph.elem_graph import MacroAction, MacroRegion
 from nest_graph.propose.context import prep_free_space, void_ratio_threshold
+from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.heavy_polish import (
     freeze_improve_rules,
     run_improve_rules_rounds,
@@ -246,11 +247,16 @@ def record_mcts_expand(
 ) -> int:
     """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id."""
     del part_areas  # areas come from contact solids
+    agent = runner.agent
+    realized = (getattr(agent, "realized", None) or {}) if agent is not None else {}
     reward = leaf_reward(
         child_snap,
         rule_id=int(getattr(action, "rule_id", 0) or 0),
+        member_hits=int(propose_stats.get("member_hits", 0) or 0),
+        materialized_motif=int(propose_stats.get("materialized_motif", 0) or 0),
+        survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+        macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
     )
-    agent = runner.agent
     if agent is None:
         return int(parent_id)
     if agent.may_expand_node(parent_id):
@@ -295,6 +301,7 @@ def record_mcts_expand(
                 max_keep=int(motif_max_keep),
                 telem=mcts_telem,
             )
+            note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
     mcts_telem["expand_ms"] = float(mcts_telem.get("expand_ms", 0.0)) + (
         time.perf_counter() - t_expand0
     ) * 1000.0
@@ -308,6 +315,14 @@ def record_mcts_expand(
             if k in agent.telem
         }
     )
+    act_rid = int(getattr(action, "rule_id", 0) or 0)
+    region_i = int(getattr(action.region, "value", action.region))
+    motif_id = int(getattr(action, "motif_id", -1) or -1)
+    for rid in range(max(act_rid + 1, 2)):
+        visits = int(agent.arena.amaf_visits(region_i, rid, motif_id))
+        if visits > 0:
+            mcts_telem[f"rule_id_amaf_{rid}"] = visits
+            propose_stats[f"rule_id_amaf_{rid}"] = visits
     return int(child_id)
 
 
@@ -322,11 +337,13 @@ def stamp_arena_amaf(
     propose_stats: dict,
     parent_id: int,
     action: Any | None = None,
+    rule_ids: tuple[int, ...] = (0,),
 ) -> tuple[int, Any | None]:
     """Write DecisionArena AMAF from an outer pack; pick so ``amaf_hits`` can fire.
 
     ContactGRG Motif upsert stays the last-leaf site (empty ``part_bases`` here).
     """
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
     agent = getattr(runner, "agent", None)
     if agent is None:
         return int(parent_id), action
@@ -346,7 +363,7 @@ def stamp_arena_amaf(
     rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
     if action is None and rem:
         action = agent.pick_expand_action(
-            rem, rule_ids=(0,), parent_id=int(parent_id), snapshot=child_snap,
+            rem, rule_ids=rule_ids, parent_id=int(parent_id), snapshot=child_snap,
         )
     if action is None:
         action = MacroAction()
@@ -376,7 +393,7 @@ def stamp_arena_amaf(
     agent._ucb(int(new_id), parent_visits)
     if rem:
         agent.pick_expand_action(
-            rem, rule_ids=(0,), parent_id=int(new_id), snapshot=child_snap,
+            rem, rule_ids=rule_ids, parent_id=int(new_id), snapshot=child_snap,
         )
     propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
     propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
@@ -404,8 +421,10 @@ def record_outer_iter_expand(
     motif_min_compactness: float = 0.35,
     motif_ttl: int = 0,
     motif_max_keep: int = 4,
+    rule_ids: tuple[int, ...] = (0,),
 ) -> tuple[int, BoardSnapshot | None]:
     """Outer-leaf expand: snapshot + record_mcts_expand + void_leak upsert telem (Q144)."""
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
     agent = getattr(runner, "agent", None)
     if agent is None:
         return int(parent_id), None
@@ -427,7 +446,7 @@ def record_outer_iter_expand(
         rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
         if rem:
             act = agent.pick_expand_action(
-                rem, rule_ids=(0,), parent_id=int(parent_id), snapshot=child_snap,
+                rem, rule_ids=rule_ids, parent_id=int(parent_id), snapshot=child_snap,
             )
         if act is None:
             act = MacroAction()
@@ -462,7 +481,7 @@ def record_outer_iter_expand(
     rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
     if rem:
         agent.pick_expand_action(
-            rem, rule_ids=(0,), parent_id=int(new_id), snapshot=child_snap,
+            rem, rule_ids=rule_ids, parent_id=int(new_id), snapshot=child_snap,
         )
     if isinstance(propose_stats.get("void_leak"), dict):
         propose_stats["void_leak"]["contact_grg_upserts"] = int(
@@ -492,6 +511,7 @@ def run_mcts_multi_sim(
     parent_id: int,
     execute_fn: Callable[..., BoardSnapshot] | None,
     mcts_telem: dict,
+    rule_ids: tuple[int, ...] = (0,),
 ) -> tuple[Any | None, int]:
     """Q107: K cheap expands; return (tip MacroAction, tip leaf id).
 
@@ -504,6 +524,7 @@ def run_mcts_multi_sim(
     agent = runner.agent
     tip_leaf = int(parent_id)
     tip_action = None
+    rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
     if agent is None or int(n_sims) <= 0 or agent.expand_frozen:
         mcts_telem["multi_sim"] = 0
         return None, tip_leaf
@@ -516,7 +537,7 @@ def run_mcts_multi_sim(
             continue
         action = agent.pick_expand_action(
             leaf_snap.remaining_gids,
-            rule_ids=(0,),
+            rule_ids=rule_ids,
             parent_id=leaf,
             snapshot=leaf_snap,
         )
@@ -534,6 +555,7 @@ def run_mcts_multi_sim(
             telem=agent.telem,
         )
         child = agent.expand(leaf, action, result.reward)
+        mcts_telem["last_cheap_reward"] = float(result.reward)
         result.snapshot.arena_node_id = int(child)
         runner.store_snapshot(int(child), result.snapshot)
         mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1
@@ -546,7 +568,7 @@ def run_mcts_multi_sim(
         if tip_snap.has_remaining:
             tip_action = agent.pick_expand_action(
                 tip_snap.remaining_gids,
-                rule_ids=(0,),
+                rule_ids=rule_ids,
                 parent_id=tip_leaf,
                 snapshot=tip_snap,
             )

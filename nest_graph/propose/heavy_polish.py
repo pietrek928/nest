@@ -15,10 +15,23 @@ from nest_graph.elem_graph import (
     refine_selection,
     sort_graph,
 )
-from nest_graph.propose.block_replace import lex_count_area_better
+from nest_graph.propose.block_replace import _packing_independent, lex_count_area_better
 from nest_graph.propose.void_selection import _sel_area
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.void_selection import count_selected_in_free
+
+
+def _shrink_independent_locks(idxs: Sequence[int], graph) -> list[int]:
+    """Greedy growing subset; empty if fewer than 2 members remain independent."""
+    out: list[int] = []
+    for raw in idxs:
+        i = int(raw)
+        if i < 0:
+            continue
+        trial = out + [i]
+        if _packing_independent(trial, graph):
+            out.append(i)
+    return out if len(out) >= 2 else []
 
 
 def apply_dg_refine_options(
@@ -243,7 +256,19 @@ def apply_refine_with_restore(
         propose_stats["rim_drop"] = 0.0
         propose_stats["refine_ms"] = 0.0
         propose_stats["void_refine_hold"] = 0
+        propose_stats["pre_refine_lock_reject"] = 0
         return list(selected_nest)
+
+    locked_work = [int(i) for i in locked_indices if int(i) >= 0]
+    propose_stats["pre_refine_lock_reject"] = 0
+    if (
+        locked_work
+        and graph is not None
+        and not _packing_independent(locked_work, graph)
+    ):
+        locked_work = _shrink_independent_locks(locked_work, graph)
+        propose_stats["pre_refine_lock_reject"] = 1
+    locked_indices = locked_work
 
     dfs_kwargs: dict = {
         "selection": sel_iter,
@@ -345,6 +370,7 @@ def apply_refine_with_restore(
         ) + 1
 
     # U1/R0: void shed without lex win → restore; also hold if refine empties void.
+    # Hollow: count-up refine that sheds void *and* area must restore (lex count trap).
     if (
         free_info is not None
         and getattr(free_info, "kind", None) == "large_void"
@@ -363,12 +389,77 @@ def apply_refine_with_restore(
         ):
             restore_refine = True
             void_refine_hold = 1
+        elif (
+            nv_nest > 0
+            and int(nv_ref) + 2 <= int(nv_nest)
+            and float(_sel_area(selected_polys, group_id, part_areas)) + 1e-12
+            < float(_sel_area(nest_before_refine, group_id, part_areas))
+        ):
+            restore_refine = True
+            void_refine_hold = 1
+            propose_stats["void_refine_area_hold"] = 1
+        elif (
+            int(nv_nest) >= 8
+            and (int(nv_nest) - int(nv_ref)) >= 4
+            and float(_sel_area(selected_polys, group_id, part_areas)) + 1e-12
+            < 1.02 * float(_sel_area(nest_before_refine, group_id, part_areas))
+        ):
+            # Shed ≥4 void without ≥2% area gain → keep nest.
+            restore_refine = True
+            void_refine_hold = 1
+            propose_stats["void_refine_half_hold"] = 1
 
     if restore_refine:
         selected_polys = list(nest_before_refine)
         propose_stats["refine_rejected"] = True
     else:
         propose_stats["refine_rejected"] = False
+
+    locked_set = {int(i) for i in locked_indices if int(i) >= 0}
+    refine_lock_hold = 0
+    refine_lock_escape = 0
+    lock_n_compose = int(propose_stats.get("lock_n_compose", len(locked_set)) or len(locked_set))
+    if locked_set:
+        final_set = set(selected_polys)
+        dropped = [i for i in locked_set if i not in final_set]
+        if dropped and not restore_refine:
+            area_locked = float(_sel_area(nest_before_refine, group_id, part_areas))
+            area_refined = float(_sel_area(selected_polys, group_id, part_areas))
+            indep_ok = _packing_independent(selected_polys, graph)
+            # MotifJoin / compose locks: need ≥5% area + void rise to escape.
+            motif_hold = (
+                int(lock_n_compose) >= 2
+                or int(propose_stats.get("compose_motif_hold", 0) or 0) > 0
+            )
+            escape_floor = 1.05 if motif_hold else 1.02
+            escape_ok = (
+                area_refined + 1e-12 >= escape_floor * area_locked
+                and indep_ok
+                and (refine_lex_better or void_fill_rise)
+            )
+            if motif_hold and escape_ok and not void_fill_rise:
+                escape_ok = False
+            if escape_ok:
+                refine_lock_escape = 1
+            else:
+                selected_polys = list(nest_before_refine)
+                restore_refine = True
+                refine_lock_hold = 1
+                propose_stats["refine_rejected"] = True
+        elif dropped and restore_refine:
+            refine_lock_hold = 1
+
+    lock_n_refine = len([i for i in locked_set if i in set(selected_polys)])
+    lock_survive = (
+        float(lock_n_refine) / float(max(lock_n_compose, 1))
+        if lock_n_compose > 0
+        else 1.0
+    )
+    propose_stats["lock_n_refine"] = int(lock_n_refine)
+    propose_stats["lock_n_final"] = int(lock_n_refine)
+    propose_stats["refine_lock_hold"] = int(refine_lock_hold)
+    propose_stats["refine_lock_escape"] = int(refine_lock_escape)
+    propose_stats["lock_survive_refine"] = float(lock_survive)
     propose_stats["rim_drop"] = float(rim_drop)
     propose_stats["void_refine_hold"] = int(void_refine_hold)
     return list(selected_polys)

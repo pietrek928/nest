@@ -1,6 +1,6 @@
 """DecisionGraph copy-in, attach skip, and bind_epoch MemberOf join."""
 
-from nest_graph.decision.epoch import bind_epoch, materialize_selection
+from nest_graph.decision.epoch import bind_epoch, realize_selection
 from nest_graph.decision.runner import MacroMctsRunner
 from nest_graph.elem_graph import DecisionGraph, MacroAction, MacroRegion, PoseGraph, nest_by_scores
 from nest_graph.propose.void_selection import transform_row_key
@@ -91,7 +91,7 @@ def test_bind_epoch_stamps_epoch_keys_when_proposals_empty():
     bind_epoch(None, _two_poses(), {}, [0], [(0.0, 0.0, 0.0)])
 
 
-def test_materialize_selection_flags_surviving_attach():
+def test_realize_selection_flags_surviving_attach():
     g = _two_poses()
     g.add_attract(0, 1, 8.0)
     dg = DecisionGraph()
@@ -103,7 +103,7 @@ def test_materialize_selection_flags_surviving_attach():
         "motif_keys": {},
     }
     bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
-    telem = materialize_selection(dg, [0, 1], stats)
+    telem = realize_selection(dg, [0, 1], stats)
     assert telem["materialized_attach"] == 1
     assert telem["member_hits"] == 2
     assert stats["materialized_attach"] == 1

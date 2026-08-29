@@ -1,0 +1,76 @@
+{
+  "phase_0": {
+    "void_fill": {
+      "area": 0.564,
+      "parts": 53,
+      "time": 61.75,
+      "independent_ok": true,
+      "overlap_ok": true,
+      "telem": {
+        "graph_hit": 23,
+        "compose_sz": 0,
+        "join_n": 8,
+        "arch_mix": 5,
+        "pin_surv": 3,
+        "void_scale": 4.0,
+        "amaf_hits": 0,
+        "member_hits": 34,
+        "mat_motif": 0,
+        "seq_pack": 0,
+        "pack_boost": 0
+      },
+      "note": "Q313: A2/V1/S1/I1 hybrid ship; fixture 0.585 treated passed near-threshold (user 2026-08-28). Scene-only locks; packing-clear = score soft-steer only. Q255 evaluator inject→bind → MotifJoin join_n>0."
+    }
+  },
+  "phase_hybrid_h1_h3": {
+    "void_fill": {
+      "area": 0.552,
+      "parts": 54.7,
+      "time": 68.03,
+      "independent_ok": true,
+      "overlap_ok": true,
+      "telem": {
+        "compose_sz": 12,
+        "mat_motif": 1,
+        "join_n": 6,
+        "member_hits": 18,
+        "hybrid_lock_compose_refine_mat": "12/6/6",
+        "refine_lock_escape": 1,
+        "trial_packed_anchored_n": 32,
+        "best_pack_restore": 1
+      },
+      "note": "H1–H3 hybrid compose (Q361–Q373): anchored post-hollow trial_packed, hybrid_compose_pick, motif_locked SoT refine, lock-hold+1.02 escape, best-pack graph indices, cache compose_sz AMAF cohort_sig. Avg seeds 0–2 2026-08-29; gate 0.585 not met (area 0.552)."
+    }
+  },
+  "phase_void_fill_dg_loop": {
+    "void_fill": {
+      "area": 0.548,
+      "parts": 49.0,
+      "time": 77.0,
+      "independent_ok": true,
+      "overlap_ok": true,
+      "telem": {
+        "compose_sz": 0,
+        "path_extend_n": 72,
+        "path_step_macro": 36,
+        "path_step_join": 52,
+        "macro_path_accept": 8,
+        "path_contact_upserts": 0,
+        "survive_motif_n": 0,
+        "contact_grg_upserts": 0,
+        "join_n": 8,
+        "mat_motif": 0,
+        "void_scale": 4.0,
+        "pre_refine_lock_reject": 0,
+        "amaf_survive_scale": 0.65,
+        "best_pack_sig_miss": 0,
+        "hollow_join_lock_sets": 4,
+        "pick_join_soft": 0,
+        "seed0_area": 0.548,
+        "seed1_area": 0.548,
+        "seed2_area": 0.536
+      },
+      "note": "Letters A–C shipped 2026-08-29: Q377→hybrid_compose_pick, pre_refine_lock_reject, MotifJoin lock fallback + board Scene retry, path_reward_beats + coverage delta, amaf_survive_scale, with_isolated_pack_cache, BestPackSnapshot.geom_sig, mutate_motif_base_on_path flag. Gate 0.585 NOT met (seed0 0.548–0.573); compose_sz=0 on seed0; surv_m=0; path telem live with enable_macro_path_replay."
+    }
+  }
+}

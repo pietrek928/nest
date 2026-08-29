@@ -377,6 +377,43 @@ void bind_elem_graph_decision(nb::module_ &m) {
         .def_rw("b", &MotifJoin::b)
         .def_rw("realized", &MotifJoin::realized);
 
+    nb::enum_<PathKind>(m, "PathKind")
+        .value("Macro", PathKind::Macro)
+        .value("MotifJoin", PathKind::MotifJoin)
+        .value("Attach", PathKind::Attach)
+        .value("Pose", PathKind::Pose);
+
+    nb::class_<PathNode>(m, "PathNode")
+        .def(nb::init<>())
+        .def_rw("kind", &PathNode::kind)
+        .def_rw("id", &PathNode::id)
+        .def_rw("motif_id", &PathNode::motif_id)
+        .def_rw("a", &PathNode::a)
+        .def_rw("b", &PathNode::b);
+
+    m.def("node_macro", &node_macro, nb::arg("node_id"));
+    m.def(
+        "node_motif",
+        [](int32_t idx, int32_t motif_id, int a, int b) {
+            return node_motif(idx, motif_id, static_cast<Tvertex>(a), static_cast<Tvertex>(b));
+        },
+        nb::arg("idx"),
+        nb::arg("motif_id"),
+        nb::arg("a"),
+        nb::arg("b"));
+    m.def(
+        "node_attach",
+        [](int32_t idx, int a, int b) {
+            return node_attach(idx, static_cast<Tvertex>(a), static_cast<Tvertex>(b));
+        },
+        nb::arg("idx"),
+        nb::arg("a"),
+        nb::arg("b"));
+    m.def(
+        "node_pose",
+        [](int v) { return node_pose(static_cast<Tvertex>(v)); },
+        nb::arg("v"));
+
     nb::class_<DecisionGraph>(m, "DecisionGraph")
         .def(nb::init<>())
         .def(
@@ -410,28 +447,27 @@ void bind_elem_graph_decision(nb::module_ &m) {
             nb::arg("motif_id"),
             nb::arg("a"),
             nb::arg("b"))
-        .def(
-            "attach_conflicts",
-            &DecisionGraph::attach_conflicts,
-            nb::arg("i"),
-            nb::arg("j"))
+        .def("conflicts", &DecisionGraph::conflicts, nb::arg("u"), nb::arg("v"))
         .def("mutex_n", &DecisionGraph::mutex_n)
         .def("attach_n", &DecisionGraph::attach_n)
         .def("motif_n", &DecisionGraph::motif_n)
         .def("kind_tagged_n", &DecisionGraph::kind_tagged_n)
         .def(
-            "materialize_selection",
+            "realize",
             [](DecisionGraph &dg, const std::vector<int> &selected) {
                 std::vector<Tvertex> verts;
                 verts.reserve(selected.size());
                 for (int v : selected) {
                     verts.push_back(static_cast<Tvertex>(v));
                 }
-                const MaterializeStats st = dg.materialize_selection(verts);
+                const RealizeStats st = dg.realize(verts);
                 nb::dict out;
-                out["materialized_attach"] = st.materialized_attach;
-                out["materialized_motif"] = st.materialized_motif;
+                out["attach"] = st.attach;
+                out["motif"] = st.motif;
                 out["member_hits"] = st.member_hits;
+                // Telem aliases used by pack_loop / benches (same values).
+                out["materialized_attach"] = st.attach;
+                out["materialized_motif"] = st.motif;
                 nb::list kind_survive;
                 for (int i = 0; i < 4; ++i) {
                     kind_survive.append(st.kind_count[i]);
@@ -440,6 +476,20 @@ void bind_elem_graph_decision(nb::module_ &m) {
                 return out;
             },
             nb::arg("selected"))
+        .def("realized", &DecisionGraph::realized, nb::arg("step"))
+        .def(
+            "survive_counts",
+            [](const DecisionGraph &dg) {
+                nb::dict out;
+                for (const auto &p : dg.survive_counts()) {
+                    out[nb::int_(p.first)] = p.second;
+                }
+                return out;
+            })
+        .def("poses_of", &DecisionGraph::poses_of, nb::arg("step"))
+        .def("neighbors", &DecisionGraph::neighbors, nb::arg("step"))
+        .def("path_node_motif", &DecisionGraph::path_node_motif, nb::arg("i"))
+        .def("path_node_attach", &DecisionGraph::path_node_attach, nb::arg("i"))
         .def_prop_ro(
             "pose_kind",
             [](const DecisionGraph &dg) {

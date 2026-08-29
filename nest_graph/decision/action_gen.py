@@ -1,6 +1,8 @@
 """Action generator: rim/void/sheet × rule, plus PLACE_MOTIF from MotifBase."""
 
 
+from typing import Sequence
+
 from nest_graph.elem_graph import MacroAction, MacroRegion, MotifBase
 
 
@@ -12,6 +14,7 @@ def generate_macros(
     prefer_motifs: bool = True,
     warm_motif_ids: tuple[int, ...] = (),
     free_kind: str = "",
+    motif_cohorts: Sequence[dict] | None = None,
 ) -> list[MacroAction]:
     """Yield discrete macro actions for progressive widening (Q70–Q73).
 
@@ -41,13 +44,41 @@ def generate_macros(
                 a.rule_id = int(rule_ids[0]) if rule_ids else 0
                 motif_actions.append(a)
 
+    cohort_actions: list[MacroAction] = []
+    seen_cohort: set[tuple[int, tuple[float, float, float] | None]] = set()
+    for c in motif_cohorts or ():
+        if not isinstance(c, dict):
+            continue
+        mid = int(c.get("motif_id", -1) or -1)
+        leader = int(c.get("leader_gid", rem[0] if rem else -1))
+        lk = c.get("leader_key")
+        key_t = tuple(lk) if isinstance(lk, tuple) else None
+        # Q387: PLACE_COHORT requires full member_keys (≥2) for MotifJoin star.
+        members = c.get("member_keys") or ()
+        if len(members) < 2:
+            continue
+        sig = (mid, key_t)
+        if sig in seen_cohort:
+            continue
+        if leader not in rem:
+            continue
+        seen_cohort.add(sig)
+        for rid in rule_ids:
+            a = MacroAction()
+            a.region = MacroRegion.Motif
+            a.motif_id = mid
+            a.part_gid = leader
+            a.rule_id = int(rid)
+            cohort_actions.append(a)
+
     if free_kind == "large_void":
         region_order = (MacroRegion.Void, MacroRegion.Rim, MacroRegion.Sheet)
     else:
         region_order = (MacroRegion.Rim, MacroRegion.Void, MacroRegion.Sheet)
 
-    # Motifs first when preferring; under large_void motifs stay ahead of Rim/Sheet.
+    # Motifs + cohorts first when preferring; under large_void stay ahead of Rim/Sheet.
     actions.extend(motif_actions)
+    actions.extend(cohort_actions)
     for region in region_order:
         for rid in rule_ids:
             a = MacroAction()

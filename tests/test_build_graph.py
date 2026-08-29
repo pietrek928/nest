@@ -649,13 +649,16 @@ def test_cheap_pack_cache_key_motif_distinct():
     motif = MacroAction()
     motif.region = MacroRegion.Motif
     motif.motif_id = 3
-    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1, 0)
-    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 0)
+    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1, 0, 0)
+    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 0, 0)
     assert cheap_pack_cache_key("void_seek", rim) != cheap_pack_cache_key(
         "void_seek", motif
     )
     motif.rule_id = 2
-    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 2)
+    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 2, 0)
+    assert cheap_pack_cache_key("void_seek", motif, compose_sz=2) == (
+        "void_seek", 3, 2, 2,
+    )
 
 
 def test_motif_graph_hits_cluster_copy_emit():
@@ -691,4 +694,57 @@ def test_r4_split_homes_not_reexported():
     assert apply_dfs_refinement.__module__.endswith("heavy_polish")
     assert build_transform_batch.__module__.endswith("transform_batch")
     assert assemble_void_leak.__module__.endswith("telem")
+
+
+def test_with_isolated_pack_cache_restores():
+    from nest_graph.decision.cheap_pack import with_isolated_pack_cache
+
+    cache: dict = {"ready": True, "compose_sel": [1, 2], "nested": {"a": 1}}
+    with with_isolated_pack_cache(cache):
+        cache["compose_sel"] = [9]
+        cache["nested"]["a"] = 9
+    assert cache["compose_sel"] == [1, 2]
+    assert cache["nested"]["a"] == 1
+
+
+def test_path_reward_beats_coverage_delta():
+    from nest_graph.decision.mcts import path_reward_beats
+    from nest_graph.decision.types import BoardSnapshot
+
+    parent = BoardSnapshot(coverage=0.50)
+    child = BoardSnapshot(coverage=0.506)
+    assert path_reward_beats(
+        parent, child, base_reward=1.0, alt_reward=1.02,
+    )
+    assert not path_reward_beats(
+        parent, child, base_reward=1.0, alt_reward=1.005,
+    )
+
+
+def test_best_pack_geom_sig_and_restore_miss():
+    from nest_graph.propose.telem import (
+        BestPackSnapshot,
+        best_pack_geom_sig,
+        maybe_restore_best_pack,
+    )
+    from shapely.geometry import box
+
+    polys = [box(0, 0, 1, 1), box(2, 0, 3, 1)]
+    sig = best_pack_geom_sig(polys, [0, 1])
+    assert sig == round(1.0 + 1.0, 4)
+    best = BestPackSnapshot(selected_polys=[0, 1], cov=0.9, geom_sig=sig + 1.0)
+    out, ok, telem = maybe_restore_best_pack(
+        best=best,
+        current_selected=[0],
+        graph=None,
+        polys=polys,
+        group_id=[0, 0],
+        part_areas=[1.0, 1.0],
+        sheet=box(-1, -1, 10, 10),
+        holes=(),
+        usable_area=10.0,
+    )
+    assert not ok
+    assert int(telem.get("best_pack_sig_miss", 0)) == 1
+    assert out == [0]
 

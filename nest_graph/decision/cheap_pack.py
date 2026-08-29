@@ -1,5 +1,7 @@
 """Cheap MCTS expand cache adapter (Q143)."""
 
+from contextlib import contextmanager
+
 from nest_graph.decision.execute import execute_pack
 from nest_graph.decision.pack_loop import RefinePackBox
 from nest_graph.decision.types import BoardSnapshot
@@ -8,7 +10,7 @@ from nest_graph.propose.heavy_polish import (
     apply_refine_with_restore,
     polish_budget_for_iter,
 )
-from nest_graph.propose.pattern_archive import merge_motif_hits, motif_graph_hits
+from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
 from nest_graph.propose.selection_compose import (
     active_rule_set,
     compose_and_nest_selection,
@@ -17,8 +19,8 @@ from nest_graph.propose.selection_compose import (
 )
 
 
-def cheap_pack_cache_key(zone, action) -> tuple[str, int, int]:
-    """Q143/S2a: cheap cache is (zone, motif_id, rule_id)."""
+def cheap_pack_cache_key(zone, action, *, compose_sz: int = 0) -> tuple[str, int, int, int]:
+    """Q143/S2a + Q369: cheap cache is (zone, motif_id, rule_id, compose_sz)."""
     motif_id = -1
     rule_id = 0
     if action is not None:
@@ -26,7 +28,26 @@ def cheap_pack_cache_key(zone, action) -> tuple[str, int, int]:
             motif_id = int(action.motif_id)
         rid = int(getattr(action, "rule_id", 0) or 0)
         rule_id = rid if rid >= 0 else 0
-    return (str(zone or ""), motif_id, rule_id)
+    return (str(zone or ""), motif_id, rule_id, int(compose_sz))
+
+
+def snapshot_pack_cache(pack_cache: dict) -> dict:
+    """Shallow copy pack_cache lists/dicts for restore after path replay."""
+    return {
+        k: (list(v) if isinstance(v, list) else dict(v) if isinstance(v, dict) else v)
+        for k, v in pack_cache.items()
+    }
+
+
+@contextmanager
+def with_isolated_pack_cache(pack_cache: dict):
+    """One gate: path execute mutates compose_* — restore after probe."""
+    snap = snapshot_pack_cache(pack_cache)
+    try:
+        yield pack_cache
+    finally:
+        pack_cache.clear()
+        pack_cache.update(snap)
 
 
 def compose_cached_selection(
@@ -38,6 +59,7 @@ def compose_cached_selection(
     patterns,
     native_geoms_fn,
     coverage_pct_fn,
+    action=None,
 ) -> tuple[list[int], float]:
     """Cheap compose from last outer graph; Motif miss injects cluster_patterns."""
     if not pack_cache.get("ready"):
@@ -57,12 +79,14 @@ def compose_cached_selection(
     pats = list(patterns or [])
     n_cc = 0
     if pats:
-        motif_keys, cohorts, n_cc = motif_graph_hits(
-            pats, group_id, transform, telem=propose_stats_c,
+        n_cc = inject_cohorts_from_patterns(
+            pats, group_id, transform, propose_stats_c,
         )
-        merge_motif_hits(propose_stats_c, motif_keys, cohorts)
+    else:
+        n_cc = 0
     pack_cache["cheap_cluster_copy_n"] = int(n_cc)
-    active_rules = active_rule_set(rule_sets)
+    rid = int(getattr(action, "rule_id", 0) or 0) if action is not None else 0
+    active_rules = active_rule_set(rule_sets, rid)
     scores = list(score_elems(graph, active_rules))
     sheet_diag = sheet_diag_from(pack_cache.get("sheet") or p_sheet_c)
     candidate_geoms = native_geoms_fn(
@@ -167,6 +191,8 @@ def refine_cached_selection(
         rim_reject=0.02,
         propose_stats=telem,
         native_geoms_from_transforms_fn=native_geoms_fn,
+        dg=pack_cache.get("dg"),
+        propose_cfg=pack_cache.get("cfg").propose if pack_cache.get("cfg") else None,
     )
     coverage_out = 0.0
     try:
@@ -195,7 +221,9 @@ def pack_execute_snapshot(
 ) -> BoardSnapshot:
     """Cheap expand execute_fn: cache (zone, motif_id); miss re-composes (Q143)."""
     snap = parent
-    cache_key = cheap_pack_cache_key(zone, action)
+    compose_sz = len(pack_cache.get("motif_locked") or ())
+    pack_cache["cache_key_compose_sz"] = int(compose_sz)
+    cache_key = cheap_pack_cache_key(zone, action, compose_sz=compose_sz)
     cheap_map: dict = pack_cache.setdefault("cheap_by_key", {})
     pack_cache["cache_lookup_n"] = int(pack_cache.get("cache_lookup_n", 0) or 0) + 1
     if cache_key in cheap_map:
@@ -205,6 +233,11 @@ def pack_execute_snapshot(
             pack_cache.get("cheap_telem_by_key", {}).get(cache_key) or {}
         )
         pack_cache["last_execute_telem"]["cache_hit"] = 1
+        # Q384: restore compose fields so post_pack_overlap_ok sees this replay.
+        comp = (pack_cache.get("cheap_compose_by_key") or {}).get(cache_key)
+        if isinstance(comp, dict):
+            for k, v in comp.items():
+                pack_cache[k] = list(v) if isinstance(v, list) else v
         lookup_n = int(pack_cache.get("cache_lookup_n", 0) or 0)
         hit_n = int(pack_cache.get("cache_hit_n", 0) or 0)
         pack_cache["cache_miss_rate"] = 1.0 - (float(hit_n) / float(lookup_n))
@@ -231,6 +264,7 @@ def pack_execute_snapshot(
             patterns=pats,
             native_geoms_fn=native_geoms_fn,
             coverage_pct_fn=coverage_pct_fn,
+            action=action,
         )
         box.selected = list(sel_out)
         box.coverage = float(cov)
@@ -322,6 +356,13 @@ def pack_execute_snapshot(
     )
     pack_cache["last_execute_telem"] = telem
     pack_cache.setdefault("cheap_telem_by_key", {})[cache_key] = dict(telem)
+    pack_cache.setdefault("cheap_compose_by_key", {})[cache_key] = {
+        "compose_sel": list(pack_cache.get("compose_sel") or ()),
+        "compose_polys": list(pack_cache.get("compose_polys") or ()),
+        "compose_group_id": list(pack_cache.get("compose_group_id") or ()),
+        "compose_transform": list(pack_cache.get("compose_transform") or ()),
+        "motif_locked": list(pack_cache.get("motif_locked") or ()),
+    }
     cheap_map[cache_key] = out
     lookup_n = int(pack_cache.get("cache_lookup_n", 0) or 0)
     hit_n = int(pack_cache.get("cache_hit_n", 0) or 0)
@@ -334,4 +375,6 @@ __all__ = [
     "compose_cached_selection",
     "pack_execute_snapshot",
     "refine_cached_selection",
+    "snapshot_pack_cache",
+    "with_isolated_pack_cache",
 ]

@@ -70,6 +70,63 @@ std::vector<std::vector<Vec2d>> rings_from_python(nb::handle rings_handle) {
     return rings;
 }
 
+std::vector<Vec2d> clip_ray_interior_samples(
+    const SolidGeometry2d &solid,
+    double ox,
+    double oy,
+    double dx,
+    double dy,
+    double max_t,
+    const std::vector<double> &sample_fracs
+) {
+    std::vector<Vec2d> out;
+    if (max_t <= 0.0 || sample_fracs.empty()) {
+        return out;
+    }
+    const double len = std::hypot(dx, dy);
+    if (len <= 1e-15) {
+        return out;
+    }
+    const double ux = dx / len;
+    const double uy = dy / len;
+    // March the ray and collect inside intervals (Shapely parity: sample along
+    // intersection segments, not fixed fractions of the full ray length).
+    constexpr int march_steps = 64;
+    std::vector<std::pair<double, double>> inside_intervals;
+    bool prev_inside = false;
+    double interval_start = 0.0;
+    for (int i = 0; i <= march_steps; ++i) {
+        const double f = static_cast<double>(i) / static_cast<double>(march_steps);
+        const double t = f * max_t;
+        const double x = ox + ux * t;
+        const double y = oy + uy * t;
+        const bool inside = is_point_inside_solid_space(Vec2d({x, y}), solid);
+        if (inside && !prev_inside) {
+            interval_start = t;
+        } else if (!inside && prev_inside) {
+            inside_intervals.push_back({interval_start, t});
+        }
+        prev_inside = inside;
+    }
+    if (prev_inside) {
+        inside_intervals.push_back({interval_start, max_t});
+    }
+    for (const auto &[t0, t1] : inside_intervals) {
+        const double span = t1 - t0;
+        if (span <= 1e-15) {
+            continue;
+        }
+        for (double sf : sample_fracs) {
+            if (sf < 0.0 || sf > 1.0) {
+                continue;
+            }
+            const double t = t0 + sf * span;
+            out.push_back({ox + ux * t, oy + uy * t});
+        }
+    }
+    return out;
+}
+
 void bind_geometry_class(nb::module_ &m) {
     nb::class_<GeometryHolder>(m, "Geometry")
         .def(nb::init<>())
@@ -321,6 +378,38 @@ void bind_geometry_class(nb::module_ &m) {
             },
             nb::arg("x"),
             nb::arg("y"))
+        .def(
+            "clip_ray_interior",
+            [](const GeometryHolder &g,
+               nb::tuple origin_xy,
+               nb::tuple direction_xy,
+               double max_t,
+               nb::object sample_fracs) {
+                const double ox = nb::cast<double>(origin_xy[0]);
+                const double oy = nb::cast<double>(origin_xy[1]);
+                const double dx = nb::cast<double>(direction_xy[0]);
+                const double dy = nb::cast<double>(direction_xy[1]);
+                std::vector<double> fracs;
+                if (!sample_fracs.is_none()) {
+                    for (nb::handle f : nb::iter(sample_fracs)) {
+                        fracs.push_back(static_cast<double>(nb::cast<double>(f)));
+                    }
+                }
+                if (fracs.empty()) {
+                    fracs = {0.1, 0.5};
+                }
+                const auto pts = clip_ray_interior_samples(
+                    g.solid, ox, oy, dx, dy, max_t, fracs);
+                nb::list out;
+                for (const auto &p : pts) {
+                    out.append(nb::make_tuple(p[0], p[1]));
+                }
+                return out;
+            },
+            nb::arg("origin_xy"),
+            nb::arg("direction_xy"),
+            nb::arg("max_t"),
+            nb::arg("sample_fracs") = nb::make_tuple(0.1, 0.5))
         .def(
             "boundary_clearance",
             [](const GeometryHolder &g, double x, double y) {

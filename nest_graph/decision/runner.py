@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from nest_graph.decision.macro_path import ancestors as macro_ancestors
 from nest_graph.decision.mcts import MctsAgent
 from nest_graph.decision.niche_archive import MacroNicheArchive
 from nest_graph.decision.slave_pack import cheap_expand_slave
@@ -48,6 +49,9 @@ class MacroMctsRunner:
 
     def store_snapshot(self, node_id: int, snap: BoardSnapshot) -> None:
         self.arena.set_snapshot(int(node_id), snap)
+
+    def ancestors(self, node_id: int) -> list[int]:
+        return macro_ancestors(self, int(node_id))
 
     def run(self, root_snapshot: BoardSnapshot, *, n_sims: int = 32) -> BoardSnapshot:
         assert self.agent is not None

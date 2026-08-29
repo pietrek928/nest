@@ -13,15 +13,41 @@ from nest_graph.build_graph import (
     NestState,
     PlateauTracker,
     _make_initial_rule_sets,
+    _mcts_rule_ids,
     _native_geoms_from_transforms,
+    _note_path_accept_warm,
+    _pack_cache_overlap_ok,
+    _path_accept_contact_upsert,
     _selection_budget_for_iter,
+    _selection_coverage_pct,
     active_rule_set,
     improve_rules,
     make_polygon_graph,
     void_elite_tuple_from_archive,
 )
-from nest_graph.propose.telem import archive_void_elite_transforms, void_elite_count
-from nest_graph.decision.epoch import bind_graph_epoch
+from nest_graph.decision.action_gen import region_to_zone
+from nest_graph.decision.cheap_pack import pack_execute_snapshot, with_isolated_pack_cache
+from nest_graph.decision.execute import (
+    board_snapshot_from_selection,
+    make_execute_fn,
+    prep_selection_freeze,
+    record_outer_iter_expand,
+    schedule_prep_selection_free,
+)
+from nest_graph.decision.mcts import leaf_reward, path_reward_beats
+from nest_graph.decision.macro_path import ancestors, macro_increase_path
+from nest_graph.decision.types import BoardSnapshot
+from nest_graph.elem_graph import MacroRegion
+from nest_graph.propose.placement_common import post_pack_overlap_ok
+from nest_graph.propose.telem import (
+    BestPackSnapshot,
+    archive_void_elite_transforms,
+    best_pack_geom_sig,
+    build_run_diagnostics,
+    maybe_restore_best_pack,
+    void_elite_count,
+)
+from nest_graph.decision.epoch import inject_cohorts_and_bind_graph
 from nest_graph.decision.pack_loop import (
     PackIterCtx,
     RefinePackBox,
@@ -35,7 +61,10 @@ from nest_graph.decision.motif_credit import (
     merge_void_elite_with_archive,
 )
 from nest_graph.decision.runner import MacroMctsRunner
-from nest_graph.propose.pattern_archive import motif_patterns_for_inject
+from nest_graph.propose.pattern_archive import (
+    motif_patterns_for_inject,
+    note_motif_ref_anchors_from_nest,
+)
 from nest_graph.propose.telem import assemble_void_leak
 from nest_graph.propose.heavy_polish import (
     apply_dfs_refinement,
@@ -64,11 +93,6 @@ from nest_graph.propose.selection_compose import (
     compose_nest_kwargs,
     dual_nest_for,
     sheet_diag_from,
-)
-from nest_graph.decision.execute import (
-    prep_selection_freeze,
-    record_outer_iter_expand,
-    schedule_prep_selection_free,
 )
 from nest_graph.config import BuildGraphConfig, ProposeConfig, score_rules_options
 from nest_graph.elem_graph import (
@@ -325,6 +349,50 @@ def _angle_allowed(
         if d <= tol:
             return True
     return False
+
+
+def _shapes_gate_ok(shapes, sheet, holes, *, overlap_area_tol: float = 1e-6) -> bool:
+    """Hard-overlap + board membership (same family as gate overlap_ok/void_ok)."""
+    for a, pa in enumerate(shapes or ()):
+        if pa is None or getattr(pa, "is_empty", False):
+            continue
+        if sheet is not None:
+            try:
+                outside = pa.difference(sheet.buffer(1e-4))
+                if (
+                    outside is not None
+                    and not getattr(outside, "is_empty", True)
+                    and float(outside.area) > overlap_area_tol
+                ):
+                    return False
+            except Exception:
+                if not sheet.buffer(1e-4).covers(pa):
+                    return False
+        for hole in holes or ():
+            inter = pa.intersection(hole)
+            if not inter.is_empty and inter.area > overlap_area_tol:
+                return False
+        for b in range(a + 1, len(shapes)):
+            pb = shapes[b]
+            if pb is None or getattr(pb, "is_empty", False):
+                continue
+            if pa.intersects(pb) and pa.intersection(pb).area > overlap_area_tol:
+                return False
+    return True
+
+
+def _shapes_pairwise_ok(shapes, *, overlap_area_tol: float = 1e-12) -> bool:
+    """Pairwise hard-overlap only (match gate overlap_ok area tol)."""
+    for a, pa in enumerate(shapes or ()):
+        if pa is None or getattr(pa, "is_empty", False):
+            continue
+        for b in range(a + 1, len(shapes)):
+            pb = shapes[b]
+            if pb is None or getattr(pb, "is_empty", False):
+                continue
+            if pa.intersects(pb) and pa.intersection(pb).area > overlap_area_tol:
+                return False
+    return True
 
 
 def metrics_meet_floors(metrics: NestingMetrics, floors) -> list[str]:
@@ -622,6 +690,13 @@ class NestingPipelineEvaluator:
         prev_packed_gid: list[int] = []
         prev_packed_tr: list = []
         trajectory: list[tuple[float, float, int]] = []
+        best_cov = 0.0
+        best_next_polys: list | None = None
+        best_next_gids: list | None = None
+        best_next_tr: list | None = None
+        best_next_sel: list | None = None
+        best_selected_polys: list[int] | None = None
+        best_pack_sig: float = 0.0
         last_void_leak: dict = {
             "free_kind": "",
             "props": 0,
@@ -645,7 +720,28 @@ class NestingPipelineEvaluator:
         }
         # P0: DG spine (niche + Motif) alongside classic evaluator harness.
         mcts_runner = MacroMctsRunner()
+        if mcts_runner.agent is not None:
+            mcts_runner.agent.motif_cohorts = ()
         mcts_parent_id = 0
+        mcts_action = None
+        pack_cache: dict = {"ready": False}
+        part_areas_t = tuple(float(p[0].area) for p in self.parts)
+        board_area_f = float(self.sheet.area) if self.sheet is not None else 1.0
+        mcts_runner.execute_fn = make_execute_fn(
+            lambda parent, zone=None, action=None, patterns=None: pack_execute_snapshot(
+                parent,
+                zone=zone,
+                action=action,
+                patterns=patterns,
+                pack_cache=pack_cache,
+                rule_sets=rule_sets,
+                sel=sel,
+                cfg=self.cfg,
+                apply_dfs_fn=apply_dfs_refinement,
+                native_geoms_fn=_native_geoms_from_transforms,
+                coverage_pct_fn=_selection_coverage_pct,
+            )
+        )
         prev_void_nest = 0
         inward_peak_state: dict[str, int] = {}
         letter_peak_state: dict[str, int] = {}
@@ -659,6 +755,9 @@ class NestingPipelineEvaluator:
             near_last = bool(self.always_heavy_polish) or (
                 int(iter_idx) == int(self.case.iters) - 2
             )
+            parent_free_hint = (
+                str(last_void_leak.get("free_kind") or "") == "large_void"
+            )
             polish_budget = polish_budget_for_iter(
                 is_last_leaf=is_last_leaf,
                 sel=sel,
@@ -667,6 +766,162 @@ class NestingPipelineEvaluator:
                 free_remaining=True,
                 large_void=True,
             )
+            # I1/Q355: path probe + AMAF pick before propose (evaluator harness).
+            mcts_telem: dict = {}
+            mcts_force_zone = "void_seek"
+            mcts_action = None
+            if (
+                nest_state is not None
+                and mcts_runner.agent is not None
+                and pack_cache.get("ready")
+            ):
+                rem = tuple(range(max(len(self.parts), 1)))
+                max_void_ratio = float(last_void_leak.get("max_void_ratio", 0.0) or 0.0)
+                void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
+                if str(last_void_leak.get("free_kind") or "") == "large_void" and max_void_ratio <= 0.0:
+                    void_fill = 0.0
+                parent_snap = BoardSnapshot(
+                    remaining_gids=rem,
+                    coverage=float(last_void_leak.get("outline_cov", 0.0) or 0.0),
+                    free_kind=str(last_void_leak.get("free_kind") or ""),
+                    arena_node_id=int(mcts_parent_id),
+                    rim_fill=float(last_void_leak.get("rim_progress", 0.0) or 0.0),
+                    void_fill=void_fill,
+                )
+                mcts_runner.store_snapshot(int(mcts_parent_id), parent_snap)
+                mcts_telem = {
+                    "pw_expand": int(
+                        (mcts_runner.agent.telem or {}).get("pw_expand", 0) or 0
+                    ),
+                    "amaf_hits": int(
+                        (mcts_runner.agent.telem or {}).get("amaf_hits", 0) or 0
+                    ),
+                    "macro_path_accept": int(
+                        last_void_leak.get("macro_path_accept", 0) or 0
+                    ),
+                    "path_extend_n": int(last_void_leak.get("path_extend_n", 0) or 0),
+                    "path_step_macro": int(
+                        last_void_leak.get("path_step_macro", 0) or 0
+                    ),
+                    "path_step_join": int(
+                        last_void_leak.get("path_step_join", 0) or 0
+                    ),
+                    "path_contact_upserts": int(
+                        last_void_leak.get("path_contact_upserts", 0) or 0
+                    ),
+                }
+                path_probe = bool(plateau.on_plateau) or parent_free_hint
+                if path_probe and mcts_runner.execute_fn is not None:
+                    path = ancestors(mcts_runner, int(mcts_parent_id))
+                    mcts_telem["policy_path_len"] = int(len(path))
+                    base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
+                    realized = getattr(mcts_runner.agent, "realized", None) or {}
+                    base_r = leaf_reward(
+                        parent_snap,
+                        survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+                        macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                    )
+                    # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
+                    path_overlap_ok = False
+                    with with_isolated_pack_cache(pack_cache):
+                        alt_action, alt_reward, path_accept_snap = macro_increase_path(
+                            mcts_runner,
+                            leaf_id=int(mcts_parent_id),
+                            baseline_reward=base_r,
+                            execute_fn=mcts_runner.execute_fn,
+                            rule_ids=_mcts_rule_ids(rule_sets),
+                            telem=mcts_telem,
+                            overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(
+                                pack_cache
+                            ),
+                        )
+                        path_overlap_ok = bool(_pack_cache_overlap_ok(pack_cache))
+                    if (
+                        alt_action is not None
+                        and path_accept_snap is not None
+                        and not path_reward_beats(
+                            parent_snap,
+                            path_accept_snap,
+                            base_reward=base_r,
+                            alt_reward=alt_reward,
+                        )
+                    ):
+                        alt_action = None
+                        path_accept_snap = None
+                    if alt_action is not None:
+                        mcts_telem["macro_path_candidate"] = 1
+                        apply_path = bool(
+                            getattr(
+                                self.cfg.propose, "enable_macro_path_replay", False
+                            )
+                        )
+                        # S1 discover telem only in evaluator — MotifBase warm/upsert
+                        # on path packs produced overlapping peak boards (brej=1).
+                        if apply_path and path_accept_snap is not None and path_overlap_ok:
+                            mcts_telem["macro_path_accept"] = int(
+                                mcts_telem.get("macro_path_accept", 0) or 0
+                            ) + 1
+                            # Apply replay only when probe pack is overlap-clean; otherwise
+                            # telem-only (S1) so evaluator peaks are not poisoned.
+                            if float(getattr(path_accept_snap, "coverage", 0.0) or 0.0) + 1e-9 >= (
+                                base_cov + 0.005
+                            ):
+                                mcts_action = alt_action
+                            if bool(
+                                getattr(
+                                    self.cfg.propose, "mutate_motif_base_on_path", False
+                                )
+                            ):
+                                mcts_telem["path_contact_upserts"] = int(
+                                    mcts_telem.get("path_contact_upserts", 0) or 0
+                                ) + _path_accept_contact_upsert(
+                                    mcts_runner,
+                                    path_accept_snap,
+                                    part_bases=part_bases,
+                                    min_dist=float(
+                                        self.cfg.board_min_dist_for(self.sheet)
+                                    ),
+                                    motif_min_compactness=float(
+                                        getattr(
+                                            self.cfg.propose,
+                                            "motif_min_compactness",
+                                            0.35,
+                                        )
+                                        or 0.35
+                                    ),
+                                    motif_ttl=int(
+                                        getattr(
+                                            self.cfg.propose, "accepted_pattern_ttl", 4
+                                        )
+                                        or 4
+                                    ),
+                                    motif_max_keep=int(
+                                        getattr(
+                                            self.cfg.propose, "accepted_pattern_max", 4
+                                        )
+                                        or 4
+                                    ),
+                                    pack_cache=pack_cache,
+                                    telem=mcts_telem,
+                                )
+                            else:
+                                mcts_telem["path_contact_upserts"] = int(
+                                    mcts_telem.get("path_contact_upserts", 0) or 0
+                                )
+                        elif apply_path and path_accept_snap is not None:
+                            mcts_telem["macro_path_overlap_skip"] = 1
+                if mcts_action is None:
+                    mcts_action = mcts_runner.agent.pick_expand_action(
+                        rem,
+                        rule_ids=_mcts_rule_ids(rule_sets),
+                        parent_id=int(mcts_parent_id),
+                        snapshot=parent_snap,
+                    )
+                if mcts_action is not None:
+                    mcts_force_zone = region_to_zone(mcts_action.region)
+                    mcts_telem["mcts_rule_id"] = int(
+                        getattr(mcts_action, "rule_id", 0) or 0
+                    )
             sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
             sel_iter, freeze_reason = prep_selection_freeze(
                 sel_iter,
@@ -725,12 +980,31 @@ class NestingPipelineEvaluator:
                 len(v) for v in (arch_rows or {}).values()
             )
             propose_stats["keep_history_on_sterile"] = keep_hist_sterile
-            propose_stats["dg_force_zone"] = "void_seek" if use_dg_mix else None
-            propose_stats["mcts_zone"] = "void_seek" if use_dg_mix else None
+            propose_stats["dg_force_zone"] = mcts_force_zone if use_dg_mix else None
+            propose_stats["mcts_zone"] = mcts_force_zone if use_dg_mix else None
+            if mcts_telem:
+                propose_stats.update({
+                    k: mcts_telem[k]
+                    for k in (
+                        "path_extend_n",
+                        "path_step_macro",
+                        "path_step_join",
+                        "macro_path_accept",
+                        "macro_path_candidate",
+                        "macro_chain_accept",
+                        "path_contact_upserts",
+                        "mcts_rule_id",
+                        "policy_path_len",
+                        "macro_swap_attempts",
+                        "macro_swap_depth",
+                    )
+                    if k in mcts_telem
+                })
             archived_for_propose = []
             if use_dg_mix and bool(
                 getattr(self.cfg.propose, "enable_accepted_pattern_archive", True)
             ):
+                note_motif_ref_anchors_from_nest(mcts_runner.motif_base, nest_state)
                 archived_for_propose = motif_patterns_for_inject(
                     mcts_runner.motif_base,
                     max_keep=int(
@@ -738,9 +1012,11 @@ class NestingPipelineEvaluator:
                     ),
                     part_bases=part_bases_fixed,
                     min_dist=float(self._min_dist(first_pass=False)),
+                    telem=propose_stats,
                     polish=True,
                 )
             propose_stats["accepted_patterns_n"] = len(archived_for_propose)
+            propose_stats["motif_library_n"] = int(mcts_runner.motif_base.size())
             propose_stats["enabled_proposers_n"] = (
                 len(ProposeConfig.proposers_for_place("void_seek") or ())
                 if use_dg_mix else 0
@@ -789,8 +1065,24 @@ class NestingPipelineEvaluator:
                 attract_kiss_band_scale=float(self.cfg.propose.attract_kiss_band_scale),
                 attract_max_degree=int(self.cfg.propose.attract_max_degree),
             )
-            graph_valid_carry = bind_graph_epoch(
-                mcts_runner.dg, graph, group_id, transform, propose_stats, self.cfg,
+            pin_keys = set(propose_stats.get("archive_mix_pin_keys") or ())
+            if pin_keys:
+                graph_keys = {
+                    transform_row_key(np.asarray(t, dtype=np.float64))
+                    for t in transform
+                }
+                propose_stats["archive_mix_pin_survive_n"] = int(
+                    len(pin_keys & graph_keys)
+                )
+            graph_valid_carry = inject_cohorts_and_bind_graph(
+                mcts_runner.dg,
+                graph,
+                group_id,
+                transform,
+                propose_stats,
+                self.cfg,
+                patterns=archived_for_propose or None,
+                agent=mcts_runner.agent,
             )
 
             graphs = [graph]
@@ -936,9 +1228,9 @@ class NestingPipelineEvaluator:
                 ),
                 proposer_counts={},
                 sheet_diag=float(sheet_diag),
-                mcts_telem=propose_stats,
+                mcts_telem=mcts_telem or propose_stats,
                 mcts_runner=mcts_runner,
-                mcts_action=None,
+                mcts_action=mcts_action,
                 cfg_propose=self.cfg.propose,
                 prev_void_nest=prev_void_nest,
                 pin_cands=pin_cands,
@@ -984,6 +1276,12 @@ class NestingPipelineEvaluator:
             # R2/R3 letter peaks (mix floor / 3b / restore) across iters.
             for key in (
                 "cluster_copy_mix_floor_hits",
+                "archive_mix_floor_hits",
+                "motif_graph_hit_n",
+                "motif_cohorts_n",
+                "motif_graph_follower_miss_n",
+                "archive_mix_pin_survive_n",
+                "accepted_patterns_n",
                 "motif_override",
                 "plateau_props_boost",
                 "run_3b",
@@ -1012,6 +1310,12 @@ class NestingPipelineEvaluator:
                     cur = max(
                         cur,
                         int(propose_stats.get("motif_library_n", 0) or 0),
+                        int(propose_stats.get("accepted_patterns_n", 0) or 0),
+                    )
+                if key == "accepted_patterns_n":
+                    cur = max(
+                        cur,
+                        int(propose_stats.get("accepted_patterns_n", 0) or 0),
                     )
                 if key == "cluster_copy_emitted":
                     ebp_cur = densify.get("emitted_by_proposer") or {}
@@ -1031,6 +1335,9 @@ class NestingPipelineEvaluator:
                     cur = max(cur, int(repack.get(short, 0) or 0))
                 letter_peak_state[key] = max(int(letter_peak_state.get(key, 0) or 0), cur)
                 last_void_leak[key] = int(letter_peak_state[key])
+            skip_reason = str(propose_stats.get("archive_mix_skip_reason") or "")
+            if skip_reason:
+                last_void_leak["archive_mix_skip_reason"] = skip_reason
             proposer_keys = leak_orch.proposer_keys
             emitted_bp = dict(
                 propose_stats.get("emitted_by_proposer")
@@ -1082,6 +1389,32 @@ class NestingPipelineEvaluator:
                     propose_stats.get("contact_grg_upserts", 0) or 0
                 ),
             })
+            if int(propose_stats.get("graph_to_nest_hollow", 0) or 0):
+                last_void_leak["graph_to_nest_hollow_iters"] = int(
+                    last_void_leak.get("graph_to_nest_hollow_iters", 0) or 0
+                ) + 1
+            nvr = float(propose_stats.get("nest_void_ratio", 1.0) or 1.0)
+            last_void_leak["nest_void_ratio_min"] = min(
+                float(last_void_leak.get("nest_void_ratio_min", 1.0) or 1.0),
+                nvr,
+            )
+            for dk in (
+                "motif_beam_wins",
+                "motif_beam_trials",
+                "motif_scene_max_sz",
+                "motif_pack_max_sz",
+                "void_override",
+                "incumbent_hold",
+                "colonize_pinned",
+                "motif_graph_leader_hit_n",
+                "hollow_renest",
+                "cluster_copy_graph_n",
+                "cluster_copy_nest_n",
+            ):
+                last_void_leak[dk] = max(
+                    int(last_void_leak.get(dk, 0) or 0),
+                    int(propose_stats.get(dk, 0) or 0),
+                )
             prop_n = int(propose_stats.get("proposal_count", 0))
             if prop_n > 0:
                 last_proposal_yield = min(1.0, n_void_graph / prop_n) if n_void_graph else (
@@ -1142,37 +1475,35 @@ class NestingPipelineEvaluator:
                 group_id=group_id,
                 transform=transform,
                 propose_stats=propose_stats,
-                mcts_telem=propose_stats,
+                mcts_telem=mcts_telem or propose_stats,
                 motif_keys=propose_stats.get("motif_keys") or {},
                 motif_ttl=motif_ttl,
-                credit_motif=False,
+                credit_motif=True,
                 refine_bp=refine_bp if mcts_runner.agent is not None else None,
                 emitted_bp=emitted_bp if mcts_runner.agent is not None else None,
             )
             if mcts_runner.agent is not None:
-                expand_bases = part_bases_fixed if is_last_leaf else {}
+                motif_ttl_expand = int(
+                    getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4
+                )
                 mcts_parent_id, _child_snap = record_outer_iter_expand(
                     mcts_runner,
                     parent_id=mcts_parent_id,
-                    action=None,
+                    action=mcts_action,
                     selected_polys=selected_polys,
                     group_id=group_id,
                     transform=transform,
                     ngroups=max(len(self.parts), 1),
                     coverage_pct=cov_pct,
                     propose_stats=propose_stats,
-                    mcts_telem=propose_stats,
+                    mcts_telem=mcts_telem or propose_stats,
                     nest_state=nest_state,
-                    part_bases=expand_bases,
+                    part_bases=part_bases_fixed,
                     min_dist=float(min_dist),
                     motif_min_compactness=float(
                         getattr(self.cfg.propose, "motif_min_compactness", 0.35) or 0.35
                     ),
-                    motif_ttl=int(
-                        getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4
-                    )
-                    if is_last_leaf
-                    else 0,
+                    motif_ttl=motif_ttl_expand if len(selected_polys) >= 2 else 0,
                     motif_max_keep=int(
                         getattr(self.cfg.propose, "accepted_pattern_max", 4) or 4
                     ),
@@ -1180,8 +1511,51 @@ class NestingPipelineEvaluator:
                 del _child_snap
                 if isinstance(last_void_leak, dict):
                     last_void_leak["contact_grg_upserts"] = int(
-                        propose_stats.get("contact_grg_upserts", 0) or 0
+                        (mcts_telem or propose_stats).get("contact_grg_upserts", 0) or 0
                     )
+                    for pk in (
+                        "path_extend_n",
+                        "path_step_macro",
+                        "path_step_join",
+                        "macro_path_accept",
+                        "macro_path_candidate",
+                        "path_contact_upserts",
+                        "survive_motif_n",
+                        "macro_survive_n",
+                        "macro_chain_accept",
+                    ):
+                        if pk in (mcts_telem or {}):
+                            last_void_leak[pk] = int(mcts_telem.get(pk, 0) or 0)
+                        elif pk in propose_stats:
+                            last_void_leak[pk] = int(propose_stats.get(pk, 0) or 0)
+            # Warm cheap-pack cache for next-iter path replay.
+            pack_cache.clear()
+            pack_cache.update({
+                "ready": True,
+                "graph": mcts_runner.dg.poses() if mcts_runner.dg is not None else graph,
+                "dg": mcts_runner.dg,
+                "polys": list(polys),
+                "group_id": list(group_id),
+                "transform": list(transform),
+                "part_areas": part_areas_t,
+                "part_bases": part_bases_fixed,
+                "p_sheet": self.sheet,
+                "min_dist": float(min_dist),
+                "cfg": self.cfg,
+                "free_info": free_info,
+                "propose_stats": dict(propose_stats),
+                "packed_geoms": [],
+                "void_geoms": [],
+                "sheet": self.sheet,
+                "sheet_area": board_area_f,
+                "board_area": board_area_f,
+                "compose_sel": list(selected_polys),
+                "compose_polys": list(polys),
+                "compose_group_id": list(group_id),
+                "compose_transform": list(transform),
+                "motif_locked": list(propose_stats.get("motif_locked") or ()),
+                "selected": list(selected_polys),
+            })
             # Q185/Q189 archive telem after Motif upsert site (post-expand).
             lib_n = int(mcts_runner.motif_base.size())
             motif_refine_n = 0
@@ -1301,6 +1675,22 @@ class NestingPipelineEvaluator:
                 )
                 cov = part_area / usable
             trajectory.append((t_elapsed, cov, len(seed_polys) + len(selected_polys)))
+            if usable > 0 and next_polys:
+                poly_cov = sum(float(p.area) for p in next_polys) / usable
+                if poly_cov > best_cov + 1e-9 and post_pack_overlap_ok(
+                    next_polys, range(len(next_polys)),
+                ):
+                    best_cov = float(poly_cov)
+                    best_next_polys = list(next_polys)
+                    best_next_gids = list(next_gids)
+                    best_next_tr = list(next_tr)
+                    best_next_sel = list(next_sel)
+                    best_selected_polys = list(selected_polys)
+                    best_pack_sig = best_pack_geom_sig(
+                        polys if polys else next_polys, selected_polys,
+                    )
+                    if isinstance(last_void_leak, dict):
+                        last_void_leak["best_pack_peak_cov"] = float(poly_cov)
             plateau.update(cov * 100.0, len(seed_polys) + len(selected_polys))
             if isinstance(last_void_leak, dict):
                 last_void_leak["on_plateau"] = bool(plateau.on_plateau)
@@ -1319,6 +1709,35 @@ class NestingPipelineEvaluator:
             )
 
         parts_final = len(next_polys) if next_polys else (len(seed_polys) + len(selected_polys))
+        usable_area = float(self.case.usable_area)
+        # Prefer peak nest polys over last-iter graph indices (wrong graph SoT).
+        if (
+            best_next_polys is None
+            and best_selected_polys is not None
+            and best_cov > 0.0
+            and usable_area > 0
+        ):
+            restored_sel, did_restore, bp_telem = maybe_restore_best_pack(
+                best=BestPackSnapshot(
+                    selected_polys=list(best_selected_polys),
+                    cov=float(best_cov),
+                    geom_sig=float(best_pack_sig),
+                ),
+                current_selected=list(selected_polys),
+                graph=graph,
+                polys=polys if polys else next_polys,
+                group_id=group_id if group_id is not None else next_gids,
+                part_areas=[float(p[0].area) for p in self.parts],
+                sheet=self.sheet,
+                holes=self.case.board_holes,
+                usable_area=usable_area,
+            )
+            if isinstance(last_void_leak, dict):
+                last_void_leak.update(bp_telem)
+            if did_restore:
+                selected_polys = list(restored_sel)
+                if isinstance(last_void_leak, dict):
+                    last_void_leak["best_cov"] = float(best_cov)
         graph_nodes = len(polys)
         min_dist = self._min_dist()
         independent_ok = (
@@ -1352,11 +1771,55 @@ class NestingPipelineEvaluator:
                 if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
                     overlap_ok = False
 
-        usable_area = self.case.usable_area
         area_coverage = 0.0
         if usable_area > 0 and parts_final > 0:
             part_area = sum(float(p.area) for p in placed_shapes)
             area_coverage = part_area / usable_area
+        # Q371: restore peak nest polys with gate-overlap (not Geometry clearance).
+        if best_next_polys is not None and usable_area > 0:
+            peak_area = sum(float(p.area) for p in best_next_polys) / usable_area
+            final_before = float(area_coverage)
+            gate_ok = post_pack_overlap_ok(
+                best_next_polys, range(len(best_next_polys)),
+            )
+            if peak_area > final_before + 0.005 and gate_ok:
+                # Re-validate void/board before accepting restore.
+                void_peak = True
+                for pa in best_next_polys:
+                    if pa is None or getattr(pa, "is_empty", False):
+                        continue
+                    if not self.sheet.buffer(1e-5).covers(pa):
+                        void_peak = False
+                        break
+                    for hole in self.case.board_holes:
+                        inter = pa.intersection(hole)
+                        if not inter.is_empty and inter.area > 1e-6:
+                            void_peak = False
+                            break
+                    if not void_peak:
+                        break
+                if void_peak:
+                    placed_shapes = list(best_next_polys)
+                    next_polys = list(best_next_polys)
+                    next_gids = list(best_next_gids or next_gids)
+                    next_tr = list(best_next_tr or next_tr)
+                    next_sel = list(best_next_sel or next_sel)
+                    parts_final = len(next_polys)
+                    area_coverage = float(peak_area)
+                    independent_ok = True
+                    overlap_ok = True
+                    void_ok = True
+                    if isinstance(last_void_leak, dict):
+                        last_void_leak["best_pack_restore"] = 1
+                        last_void_leak["best_cov"] = float(peak_area)
+                        last_void_leak["best_pack_peak_cov"] = float(peak_area)
+                        last_void_leak["best_pack_final_cov"] = float(final_before)
+                elif isinstance(last_void_leak, dict):
+                    last_void_leak["best_pack_reject"] = 1
+            elif isinstance(last_void_leak, dict) and peak_area > final_before + 0.005:
+                last_void_leak["best_pack_reject"] = 0 if gate_ok else 1
+                last_void_leak["best_pack_peak_cov"] = float(peak_area)
+                last_void_leak["best_pack_final_cov"] = float(final_before)
 
         out_cov = outline_coverage_ratio(
             placed_shapes,
@@ -1475,6 +1938,14 @@ class NestingPipelineEvaluator:
                 area += 0.5 * (c0 + c1) * (t1_ - t0_)
             if c_final > 1e-12:
                 density_auc = float(np.clip(area / (c_final * t_total), 0.0, 1.0))
+
+        if isinstance(last_void_leak, dict):
+            last_void_leak["diag"] = build_run_diagnostics(
+                leak=last_void_leak,
+                trajectory=trajectory,
+                area_coverage=area_coverage,
+                area_coverage_seed=area_coverage_seed,
+            )
 
         self.last_result = {
             "selected_polys": next_sel,

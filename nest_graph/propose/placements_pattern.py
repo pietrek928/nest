@@ -494,12 +494,18 @@ def void_seek_motif_anchors(
     void_pole: Point | None = None,
     patterns: Sequence[ClusterPattern] = (),
     lattice_stats_out: dict | None = None,
+    void_poly: Polygon | None = None,
+    part_for_pocket: Polygon | None = None,
+    anchor_cache: dict | None = None,
 ) -> list[tuple[float, float, float]]:
     """Unified anchor priority for void_seek motif stamps (§4).
 
     topology / void_pole → topology_pocket → free_pocket → ΔT lattice (pole-sort)
-    → optional AABB mirrors last.
+    → optional pocket-aligned poses (R4) → optional AABB mirrors last.
     """
+    if anchor_cache is not None and "anchors" in anchor_cache:
+        return list(anchor_cache["anchors"])
+
     anchors: list[tuple[float, float, float]] = []
     n_seed = int(propose_cfg.cluster_copy_anchor_seeds)
     lattice_added = 0
@@ -572,11 +578,28 @@ def void_seek_motif_anchors(
         for pat in patterns:
             anchors.extend(_mirror_anchors(pat.ref_transform, sheet))
 
+    if (
+        propose_cfg.motif_use_topo_anchors
+        and void_poly is not None
+        and not void_poly.is_empty
+        and part_for_pocket is not None
+        and not part_for_pocket.is_empty
+    ):
+        from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
+
+        for coords, _tag in aligned_poses_for_pocket(
+            part_for_pocket, void_poly, min_dist=min_dist, allowed_angles=None,
+        ):
+            anchors.append(coords)
+
     if lattice_stats_out is not None:
         lattice_stats_out["lattice_anchors_added"] = int(lattice_added)
         lattice_stats_out["lattice_anchors_kept"] = int(lattice_kept)
 
-    return _dedupe_anchors(anchors)
+    out = _dedupe_anchors(anchors)
+    if anchor_cache is not None:
+        anchor_cache["anchors"] = list(out)
+    return out
 
 
 def emit_packing_clear(

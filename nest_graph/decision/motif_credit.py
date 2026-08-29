@@ -136,8 +136,12 @@ def credit_motif_on_nest_survival(
     member_hits: int = 0,
     credit_motif: bool = True,
     upsert_patterns: Sequence | None = None,
+    survive_by_motif: dict | None = None,
 ) -> int:
-    """Q116 accept_count++ plus Q165 Kind/Attach scalars (outer leaf only)."""
+    """Q116 accept_count++ plus Q165 Kind/Attach scalars (outer leaf only).
+
+    Q382: when ``survive_by_motif`` is non-empty, credit only those mids.
+    """
     _write_realized_kind_attach(
         realized_out,
         selected_n=len(selected_polys or ()),
@@ -146,9 +150,23 @@ def credit_motif_on_nest_survival(
         member_hits=int(member_hits),
         telem=telem,
     )
-    if not credit_motif or motif_base is None or not selected_polys or not motif_keys:
+    if not credit_motif or motif_base is None:
         return 0
     credited = 0
+    survivors = {
+        int(k): int(v)
+        for k, v in (survive_by_motif or {}).items()
+        if int(v) > 0 and int(k) >= 0
+    }
+    if survivors:
+        for mid, _cnt in survivors.items():
+            if motif_base.credit_accept(int(mid), int(ttl)):
+                credited += 1
+        if telem is not None:
+            telem["motif_nest_credit"] = int(telem.get("motif_nest_credit", 0)) + credited
+        return credited
+    if not selected_polys or not motif_keys:
+        return 0
     seen_pairs: set[tuple[int, int, tuple[float, float, float]]] = set()
     for pat in upsert_patterns or ():
         members = tuple(getattr(pat, "members", ()) or ())

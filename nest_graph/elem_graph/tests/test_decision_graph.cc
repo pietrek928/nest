@@ -43,7 +43,7 @@ TEST_CASE("DecisionGraph add_attach skips Collision like add_attract", "[decisio
     REQUIRE(dg.attach_n() == 1);
 }
 
-TEST_CASE("DecisionGraph Mutex is derived Collision among members", "[decision_graph]") {
+TEST_CASE("DecisionGraph Mutex is derived via conflicts PathNode", "[decision_graph]") {
     DecisionGraph dg;
     PoseGraph g;
     append_elem_at(g, 0, 0.0f, 0.0f);
@@ -55,7 +55,7 @@ TEST_CASE("DecisionGraph Mutex is derived Collision among members", "[decision_g
     dg.add_attach(0, 1);
     dg.add_attach(2, 3);
     REQUIRE(dg.attach_n() == 2);
-    REQUIRE(dg.attach_conflicts(0, 1));
+    REQUIRE(dg.conflicts(dg.path_node_attach(0), dg.path_node_attach(1)));
     REQUIRE(dg.mutex_n() == 1);
     dg.add_motif_join(0, 0, 3);
     REQUIRE(dg.mutex_n() == 1);
@@ -74,7 +74,7 @@ TEST_CASE("nest_by_scores DecisionGraph forwards to poses", "[decision_graph]") 
     REQUIRE(selected[0] == 0);
 }
 
-TEST_CASE("materialize_selection flags Attach whose members survived", "[decision_graph]") {
+TEST_CASE("realize flags Attach whose members survived", "[decision_graph]") {
     DecisionGraph dg;
     PoseGraph g;
     append_elem_at(g, 0, 0.0f, 0.0f);
@@ -85,10 +85,32 @@ TEST_CASE("materialize_selection flags Attach whose members survived", "[decisio
     dg.set_pose_kind(1, static_cast<uint8_t>(MacroRegion::Void));
     dg.add_attach(0, 1);
     dg.add_attach(1, 2);
-    const auto st = dg.materialize_selection({0, 1});
-    REQUIRE(st.materialized_attach == 1);
+    const auto st = dg.realize({0, 1});
+    REQUIRE(st.attach == 1);
     REQUIRE(st.member_hits == 2);
     REQUIRE(st.kind_count[static_cast<int>(MacroRegion::Void)] == 2);
     REQUIRE(dg.attach()[0].realized);
     REQUIRE_FALSE(dg.attach()[1].realized);
+    REQUIRE(dg.realized(dg.path_node_attach(0)));
+    REQUIRE_FALSE(dg.realized(dg.path_node_attach(1)));
+}
+
+TEST_CASE("neighbors MotifJoin Pose and survive_counts", "[decision_graph]") {
+    DecisionGraph dg;
+    PoseGraph g;
+    append_elem_at(g, 0, 0.0f, 0.0f);
+    append_elem_at(g, 0, 2.0f, 0.0f);
+    append_elem_at(g, 0, 4.0f, 0.0f);
+    dg.replace_poses(g);
+    dg.set_pose_kind(0, static_cast<uint8_t>(MacroRegion::Motif));
+    dg.set_pose_kind(1, static_cast<uint8_t>(MacroRegion::Motif));
+    dg.add_motif_join(7, 0, 1);
+    dg.add_motif_join(7, 1, 2);
+    dg.realize({0, 1});
+    const auto nbrs = dg.neighbors(dg.path_node_motif(0));
+    REQUIRE(nbrs.size() >= 2);
+    const auto sc = dg.survive_counts();
+    REQUIRE(sc.size() == 1);
+    REQUIRE(sc[0].first == 7);
+    REQUIRE(sc[0].second == 1);
 }

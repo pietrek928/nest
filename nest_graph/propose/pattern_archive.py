@@ -7,19 +7,114 @@ goes only through MotifBase (pairs). N-way clusters are never archived.
 
 from typing import Any, Mapping, Sequence
 
+import numpy as np
+
 from nest_graph.geometry import nfp_lite_pair_relative
 from nest_graph.propose.placements_pattern import ClusterPattern, extract_cluster_patterns
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 from nest_graph.propose.motif_keys import (
+    cohort_member_indices,
     fold_emit_motif_keys,
     pose_in_motif_keys,
     resolve_motif_keys,
 )
 from nest_graph.utils import compose_transforms
 
+# Q278: leader world anchor at upsert time (MotifRecord has relative only).
+_motif_ref_anchors: dict[int, tuple[float, float, float]] = {}
 
-def record_to_cluster_pattern(rec: Any, *, motif_id: int = -1) -> ClusterPattern:
+
+def note_motif_ref_anchors(
+    motif_base: Any,
+    gids: Sequence[int],
+    transforms: Sequence,
+) -> None:
+    """Update world ref_transform cache for MotifBase leader gids."""
+    if motif_base is None or int(motif_base.size()) <= 0:
+        return
+    gid_tf = {
+        int(g): (
+            float(t[0]),
+            float(t[1]),
+            float(t[2]),
+        )
+        for g, t in zip(gids, transforms, strict=False)
+    }
+    for mid in range(int(motif_base.size())):
+        rec = motif_base.at(mid)
+        ga = int(rec.gid_a)
+        ref = gid_tf.get(ga)
+        if ref is not None:
+            _motif_ref_anchors[int(mid)] = ref
+
+
+def note_motif_ref_anchors_from_nest(motif_base: Any, nest_state: Any) -> None:
+    """Refresh leader world anchors from a packed NestState (Q324)."""
+    if nest_state is None:
+        return
+    indices = getattr(nest_state, "selected_indices", None) or ()
+    if not indices:
+        return
+    gids: list[int] = []
+    transforms: list = []
+    group_id = getattr(nest_state, "group_id", None) or []
+    transform = getattr(nest_state, "transform", None) or []
+    for i in indices:
+        ii = int(i)
+        if ii < 0 or ii >= len(group_id) or ii >= len(transform):
+            continue
+        gids.append(int(group_id[ii]))
+        transforms.append(transform[ii])
+    if gids:
+        note_motif_ref_anchors(motif_base, gids, transforms)
+
+
+def archive_ref_origin_count(patterns: Sequence[ClusterPattern]) -> int:
+    """Count archived patterns still at default origin ref_transform (A1 telem)."""
+    n = 0
+    for pat in patterns:
+        rt = getattr(pat, "ref_transform", None)
+        if rt is None:
+            n += 1
+            continue
+        if (
+            float(rt[0]) == 0.0
+            and float(rt[1]) == 0.0
+            and float(rt[2]) == 0.0
+        ):
+            n += 1
+    return n
+
+
+def record_archive_ref_telem(
+    patterns: Sequence[ClusterPattern],
+    telem: dict | None,
+) -> None:
+    """A1 gate telem: archive_ref_origin_n on inject list."""
+    if telem is None or not patterns:
+        return
+    origin_n = archive_ref_origin_count(patterns)
+    telem["archive_ref_origin_n"] = int(telem.get("archive_ref_origin_n", 0)) + int(
+        origin_n
+    )
+    telem["archive_ref_nonzero_n"] = int(telem.get("archive_ref_nonzero_n", 0)) + int(
+        len(patterns) - origin_n
+    )
+
+
+def record_to_cluster_pattern(
+    rec: Any,
+    *,
+    motif_id: int = -1,
+    ref_transform: tuple[float, float, float] | None = None,
+) -> ClusterPattern:
     """One MotifRecord → pair ClusterPattern."""
+    mid = int(motif_id)
+    ref = ref_transform
+    if ref is None and mid >= 0:
+        ref = _motif_ref_anchors.get(mid)
+    if ref is None:
+        ref = (0.0, 0.0, 0.0)
     members = (
         (int(rec.gid_a), (0.0, 0.0, 0.0)),
         (
@@ -30,8 +125,12 @@ def record_to_cluster_pattern(rec: Any, *, motif_id: int = -1) -> ClusterPattern
     return ClusterPattern(
         members=members,
         part_count=2,
-        ref_transform=(0.0, 0.0, 0.0),
-        motif_id=int(motif_id),
+        ref_transform=(
+            float(ref[0]),
+            float(ref[1]),
+            float(ref[2]),
+        ),
+        motif_id=mid,
     )
 
 
@@ -74,6 +173,53 @@ def _pattern_full_clique_hit(
     return False
 
 
+def _cohort_member_keys_for_leader(
+    members: Sequence,
+    world_a: tuple[float, float, float],
+    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
+) -> list[tuple[int, tuple[float, float, float]]]:
+    """Q387: stamp every in-graph member under a leader pose (full cohort)."""
+    key_a = transform_row_key(world_a)
+    gid_a = int(members[0][0])
+    out: list[tuple[int, tuple[float, float, float]]] = [(gid_a, key_a)]
+    for gid_m, t_m in members[1:]:
+        rel = (float(t_m[0]), float(t_m[1]), float(t_m[2]))
+        world_m = compose_transforms(world_a, rel)
+        key_m = transform_row_key(world_m)
+        if (int(gid_m), key_m) not in key_map:
+            continue
+        out.append((int(gid_m), key_m))
+    return out
+
+
+def _ref_transform_pair_cohort(
+    pat: Any,
+    idx: int,
+    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
+) -> dict | None:
+    """Q340/Q387: ref_transform cohort with full in-graph member_keys."""
+    members = tuple(getattr(pat, "members", ()) or ())
+    if len(members) < 2:
+        return None
+    rt_raw = getattr(pat, "ref_transform", None)
+    if rt_raw is None:
+        return None
+    rt = np.asarray(rt_raw, dtype=np.float64).reshape(3)
+    world_a = (float(rt[0]), float(rt[1]), float(rt[2]))
+    member_keys = _cohort_member_keys_for_leader(members, world_a, key_map)
+    if len(member_keys) < 2:
+        return None
+    mid = int(getattr(pat, "motif_id", -1))
+    if mid < 0:
+        mid = int(idx)
+    return {
+        "leader_gid": int(member_keys[0][0]),
+        "leader_key": member_keys[0][1],
+        "member_keys": member_keys,
+        "motif_id": mid,
+    }
+
+
 def motif_graph_hits(
     patterns: Sequence[ClusterPattern],
     group_id: Sequence[int],
@@ -88,9 +234,12 @@ def motif_graph_hits(
     key_map = pose_key_to_verts(group_id, transform)
     motif_keys: dict[int, set[tuple[float, float, float]]] = {}
     cohorts: list[dict] = []
+    cohort_sigs: set[tuple[int, tuple[float, float, float]]] = set()
     n_hits = 0
     clique_pairs_n = 0
     clique_full_hits = 0
+    leader_hit_n = 0
+    follower_miss_n = 0
     for idx, pat in enumerate(patterns):
         members = tuple(getattr(pat, "members", ()) or ())
         if len(members) < 2:
@@ -102,29 +251,46 @@ def motif_graph_hits(
         if mid < 0:
             mid = int(idx)
         gid_a, _t_a = members[0]
-        gid_b, t_b = members[1]
-        rel_b = (float(t_b[0]), float(t_b[1]), float(t_b[2]))
         for i, (gid, t) in enumerate(zip(group_id, transform, strict=False)):
             if int(gid) != int(gid_a):
                 continue
             world_a = (float(t[0]), float(t[1]), float(t[2]))
-            world_b = compose_transforms(world_a, rel_b)
-            key_b = transform_row_key(world_b)
-            if (int(gid_b), key_b) not in key_map:
-                continue
             key_a = transform_row_key(world_a)
-            motif_keys.setdefault(int(gid_a), set()).add(key_a)
-            motif_keys.setdefault(int(gid_b), set()).add(key_b)
+            leader_in = (int(gid_a), key_a) in key_map
+            if leader_in:
+                leader_hit_n += 1
+            member_keys = _cohort_member_keys_for_leader(members, world_a, key_map)
+            if len(member_keys) < 2:
+                if leader_in:
+                    follower_miss_n += 1
+                continue
+            for gid_m, key_m in member_keys:
+                motif_keys.setdefault(int(gid_m), set()).add(key_m)
             cohorts.append({
                 "leader_gid": int(gid_a),
                 "leader_key": key_a,
-                "member_keys": [
-                    (int(gid_a), key_a),
-                    (int(gid_b), key_b),
-                ],
+                "member_keys": member_keys,
                 "motif_id": mid,
             })
+            cohort_sigs.add((mid, key_a))
             n_hits += 1
+        ref_cohort = _ref_transform_pair_cohort(pat, idx, key_map)
+        if ref_cohort is not None:
+            sig = (
+                int(ref_cohort["motif_id"]),
+                tuple(ref_cohort["leader_key"]),
+            )
+            if sig not in cohort_sigs:
+                lk = ref_cohort["leader_key"]
+                gid_a = int(ref_cohort["leader_gid"])
+                motif_keys.setdefault(gid_a, set()).add(lk)
+                for gid_m, key_m in ref_cohort["member_keys"]:
+                    motif_keys.setdefault(int(gid_m), set()).add(
+                        tuple(key_m) if isinstance(key_m, tuple) else key_m
+                    )
+                cohorts.append(ref_cohort)
+                cohort_sigs.add(sig)
+                n_hits += 1
     if telem is not None:
         telem["motif_clique_pairs_n"] = int(
             telem.get("motif_clique_pairs_n", 0)
@@ -132,6 +298,16 @@ def motif_graph_hits(
         telem["motif_clique_full_hits"] = int(
             telem.get("motif_clique_full_hits", 0)
         ) + int(clique_full_hits)
+        telem["motif_graph_leader_hit_n"] = int(
+            telem.get("motif_graph_leader_hit_n", 0)
+        ) + int(leader_hit_n)
+        telem["motif_graph_follower_miss_n"] = int(
+            telem.get("motif_graph_follower_miss_n", 0)
+        ) + int(follower_miss_n)
+        if leader_hit_n > 0 or follower_miss_n > 0:
+            telem["motif_graph_hit_pass_n"] = int(
+                telem.get("motif_graph_hit_pass_n", 0)
+            ) + 1
     return motif_keys, cohorts, n_hits
 
 
@@ -150,9 +326,53 @@ def merge_motif_hits(
             merged.setdefault(int(gid), set()).update(keys or ())
         propose_stats["motif_graph_keys"] = merged
     if cohorts:
-        propose_stats["motif_cohorts"] = list(
-            propose_stats.get("motif_cohorts") or []
-        ) + list(cohorts)
+        existing = list(propose_stats.get("motif_cohorts") or [])
+        seen: set[tuple[int, tuple[float, float, float] | None]] = set()
+        for c in existing:
+            if isinstance(c, dict):
+                lk = c.get("leader_key")
+                key_t = tuple(lk) if isinstance(lk, tuple) else None
+                seen.add((int(c.get("motif_id", -1) or -1), key_t))
+        added = 0
+        for c in cohorts:
+            if not isinstance(c, dict):
+                continue
+            lk = c.get("leader_key")
+            key_t = tuple(lk) if isinstance(lk, tuple) else None
+            sig = (int(c.get("motif_id", -1) or -1), key_t)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            existing.append(c)
+            added += 1
+        if added:
+            propose_stats["motif_cohorts"] = existing
+            propose_stats["motif_cohort_dedup_n"] = int(
+                propose_stats.get("motif_cohort_dedup_n", 0)
+            ) + int(added)
+
+
+def inject_cohorts_from_patterns(
+    patterns: Sequence,
+    group_id: Sequence[int],
+    transform: Sequence,
+    propose_stats: dict,
+    *,
+    telem: dict | None = None,
+) -> int:
+    """Archive → graph-hit cohort inject (Q255). Pre-bind outer + cheap compose only."""
+    if not patterns:
+        return 0
+    sink = telem if telem is not None else propose_stats
+    keys, cohorts, n = motif_graph_hits(
+        patterns, group_id, transform, telem=sink,
+    )
+    merge_motif_hits(propose_stats, keys, cohorts)
+    n_i = int(n)
+    propose_stats["motif_graph_hit_n"] = int(
+        propose_stats.get("motif_graph_hit_n", 0)
+    ) + n_i
+    return n_i
 
 
 def patterns_from_motif_base(
@@ -167,16 +387,40 @@ def patterns_from_motif_base(
     out: list[ClusterPattern] = []
     seen: set[int] = set()
     if prefer_motif_id >= 0 and prefer_motif_id < int(motif_base.size()):
-        out.append(record_to_cluster_pattern(motif_base.at(int(prefer_motif_id))))
+        out.append(
+            record_to_cluster_pattern(
+                motif_base.at(int(prefer_motif_id)),
+                motif_id=int(prefer_motif_id),
+            )
+        )
         seen.add(int(prefer_motif_id))
     for mid in motif_base.list_for_inject(int(max_keep)):
         mid_i = int(mid)
         if mid_i in seen:
             continue
         seen.add(mid_i)
-        out.append(record_to_cluster_pattern(motif_base.at(mid_i)))
+        out.append(record_to_cluster_pattern(motif_base.at(mid_i), motif_id=mid_i))
         if max_keep > 0 and len(out) >= int(max_keep):
             break
+    if not out and int(motif_base.size()) > 0:
+        ranked = sorted(
+            range(int(motif_base.size())),
+            key=lambda i: (
+                int(getattr(motif_base.at(i), "accept_count", 0) or 0),
+                float(getattr(motif_base.at(i), "gci", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        for mid_i in ranked:
+            if int(mid_i) in seen:
+                continue
+            rec = motif_base.at(int(mid_i))
+            if int(getattr(rec, "accept_count", 0) or 0) <= 0:
+                if int(getattr(rec, "ttl_remaining", 0) or 0) < 0:
+                    continue
+            out.append(record_to_cluster_pattern(rec, motif_id=int(mid_i)))
+            if max_keep > 0 and len(out) >= int(max_keep):
+                break
     return out
 
 
@@ -200,6 +444,8 @@ def motif_patterns_for_inject(
         max_keep=int(max_keep),
         prefer_motif_id=int(prefer_motif_id),
     )
+    if pats and telem is not None:
+        record_archive_ref_telem(pats, telem)
     if not pats or not polish or part_bases is None:
         return pats
     return polish_patterns_at_inject(
@@ -304,11 +550,16 @@ __all__ = [
     "age_motif_library",
     "extract_cluster_patterns",
     "fold_emit_motif_keys",
+    "inject_cohorts_from_patterns",
     "motif_graph_hits",
     "merge_motif_hits",
     "motif_patterns_for_inject",
     "motif_to_cluster_patterns",
     "note_motif_hollow_miss",
+    "note_motif_ref_anchors",
+    "note_motif_ref_anchors_from_nest",
+    "archive_ref_origin_count",
+    "record_archive_ref_telem",
     "patterns_from_motif_base",
     "polish_patterns_at_inject",
     "pose_in_motif_keys",

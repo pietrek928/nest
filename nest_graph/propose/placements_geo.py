@@ -1,13 +1,15 @@
 import math
+import time
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiLineString, MultiPoint, Point, Polygon
+from shapely import LineString, LinearRing, MultiPoint, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import voronoi_diagram
 
 from nest_graph.utils import get_shape_exteriors
 
+from nest_graph.geometry import Geometry
 from nest_graph.propose.context import search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 
@@ -61,7 +63,7 @@ def propose_placements_voronoi(
         if focal_shape is not None and not focal_shape.is_empty
         else region.centroid
     )
-    fit_shape = region
+    region_g = propose_geom.region_geometry(region)
 
     # 1. Densify the layout region and generate Voronoi Diagram
     extent = max(region.bounds[2] - region.bounds[0], region.bounds[3] - region.bounds[1])
@@ -77,9 +79,13 @@ def propose_placements_voronoi(
         rings = get_shape_exteriors(vor_region)
         for ring in rings:
             for vert in ring.coords:
-                p = Point(vert)
-                if fit_shape.contains(p):
-                    candidate_points.append(p)
+                x, y = float(vert[0]), float(vert[1])
+                if region_g is not None:
+                    if not region_g.contains_point(x, y):
+                        continue
+                elif not region.contains(Point(x, y)):
+                    continue
+                candidate_points.append((x, y))
     if len(candidate_points) > max_sites:
         idx = np.linspace(0, len(candidate_points) - 1, max_sites, dtype=int)
         candidate_points = [candidate_points[i] for i in idx]
@@ -87,14 +93,14 @@ def propose_placements_voronoi(
     angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
     attract_x, attract_y = float(attract.x), float(attract.y)
 
-    for pt in candidate_points:
+    for px, py in candidate_points:
         for angle in angles:
-            coords = (float(pt.x), float(pt.y), float(angle))
+            coords = (float(px), float(py), float(angle))
             if not propose_geom.valid_at(coords, pt_push):
                 continue
             propositions.append({
                 "coords": coords,
-                "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
+                "cost": math.hypot(px - attract_x, py - attract_y),
             })
 
     propositions.sort(key=lambda x: x["cost"])
@@ -144,15 +150,15 @@ def propose_placements_raycasting(
 
     attract_x, attract_y = float(attract.x), float(attract.y)
 
-    # Ray segment clipping on uneroded region; batch valid_at enforces clearance.
-    if region.is_empty:
+    t_ray0 = time.perf_counter()
+    region_g = propose_geom.region_geometry(region)
+    if region_g is None:
         return []
 
     # 1. Identify Anchor Points (vertices of the base and holes)
     anchors = []
     for line in get_shape_exteriors(anchor_source):
         anchors.extend([Point(pt) for pt in line.coords])
-    # Q184: also cast from packed rim part exteriors (inner boundary of the shell).
     if rim_anchor_geoms:
         for geom in rim_anchor_geoms:
             if geom is None or getattr(geom, "is_empty", True):
@@ -160,7 +166,6 @@ def propose_placements_raycasting(
             for line in get_shape_exteriors(geom):
                 anchors.extend([Point(pt) for pt in line.coords])
 
-    # Limit anchors to avoid explosion on complex shapes
     max_anchors = 200
     if len(anchors) > max_anchors:
         step = len(anchors) / max_anchors
@@ -169,42 +174,32 @@ def propose_placements_raycasting(
     min_x, min_y, max_x, max_y = region.bounds
     ray_len = np.sqrt((max_x - min_x)**2 + (max_y - min_y)**2)
 
-    # 3. Cast Rays and Find Candidates
     ray_angles = np.linspace(0, 2*np.pi, num_rays, endpoint=False)
     placement_angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
 
     stride = max(1, anchor_stride)
+    sample_fracs = (0.1, 0.5)
     for anchor in anchors[::stride]:
         for r_angle in ray_angles:
-            # Create a ray from the anchor point
-            end_x = anchor.x + ray_len * np.cos(r_angle)
-            end_y = anchor.y + ray_len * np.sin(r_angle)
-            ray = LineString([anchor, (end_x, end_y)])
-
-            # Find parts of the ray that are inside the search region
-            valid_segments = ray.intersection(region)
-            if valid_segments.is_empty:
+            dx = ray_len * float(np.cos(r_angle))
+            dy = ray_len * float(np.sin(r_angle))
+            try:
+                for x, y in region_g.clip_ray_interior(
+                    (float(anchor.x), float(anchor.y)),
+                    (dx, dy),
+                    float(ray_len),
+                    sample_fracs,
+                ):
+                    pt_x, pt_y = float(x), float(y)
+                    for p_angle in placement_angles:
+                        coords = (pt_x, pt_y, float(p_angle))
+                        propositions.append({
+                            "coords": coords,
+                            "cost": math.hypot(pt_x - attract_x, pt_y - attract_y),
+                        })
+            except Exception:
                 continue
 
-            # Check points along the valid segments
-            # We focus on the start of the segment (nearest to the wall)
-            coords_to_test = []
-            if valid_segments.geom_type == 'LineString':
-                coords_to_test = [valid_segments.interpolate(0.1, normalized=True),
-                                  valid_segments.interpolate(0.5, normalized=True)]
-            elif isinstance(valid_segments, MultiLineString):
-                for ls in valid_segments.geoms:
-                    coords_to_test.append(ls.interpolate(0.1, normalized=True))
-
-            for pt in coords_to_test:
-                for p_angle in placement_angles:
-                    coords = (float(pt.x), float(pt.y), float(p_angle))
-                    propositions.append({
-                        "coords": coords,
-                        "cost": math.hypot(pt.x - attract_x, pt.y - attract_y),
-                    })
-
-    # Dedupe → oversample 3N → full-guidance batch filter (chunked).
     propositions.sort(key=lambda x: x["cost"])
     unique_props: list[tuple[float, float, float]] = []
     unique_costs: list[float] = []
@@ -222,6 +217,8 @@ def propose_placements_raycasting(
 
     if not unique_props:
         return []
+    _ray_ms = (time.perf_counter() - t_ray0) * 1000.0
+    propose_geom._last_raycast_ms = float(getattr(propose_geom, "_last_raycast_ms", 0.0) or 0.0) + _ray_ms
     cost_map = {c: cost for c, cost in zip(unique_props, unique_costs, strict=True)}
     valid = filter_candidates_batch(propose_geom, unique_props, pt_push)
     valid.sort(key=lambda c: cost_map.get(c, 0.0))

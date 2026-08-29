@@ -3,7 +3,10 @@
 from shapely.geometry import box
 
 from nest_graph.geometry import Geometry, find_polygon_intersections
-from nest_graph.propose.placement_common import selection_pairwise_independent
+from nest_graph.propose.placement_common import (
+    post_pack_overlap_ok,
+    selection_pairwise_independent,
+)
 
 
 def test_edge_kiss_not_packing_collision():
@@ -28,4 +31,14 @@ def test_real_overlap_is_packing_collision():
     assert a.intersects(c)
     assert not selection_pairwise_independent(
         [box(0, 0, 2, 2), box(1, 1, 3, 3)], [0, 1]
+    )
+
+
+def test_post_pack_overlap_ok_rejects_seed_penetration():
+    seed = box(0, 0, 1, 1)
+    packed_clear = box(1.5, 0, 3, 1.5)
+    polys = [seed, packed_clear]
+    assert post_pack_overlap_ok(polys, [1], fixed_obstacles=[seed])
+    assert not post_pack_overlap_ok(
+        [seed, box(0.2, 0.2, 2, 2)], [1], fixed_obstacles=[seed],
     )

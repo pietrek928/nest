@@ -3522,10 +3522,6 @@ def proposed_transforms_for_groups(
                 int(emitted_by_proposer.get(name, 0)),
                 len(keys),
             )
-            pool_by_proposer[name] = max(
-                int(pool_by_proposer.get(name, 0)),
-                len(keys),
-            )
         _union_sniper_keys(sniper_keys_by_group, group_id, group_proposer_keys)
         if group_cascade.get("cascade_stopped_after") not in (None, "none"):
             cascade_agg["cascade_stopped_after"] = group_cascade.get(

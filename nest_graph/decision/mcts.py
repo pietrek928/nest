@@ -33,9 +33,11 @@ class MctsAgent:
     expand_frozen: bool = False
     telem: dict = field(default_factory=dict)
     realized: dict = field(default_factory=_empty_realized)
+    motif_cohorts: tuple = ()
     _tombstoned: set[int] = field(default_factory=set)
     _idle_age: dict[int, int] = field(default_factory=dict)
     _related_snaps: tuple = ()
+    _cohort_amaf: dict[tuple, dict] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.telem.setdefault("pw_expand", 0)
@@ -45,11 +47,48 @@ class MctsAgent:
         self.telem.setdefault("amaf_miss", 0)
         self.telem.setdefault("browse_jump", 0)
         self.telem.setdefault("tombstone_n", 0)
+        self.telem.setdefault("cohort_sig_amaf_visits", 0)
+        self.telem.setdefault("mcts_cohort_macro_n", 0)
+
+    def _cohort_sig_for_action(self, action: MacroAction) -> tuple:
+        mid = int(getattr(action, "motif_id", -1) or -1)
+        if mid < 0:
+            return ()
+        leader = int(getattr(action, "part_gid", -1) or -1)
+        for c in self.motif_cohorts or ():
+            if not isinstance(c, dict):
+                continue
+            if int(c.get("motif_id", -1) or -1) != mid:
+                continue
+            if int(c.get("leader_gid", -1) or -1) != leader:
+                continue
+            lk = c.get("leader_key")
+            key_t = tuple(lk) if isinstance(lk, tuple) else None
+            return (mid, leader, key_t)
+        return (mid, leader, None)
 
     def _action_key(self, action: MacroAction) -> tuple:
         region = action.region
         region_i = int(getattr(region, "value", region))
-        return (region_i, int(action.rule_id), int(action.motif_id))
+        cohort_sig = self._cohort_sig_for_action(action)
+        return (region_i, int(action.rule_id), int(action.motif_id), cohort_sig)
+
+    def _record_cohort_amaf(self, action: MacroAction, reward: float, miss: bool) -> None:
+        sig = self._cohort_sig_for_action(action)
+        if not sig:
+            return
+        key = self._action_key(action)
+        slot = self._cohort_amaf.setdefault(
+            key, {"visits": 0, "reward": 0.0, "misses": 0},
+        )
+        slot["visits"] = int(slot["visits"]) + 1
+        slot["reward"] = float(slot["reward"]) + float(reward)
+        if miss:
+            slot["misses"] = int(slot["misses"]) + 1
+        self.telem["cohort_sig_amaf_visits"] = max(
+            int(self.telem.get("cohort_sig_amaf_visits", 0)),
+            int(slot["visits"]),
+        )
 
     def _is_tombstoned(self, node_id: int) -> bool:
         return int(node_id) in self._tombstoned
@@ -123,6 +162,7 @@ class MctsAgent:
             self.arena.amaf_record(
                 region_i, int(action.rule_id), int(action.motif_id), float(reward), False,
             )
+            self._record_cohort_amaf(action, float(reward), False)
             cur = int(self.arena.parent_id(cur))
 
     def note_macro_miss(self, action: MacroAction | None) -> None:
@@ -132,6 +172,7 @@ class MctsAgent:
         self.arena.amaf_record(
             region_i, int(action.rule_id), int(action.motif_id), 0.0, True,
         )
+        self._record_cohort_amaf(action, 0.0, True)
         self.telem["amaf_miss"] = int(self.telem.get("amaf_miss", 0)) + 1
 
     def best_child(self, node_id: int | None = None) -> int:
@@ -286,19 +327,44 @@ class MctsAgent:
         region_i = int(key[0])
         rule_id = int(key[1])
         motif_id = int(key[2])
+        cohort_sig = key[3] if len(key) > 3 else ()
         visits = int(self.arena.amaf_visits(region_i, rule_id, motif_id))
-        c = float(self.ucb_c)
-        pb = c / math.sqrt(float(parent_visits) + 1.0)
-        if visits <= 0:
-            score = pb  # AMAF_mean = 0
+        mean = 0.0
+        misses = 0
+        if cohort_sig:
+            slot = self._cohort_amaf.get(key)
+            if slot and int(slot.get("visits", 0)) > 0:
+                visits = int(slot["visits"])
+                mean = float(slot["reward"]) / float(visits)
+                misses = int(slot.get("misses", 0))
+                self.telem["cohort_sig_amaf_visits"] = max(
+                    int(self.telem.get("cohort_sig_amaf_visits", 0)),
+                    visits,
+                )
+            else:
+                visits = 0
+        elif visits <= 0:
+            visits = 0
         else:
             mean = float(self.arena.amaf_mean(region_i, rule_id, motif_id))
             misses = int(self.arena.amaf_misses(region_i, rule_id, motif_id))
-            # C++ miss records also increment visits (U1 SoT); den is visits.
+        c = float(self.ucb_c)
+        pb = c / math.sqrt(float(parent_visits) + 1.0)
+        realized = self.realized or {}
+        survive_map = realized.get("survive_by_motif") or {}
+        survival_live = int(realized.get("survive_motif_n", 0) or 0) > 0 or any(
+            int(v) > 0 for v in (survive_map or {}).values()
+        )
+        amaf_scale = 0.65 if survival_live else 1.0
+        if survival_live:
+            self.telem["amaf_survive_scale"] = float(amaf_scale)
+        if visits <= 0:
+            score = pb * amaf_scale
+        else:
             miss_term = 0.0
             if misses > 0:
                 miss_term = LAMBDA_MISS * (float(misses) / float(visits))
-            score = mean - miss_term + pb
+            score = (mean - miss_term + pb) * amaf_scale
         # Prefer Void macros under large_void (anti hollow-rim).
         void_i = int(getattr(MacroRegion.Void, "value", 1))
         rim_i = int(getattr(MacroRegion.Rim, "value", 0))
@@ -307,14 +373,29 @@ class MctsAgent:
             score += 0.35
         if str(free_kind) == "large_void" and region_i == rim_i:
             score -= 0.15
-        realized = self.realized or {}
         kind_t = tuple(int(x) for x in (realized.get("kind") or (0, 0, 0, 0)))
         sel_n = max(int(realized.get("sel_n", 0) or 0), 1)
         if 0 <= region_i < 4 and region_i < len(kind_t):
             score += 0.2 * (float(kind_t[region_i]) / float(sel_n))
         attach_n = int(realized.get("attach", 0) or 0)
+        member_hits = int(realized.get("member_hits", 0) or 0)
+        mat_motif = int(realized.get("materialized_motif", 0) or 0)
+        survive_map = realized.get("survive_by_motif") or {}
+        survive_n = int(survive_map.get(motif_id, 0) or 0) if motif_id >= 0 else 0
+        if survive_n <= 0:
+            survive_n = int(realized.get("survive_motif_n", 0) or 0)
         if region_i in (void_i, motif_i, rim_i):
             score += 0.1 * (float(attach_n) / float(sel_n))
+        if member_hits > 0 and region_i == motif_i:
+            score += 0.08 * min(float(member_hits), 16.0) / 16.0
+        if mat_motif > 0 and region_i == motif_i:
+            score += 0.1 * min(float(mat_motif), 4.0) / 4.0
+        # Q383: MotifJoin survival blend into AMAF pick.
+        if survive_n > 0 and region_i in (void_i, motif_i):
+            score += 0.12 * (float(survive_n) / float(sel_n))
+        prior_graph_hit = int(getattr(self, "prior_motif_graph_hit_n", 0) or 0)
+        if prior_graph_hit > 0 and region_i == motif_i:
+            score += 0.05 * min(float(prior_graph_hit), 4.0) / 4.0
         if (
             motif_id >= 0
             and self.motif_base is not None
@@ -358,7 +439,14 @@ class MctsAgent:
             prefer_motifs=True,
             warm_motif_ids=warm,
             free_kind=free_kind,
+            motif_cohorts=self.motif_cohorts or None,
         )
+        cohort_n = sum(
+            1 for a in actions
+            if self._cohort_sig_for_action(a) and int(getattr(a, "motif_id", -1) or -1) >= 0
+        )
+        if cohort_n > 0:
+            self.telem["mcts_cohort_macro_n"] = int(cohort_n)
         if not actions:
             return None
         if parent_id is None:
@@ -384,6 +472,32 @@ class MctsAgent:
         return best
 
 
+def coverage_delta(child: BoardSnapshot, parent: BoardSnapshot) -> float:
+    """Normalized coverage gain (child vs parent)."""
+    pc = max(float(getattr(parent, "coverage", 0.0) or 0.0), 1e-9)
+    cc = float(getattr(child, "coverage", 0.0) or 0.0)
+    return (cc - pc) / pc
+
+
+def path_reward_beats(
+    parent: BoardSnapshot,
+    child: BoardSnapshot,
+    *,
+    base_reward: float,
+    alt_reward: float,
+    min_abs_cov: float = 0.005,
+    min_reward_eps: float = 0.01,
+) -> bool:
+    """Path accept: reward edge + normalized coverage delta (not absolute cov)."""
+    if alt_reward <= float(base_reward) + float(min_reward_eps):
+        return False
+    bc = float(getattr(parent, "coverage", 0.0) or 0.0)
+    cc = float(getattr(child, "coverage", 0.0) or 0.0)
+    if cc + 1e-9 >= bc + float(min_abs_cov):
+        return True
+    return coverage_delta(child, parent) >= float(min_abs_cov) / max(bc, 1e-9)
+
+
 def leaf_reward(
     snapshot: BoardSnapshot,
     *,
@@ -392,6 +506,10 @@ def leaf_reward(
     lam_void: float = 0.5,
     lam_rim: float = 0.1,
     rule_id: int = -1,
+    member_hits: int = 0,
+    materialized_motif: int = 0,
+    survive_motif_n: int = 0,
+    macro_survive_n: int = 0,
 ) -> float:
     """Coverage + void/rim fills (Dg1) + optional kiss/comp.
 
@@ -413,6 +531,18 @@ def leaf_reward(
     )
     if int(rule_id) > 0:
         base += 0.02 * min(float(int(rule_id)), 3.0)
+    mh = max(int(member_hits), 0)
+    mm = max(int(materialized_motif), 0)
+    if mh > 0:
+        base += 0.03 * min(float(mh), 12.0) / 12.0
+    if mm > 0:
+        base += 0.05 * min(float(mm), 4.0) / 4.0
+    sn = max(int(survive_motif_n), 0)
+    msn = max(int(macro_survive_n), 0)
+    if sn > 0:
+        base += 0.04 * min(float(sn), 8.0) / 8.0
+    if msn > 0:
+        base += 0.06 * min(float(msn), 4.0) / 4.0
     return base
 
 

@@ -51,6 +51,10 @@ def propose_placements_free_space_cloud(
     else:
         angles = [2.0 * math.pi * i / n_ang for i in range(n_ang)]
 
+    void_g = None
+    if hasattr(propose_geom, "region_geometry"):
+        void_g = propose_geom.region_geometry(void_poly)
+
     out: list[tuple[float, float, float]] = []
     seen: set[tuple[float, float, float]] = set()
     # Skip first Halton index (0,0) clump; start at 1.
@@ -59,7 +63,12 @@ def propose_placements_free_space_cloud(
         v = _halton(i, 3)
         x = minx + u * w
         y = miny + v * h
-        if not void_poly.covers(Point(x, y)):
+        inside = (
+            void_g.contains_point(x, y)
+            if void_g is not None
+            else void_poly.covers(Point(x, y))
+        )
+        if not inside:
             continue
         for ang in angles:
             coords = (float(x), float(y), float(ang))

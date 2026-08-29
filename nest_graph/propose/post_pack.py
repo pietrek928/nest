@@ -14,6 +14,7 @@ from nest_graph.propose.cluster_repack import (
 from nest_graph.propose.context import prep_free_space, void_ratio_threshold
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.propose.pipeline import allow_void_repack
+from nest_graph.propose.placement_common import post_pack_overlap_ok
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import iterative_multi_poles
 
@@ -46,6 +47,7 @@ def run_post_pack_passes(
     refresh_after_repack: bool = True,
     mean_part_area: float | None = None,
     native_pack_geoms_fn=None,
+    force_bfs_peel: bool = False,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity).
 
@@ -60,6 +62,9 @@ def run_post_pack_passes(
     sel = list(selected_indices)
     out_polys = list(polys)
     out_tr = list(transforms)
+    entry_polys = list(polys)
+    entry_tr = list(transforms)
+    entry_sel = list(selected_indices)
     ctx = SelectionEditCtx(
         sheet=sheet,
         polys=out_polys,
@@ -85,6 +90,7 @@ def run_post_pack_passes(
             free_space=free_space,
             victim_indices=victim_indices,
             repair_patterns=repair_patterns,
+            force_bfs_peel=force_bfs_peel,
         )
         ctx.polys = out_polys
         ctx.transforms = out_tr
@@ -158,6 +164,26 @@ def run_post_pack_passes(
             out_polys, out_tr, se2_stats2 = local_se2_selection(ctx)
             if int(se2_stats2.get("moved", 0)):
                 stats["local_se2"] = se2_stats2
+    if not post_pack_overlap_ok(out_polys, sel, fixed_obstacles=fixed_obstacles):
+        stats["overlap_revert"] = 1
+        return entry_polys, entry_tr, list(entry_sel), stats
+    entry_area = sum(
+        float(part_by_group[int(group_ids[i])].area)
+        for i in entry_sel
+        if 0 <= int(i) < len(group_ids) and int(group_ids[i]) in part_by_group
+    )
+    out_area = sum(
+        float(part_by_group[int(group_ids[i])].area)
+        for i in sel
+        if 0 <= int(i) < len(group_ids) and int(group_ids[i]) in part_by_group
+    )
+    if (
+        entry_area > 1e-9
+        and out_area + 1e-9 < 0.985 * entry_area
+        and len(sel) <= len(entry_sel)
+    ):
+        stats["area_revert"] = 1
+        return entry_polys, entry_tr, list(entry_sel), stats
     return out_polys, out_tr, list(sel), stats
 
 
@@ -176,6 +202,7 @@ class PostPackPrep:
     hole_ok: bool
     stamp_victim: Sequence[int] | None
     repair_patterns: Sequence | None = None
+    force_bfs_peel: bool = False
 
 
 def prepare_post_pack(
@@ -294,6 +321,7 @@ def prepare_post_pack(
         hole_ok=hole_ok,
         stamp_victim=None if hole_ok else stamp_victim,
         repair_patterns=None if hole_ok else repair_patterns,
+        force_bfs_peel=bool(hull_reject),
     )
 
 
@@ -341,6 +369,7 @@ def apply_post_pack_and_telem(
         refresh_after_repack=True,
         mean_part_area=prep.mean_part_post,
         native_pack_geoms_fn=native_pack_geoms_fn,
+        force_bfs_peel=prep.force_bfs_peel,
     )
     if isinstance(void_leak_stats, dict):
         void_leak_stats["repack"] = pack_stats.get("repack") or {
@@ -362,5 +391,14 @@ def apply_post_pack_and_telem(
         )
         void_leak_stats["repack_pattern_fallback"] = int(
             (void_leak_stats["repack"] or {}).get("pattern_fallback", 0) or 0
+        )
+        repack = void_leak_stats["repack"] or {}
+        void_leak_stats["repack_ms"] = max(
+            int(void_leak_stats.get("repack_ms", 0) or 0),
+            int(repack.get("repack_ms", 0) or 0),
+        )
+        void_leak_stats["stamp_anchor_rebuilds"] = max(
+            int(void_leak_stats.get("stamp_anchor_rebuilds", 0) or 0),
+            int(repack.get("stamp_anchor_rebuilds", 0) or 0),
         )
     return polys_out, tr_out, list(sel_out), pack_stats

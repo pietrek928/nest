@@ -24,7 +24,14 @@ from nest_graph.geometry import (
     batch_score_placed_contact_hybrid,
 )
 from nest_graph.utils import transform_row_key
-from nest_graph.propose.motif_keys import resolve_motif_keys
+from nest_graph.propose.motif_keys import (
+    boost_score_indices,
+    cohort_keys_from_cohorts,
+    count_proposer_on_selection,
+    proposer_survivors_on_graph,
+    resolve_motif_keys,
+    VOID_EMIT_PROPOSERS,
+)
 
 
 def pose_key_to_index(
@@ -266,6 +273,29 @@ def apply_void_centroid_score_term(
         try:
             if pred.covers_part(poly):
                 scores[i] = float(scores[i]) + float(void_term)
+                hits += 1
+        except Exception:
+            continue
+    return hits
+
+
+def boost_free_centroid_scores(
+    polys: Sequence,
+    scores: list[float],
+    free_poly: BaseGeometry | None,
+    weight: float,
+) -> int:
+    """Extra in-free score boost for graph_to_nest hollow compose retry."""
+    if weight <= 0.0 or free_poly is None or getattr(free_poly, "is_empty", True):
+        return 0
+    pred = FreeCentroidPredicate(free_poly, 0.0)
+    hits = 0
+    for i, poly in enumerate(polys):
+        if i >= len(scores):
+            break
+        try:
+            if pred.covers_part(poly, index=int(i)):
+                scores[i] = float(scores[i]) + float(weight)
                 hits += 1
         except Exception:
             continue
@@ -632,6 +662,22 @@ def apply_void_selection_boosts(
     if motif_w > 0.0 and propose_stats is not None:
         densify = propose_stats.get("densify_stats") or {}
         motif_keys = resolve_motif_keys(propose_stats, densify=densify)
+        pk = propose_stats.get("proposer_keys") or {}
+        dens_pk = densify.get("proposer_keys") or {}
+        merged_pk = dict(dens_pk)
+        for name, keys in pk.items():
+            merged_pk.setdefault(name, set()).update(keys or ())
+        for gid, kset in proposer_survivors_on_graph(
+            group_id, transform, merged_pk, VOID_EMIT_PROPOSERS,
+        ).items():
+            motif_keys.setdefault(int(gid), set()).update(kset)
+        if (
+            free_info is not None
+            and getattr(free_info, "kind", None) == "large_void"
+            and bool(propose_stats.get("on_plateau", False))
+            and int(propose_stats.get("motif_graph_hit_n", 0) or 0) > 0
+        ):
+            motif_w = float(motif_w) * 1.25
         hits["motif_keys"] = boost_keyed_proposal_scores(
             group_id,
             transform,
@@ -639,6 +685,15 @@ def apply_void_selection_boosts(
             motif_keys,
             weight=motif_w,
         )
+        cohort_keys = cohort_keys_from_cohorts(propose_stats.get("motif_cohorts"))
+        if cohort_keys and int(propose_stats.get("motif_graph_hit_n", 0) or 0) > 0:
+            hits["motif_cohort"] = boost_keyed_proposal_scores(
+                group_id,
+                transform,
+                scores,
+                cohort_keys,
+                weight=float(motif_w) * 0.35,
+            )
     # Open basin (high void ratio): prefer large parts for scrap density;
     # swiss-cheese / modest voids keep small-part pocket fill.
     void_ratio = float(getattr(free_info, "max_void_ratio", 0.0) or 0.0)
@@ -673,6 +728,21 @@ def apply_void_selection_boosts(
                 stats_out=geom_stats_out,
             )
     return hits
+
+
+def apply_motif_packing_score_steer(
+    scores: list[float],
+    packing_idxs: Sequence[int],
+    *,
+    motif_weight: float,
+    scale: float = 0.4,
+) -> int:
+    """Q262 hybrid: packing-clear indices → MIS soft boost (Scene locks stay separate)."""
+    return boost_score_indices(
+        scores,
+        packing_idxs,
+        float(motif_weight) * float(scale),
+    )
 
 
 def centroid_in_free(
@@ -945,6 +1015,7 @@ def colonize_void_onto_base(
     t0 = time.perf_counter()
     out = list(base)
     out_set = set(int(i) for i in out)
+    base_set = set(out_set)
     collisions = getattr(graph, "collisions", None)
     margin = float(interior_margin)
     pred = predicate or FreeCentroidPredicate.from_shapely(free_poly, margin)
@@ -955,6 +1026,7 @@ def colonize_void_onto_base(
         if stats_out is not None:
             stats_out["colonize_candidates"] = 0
             stats_out["colonize_pinned"] = 0
+            stats_out["colonize_pinned_idxs"] = []
             stats_out["colonize_blocked"] = 0
             stats_out["colonize_rim_drop"] = 0
             stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
@@ -1108,9 +1180,11 @@ def colonize_void_onto_base(
                 pinned += add
                 blocked = blk
                 rim_drop += k
+    pinned_idxs = [int(i) for i in out if int(i) not in base_set]
     if stats_out is not None:
         stats_out["colonize_candidates"] = len(candidates)
         stats_out["colonize_pinned"] = pinned
+        stats_out["colonize_pinned_idxs"] = list(pinned_idxs)
         stats_out["colonize_blocked"] = blocked
         stats_out["colonize_rim_drop"] = rim_drop
         stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
@@ -1126,6 +1200,7 @@ def void_core_then_rim(
     interior_margin: float = 0.0,
     stats_out: dict | None = None,
     predicate: FreeCentroidPredicate | None = None,
+    seed_core: Sequence[int] | None = None,
 ) -> list[int]:
     """Void-first MIS then rim fill (hybrid complement to rim-first colonize)."""
     t0 = time.perf_counter()
@@ -1156,8 +1231,21 @@ def void_core_then_rim(
         void_cands.sort(key=lambda v: float(scores[v]), reverse=True)
     core: list[int] = []
     core_set: set[int] = set()
+    for raw in seed_core or ():
+        vi = int(raw)
+        if vi in core_set or vi >= len(collisions) or vi >= len(polys):
+            continue
+        if not pred.covers_part(polys[vi], index=vi):
+            if margin > 1e-12 and not pred_zero.covers_part(polys[vi], index=vi):
+                continue
+        if any(int(u) in core_set for u in collisions[vi]):
+            continue
+        core.append(vi)
+        core_set.add(vi)
     for v in void_cands:
         vi = int(v)
+        if vi in core_set:
+            continue
         if any(int(u) in core_set for u in collisions[vi]):
             continue
         core.append(vi)

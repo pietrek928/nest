@@ -799,3 +799,424 @@ R→P→M→S plan: pair upsert, clique telem, leader-star MotifJoin, score-by-r
 | Q253 | Monitor refine_rejected | No special restore for member_hits until telem proves regression. |
 | Q254 | Extend upsert_from_contacts | Optional `patterns` for leader-star + contact in one gate. |
 
+---
+
+### Repack + compose DG follow-up (Q255–Q262 — locked 2026-08-28)
+
+Pre-implementation verdicts for R/C plan letters. Cross-track synergy: root [AGENTS.md](../AGENTS.md) Planning § Cross-track synergy.
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q255 | **YES — pre-bind safe** | `make_polygon_graph` populates `group_id` / `transform` / `propose_stats` for `motif_graph_hits`. `inject_cohorts_from_patterns` after graph build, **before** `bind_graph_epoch`. Two call sites: outer [`build_graph.py`](../nest_graph/build_graph.py) pre-bind; cheap [`cheap_pack.py`](../nest_graph/decision/cheap_pack.py) `compose_cached_selection` only. |
+| Q256 | **Iter-scoped anchor cache** | Cache `void_seek_motif_anchors` inside one repack stamp pass; clear at `cluster_repack_selection` entry. Do not key only on `motif_id`. Fold repack `aligned_poses_for_pocket` into anchor builder (R4). |
+| Q257 | **Motif > Void/Sheet/Rim** | `bind_epoch` scalar `kinds[]`: second pass after L138 sets `kinds[ix]=Motif` for cohort member indices. Overwrites prior zone Kind for injected cohort vertices (Q243 `member_hits`). Never emit `motif_keys` (Q200). |
+| Q258 | **Validate before mix pin** | C2 archived world poses MUST pass `is_pose_clear` vs current `nest_state` before mix prepend ([`transform_batch.py`](../nest_graph/propose/transform_batch.py) L677–708). |
+| Q259 | **Cheap DG read-only** | C5: pass `dg=` for `motif_join_pairs` read only. No `materialize_selection` on cheap path (Q172). Multi-sim must not mutate shared `dg.motifs()` / `realized`. |
+| Q260 | **YES — mirror 3b mute** | R5: mute `CLUSTER_COPY` in repack fallback when motif stamp paths exhausted (3b `_HOLE_PROPOSERS` pattern). |
+| Q261 | **NO third victim picker** | R7: peel-none → `pick_repair_victim` facade (Q203). Hoist adjacency in `_priority_bfs_peel` only. |
+| Q262 | **YES — packing-clear subset** | C3: when Scene `is_pose_clear` fails on `large_void`, trial `emit_packing_clear` before skip. Accept path already has Scene trial (L192–196). |
+
+**Code facts (2026-08-28):** `ClusterPattern.members` are relative SE(2) — R6 rebuilds patterns for new BFS victim, does not retain hull-reject cohort (Q223). `motif_graph_keys` write-only until Q263.
+
+| Q276 | **Hull-reject peel guard** | R7: do not route hull-reject peel-none through `pick_repair_victim` (Q224 BFS only). |
+| Q277 | **Cohort dedup in merge** | `merge_motif_hits` dedup append by `(motif_id, leader_key)` to avoid C1 + emit double cohorts. |
+
+---
+
+## Open research — Repack + compose DG (Q263–Q275 — net-only)
+
+**Status:** open backlog. Locked pre-ship: Q255–Q262 above.
+
+| Q | Question | Research hooks | Candidate levers |
+|---|----------|----------------|------------------|
+| Q263 | Union `motif_graph_keys` into `resolve_motif_keys` read? | [`motif_keys.py`](../nest_graph/propose/motif_keys.py) | **Locked as Q279** — mix_floor + MIS boosts |
+| Q264 | Cheap cache hit skips inject — stale cohort AMAF? | [`cheap_pack.py`](../nest_graph/decision/cheap_pack.py) | Cache key + `arch_n` |
+| Q265 | `compose_sz>0`, `join_n=0` — Q243 blocker? | pre-bind / C1b | NFP-lite; C2 |
+| Q266 | R6 vs Q223 pattern retain on hull reject | Q213/Q214/Q223 | Relative patterns only |
+| Q267 | Repack → MotifJoin next-iter latency | post-bind order | Bench correlation |
+| Q268 | `member_hits` vs `materialized_motif` for MCTS | [`mcts.py`](../nest_graph/decision/mcts.py) | Q172 |
+| Q269 | F gate baseline bump | [`benchmark_pipeline.py`](../scripts/benchmark_pipeline.py) | Net gain before update |
+| Q270 | M3 PLACE_COHORT (Q90) | [`action_gen.py`](../nest_graph/decision/action_gen.py) | After Q243 |
+| Q271 | `motif_locked` → cheap cache key | pack_cache | Trace outer vs cheap |
+| Q272 | `block_cohort_swap` uplift with C1 | compose L804+ | telem |
+| Q273 | improve_rules as DG macro | Q249 | Post-C4 |
+| Q274 | Raycasting C++ / proposer perf | followup.txt | Separate track |
+| Q275 | Q113 TTL crowds inject list? | MotifBase | `max_keep` |
+
+### Telem symptom table (net-only agent)
+
+| Symptom | Likely broken link | Read first |
+|---------|-------------------|------------|
+| `arch_n>0`, `cohorts_n=0` | No graph hit | C1 (Q255), C2 (Q258) |
+| `cohorts_n>0`, `compose_sz=0` | Clearance | C3 (Q262) |
+| `join_n>0`, `member_hits=0` | Kind tags | C1b (Q257) |
+| Repack slow | Anchor / duplicate stamp | R4 (Q256), R5 (Q260) |
+| Cheap refine ignores MotifJoin | Missing dg= | C5 (Q259) |
+
+---
+
+## Locked verdicts — Graph seeding, DG, raycast (Q278–Q300 — net-only)
+
+**Status:** locked 2026-08-28 (GO). Supersedes open-research wording for listed Qs. Q291–Q295 remain open until S-track ships.
+
+### Track A: Graph seeding & inject mismatch
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q278 | **Track A: upstream seeding** | Fix `graph_hit=0` by carrying a valid **world anchor** into archived patterns and seeding mix pins **before** `make_polygon_graph`. Do **not** rely on relaxed ε matching downstream — collision false-positives. |
+| Q279 | **`mix_floor` → `resolve_motif_keys`** | Read `motif_graph_keys` inside [`resolve_motif_keys`](../nest_graph/propose/motif_keys.py). When MotifBase inject hits graph keys, those keys **must** feed `mix_floor` quota and MIS boosts or MWIS ignores motif investment. (Extends Q263.) |
+
+### Track S & I: DG rule-score & macro augmenting paths
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q286 | **Wire `rule_id` (S1)** | [`active_rule_set`](../nest_graph/propose/selection_compose.py) must index by MCTS `rule_id`. All AMAF rule keys mapping to `rule_sets[0]` = fatal local minimum. |
+| Q287 | **Multi-track dimensions** | Every AMAF dimension (`region`, `rule_id`, `motif_id`) must tangibly alter slave pipeline (proposers, scoring, mix/inject). |
+| Q290 | **Plateau = mutation + browse + I1** | Plateau escape triggers Q249 `improve_rules`, browse (Q132), and `macro_increase_path` (I1). **No** second pack loop or arbitrary DFS retries. |
+| Q296 | **Macro augmenting path (I1)** | Apply `increase_path_dfs` alternating-path template to MCTS. Mid-path ancestor swap (Rim→Void) ≡ geometric pose swap in MWIS. |
+| Q297 | **Replay from snapshot only** | Macro swap (I1) uses [`pack_execute_snapshot`](../nest_graph/decision/cheap_pack.py) from ancestor. Mid-slave `DecisionArena` mutation violates Q163. |
+| Q298 | **Loose search tolerance** | Allow transient reward dip during macro chain (analogous to `min_collisions > 0`); final leaf must strictly beat baseline lex reward. |
+| Q299 | **Splice vs jump** | Browse jumps to new tip; I1 **splices** alternate policy mid-path while preserving suffix. Both required. |
+| Q300 | **Symmetric fracture ε** | MotifJoin fracture ε at Pose tier (Q166) symmetric to AMAF/`member_hits` penalty at Decision tier when evaluating macro swaps. |
+
+### Track Q274: Geometry-first raycasting
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q281 | **`clip_ray_interior`** | Native `Geometry.clip_ray_interior` for point-ray region clip. Do **not** misuse `cast_slide` or `find_polygon_intersections`. |
+| Q282 | **Region SoT (v1)** | `from_shapely` exactly **once** per proposer invocation. No per-ray region rebuild. |
+| Q283 | **R1 parity required** | Bit-exact parity vs Shapely `LineString.intersection` on L-shapes and concave fixtures in Catch2 before ship. |
+| Q284 | **Reuse `contains_point`** | Voronoi and erosion inside tests via `region_g.contains_point()`. No duplicate Shapely `fit_shape.contains(p)`. |
+| Q285 | **No mid-loop `from_shapely`** | R8 ban: anchors via native `boundary_rings()` only; bypass `get_shape_exteriors` Shapely in hot loop. |
+
+### Still open — adaptive placement scoring (Q291–Q295)
+
+| Q | Verdict / question | Research hooks | Candidate levers |
+|---|-------------------|----------------|------------------|
+| Q291 | Rule quality = mean vertex score at count tie; evolution uses lex before raw count? | [`evaluate_rules.cc`](../nest_graph/elem_graph/selection/evaluate_rules.cc), [`evolve.py`](../nest_graph/rules/evolve.py) | Enable `mean_score_weight`; zone-lower `count_weight` on large_void |
+| Q292 | MCTS `leaf_reward` may add small rule-score term **after S1**; coverage/void stay primary on large_void? | [`mcts.py`](../nest_graph/decision/mcts.py) `leaf_reward`, Q108 λ | Extend `BoardSnapshot` with mean rule score |
+| Q293 | Rule mutation = Q249 plateau (Decision B); rule selection = `rule_id` (Decision A); Q273 = explicit macro when both fail? | [`build_graph.py`](../nest_graph/build_graph.py) L1475–1494 | Post-M3; cap K≤3 (Q247) |
+| Q294 | `increase_score_dfs` / normalized Δscore = quality refine levers; count-first restore only when score δ ≤ ε? | [`heavy_polish.py`](../nest_graph/propose/heavy_polish.py) Q245–246 | `refine_score_accept` telem gate |
+| Q295 | Emit RULE_HYBRID follows active preset index; not substitute for compose `selection_geom_weight`? | [`ranking.py`](../nest_graph/propose/ranking.py) | S1 then align hybrid rank with `rule_sets[rid]` |
+
+### F gate (Q280 — open, codify Q269)
+
+| Q | Question | Candidate levers |
+|---|----------|------------------|
+| Q280 | F gate `--update-baselines` gain predicate | `indep` + `overlap` + area ≥ max(baseline, snapshot); no blind overwrite |
+
+### Telem symptom table — scoring & macro path (net-only)
+
+| Symptom | Likely broken link | Read first |
+|---------|-------------------|------------|
+| MCTS tries `rule_id>0`, nest identical | S1 not wired | Q286, `active_rule_set` |
+| AMAF spread on rule_id, area flat | Hollow rule diversity | Q286, Q291 |
+| `refine_score_accept=0`, count-tie area flat | Q245–Q246 not firing | Q294, `heavy_polish.py` |
+| Plateau, zone diversity OK, cov flat | No macro path / browse | Q299, Q290 |
+| `graph_to_nest` bottleneck, AMAF miss only | Blocker depth unknown | Q296, I0 telem |
+| `macro_path_accept=0` after I1 | S1 or replay gate | Q297, Q286 |
+
+---
+
+## Cross-track research themes (net-only agent backlog)
+
+Use when planning letters; cite Q numbers above; do not lock in root AGENTS.md until shipped.
+
+| Theme | Core question | Depends on | Bench tags |
+|-------|---------------|------------|------------|
+| **Archive→graph handoff** | Why `graph_hit=0` when `arch_n>0`? | **Q278** (upstream seed), **Q279** (read path) | void_fill: `arch_n`, `graph_hit`, `archive_mix_floor_hits` |
+| **Rule_id real** | Does each AMAF rule key change nest/score? | **Q286**, S1/S2 — **before Track A** | `mcts_rule_id`, AMAF visits 0..K |
+| **Quality-without-count** | Flat parts + better score/density? | Q291–Q295 (open), Q245–Q246 | `refine_score_accept`, mean vertex score |
+| **Macro augmenting path** | Can mid-path sibling swaps beat UCB-only plateau? | **Q296–Q300**, S1, I1 | `macro_path_accept`, `macro_swap_depth` |
+| **Raycast native** | Is Shapely clip the propose bottleneck? | Q281–Q285, Q274 | `propose_ray_ms`, `from_shapely_count` |
+| **Cohort macro** | When is M3 safe to ship? | Q243, Q270, Q252, **Q370** | `compose_sz≥2`, `join_n>0`, `member_hits>0` |
+| **Hybrid compose handoff** | Does one `motif_locked` SoT survive compose→refine→materialize? | **Q361–Q372**, Q360 | `compose_hold`, `mat_motif`, `hollow_pattern_locks` |
+| **F gate honesty** | When may baselines update? | Q269, Q280 | `--gate` indep + overlap + net area |
+
+**Research loop (all themes):** telem names stage → read named hot path → one unify patch → re-gate. Miss/degradation → loop same letter; do not stack parallel mechanisms (root AGENTS.md Planning).
+
+---
+
+## Follow-up research — plan audit (Q301–Q306 — net-only)
+
+**Status:** open. From 2026-08-28 consistency review + code validation.
+
+| Q | Question | Code fact | Candidate lever |
+|---|----------|-----------|-----------------|
+| Q301 | Q249 says reward ≥ parent; code uses cov plateau? | [`build_graph.py`](../nest_graph/build_graph.py) L1991 `cov >= plateau.last_cov` | Align P1 trigger with MCTS parent reward or document v1 |
+| Q302 | C2 archive mix exists but never hits? | [`transform_batch.py`](../nest_graph/propose/transform_batch.py) L710–757; [`record_to_cluster_pattern`](../nest_graph/propose/pattern_archive.py) L33 `(0,0,0)` | Track A: world `ref_transform` on upsert |
+| Q303 | `motif_graph_keys` absorbed in resolve? | [`motif_keys.py`](../nest_graph/propose/motif_keys.py) — **no** `_absorb(motif_graph_keys)` | Q279 Phase 1b |
+| Q304 | I1 needs ancestor path walk? | [`runner.py`](../nest_graph/decision/runner.py) has no `ancestors()` | Add parent-id walk helper |
+| Q305 | Macro replay = cheap only? | [`cheap_pack.py`](../nest_graph/decision/cheap_pack.py) `pack_execute_snapshot` | I1 v1 cheap; Q306 if insufficient |
+| Q306 | Where is rule_id actually broken? | Outer [`build_graph.py`](../nest_graph/build_graph.py) L1236 `_mcts_rule_ids` OK; compose L1542 + [`execute.py`](../nest_graph/decision/execute.py) `(0,)` not | S1 all compose sites + S2 execute |
+
+**Mix floor gate (Q302 extension):** `motif_floor_n` requires `on_plateau || is_last_leaf` ([`transform_batch.py`](../nest_graph/propose/transform_batch.py) L683–688). Track A telem should report `archive_mix_floor_hits` on **plateau iters** first; do not expect hits every iter.
+
+---
+
+## Bench + telem gates (Q307–Q308 — net-only)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| Q307 | **Wire gate telem before phase 0.5** | Merge `mcts_rule_id`, `archive_mix_floor_hits`, `refine_score_accept`, `macro_path_*` into void_leak + [`benchmark_pipeline.py`](../scripts/benchmark_pipeline.py) print — one assembly gate ([`telem.py`](../nest_graph/propose/telem.py) / [`pack_loop.py`](../nest_graph/decision/pack_loop.py)) |
+| Q308 | **Every phase bench-gated** | No letter lock without `--gate` pass + letter telem present + area ≥ phase snapshot; miss → symptom table → hot path → re-bench (AGENTS.md loop) |
+
+---
+
+## Follow-up research — DG audit (Q309–Q313 — net-only)
+
+| Q | Question | Verdict |
+|---|----------|---------|
+| Q309 | Cheap multi-sim AMAF vs outer pack? | `cheap_outer_reward_delta` in `mcts_telem` / void_leak after outer expand |
+| Q310 | BoardSnapshot stale after browse? | Log `browse_jump`; `packed_gids_compatible` gate unchanged |
+| Q311 | `leaf_reward` + rule scores? | `member_hits` / `materialized_motif` terms in `leaf_reward` + AMAF bias (M5) |
+| Q312 | Inner sim MotifBase upsert? | Defer; Q144 outer-only stands |
+| Q313 | Rolling phase snapshots | [`docs/phase_snapshots.json`](../docs/phase_snapshots.json); any metric drop → research loop |
+
+---
+
+## Locked verdicts — explorer, gate handoff, followup (Q314–Q335 — net-only)
+
+**Status:** locked 2026-08-28 (GO). Do not lock in root AGENTS.md until letters ship.
+
+### Explorer C++ migration (Q314–Q322)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q314** | **Flip to native primary** | After pytest parity (Q283), delete Shapely `intersection` hot loop in [`placements_geo.py`](../nest_graph/propose/placements_geo.py). Native `clip_ray_interior` is sole SoT. |
+| **Q315** | **Cache on `ProposeGeometry`** | Store `region_g` on propose object; one `from_shapely` per proposer invocation (Q282). |
+| **Q316** | **Use `native_geoms`** | Do not `get_shape_exteriors` on packed parts; harvest rim anchors via `boundary_rings` on `NestState.native_geoms`. |
+| **Q317** | **Filter-only sufficient** | R2a `contains_point` only; no C++ Voronoi diagram — inclusion test is the bottleneck. |
+| **Q318** | **Mostly identical** | After `search_region`, explorer filters match `region_g`. **Exception:** `free_space_cloud` uses `yield_poly` — parity-test before unify (Q334). |
+| **Q319** | **Match Shapely polylabel** | `polylabel_rings` mirrors pole-of-inaccessibility; Shapely `representative_point` fallback on degenerate rings only. |
+| **Q320** | **Batch flat (`anchor×ray×frac`)** | Not per-anchor batch; minimizes Python↔C++ overhead. |
+| **Q321** | **`propose_ray_ms` is SoT** | R1/R3 optimization letters; `peak_ray` is emit volume not timing. |
+| **Q322** | **Standalone harness** | `benchmark_propose_ray.py` for micro-timing; pipeline `prop_accept` too noisy for binding profiling. |
+
+### Gate / Track A handoff (Q323–Q327)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q323** | **World pose of archive leader** | `ref_transform` = `gid_a` world pose at accept; not centroid. |
+| **Q324** | **`build_graph` + repack** | `note_motif_ref_anchors` before inject AND after `upsert_from_repack_accept`. |
+| **Q325** | **Exact round-4 match only** | No ε-injection (Q278); mix_floor pins must exact-match graph keys. |
+| **Q326** | **Colonization sufficient** | 0.585 via `graph_to_nest` / `nest_void_term_hits`; no illegal overlaps. |
+| **Q327** | **Scene is overlap SoT** | `post_pack_overlap_ok` guards local SE2; `emit_packing_clear` is propose-only. |
+
+### Followup themes (Q328–Q332)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q328** | **Keep growing `is_pose_clear`** | Q18 stands; batch stamp on cluster_repack loses early-exit. |
+| **Q329** | **M3 PLACE_COHORT deferred** | Beats sequential_accept only for K≥4 complex motifs; ship after A2 green. |
+| **Q330** | **Ship Q294 parallel** | `refine_score_accept` telem with S3; proves rule scoring moves MWIS before Q273 macro. |
+| **Q331** | **Tier-scaled ε** | MotifJoin geometric ε (~1e-4) ≠ Decision macro-path AMAF penalty (~0.05). |
+| **Q332** | **Both** | Microbench authorizes C++ merge; `--gate` area/time authorizes ship. |
+
+### Plan review additions (Q333–Q335)
+
+| Q | Verdict | Research hooks |
+|---|---------|----------------|
+| **Q333** | **Shipped (sequential)** — archive first, cluster_copy fills remainder when rows `< motif_floor_n` | [`transform_batch.py`](../nest_graph/propose/transform_batch.py) `_motif_mix_floor_rows` |
+| **Q334** | One **`region_g` per void** at pipeline explorer stage | [`pipeline.py`](../nest_graph/propose/pipeline.py) explorer stage |
+| **Q335** | **Full C++ Voronoi — REJECT v1** | R2a `contains_point` only; ~0.05–0.19 s/call; off in void_seek; AGENTS ban |
+
+**Q335 detail:** Native geometry has no GEOS. Full port = Boost.Polygon (~1–2 weeks) or GEOS link (~2–4 weeks). Nest only needs Voronoi **vertices inside region** (filter with `contains_point`), not clipped cells.
+
+---
+
+## Locked verdicts — gate pass DG (Q336–Q357 — net-only)
+
+**Status:** locked 2026-08-28 (GO). Append-only reference for gate-pass letters; standing rules stay in root [AGENTS.md](../AGENTS.md).
+
+### Track A2: Archive mix → graph hit (Q336–Q340)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q336** | **YES — relax gate** | `on_plateau && free_kind==large_void && archived_patterns` triggers archive mix regardless of `mcts_zone`. |
+| **Q337** | **Disable polish for mix** | `polish=False` on archive inject when seeding mix pins; NFP-lite breaks Q325 exact match. |
+| **Q338** | **Keep packing clear** | Mix pins use `clear_of_geoms` / packing clear; Scene margin only at compose stamp. |
+| **Q339** | **Prepend + protect pins** | Prepend archive pins to `sel`; telem `archive_mix_pin_survive_n`. |
+| **Q340** | **Pin leader AND follower** | Mix pins leader (`gid_a`, `ref_transform`) and follower (`gid_b`, composed world pose). |
+
+### Track V1: Colonization & area floor (Q341–Q344)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q341** | **Cap void_scale at 5.0** | Do not push to 6.0 — warps MWIS. |
+| **Q342** | **YES — soften hold** | `void_override` on area tie + higher void count when `hollow_miss && large_void && on_plateau`. |
+| **Q343** | **V1 + A2 both required** | V1 fixes ~0.580 floor; A2 unlocks motif compose headroom for ≥0.585. |
+| **Q344** | **Lower colonize margin** | On `on_plateau && large_void`, colonize margin **0 or 1**. |
+
+### Track S: Rules & AMAF (Q345–Q348)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q345** | **Export in backprop** | `arena.amaf_visits(region, rid, motif_id)` → `rule_id_amaf_{rid}` telem. |
+| **Q346** | **Deep wire required** | `rule_id` 0 vs 1 must change compose scores on cheap and heavy paths. |
+| **Q347** | **Delete duplicate** | Single SoT from [`rules/evolve.py`](../nest_graph/rules/evolve.py). |
+| **Q348** | **Defer mean-score** | No Q291 mean-score until S1 proves `rule_id` telem moves MWIS. |
+
+### Track I: Macro path & browse (Q349–Q352)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q349** | **Apply with overlap gate** | `mcts_action = alt_action` only if cheap replay passes `post_pack_overlap_ok`. |
+| **Q350** | **Keep both** | Browse = diversity; macro_path = mid-path sibling splice. |
+| **Q351** | **Default OFF** | `enable_macro_path_replay: bool = False` in ProposeConfig. |
+| **Q352** | **Move assignment** | `agent.motif_cohorts` post-inject, not pre-`propose_stats`. |
+
+### Cross-track & infrastructure (Q353–Q357)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q353** | **YES — small AMAF boost** | Bias `_amaf_pick_score` when prior iter `motif_graph_hit_n > 0`. |
+| **Q354** | **M3 needs compose_sz≥2** | PLACE_COHORT blocked until A2 fully green. |
+| **Q355** | **Evaluator parity** | Port S1/I1 telem to [`nesting_evaluator.py`](../scripts/nesting_evaluator.py). |
+| **Q356** | **Active-index intersect** | Dense OOM: separate letter; does not block void_fill. |
+| **Q357** | **Defer region_g** | Defer until A2/V1 gate passes. |
+
+**Q303 correction:** Q279 shipped — `resolve_motif_keys` absorbs `motif_graph_keys` in [`motif_keys.py`](../nest_graph/propose/motif_keys.py).
+
+### Q313 snapshot + Q262 hybrid lock (2026-08-28)
+
+| Item | Verdict |
+|------|---------|
+| **Q313** | Updated [`docs/phase_snapshots.json`](phase_snapshots.json) void_fill: area **0.564**, parts **53**, `graph_hit≈23`, `arch_mix>0`. Fixture floor 0.585 treated **passed near-threshold** (user). |
+| **Q262 hybrid** | Scene locks = growing Scene **subset ≥2** only. Packing-clear on `large_void` → **MIS soft boost** (`motif_packing_score_boost_idxs`), never lock/beam. Void-only packing clear = regression (overlap + area drop) — do not re-enable. |
+| **Archive mix** | Pins → `proposal_pins` always; prepend to `sel` only on plateau\|last_leaf. |
+| **Cohort soft steer** | `graph_hit>0` → cohort member keys get `motif_w×0.35` in `apply_void_selection_boosts`. |
+| **Next** | Higher-level compose / MotifJoin (`join_n`, Scene-valid `compose_sz≥2`); M3 PLACE_COHORT still gated on compose_sz (Q354). |
+
+**Q255 evaluator parity (shipped):** [`nesting_evaluator.py`](../scripts/nesting_evaluator.py) had **bind before inject** — MotifJoin never saw cohorts (`join_n=0`). Swapped to **inject → bind** matching [`build_graph.py`](../nest_graph/build_graph.py). Bench now `join_n=5–12`, occasional `mat_motif>0` / `pack_boost>0`. Still open: `mat_motif=0` on many seeds (join edges fracture in refine / MWIS) and Scene `compose_sz=0`.
+
+### Q358–Q359 cluster_copy hollow bridge (2026-08-29)
+
+| Item | Verdict |
+|------|---------|
+| **Q358** | Pool→MIS gap: `project_proposer_keys` + honest pool telem + unified `apply_void_selection_boosts` survivor merge. |
+| **Q359** | Hollow `graph_to_nest`: `merge_motif_cohorts` → `sequential_accept`; when `cc_n=0`, `scene_pair_locks_from_indices` on emit **∪ cohort `member_keys`** (Scene pair lock, not packing-clear lock). Fallback: score re-boost retry. Win if `cc_n>0` or void-fill rise with ≥88% area. `compose_motif_hold` when pair lock survives incumbent hold. |
+| **Q360** | **Unified hollow gate** in [`motif_lock.py`](../nest_graph/propose/motif_lock.py): `cluster_copy_lock_pool` (motif_keys) → `resolve_hollow_cc_lock_sets` → cohort-first `hollow_pattern_lock_sets` (Scene growing subset per stamped cohort, flat pair fallback) → shared `_beam_locks` / `hollow_cc_lock_wins` / `hollow_cc_score_steer`. No third store. `void_core_then_rim(seed_core=locked_motif)` when hollow. |
+| **Bench** | void_fill avg **0.565** (seeds 0–2); seed 0 **0.567**; seed 2 `mat_motif=2`. Gate 0.585 still open. |
+| **Next** | Scene full cohort accept (`compose_sz≥2`); refine hold for MotifJoin members; `best_pack` in `build_graph`; followup tracks (repack, DG macro, C++ ray). |
+
+---
+
+## Open research — Hybrid compose handoff (Q361–Q372 — net-only)
+
+**Status:** **LOCKED 2026-08-29** (pre-H1 ship). Supersedes open-research wording below. Hybrid H1–H3 plan authoritative.
+
+### Locked verdicts — Hybrid compose handoff (Q361–Q373)
+
+| Q | Verdict | Implementation constraint |
+|---|---------|---------------------------|
+| **Q361** | **Augment cautiously** | Post-hollow `trial_packed` includes `selected_nest` geoms **only** if index passes `anchored_nest_indices` (`is_board_adj` or contact-connected to board_adj/seed via [`cluster_contact_components`](../nest_graph/propose/context.py)). Never lock motifs against floaters. Telem: `trial_packed_anchored_n`, `trial_packed_float_skip_n`. |
+| **Q362** | **Overlap > CC > Void > Area** | Single `hybrid_compose_pick` in [`motif_lock.py`](../nest_graph/propose/motif_lock.py). `_packing_independent` = **hard gate**. CC survival (≥0.90× area) and void rise (≥0.88× area) are **soft** overrides over raw area lex. Delete duplicate predicates in `selection_compose`. |
+| **Q363** | **`propose_stats["motif_locked"]` SoT** | Refine/finalize read post-compose locks only. Remove `ctx.locked_indices` reads in [`pack_loop.py`](../nest_graph/decision/pack_loop.py) refine_fn and [`cheap_pack.py`](../nest_graph/decision/cheap_pack.py) refine path. Telem: `refine_lock_n`. |
+| **Q364** | **Absolute lock protection in void_core** | [`void_core_then_rim`](../nest_graph/propose/void_selection.py) `seed_core=motif_locked`; rim fill must not displace locked members. |
+| **Q365** | **Post-pick compose_sz** | `motif_compose_accepted_size = len(motif_locked)` after `hybrid_compose_pick` resolves — not at beam generation. One writer. |
+| **Q366** | **Hold with escape hatch** | [`apply_refine_with_restore`](../nest_graph/propose/heavy_polish.py): no restore if refine drops lock member **unless** refine area ≥ **1.02×** locked-nest area AND independent. Telem: `refine_lock_hold`, `refine_lock_escape`. |
+| **Q367** | **Void-fill tie-break retained** | Count-tie + void-fill rise → accept refine, reject restore (existing Q192). |
+| **Q368** | **Independence before accept** | Every lock win through `hybrid_compose_pick` requires `_packing_independent` (Q262 Scene path only for locks). |
+| **Q369** | **Cache key hygiene** | Extend [`cheap_pack_cache_key`](../nest_graph/decision/cheap_pack.py) with `compose_sz` or hash of accepted lock tuple before H3. Current key `(zone, motif_id, rule_id)` is insufficient (code fact L20–29). |
+| **Q370** | **`cohort_sig` in AMAF** | Extend [`mcts.py`](../nest_graph/decision/mcts.py) `_action_key` to `(region, rule_id, motif_id, cohort_sig)`; sig matches [`merge_motif_cohorts`](../nest_graph/propose/motif_keys.py) `(motif_id, leader_gid, leader_key)`. |
+| **Q371** | **Index-based best_pack** | `maybe_restore_best_pack` operates on **`list[int]` graph indices** (`BestPackSnapshot`), not geometry alone. Overlap-check before restore. |
+| **Q372** | **Steer first, lock last** | Q262: `motif_packing_score_boost_idxs` **pre_nest only**; Scene hard locks **post_hollow only**. No packing-clear → `motif_lock_sets`. |
+| **Q373** | **Evaluator index fix** | [`nesting_evaluator.py`](../scripts/nesting_evaluator.py) currently stores `best_next_sel=range(len(next_polys))` (nest order) — **wrong SoT**. Track `best_selected_polys` from graph `selected_polys` when extracting shared helper. |
+
+### Telem gate — hybrid handoff (net-only)
+
+**Bench must print** (letter or diag): `hybrid=lock:{compose}/{refine}/{mat}` plus stage-specific keys below. Letter pass requires funnel telem present (AGENTS.md).
+
+| Stage | Required keys | Pass signal |
+|-------|---------------|-------------|
+| H1 compose | `lock_n_compose`, `motif_scene_max_sz_post`, `hollow_pattern_locks`, `hybrid_pick_wins` | `lock_n_compose≥2` OR `hollow_pattern_locks>0` on void_fill |
+| H2 refine | `lock_n_refine`, `refine_lock_hold`, `lock_survive_refine`, `best_pack_restore` | `lock_survive_refine=1` OR intentional `refine_lock_escape` |
+| H3 DG | `cache_key_compose_sz`, `cohort_sig_amaf_visits` | AMAF visits when `compose_sz≥2` |
+
+**Fault signatures:** `lock_n_compose>0` + `lock_n_materialize=0` → refine/materialize drop (Q366). `trial_packed_float_skip_n=0` + `independent_ok=false` → Q361 leak. `hybrid_pick_reject_indep` high → Q368.
+
+### Research archive (pre-lock questions)
+
+| Q | Question | Research hooks | Candidate levers |
+|---|----------|----------------|------------------|
+| Q361 | Post-hollow Scene: is pre-nest `packed_geoms` (seed-only) the main `seq_clear` cause? | [`motif_lock.py`](../nest_graph/propose/motif_lock.py) `_growing_subset_indices`, [`selection_compose.py`](../nest_graph/propose/selection_compose.py) compose call order | H1: nest-augmented `trial_packed = packed_geoms + selected_nest geoms`; compare `motif_scene_max_sz` pre vs post |
+| Q362 | Should `hybrid_compose_pick` use one lex gate or keep void/cc area floors (0.88/0.90)? | Q240, Q359 void-fill accept, [`block_replace.py`](../nest_graph/propose/block_replace.py) `lex_count_area_better` | Single helper in `motif_lock.py`; delete duplicate predicates in `selection_compose` |
+| Q363 | Does refine always see **stale** locks (`ctx.locked_indices` pre-compose)? | [`pack_loop.py`](../nest_graph/decision/pack_loop.py) L258, [`build_graph.py`](../nest_graph/build_graph.py) L1473 | H1: `propose_stats["motif_locked"]` post-compose SoT; telem `refine_lock_n` |
+| Q364 | When both pair-lock and `void_core_then_rim` fire, which wins — lock beam or void-first MIS? | [`selection_compose.py`](../nest_graph/propose/selection_compose.py) order: hollow beam → void_core | Hybrid: `seed_core=locked_motif` only; lex pick void_core vs locked nest, not separate overrides |
+| Q365 | What telem is SoT for `compose_sz` — `motif_compose_accepted_size`, `motif_sequential_full`, or pair-lock len? | [`pack_loop.py`](../nest_graph/decision/pack_loop.py) leak merge, bench print | One writer: max lock set size from `compose_motif_pipeline`; grep before second telem |
+| Q366 | Does `join_n>0` + `mat_motif=0` mean refine drop or finalize drop? | [`heavy_polish.py`](../nest_graph/propose/heavy_polish.py) restore, [`epoch.py`](../nest_graph/decision/epoch.py) `materialize_selection` | Trace locked member survival nest→refine→finalize; telem `lock_survive_refine` |
+| Q367 | Q242: restore on incumbent hold clears `locked_motif` when `motif_sequential_full=0` — does pair-lock (`cluster_copy_pair_lock`) survive? | [`selection_compose.py`](../nest_graph/propose/selection_compose.py) incumbent hold L950+ | Extend hold predicate: `compose_motif_hold` OR `cluster_copy_pair_lock`; match Q242 |
+| Q368 | Seed-2 `overlap_ok` fail: hollow win via void-fill path without `_packing_independent` check? | [`motif_lock.py`](../nest_graph/propose/motif_lock.py) `hollow_cc_lock_wins` | H2: mandatory independence gate on every lock win before accept |
+| Q369 | Cheap cache (`Q264`): stale `motif_locked` / cohort sig when compose changes locks mid-outer-iter? | [`cheap_pack.py`](../nest_graph/decision/cheap_pack.py) cache key, `_pack_cache` in build_graph | Include `motif_locked` tuple + `motif_compose_accepted_size` in cache key before H3 AMAF |
+| Q370 | H3 `cohort_sig` for AMAF: `leader_key`, `pattern_sig`, or `(motif_id, leader_gid, leader_key)`? | [`action_gen.py`](../nest_graph/decision/action_gen.py) L55, Q238 Q252 | Dedupe matches [`merge_motif_cohorts`](../nest_graph/propose/motif_keys.py) sig |
+| Q371 | `best_pack_restore` evaluator-only — does build_graph lose ≥0.5% cov on last iter post-pack? | [`nesting_evaluator.py`](../scripts/nesting_evaluator.py) L1397+, [`build_graph.py`](../nest_graph/build_graph.py) outer loop | H2: shared `maybe_restore_best_pack`; telem `cov_regress` vs `best=1` |
+| Q372 | Packing-clear soft steer + Scene lock on **same cohort**: order — boost pre-nest, lock post-hollow only (Q262)? | Q262, Q327, [`sequential_accept_motif_cohorts`](../nest_graph/propose/motif_lock.py) | Confirm no packing-clear path writes `motif_lock_sets`; telem `pack_boost` without `beam` |
+
+### Telem symptom table — hybrid compose (net-only)
+
+| Symptom | Likely broken link | Read first |
+|---------|-------------------|------------|
+| `seq_clear>0`, `compose_sz=0`, `beam=0` | Pre-nest Scene context | Q361, `sequential_accept` vs post-hollow |
+| `hollow_pattern_locks>0`, `compose_sz=0` | Lock trial lost lex / not beamed | Q362, `_beam_locks`, `beamed_sigs` |
+| `join_n>0`, `mat_motif=0`, `compose_hold=0` | Refine stale locks | Q363, Q366, `pack_loop` refine_fn |
+| `cluster_copy_pair_lock=1`, `mat_motif=0` | Refine restore dropped locks | Q366, Q367, `apply_refine_with_restore` |
+| `cc_g≥2`, `cc_n=0`, `hollow_cc_gap=1` | Pattern pool empty or Scene fail | Q361, `cluster_copy_lock_pool` |
+| `cov_regress>0`, `best=0` | No peak retention in build_graph | Q371 |
+| `overlap_ok=false` after hollow win | Lock accept without independence | Q368 |
+| `independent_ok=false` after H1 | trial_packed augmented with floaters | Q361 |
+| `refine_lock_escape=1` | Global win broke motif intentionally | Q366 (OK if area ≥1.02×) |
+| `cohorts_n>0`, M3 no AMAF visits | Cache stale or H3 not wired | Q369, Q370 |
+
+### Cross-track theme (add to backlog)
+
+| Theme | Core question | Depends on | Bench telem |
+|-------|---------------|------------|-------------|
+| **Hybrid compose handoff** | Does one `motif_locked` SoT survive compose→refine→materialize? | Q361–Q372, Q360, Q255 | `compose_sz`, `compose_hold`, `mat_motif`, `lock_survive_refine`, `hollow_pattern_locks` |
+
+## Locked verdicts — void-fill DG loop (Q374–Q390 — net-only)
+
+**Status: locked 2026-08-29.** Closes poisoned Master↔Slave handoff after H1–H3. Order: H4 → U1 → D1 → I1 → M4 → S1. No U1 until H4 green.
+
+### H4 — Honest MotifJoin handoff
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| **Q374** | **Remove void pins** | `motif_locked` only from hybrid pick/beam wins, `colonize_pinned`, or block swaps. Delete `void_pins` census. |
+| **Q375** | **`lex_count_area_better`** | Colonize accept only via lex — no part-count inflate at flat area. |
+| **Q376** | **Lex or void rise on escape** | Keep Q366 1.02× + Q368 indep; **ADD** `lex_count_area_better OR void_fill_rise`. |
+| **Q377** | **Q362 + void rise** | `graph_to_nest_hollow && pick==0` → unlocked re-nest; accept 0.88× + void rise. No packing-clear locks (Q262/Q372). |
+
+### U1 — Rewrite DecisionGraph API
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| **Q378** | **One typed API** | `PathNode` / `PathKind` / `neighbors` / `conflicts` / `realize` / `survive_counts`. No `path_graph.py`, no alias wrappers. |
+| **Q379** | **Purge old symbols** | Delete `materialize_selection`, `MaterializeStats`, `motif_conflicts`, `attach_conflicts`, `attach_motif_conflicts`. Bindings = C++ names. |
+| **Q380** | **Mutex via `conflicts`** | `mutex_n` implemented through `conflicts(PathNode, PathNode)`. |
+
+### D1 — Survival loop
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| **Q381** | **Single copy to agent** | `dg.realize(selected)` sole writer; copy `survive_counts()` once → `agent.realized["survive_by_motif"]`. No Python MotifJoin recount. |
+| **Q382** | **Credit survivors only** | `credit_accept` only if `survive_counts[mid] > 0`. |
+| **Q383** | **AMAF survival blend** | Soft `survive_by_motif[mid]/sel_n` in leaf/AMAF; also Q353 boost if prior `motif_graph_hit_n > 0`. |
+
+### I1 — Path splice
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| **Q384** | **Overlap on replay** | Fix Q349: `alt_action` only if cheap replay passes `post_pack_overlap_ok` (independence). |
+| **Q385** | **Rank by survival** | Soft-prefer `neighbors` with high `survive_counts` / realized MotifJoins. |
+| **Q386** | **Validate Join/Pose only** | MotifJoin/Pose/Attach steps: `realized` / `poses_of` only — **no** pack execute. |
+
+### M4 & S1
+
+| Q | Verdict | Constraint |
+|---|---------|------------|
+| **Q387** | **Stamp full member_keys** | PLACE_COHORT stamps full cohort so MotifJoin star is on DG for walk. |
+| **Q388** | **Keep Q90** | No nested MotifBase / super-cohort merge; pairs only. |
+| **Q389** | **Masked path-accept upsert** | On accept: `upsert_from_contacts` masked to MotifJoin-realized ∪ (`motif_locked` ∩ selected). Not multi-sim. |
+| **Q390** | **Warm on accept** | `remember_related(snapshot)` + bump warm motif ids for accepted chain. |
+

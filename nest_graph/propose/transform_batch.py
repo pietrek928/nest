@@ -1,6 +1,6 @@
 """Propose transform-batch assembly (moved from build_graph)."""
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from shapely.geometry.base import BaseGeometry
@@ -27,6 +27,12 @@ from nest_graph.propose.placements_selection_expand import (
 )
 from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.propose.motif_keys import resolve_motif_keys
+from nest_graph.propose.placement_common import (
+    clear_of_geoms,
+    dual_pose_from_base,
+    placement_obstacles,
+)
+from nest_graph.utils import compose_transforms
 
 
 def rim_sat_proposer_updates(
@@ -78,6 +84,181 @@ def prune_transforms_vs_packed(
     return np.asarray(keep, dtype=np.float64).reshape(-1, 3)
 
 
+def _archive_mix_pin_rows(
+    *,
+    archived_patterns: Sequence,
+    group_id: int,
+    motif_floor_n: int,
+    motif_key_set: set[tuple[float, float, float]],
+    nest_state: Any,
+    part_bases: dict,
+    parts: Sequence,
+    min_dist: float,
+    propose_stats_out: dict | None,
+    existing_rows: list[np.ndarray],
+) -> list[np.ndarray]:
+    """Q333/Q340: archive ref_transform pins (leader + follower world poses)."""
+    if (
+        motif_floor_n <= 0
+        or not archived_patterns
+        or nest_state is None
+        or part_bases is None
+    ):
+        return existing_rows
+    voids_ob = list(getattr(nest_state, "void_geoms", None) or ())
+    packed_ob = list(nest_state.native_geoms or [])
+    rows = list(existing_rows)
+    seen_pin_keys = {
+        transform_row_key(np.asarray(r, dtype=np.float64)) for r in rows
+    }
+    reject_n = 0
+    for pat in archived_patterns:
+        if len(rows) >= motif_floor_n:
+            break
+        members = tuple(getattr(pat, "members", ()) or ())
+        if len(members) < 2:
+            continue
+        gid_a, _rel_a = members[0]
+        gid_b, rel_b = members[1]
+        rt = np.asarray(pat.ref_transform, dtype=np.float64).reshape(3)
+        pin_pairs: list[tuple[int, np.ndarray]] = []
+        if int(group_id) == int(gid_a):
+            pin_pairs.append((int(gid_a), rt))
+        if int(group_id) == int(gid_b):
+            pin_pairs.append(
+                (
+                    int(gid_b),
+                    np.asarray(
+                        compose_transforms(
+                            (float(rt[0]), float(rt[1]), float(rt[2])),
+                            (float(rel_b[0]), float(rel_b[1]), float(rel_b[2])),
+                        ),
+                        dtype=np.float64,
+                    ).reshape(3),
+                )
+            )
+        for gid_pat, pin_tf in pin_pairs:
+            if len(rows) >= motif_floor_n:
+                break
+            if int(group_id) != int(gid_pat):
+                continue
+            key = transform_row_key(pin_tf)
+            if key in seen_pin_keys or key in motif_key_set:
+                continue
+            base_g = part_bases.get(int(group_id))
+            part_poly = None
+            if parts:
+                for p, g in parts:
+                    if int(g) == int(group_id):
+                        part_poly = p
+                        break
+            if base_g is None or part_poly is None:
+                reject_n += 1
+                continue
+            cand_g, _ = dual_pose_from_base(base_g, part_poly, pin_tf)
+            if cand_g is None:
+                reject_n += 1
+                continue
+            obs = placement_obstacles(voids_ob, [])
+            if obs and not clear_of_geoms(cand_g, obs, 0.0):
+                reject_n += 1
+                continue
+            rows.append(pin_tf)
+            seen_pin_keys.add(key)
+    if propose_stats_out is not None and reject_n > 0:
+        propose_stats_out["archive_mix_reject_n"] = int(
+            propose_stats_out.get("archive_mix_reject_n", 0)
+        ) + int(reject_n)
+    added = max(0, len(rows) - len(existing_rows))
+    if propose_stats_out is not None and added > 0:
+        propose_stats_out["archive_mix_floor_hits"] = int(
+            propose_stats_out.get("archive_mix_floor_hits", 0)
+        ) + int(added)
+    return rows
+
+
+def _motif_mix_floor_rows(
+    *,
+    group_id: int,
+    motif_floor_n: int,
+    motif_key_set: set[tuple[float, float, float]],
+    archived_patterns: Sequence,
+    nest_state: Any,
+    part_bases: dict,
+    parts: Sequence,
+    min_dist: float,
+    proposal_pins: np.ndarray,
+    propose_stats_out: dict | None,
+    archive_ok: bool,
+) -> tuple[np.ndarray, set[tuple[float, float, float]]]:
+    """U-A2: archive-first mix floor, cluster_copy fills remainder (Q333)."""
+    if motif_floor_n <= 0:
+        if propose_stats_out is not None and group_id == 0:
+            propose_stats_out["motif_floor_active"] = 0
+        return np.zeros((0, 3), dtype=np.float64), set()
+    if propose_stats_out is not None and group_id == 0:
+        propose_stats_out["motif_floor_active"] = 1
+        propose_stats_out["archive_mix_attempt_n"] = int(
+            propose_stats_out.get("archive_mix_attempt_n", 0)
+        ) + 1
+    rows: list[np.ndarray] = []
+    skip_reason = "none"
+    if not archived_patterns:
+        skip_reason = "no_archive"
+    elif not archive_ok:
+        skip_reason = str(
+            (propose_stats_out or {}).get("archive_mix_skip_reason") or "no_void_seek"
+        )
+    elif nest_state is None or part_bases is None:
+        skip_reason = "no_archive"
+    if archive_ok and archived_patterns and nest_state is not None and part_bases is not None:
+        rows = _archive_mix_pin_rows(
+            archived_patterns=archived_patterns,
+            group_id=int(group_id),
+            motif_floor_n=int(motif_floor_n),
+            motif_key_set=motif_key_set,
+            nest_state=nest_state,
+            part_bases=part_bases,
+            parts=parts,
+            min_dist=min_dist,
+            propose_stats_out=propose_stats_out,
+            existing_rows=rows,
+        )
+        if not rows and propose_stats_out is not None and group_id == 0:
+            skip_reason = "floor_zero"
+    elif propose_stats_out is not None and group_id == 0 and skip_reason == "none":
+        fk = str((propose_stats_out or {}).get("free_kind", "") or "")
+        on_plat = bool((propose_stats_out or {}).get("on_plateau", False))
+        if not on_plat:
+            skip_reason = "no_plateau"
+        elif fk != "large_void":
+            skip_reason = "no_void_seek"
+    if motif_key_set and len(rows) < motif_floor_n:
+        cc_before = len(rows)
+        for r in proposal_pins:
+            if transform_row_key(np.asarray(r, dtype=np.float64)) in motif_key_set:
+                rows.append(np.asarray(r, dtype=np.float64))
+                if len(rows) >= motif_floor_n:
+                    break
+        cc_added = len(rows) - cc_before
+        if cc_added and propose_stats_out is not None:
+            propose_stats_out["cluster_copy_mix_floor_hits"] = int(
+                propose_stats_out.get("cluster_copy_mix_floor_hits", 0)
+            ) + int(cc_added)
+    pin_keys = {
+        transform_row_key(np.asarray(r, dtype=np.float64)) for r in rows
+    }
+    if propose_stats_out is not None:
+        merged_pins = set(propose_stats_out.get("archive_mix_pin_keys") or ())
+        merged_pins.update(pin_keys)
+        propose_stats_out["archive_mix_pin_keys"] = merged_pins
+        if group_id == 0 and skip_reason != "none":
+            propose_stats_out["archive_mix_skip_reason"] = skip_reason
+    if not rows:
+        return np.zeros((0, 3), dtype=np.float64), pin_keys
+    return np.asarray(rows, dtype=np.float64).reshape(-1, 3), pin_keys
+
+
 def project_angles_to_allowed(
     transforms: np.ndarray,
     allowed: Sequence[float],
@@ -120,6 +301,28 @@ def project_row_key(
     return transform_row_key(row3[0])
 
 
+def project_proposer_keys(
+    proposer_keys: dict[str, set[tuple[float, float, float]]] | None,
+    group_allowed_angles: Sequence | None,
+) -> dict[str, set[tuple[float, float, float]]]:
+    """Project flat emit keys so MIS boost / telem match graph transforms."""
+    if not proposer_keys:
+        return {}
+    allowed_list = list(group_allowed_angles or ())
+    out: dict[str, set[tuple[float, float, float]]] = {}
+    for name, keys in proposer_keys.items():
+        proj: set[tuple[float, float, float]] = set()
+        for key in keys or ():
+            if allowed_list:
+                for allowed in allowed_list:
+                    proj.add(project_row_key(key, allowed))
+            else:
+                proj.add(project_row_key(key, None))
+        if proj:
+            out[str(name)] = proj
+    return out
+
+
 def graph_valid_carry_by_group(
     group_id: Sequence[int],
     transform: Sequence,
@@ -141,6 +344,72 @@ def graph_valid_carry_by_group(
         stacked = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
         out.append(cap_graph_valid_carry(stacked, max_keep))
     return tuple(out)
+
+
+def _ensure_archive_pin_pairs(
+    mixed: tuple[np.ndarray, ...],
+    archived_patterns: Sequence,
+    group_allowed_angles: Sequence[tuple[float, ...] | None] | tuple,
+) -> tuple[tuple[np.ndarray, ...], int]:
+    """Q340: if subsample kept one archive pin but dropped its partner, restore it."""
+    if not archived_patterns or not mixed:
+        return mixed, 0
+    out: list[np.ndarray] = []
+    for arr in mixed:
+        if arr is None or np.asarray(arr).size == 0:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+        else:
+            out.append(np.asarray(arr, dtype=np.float64).reshape(-1, 3))
+    n_groups = len(out)
+    restored = 0
+    for pat in archived_patterns:
+        members = tuple(getattr(pat, "members", ()) or ())
+        if len(members) < 2:
+            continue
+        gid_a, _rel_a = members[0]
+        gid_b, rel_b = members[1]
+        rt_raw = getattr(pat, "ref_transform", None)
+        if rt_raw is None:
+            continue
+        rt = np.asarray(rt_raw, dtype=np.float64).reshape(3)
+        follower_tf = np.asarray(
+            compose_transforms(
+                (float(rt[0]), float(rt[1]), float(rt[2])),
+                (float(rel_b[0]), float(rel_b[1]), float(rel_b[2])),
+            ),
+            dtype=np.float64,
+        ).reshape(3)
+        pair_rows = [(int(gid_a), rt), (int(gid_b), follower_tf)]
+        present: list[tuple[int, np.ndarray, bool]] = []
+        for gid_pat, tf_row in pair_rows:
+            if gid_pat < 0 or gid_pat >= n_groups:
+                continue
+            allowed = allowed_for_gid(group_allowed_angles, gid_pat)
+            tf_use = tf_row.reshape(1, 3)
+            if allowed is not None:
+                tf_use = project_angles_to_allowed(tf_use, allowed)
+            row = tf_use[0]
+            keys_in = {
+                transform_row_key(np.asarray(r, dtype=np.float64)) for r in out[gid_pat]
+            }
+            present.append((gid_pat, row, transform_row_key(row) in keys_in))
+        if len(present) != 2:
+            continue
+        if present[0][2] and present[1][2]:
+            continue
+        if not present[0][2] and not present[1][2]:
+            continue
+        for gid_pat, row, is_present in present:
+            if is_present:
+                continue
+            cur = out[gid_pat]
+            out[gid_pat] = dedupe_transforms(
+                np.concatenate([cur, row.reshape(1, 3)], axis=0)
+                if cur.shape[0] > 0
+                else row.reshape(1, 3)
+            )
+            restored += 1
+    return tuple(out), int(restored)
 
 
 def window_selected_transforms(
@@ -432,6 +701,13 @@ def build_transform_batch(
                     gb,
                 ))
             propose_stats_out["batch_pack_pairs"] = proj_pairs
+            pk_raw = (densify or {}).get("proposer_keys") or {}
+            if pk_raw:
+                pk_proj = project_proposer_keys(pk_raw, group_allowed_angles)
+                propose_stats_out["proposer_keys"] = pk_proj
+                densify_stats["proposer_keys"] = {
+                    name: set(keys) for name, keys in pk_proj.items()
+                }
             propose_stats_out["zones_used"] = zones_used
             propose_stats_out["densify_stats"] = densify_stats
             propose_stats_out["proposed_by_group"] = {
@@ -679,37 +955,53 @@ def build_transform_batch(
         # reach PlateauTracker; last leaf still needs structure reuse.
         motif_floor_n = 0
         last_leaf = bool((propose_stats_out or {}).get("is_last_leaf", False))
-        if (
-            bool(getattr(cfg.propose, "enable_inward_bridge", True))
-            and (on_plateau or last_leaf)
+        if bool(getattr(cfg.propose, "enable_inward_bridge", True)) and (
+            on_plateau or last_leaf
         ):
             motif_floor_n = int(
                 getattr(cfg.propose, "cluster_copy_mix_floor", 12) or 12
             )
         motif_pin = np.zeros((0, 3), dtype=np.float64)
-        if motif_floor_n > 0 and proposal_pins.shape[0] > 0:
+        if motif_floor_n > 0:
             resolved = resolve_motif_keys(
                 propose_stats_out, densify=(propose_stats_out or {}).get("densify_stats"),
                 gid=int(group_id),
             )
             motif_key_set = set(resolved.get(int(group_id)) or ())
-            if motif_key_set:
-                rows = []
-                for r in proposal_pins:
-                    if transform_row_key(np.asarray(r, dtype=np.float64)) in motif_key_set:
-                        rows.append(np.asarray(r, dtype=np.float64))
-                        if len(rows) >= motif_floor_n:
-                            break
-                if rows:
-                    motif_pin = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
-                    if propose_stats_out is not None:
-                        propose_stats_out["cluster_copy_mix_floor_hits"] = int(
-                            propose_stats_out.get("cluster_copy_mix_floor_hits", 0)
-                        ) + int(motif_pin.shape[0])
+            # Q336: plateau + large_void archive mix regardless of mcts_zone.
+            archive_ok = (
+                archived_patterns
+                and nest_state is not None
+                and part_bases is not None
+                and (
+                    on_plateau and free_kind == "large_void"
+                    or mcts_zone == "void_seek"
+                    or any("void_seek" in str(z) for z in zones_used)
+                )
+            )
+            motif_pin, _pin_keys = _motif_mix_floor_rows(
+                group_id=int(group_id),
+                motif_floor_n=int(motif_floor_n),
+                motif_key_set=motif_key_set,
+                archived_patterns=archived_patterns or (),
+                nest_state=nest_state,
+                part_bases=part_bases,
+                parts=parts,
+                min_dist=min_dist,
+                proposal_pins=proposal_pins,
+                propose_stats_out=propose_stats_out,
+                archive_ok=bool(archive_ok),
+            )
         if motif_pin.shape[0] > 0:
             proposal_pins = dedupe_transforms(
                 np.concatenate([motif_pin, proposal_pins], axis=0)
             )
+            if on_plateau or last_leaf:
+                sel = (
+                    dedupe_transforms(np.concatenate([motif_pin, sel], axis=0))
+                    if sel.shape[0]
+                    else motif_pin
+                )
         merged = subsample_transforms_stratified(
             selection=sel,
             proposals=proposal_pins,
@@ -781,6 +1073,14 @@ def build_transform_batch(
             - set(hist_keys_all.get(int(gid)) or ())
             for gid, keys in mixed_keys.items()
         }
+    if archived_patterns:
+        mixed, pair_restore = _ensure_archive_pin_pairs(
+            mixed, archived_patterns, group_allowed_angles,
+        )
+        if propose_stats_out is not None and pair_restore > 0:
+            propose_stats_out["archive_pin_pair_restore_n"] = int(
+                propose_stats_out.get("archive_pin_pair_restore_n", 0)
+            ) + int(pair_restore)
     return mixed
 
 

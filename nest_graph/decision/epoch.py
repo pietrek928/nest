@@ -5,6 +5,7 @@ from typing import Sequence
 import numpy as np
 
 from nest_graph.elem_graph import DecisionGraph, MacroRegion
+from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.transform_batch import graph_valid_carry_by_group
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 
@@ -152,30 +153,30 @@ def bind_epoch(
     verts = pose_key_to_verts(group_id, transform)
     cohorts = stats.get("motif_cohorts") or densify.get("motif_cohorts") or ()
     motif_join_n = 0
+    cohort_kind_touch = False
     for cohort in cohorts:
         if not isinstance(cohort, dict):
             continue
         mid = int(cohort.get("motif_id", -1) or -1)
-        members = list(cohort.get("member_keys") or ())
-        idxs: list[int] = []
-        for item in members:
-            if item is None or len(item) < 2:
-                continue
-            gid_m, key_m = int(item[0]), item[1]
-            key_t = tuple(key_m) if not isinstance(key_m, tuple) else key_m
-            hits = verts.get((gid_m, key_t)) or ()
-            if hits:
-                idxs.append(int(hits[0]))
+        idxs, _missing = cohort_member_indices(cohort, verts, first_only=False)
         if len(idxs) < 2:
             continue
         leader = _cohort_leader_idx(idxs, graph)
         if leader < 0:
             continue
+        motif_val = int(getattr(MacroRegion.Motif, "value", 3))
         for ix in idxs:
+            gi = int(group_id[int(ix)])
+            key = transform_row_key(transform[int(ix)])
+            kinds[int(ix)] = motif_val
+            kind_keys.setdefault(gi, set()).add(key)
+            cohort_kind_touch = True
             if int(ix) == int(leader):
                 continue
             dg.add_motif_join(mid, int(leader), int(ix))
             motif_join_n += 1
+    if cohort_kind_touch:
+        dg.set_pose_kinds(kinds)
     stats["motif_join_n"] = int(motif_join_n)
 
     stats["kind_keys"] = kind_keys
@@ -186,13 +187,8 @@ def bind_epoch(
         propose_stats.update(stats)
 
 
-def materialize_final_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
-    """Single post-3b/pin survival readback (Q169). Alias for ``materialize_selection``."""
-    return materialize_selection(dg, selected, propose_stats)
-
-
-def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
-    """Flag Attach/MotifJoin whose members survived MWIS (Q154)."""
+def realize_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
+    """Flag Attach/MotifJoin whose members survived MWIS (Q154/Q381)."""
     out = {
         "materialized_attach": 0,
         "materialized_motif": 0,
@@ -201,12 +197,13 @@ def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | Non
         "kind_survive_hist": [0, 0, 0, 0],
         "attach_n": 0,
         "mutex_n": 0,
+        "survive_by_motif": {},
     }
     if dg is None:
         return out
-    raw = dg.materialize_selection([int(i) for i in selected])
-    out["materialized_attach"] = int(raw.get("materialized_attach", 0) or 0)
-    out["materialized_motif"] = int(raw.get("materialized_motif", 0) or 0)
+    raw = dg.realize([int(i) for i in selected])
+    out["materialized_attach"] = int(raw.get("attach", raw.get("materialized_attach", 0)) or 0)
+    out["materialized_motif"] = int(raw.get("motif", raw.get("materialized_motif", 0)) or 0)
     out["member_hits"] = int(raw.get("member_hits", 0) or 0)
     hist = [int(x) for x in (raw.get("kind_survive") or (0, 0, 0, 0))]
     hist = (hist + [0, 0, 0, 0])[:4]
@@ -214,6 +211,8 @@ def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | Non
     out["kind_survive"] = int(sum(hist))
     out["attach_n"] = int(dg.attach_n())
     out["mutex_n"] = int(dg.mutex_n())
+    sc = dg.survive_counts() if hasattr(dg, "survive_counts") else {}
+    out["survive_by_motif"] = {int(k): int(v) for k, v in dict(sc).items()}
     if propose_stats is not None:
         propose_stats["materialized_attach"] = out["materialized_attach"]
         propose_stats["materialized_motif"] = out["materialized_motif"]
@@ -222,6 +221,16 @@ def materialize_selection(dg, selected: Sequence[int], propose_stats: dict | Non
         propose_stats["kind_survive_hist"] = list(hist)
         propose_stats["attach_n"] = out["attach_n"]
         propose_stats["mutex_n"] = out["mutex_n"]
+        propose_stats["survive_by_motif"] = dict(out["survive_by_motif"])
+        propose_stats["survive_motif_n"] = int(
+            sum(int(v) for v in out["survive_by_motif"].values())
+        )
+        motif_locked = propose_stats.get("motif_locked") or ()
+        sel_set = {int(i) for i in selected}
+        propose_stats["lock_n_materialize"] = len(
+            [int(i) for i in motif_locked if int(i) in sel_set]
+        )
+        propose_stats["lock_n_realize"] = int(propose_stats["lock_n_materialize"])
     return out
 
 
@@ -250,3 +259,26 @@ def bind_graph_epoch(
         sum(int(a.shape[0]) for a in carry)
     )
     return carry
+
+
+def inject_cohorts_and_bind_graph(
+    dg,
+    graph,
+    group_id: Sequence[int],
+    transform: Sequence,
+    propose_stats: dict,
+    cfg,
+    *,
+    patterns: Sequence | None = None,
+    agent=None,
+) -> tuple:
+    """Q255: inject archive cohorts then bind epoch (one gate for both call sites)."""
+    if patterns:
+        from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
+
+        inject_cohorts_from_patterns(
+            patterns, group_id, transform, propose_stats,
+        )
+        if agent is not None:
+            agent.motif_cohorts = tuple(propose_stats.get("motif_cohorts") or ())
+    return bind_graph_epoch(dg, graph, group_id, transform, propose_stats, cfg)

@@ -22,8 +22,10 @@ from nest_graph.propose.context import outline_coverage_ratio, should_use_border
 from nest_graph.propose.void_selection import (
     apply_void_centroid_score_term,
     apply_void_selection_boosts,
+    apply_motif_packing_score_steer,
     boost_border_scores,
     colonize_void_onto_base,
+    count_proposer_on_selection,
     count_graph_in_free,
     count_selected_in_free,
     FreeCentroidPredicate,
@@ -38,9 +40,14 @@ from nest_graph.propose.block_replace import (
     lex_count_area_better,
     try_block_cohort_swap,
 )
-from nest_graph.propose.motif_lock import sequential_accept_motif_cohorts
+from nest_graph.propose.motif_lock import (
+    compose_motif_pipeline,
+    hybrid_compose_pick,
+    hollow_cc_score_steer,
+    motif_join_lock_sets,
+)
 from nest_graph.propose.first_pass_border import border_kiss_indices
-from nest_graph.propose.motif_keys import resolve_motif_keys
+from nest_graph.propose.motif_keys import merge_motif_cohorts, resolve_motif_keys
 from nest_graph.board import board_context_from_geometry
 from nest_graph.decision.epoch import bind_epoch
 from shapely.geometry import Polygon
@@ -333,9 +340,15 @@ class ComposedSelection:
     n_void_nest: int = 0
 
 
-def active_rule_set(rule_sets: list[PlacementRuleSet]) -> PlacementRuleSet:
+def active_rule_set(
+    rule_sets: list[PlacementRuleSet],
+    rule_id: int = 0,
+) -> PlacementRuleSet:
     if not rule_sets:
         return PlacementRuleSet()
+    rid = int(rule_id)
+    if 0 <= rid < len(rule_sets):
+        return rule_sets[rid]
     return rule_sets[0]
 
 
@@ -419,6 +432,12 @@ def compose_and_nest_selection(
         void_scale = 2.5
     if free_info is not None and getattr(free_info, "kind", None) == "large_void":
         void_scale = max(void_scale, 4.0)
+    on_plateau = bool((propose_stats or {}).get("on_plateau", False))
+    if on_plateau and mcts_zone == "void_seek":
+        void_scale = max(void_scale, 5.0)
+    if on_plateau and free_info is not None and getattr(free_info, "kind", None) == "large_void":
+        void_scale = max(void_scale, 5.0)
+    void_scale = min(float(void_scale), 5.0)
     void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * void_scale
     nest_void_hits = apply_void_centroid_score_term(
         polys,
@@ -429,6 +448,7 @@ def compose_and_nest_selection(
     )
     if propose_stats is not None:
         propose_stats["nest_void_term_hits"] = int(nest_void_hits)
+        propose_stats["void_scale_applied"] = float(void_scale)
 
     n_graph = len(graph.elems) if hasattr(graph, "elems") else len(getattr(graph, "collisions", []))
     if len(scores) != n_graph:
@@ -439,20 +459,24 @@ def compose_and_nest_selection(
     locked_motif: list[int] = []
     lock_sets: list[list[int]] = []
     void_geoms_list: list = list(void_geoms) if void_geoms is not None else []
+    merged_cohorts = merge_motif_cohorts(
+        (propose_stats or {}).get("motif_cohorts"),
+        ((propose_stats or {}).get("densify_stats") or {}).get("motif_cohorts"),
+    )
     if bool(getattr(cfg.propose, "enable_motif_sequential_accept", False)):
-        cohorts = (propose_stats or {}).get("motif_cohorts") or []
         if not void_geoms_list:
             try:
                 _sheet, void_geoms_list = board_context_from_geometry(outline)
                 void_geoms_list = list(void_geoms_list or [])
             except Exception:
                 void_geoms_list = []
-        _combined, seq_telem = sequential_accept_motif_cohorts(
+        pre_result = compose_motif_pipeline(
+            "pre_nest",
             graph=graph,
             scores=scores,
             group_id=group_id,
             transform=transform,
-            cohorts=cohorts,
+            cohorts=merged_cohorts,
             candidate_geoms=candidate_geoms,
             void_geoms=void_geoms_list,
             packed_geoms=packed_geoms,
@@ -462,16 +486,25 @@ def compose_and_nest_selection(
                 getattr(cfg.propose, "motif_sequential_accept_max", 3) or 3
             ),
             rcl_top_k=10,
+            large_void=bool(
+                free_info is not None and getattr(free_info, "kind", None) == "large_void"
+            ),
         )
-        del _combined
-        lock_sets = [list(s) for s in (seq_telem.get("motif_lock_sets") or [])][:4]
+        lock_sets = list(pre_result.lock_sets)
         boost_hits = dict(boost_hits)
-        boost_hits["motif_sequential"] = int(seq_telem.get("motif_sequential_full", 0))
+        boost_hits["motif_sequential"] = int(
+            pre_result.telem.get("motif_sequential_full", 0)
+        )
         if propose_stats is not None:
-            propose_stats.update(seq_telem)
-            lock_sizes = [len(s) for s in lock_sets if s]
-            if lock_sizes:
-                propose_stats["motif_compose_accepted_size"] = max(lock_sizes)
+            propose_stats.update(pre_result.telem)
+            boost_idxs = pre_result.boost_idxs
+            motif_w = float(getattr(cfg.propose, "motif_score_boost", 0.0) or 0.0)
+            if boost_idxs and motif_w > 0.0:
+                n_boost = apply_motif_packing_score_steer(
+                    scores, boost_idxs, motif_weight=motif_w,
+                )
+                propose_stats["motif_packing_score_boost_n"] = int(n_boost)
+                boost_hits["motif_packing_soft"] = int(n_boost)
 
     seed_lock = [int(i) for i in (locked_seed or ()) if 0 <= int(i) < n_graph]
     # L2: always beam unlocked dual when dual_nest (locks kill dual inside one call).
@@ -501,23 +534,319 @@ def compose_and_nest_selection(
         ):
             selected_nest = locked_cand
             locked_motif = list(seed_lock)
-    for lock in lock_sets:
-        cand = _nest_with_locks(
-            graph,
-            scores,
-            lock,
-            group_id=group_id,
-            part_areas=part_areas,
-            dual=bool(dual_nest),
+    motif_beam_trials = 0
+    motif_beam_wins = 0
+    beamed_sigs: set[tuple[int, ...]] = set()
+    pk_merged: dict[str, set[tuple[float, float, float]]] = {}
+    if propose_stats is not None:
+        pk = propose_stats.get("proposer_keys") or {}
+        dens_pk = (propose_stats.get("densify_stats") or {}).get("proposer_keys") or {}
+        pk_merged = dict(dens_pk)
+        for name, keys in pk.items():
+            pk_merged.setdefault(name, set()).update(keys or ())
+
+    def _beam_locks(locks: Sequence[Sequence[int]]) -> None:
+        nonlocal selected_nest, locked_motif, motif_beam_trials, motif_beam_wins
+        for lock in locks:
+            sig = tuple(sorted(int(i) for i in lock))
+            if len(sig) < 2 or sig in beamed_sigs:
+                continue
+            beamed_sigs.add(sig)
+            motif_beam_trials += 1
+            cand = _nest_with_locks(
+                graph,
+                scores,
+                lock,
+                group_id=group_id,
+                part_areas=part_areas,
+                dual=bool(dual_nest),
+            )
+            if _lex_pick_better(
+                best=selected_nest,
+                cand=cand,
+                group_id=group_id,
+                part_areas=part_areas,
+            ):
+                selected_nest = cand
+                locked_motif = list(lock)
+                motif_beam_wins += 1
+                if propose_stats is not None:
+                    propose_stats["motif_lock_source"] = "beam"
+
+    _beam_locks(lock_sets)
+
+    graph_to_nest_hollow = False
+    nest_void_ratio = 1.0
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        n_void_graph_pre = count_graph_in_free(polys, free_poly)
+        n_void_nest_pre = count_selected_in_free(polys, selected_nest, free_poly)
+        if n_void_graph_pre > 0:
+            nest_void_ratio = float(n_void_nest_pre) / float(n_void_graph_pre)
+        graph_to_nest_hollow = bool(
+            n_void_graph_pre > 20
+            and n_void_nest_pre <= max(1, int(0.25 * n_void_graph_pre))
         )
-        if _lex_pick_better(
-            best=selected_nest,
-            cand=cand,
-            group_id=group_id,
-            part_areas=part_areas,
-        ):
-            selected_nest = cand
-            locked_motif = list(lock)
+        if propose_stats is not None:
+            propose_stats["nest_void_ratio"] = float(nest_void_ratio)
+            propose_stats["graph_to_nest_hollow"] = int(graph_to_nest_hollow)
+        if pk_merged:
+            cc_g, cc_n = count_proposer_on_selection(
+                group_id, transform, selected_nest, pk_merged, "cluster_copy",
+            )
+            if propose_stats is not None:
+                propose_stats["cluster_copy_graph_n"] = int(cc_g)
+                propose_stats["cluster_copy_nest_n"] = int(cc_n)
+            if graph_to_nest_hollow and not void_geoms_list:
+                try:
+                    _sheet, void_geoms_list = board_context_from_geometry(outline)
+                    void_geoms_list = list(void_geoms_list or [])
+                except Exception:
+                    void_geoms_list = []
+            post_result = compose_motif_pipeline(
+                "post_hollow",
+                graph=graph,
+                scores=scores,
+                group_id=group_id,
+                transform=transform,
+                cohorts=merged_cohorts,
+                candidate_geoms=candidate_geoms,
+                void_geoms=void_geoms_list,
+                packed_geoms=packed_geoms,
+                min_dist=float(min_dist),
+                selected_nest=selected_nest,
+                polys=polys,
+                sheet=outline,
+                proposer_keys=pk_merged,
+                cc_graph_n=int(cc_g),
+                cc_nest_n=int(cc_n),
+                graph_to_nest_hollow=graph_to_nest_hollow,
+                pole=getattr(free_info, "target_pt", None),
+            )
+            hollow_locks = post_result.lock_sets
+            hollow_telem = post_result.telem
+            if propose_stats is not None:
+                propose_stats.update(hollow_telem)
+            join_lock_fallback = False
+            if not hollow_locks and dg is not None:
+                hollow_locks = motif_join_lock_sets(dg, graph, max_locks=4)
+                join_lock_fallback = bool(hollow_locks)
+                if hollow_locks and propose_stats is not None:
+                    propose_stats["hollow_join_lock_sets"] = int(len(hollow_locks))
+            cc_pair_won = False
+            pick_telem: dict = {}
+            void_scene_locks = bool(
+                (hollow_telem or {}).get("hollow_lock_void_hit", 0)
+            )
+            if hollow_locks:
+                a_orig = float(_sel_area(selected_nest, group_id, part_areas))
+                vf_orig = count_selected_in_free(
+                    polys, selected_nest, free_poly,
+                )
+                for lock in hollow_locks:
+                    sig = tuple(sorted(int(i) for i in lock))
+                    if sig in beamed_sigs:
+                        continue
+                    # MotifJoin fallback: if pair already in MIS, pin for refine
+                    # without re-nest area penalty (hybrid_pick_reject_area).
+                    if join_lock_fallback:
+                        sel_set = {int(i) for i in selected_nest}
+                        lock_set = {int(i) for i in lock}
+                        if (
+                            len(lock_set) >= 2
+                            and lock_set <= sel_set
+                            and _packing_independent(lock, graph)
+                        ):
+                            locked_motif = [int(i) for i in lock]
+                            cc_pair_won = True
+                            beamed_sigs.add(sig)
+                            motif_beam_trials += 1
+                            motif_beam_wins += 1
+                            if propose_stats is not None:
+                                propose_stats["compose_motif_hold"] = 1
+                                propose_stats["motif_lock_source"] = "join_in_nest"
+                                propose_stats["join_in_nest_pin"] = 1
+                            break
+                    score_use = list(scores)
+                    if void_scene_locks and void_term > 0.0:
+                        for i in lock:
+                            ix = int(i)
+                            if 0 <= ix < len(score_use):
+                                score_use[ix] = float(score_use[ix]) + float(void_term)
+                    cc_nest = _nest_with_locks(
+                        graph,
+                        score_use,
+                        lock,
+                        group_id=group_id,
+                        part_areas=part_areas,
+                        dual=bool(dual_nest),
+                    )
+                    _cg2, cc_n2 = count_proposer_on_selection(
+                        group_id, transform, cc_nest, pk_merged, "cluster_copy",
+                    )
+                    a_cc = float(_sel_area(cc_nest, group_id, part_areas))
+                    vf_cc = count_selected_in_free(
+                        polys, cc_nest, free_poly,
+                    )
+                    lex_win = _lex_pick_better(
+                        best=selected_nest,
+                        cand=cc_nest,
+                        group_id=group_id,
+                        part_areas=part_areas,
+                    )
+                    if hybrid_compose_pick(
+                        graph=graph,
+                        lock=lock,
+                        area_cand=a_cc,
+                        area_orig=a_orig,
+                        void_cand=int(vf_cc),
+                        void_orig=int(vf_orig),
+                        cc_n2=int(cc_n2),
+                        lex_better=lex_win,
+                        telem=pick_telem,
+                        join_prefer=bool(join_lock_fallback or void_scene_locks),
+                    ):
+                        selected_nest = cc_nest
+                        locked_motif = list(lock)
+                        cc_pair_won = True
+                        beamed_sigs.add(sig)
+                        motif_beam_trials += 1
+                        motif_beam_wins += 1
+                        if void_scene_locks and score_use is not scores:
+                            scores[:] = score_use
+                        if propose_stats is not None:
+                            propose_stats.update(pick_telem)
+                            propose_stats["cluster_copy_pair_lock"] = 1
+                            propose_stats["cluster_copy_nest_n"] = int(cc_n2)
+                            propose_stats["compose_motif_hold"] = 1
+                            propose_stats["motif_lock_source"] = (
+                                "hybrid_void_scene"
+                                if void_scene_locks
+                                else ("hybrid_join" if join_lock_fallback else "hybrid_pick")
+                            )
+                        break
+                    elif (
+                        void_scene_locks
+                        and cc_nest
+                        and _packing_independent(cc_nest, graph)
+                        and int(vf_cc) > int(vf_orig)
+                        and (int(vf_cc) - int(vf_orig)) >= 1
+                        and a_cc + 1e-12 >= 0.84 * a_orig
+                    ):
+                        selected_nest = cc_nest
+                        locked_motif = list(lock)
+                        cc_pair_won = True
+                        beamed_sigs.add(sig)
+                        motif_beam_trials += 1
+                        motif_beam_wins += 1
+                        if score_use is not scores:
+                            scores[:] = score_use
+                        if propose_stats is not None:
+                            propose_stats["void_scene_lock_accept"] = int(
+                                propose_stats.get("void_scene_lock_accept", 0) or 0
+                            ) + 1
+                            propose_stats["cluster_copy_pair_lock"] = 1
+                            propose_stats["cluster_copy_nest_n"] = int(cc_n2)
+                            propose_stats["compose_motif_hold"] = 1
+                            propose_stats["motif_lock_source"] = "void_scene_rise"
+                        break
+                    beamed_sigs.add(sig)
+                    motif_beam_trials += 1
+                if propose_stats is not None and pick_telem:
+                    for k, v in pick_telem.items():
+                        if k.startswith("hybrid_pick_"):
+                            propose_stats[k] = int(propose_stats.get(k, 0) or 0) + int(v)
+                if not cc_pair_won and dg is not None:
+                    sel_set = {int(i) for i in selected_nest}
+                    for lock in motif_join_lock_sets(dg, graph, max_locks=4):
+                        lock_set = {int(i) for i in lock}
+                        if (
+                            len(lock_set) >= 2
+                            and lock_set <= sel_set
+                            and _packing_independent(lock, graph)
+                        ):
+                            locked_motif = [int(i) for i in lock]
+                            cc_pair_won = True
+                            if propose_stats is not None:
+                                propose_stats["compose_motif_hold"] = 1
+                                propose_stats["motif_lock_source"] = "join_in_nest"
+                                propose_stats["join_in_nest_pin"] = 1
+                            break
+                if not cc_pair_won:
+                    # Q377: when pick=0 on hollow, unlocked re-nest @ 0.88× + void rise.
+                    pick_wins = int(pick_telem.get("hybrid_pick_wins", 0) or 0)
+                    cc_keys = pk_merged.get("cluster_copy") or set()
+                    emit_scores = list(scores)
+                    motif_w = float(getattr(cfg.propose, "motif_score_boost", 0.0) or 0.0)
+                    n_steer = hollow_cc_score_steer(
+                        emit_scores,
+                        transform,
+                        cc_keys,
+                        motif_weight=motif_w,
+                        void_term=float(void_term),
+                    )
+                    if n_steer > 0 or pick_wins == 0:
+                        score_use = emit_scores if n_steer > 0 else scores
+                        cc_nest = _nest_with_locks(
+                            graph,
+                            score_use,
+                            [],
+                            group_id=group_id,
+                            part_areas=part_areas,
+                            dual=bool(dual_nest),
+                        )
+                        if not _packing_independent(cc_nest, graph):
+                            cc_nest = []
+                        _cg2, cc_n2 = count_proposer_on_selection(
+                            group_id, transform, cc_nest, pk_merged, "cluster_copy",
+                        ) if cc_nest else (0, 0)
+                        a_cc = float(_sel_area(cc_nest, group_id, part_areas)) if cc_nest else 0.0
+                        vf_cc = count_selected_in_free(
+                            polys, cc_nest, free_poly,
+                        ) if cc_nest else 0
+                        void_rise = int(vf_cc) > int(vf_orig)
+                        lex_ok = bool(cc_nest) and lex_count_area_better(
+                            old_count=len(selected_nest),
+                            old_area=a_orig,
+                            new_count=len(cc_nest),
+                            new_area=a_cc,
+                        )
+                        # Q377 folded: unlocked void uses lock_len=2 so void 0.88×
+                        # branch fires inside hybrid_compose_pick (one gate).
+                        unlock_telem: dict = {}
+                        accept_unlock = bool(cc_nest) and hybrid_compose_pick(
+                            graph=graph,
+                            lock=[],
+                            lock_len=(
+                                2 if (pick_wins == 0 and void_rise) else 0
+                            ),
+                            area_cand=a_cc,
+                            area_orig=a_orig,
+                            void_cand=int(vf_cc),
+                            void_orig=int(vf_orig),
+                            cc_n2=int(cc_n2),
+                            lex_better=lex_ok,
+                            telem=unlock_telem,
+                        )
+                        if accept_unlock:
+                            selected_nest = cc_nest
+                            if n_steer > 0:
+                                scores[:] = emit_scores
+                            if propose_stats is not None:
+                                propose_stats.update(unlock_telem)
+                                propose_stats["cluster_copy_nest_retry"] = 1
+                                propose_stats["cluster_copy_nest_n"] = int(cc_n2)
+                                propose_stats["hollow_void_bridge"] = int(
+                                    pick_wins == 0 and void_rise
+                                )
+                                if n_steer > 0:
+                                    propose_stats["motif_packing_score_boost_n"] = int(
+                                        propose_stats.get("motif_packing_score_boost_n", 0) or 0
+                                    ) + int(n_steer)
 
     # Beam void-core MIS before incumbent hold so fat-basin void packs can
     # survive S0 via the same void_override path (one prefer helper).
@@ -534,6 +863,11 @@ def compose_and_nest_selection(
             interior_m,
         )
         core_stats: dict = {}
+        void_seed = (
+            list(locked_motif)
+            if graph_to_nest_hollow and locked_motif
+            else None
+        )
         void_first = void_core_then_rim(
             graph,
             polys,
@@ -542,6 +876,7 @@ def compose_and_nest_selection(
             interior_margin=interior_m,
             stats_out=core_stats,
             predicate=free_predicate,
+            seed_core=void_seed,
         )
         if not void_first and interior_m > 1e-12:
             void_first = void_core_then_rim(
@@ -552,17 +887,31 @@ def compose_and_nest_selection(
                 interior_margin=0.0,
                 stats_out=core_stats,
                 predicate=free_predicate.with_margin(0.0),
+                seed_core=void_seed,
             )
         if propose_stats is not None:
             propose_stats.update(core_stats)
-        if void_first and prefer_void_core_selection(
-            rim_sel=selected_nest,
-            void_sel=void_first,
-            polys=polys,
-            free_poly=free_poly,
-            group_id=group_id,
-            part_areas=part_areas,
-        ):
+        take_void_core = False
+        if void_first:
+            vf_void = count_selected_in_free(polys, void_first, free_poly)
+            rim_void = count_selected_in_free(polys, selected_nest, free_poly)
+            vf_area = float(_sel_area(void_first, group_id, part_areas))
+            rim_area = float(_sel_area(selected_nest, group_id, part_areas))
+            if graph_to_nest_hollow and vf_void > rim_void and (
+                vf_area + 1e-12 >= 0.87 * rim_area
+                or (vf_void >= rim_void + 5 and vf_area + 1e-12 >= 0.84 * rim_area)
+            ):
+                take_void_core = True
+            elif prefer_void_core_selection(
+                rim_sel=selected_nest,
+                void_sel=void_first,
+                polys=polys,
+                free_poly=free_poly,
+                group_id=group_id,
+                part_areas=part_areas,
+            ):
+                take_void_core = True
+        if take_void_core:
             selected_nest = list(void_first)
             if propose_stats is not None:
                 propose_stats["void_core_accepted"] = 1
@@ -662,6 +1011,29 @@ def compose_and_nest_selection(
             if void_override:
                 void_override_flag = 1
             else:
+                # Q342: hollow + plateau + large_void — area near-tie + void gain.
+                hollow_miss = bool((propose_stats or {}).get("hollow_miss", False))
+                on_plateau = bool((propose_stats or {}).get("on_plateau", False))
+                if (
+                    (hollow_miss or graph_to_nest_hollow)
+                    and on_plateau
+                    and void_gain > 0
+                    and cand_area + 1e-12 >= 0.99 * inc_area
+                ):
+                    void_override = True
+                    void_override_flag = 1
+            if (
+                not void_override
+                and graph_to_nest_hollow
+                and void_gain >= 1
+                and cand_area + 1e-12 >= (
+                    0.82 if void_gain >= 5 else 0.86
+                ) * inc_area
+                and len(selected_nest) >= int(0.70 * len(incumbent))
+            ):
+                void_override = True
+                void_override_flag = 1
+            if not void_override:
                 # Q187/Q198: motif soft override — key-hit fraction (not MotifBase GCI).
                 # Q199: if incumbent has 0 key-hit (stringy rim), allow cand with dens>0.
                 # Q220/Q221: must also pass void_override coverage drop_allow (OR accept).
@@ -722,8 +1094,15 @@ def compose_and_nest_selection(
                         propose_stats["motif_override"] = 1
                 else:
                     selected_nest = list(incumbent)
-                    if int((propose_stats or {}).get("motif_sequential_full", 0) or 0) <= 0:
+                    if (
+                        int((propose_stats or {}).get("motif_sequential_full", 0) or 0) <= 0
+                        and not int((propose_stats or {}).get("cluster_copy_pair_lock", 0) or 0)
+                        and not locked_motif
+                    ):
                         locked_motif = []
+                    elif locked_motif:
+                        if propose_stats is not None:
+                            propose_stats["compose_motif_hold"] = 1
                     incumbent_hold = 1
                     if propose_stats is not None:
                         propose_stats["motif_override"] = 0
@@ -734,6 +1113,12 @@ def compose_and_nest_selection(
         and not getattr(free_poly, "is_empty", True)
     ):
         interior_m = float(min_dist) * 0.25
+        on_plateau_void_col = bool((propose_stats or {}).get("on_plateau", False)) and (
+            free_info is not None and getattr(free_info, "kind", None) == "large_void"
+        )
+        # Q344: plateau + large_void colonize margin 1 (margin 0 on hollow hurt area).
+        if on_plateau_void_col:
+            interior_m = min(1.0, float(min_dist))
         void_base = count_selected_in_free(
             polys, selected_nest, free_poly, interior_margin=interior_m,
             predicate=free_predicate,
@@ -773,31 +1158,33 @@ def compose_and_nest_selection(
                 propose_stats.update(colonize_stats)
             pinned_n = int(colonize_stats.get("colonize_pinned", 0) or 0)
             if pinned_n > 0 or len(colonized) != len(selected_nest):
-                base_area = float(_sel_area(selected_nest, group_id, part_areas))
-                col_area = float(_sel_area(colonized, group_id, part_areas))
-                if col_area > base_area + 1e-12 or (
-                    col_area + 1e-12 >= base_area
-                    and len(colonized) >= len(selected_nest)
+                # Q375: colonize accept via lex only (no flat-area part inflate).
+                if lex_count_area_better(
+                    old_count=len(selected_nest),
+                    old_area=float(_sel_area(selected_nest, group_id, part_areas)),
+                    new_count=len(colonized),
+                    new_area=float(_sel_area(colonized, group_id, part_areas)),
                 ):
                     selected_nest = colonized
+                    # Q374: do not union colonize pins into motif_locked — only
+                    # pick/beam/block_swap are MotifJoin-worthy (colonize is density).
                 elif propose_stats is not None:
                     propose_stats["colonize_area_reject"] = 1
-            # Keep colonized free-core pins locked through refine so DFS cannot
-            # shed void fill (R0 soft unify: budget/hold, not Motif→DFS).
-            void_pins = [
-                int(i) for i in selected_nest
-                if 0 <= int(i) < len(polys)
-                and pred_use.covers_part(polys[int(i)], index=int(i))
-            ][:12]
-            if void_pins:
-                locked_motif = list(dict.fromkeys(list(locked_motif) + void_pins))
-            # void_core already beamed before hold (prefer_void_core_selection).
-            # Colonize is the rim↔void hybrid pin walk on the held/MIS base.
+        elif propose_stats is not None and on_plateau_void_col:
+            propose_stats["colonize_skipped"] = int(
+                propose_stats.get("colonize_skipped", 0) or 0
+            ) + 1
     if propose_stats is not None:
         propose_stats["incumbent_hold"] = int(incumbent_hold)
         propose_stats["void_override"] = int(void_override_flag)
         propose_stats["motif_locked"] = list(locked_motif)
+        compose_sz = len(locked_motif)
+        propose_stats["motif_compose_accepted_size"] = int(compose_sz)
+        propose_stats["lock_n_compose"] = int(compose_sz)
+        propose_stats["refine_lock_n"] = int(compose_sz)
         propose_stats["motif_beam_sets"] = int(len(lock_sets))
+        propose_stats["motif_beam_trials"] = int(motif_beam_trials)
+        propose_stats["motif_beam_wins"] = int(motif_beam_wins)
         propose_stats["uh_beam_unlocked"] = int(beam_unlocked)
         propose_stats["compose_beam_unlocked"] = int(beam_unlocked)
 
@@ -825,6 +1212,14 @@ def compose_and_nest_selection(
         if propose_stats is not None:
             propose_stats.update(swap_telem)
             propose_stats["motif_locked"] = list(locked_motif)
+            compose_sz = len(locked_motif)
+            propose_stats["motif_compose_accepted_size"] = int(compose_sz)
+            propose_stats["lock_n_compose"] = int(compose_sz)
+            propose_stats["refine_lock_n"] = int(compose_sz)
+            if int(swap_telem.get("block_cohort_accepted", 0) or 0) > 0:
+                propose_stats["motif_lock_source"] = str(
+                    propose_stats.get("motif_lock_source") or ""
+                ) + "+block_swap"
 
 
     refine_scores = list(scores)

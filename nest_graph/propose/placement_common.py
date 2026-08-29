@@ -153,6 +153,60 @@ def placement_obstacles(voids, packed) -> list[Geometry]:
     return obs
 
 
+def _shapely_hard_overlap(pa: BaseGeometry, pb: BaseGeometry, tol: float = 1e-12) -> bool:
+    if pa is None or pb is None:
+        return False
+    if getattr(pa, "is_empty", False) or getattr(pb, "is_empty", False):
+        return False
+    if not pa.intersects(pb):
+        return False
+    inter = pa.intersection(pb)
+    return not inter.is_empty and float(inter.area) > tol
+
+
+def is_pose_clear_vs_fixed_shapely(
+    candidate_poly: BaseGeometry,
+    fixed_obstacles: Sequence[BaseGeometry] | None,
+    overlap_area_tol: float = 1e-12,
+) -> bool:
+    """Shapely hard-overlap gate for locked seeds (evaluator parity)."""
+    if candidate_poly is None or getattr(candidate_poly, "is_empty", False):
+        return False
+    for obs in fixed_obstacles or ():
+        if obs is None or getattr(obs, "is_empty", False):
+            continue
+        if _shapely_hard_overlap(candidate_poly, obs, overlap_area_tol):
+            return False
+    return True
+
+
+def post_pack_overlap_ok(
+    polys: Sequence[BaseGeometry],
+    selected_indices: Sequence[int],
+    *,
+    fixed_obstacles: Sequence[BaseGeometry] | None = None,
+    overlap_area_tol: float = 1e-12,
+) -> bool:
+    """Match ``nesting_evaluator`` overlap_ok for post-pack poses (incl. seeds)."""
+    sel = [int(i) for i in selected_indices]
+    sel_polys = [
+        polys[i]
+        for i in sel
+        if polys[i] is not None and not getattr(polys[i], "is_empty", False)
+    ]
+    for a in range(len(sel_polys)):
+        pa = sel_polys[a]
+        for b in range(a + 1, len(sel_polys)):
+            if _shapely_hard_overlap(pa, sel_polys[b], overlap_area_tol):
+                return False
+        for obs in fixed_obstacles or ():
+            if obs is None or getattr(obs, "is_empty", False):
+                continue
+            if _shapely_hard_overlap(pa, obs, overlap_area_tol):
+                return False
+    return True
+
+
 def selection_pairwise_independent(
     polys: Sequence[BaseGeometry],
     selected_indices: Sequence[int],

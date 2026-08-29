@@ -11,7 +11,7 @@ from shapely.geometry import box as shapely_box
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 from tqdm import tqdm
-from typing import Iterator, NamedTuple, Sequence, Tuple
+from typing import Any, Iterator, NamedTuple, Sequence, Tuple
 
 from .config import (
     BuildGraphConfig,
@@ -29,7 +29,7 @@ from .placement_scene import (
     guidance_config_for_graph,
     placement_scene_for_part,
 )
-from .propose.placement_common import as_geometry
+from nest_graph.propose.placement_common import as_geometry, post_pack_overlap_ok
 from .board import (
     board_context_from_geometry,
     default_sheet_padding,
@@ -41,10 +41,10 @@ from .propose.feedback import ProposeFeedbackState
 from .propose.post_pack import prepare_post_pack
 from .propose.pattern_archive import (
     age_motif_library,
-    motif_graph_hits,
-    merge_motif_hits,
     motif_patterns_for_inject,
     note_motif_hollow_miss,
+    note_motif_ref_anchors,
+    note_motif_ref_anchors_from_nest,
 )
 from .propose.placements_selection_expand import (
     transforms_around as _transforms_around_impl,
@@ -114,7 +114,7 @@ from .propose.void_selection import (
     zones_have_void_hijack,
 )
 from .propose.selection_compose import (
-    active_rule_set as compose_active_rule_set,
+    active_rule_set,
     compose_and_nest_selection,
     compose_nest_kwargs,
     dual_nest_for,
@@ -127,13 +127,21 @@ from .propose.transform_batch import (
     prepend_group_transforms,
 )
 from .propose.motif_lock import LargeVoidMotifPlateau
+from .propose.telem import (
+    BestPackSnapshot,
+    best_pack_geom_sig,
+    maybe_restore_best_pack,
+)
+from .decision.cheap_pack import with_isolated_pack_cache
 from .decision.action_gen import region_to_zone
-from .decision.epoch import bind_epoch, bind_graph_epoch, materialize_selection
+from .decision.epoch import bind_epoch, inject_cohorts_and_bind_graph
 from .decision.browse import (
     choose_browse_parent,
     packed_gids_compatible,
     should_browse_tip,
 )
+from .decision.macro_path import ancestors, macro_increase_path
+from .decision.mcts import leaf_reward, path_reward_beats
 from .decision.execute import (
     execute_pack,
     make_execute_fn,
@@ -143,7 +151,7 @@ from .decision.execute import (
     run_mcts_multi_sim,
     schedule_prep_selection_free,
 )
-from .decision.slave_pack import upsert_from_repack_accept
+from .decision.slave_pack import upsert_from_contacts, upsert_from_repack_accept
 from .decision.motif_credit import (
     credit_motif_on_nest_survival,
     credit_void_niche_from_iter,
@@ -168,6 +176,106 @@ nest_by_graph = show_performance(nest_by_graph)
 nest_by_scores = show_performance(nest_by_scores)
 score_elems = show_performance(score_elems)
 score_rules = show_performance(score_rules)
+
+
+def _pack_cache_overlap_ok(pack_cache: dict) -> bool:
+    """Q384: independence on compose fields after cheap replay."""
+    return post_pack_overlap_ok(
+        list(pack_cache.get("compose_polys") or ()),
+        list(pack_cache.get("compose_sel") or ()),
+    )
+
+
+def _path_accept_contact_upsert(
+    runner: Any,
+    snap: BoardSnapshot,
+    *,
+    part_bases: dict,
+    min_dist: float,
+    motif_min_compactness: float,
+    motif_ttl: int,
+    motif_max_keep: int,
+    pack_cache: dict,
+    telem: dict,
+) -> int:
+    """Q389: masked ContactGRG upsert on macro_path accept (not multi-sim)."""
+    if runner is None or getattr(runner, "motif_base", None) is None:
+        return 0
+    packed_gids = tuple(getattr(snap, "packed_gids", ()) or ())
+    packed_tf = tuple(getattr(snap, "packed_transforms", ()) or ())
+    if len(packed_gids) < 2 or len(packed_tf) < 2 or not part_bases:
+        return 0
+    geoms = []
+    gids_ok = []
+    tfs_ok = []
+    for gid, tf in zip(packed_gids, packed_tf):
+        base = part_bases.get(int(gid))
+        if base is None:
+            continue
+        try:
+            geoms.append(
+                base.apply_transform(float(tf[0]), float(tf[1]), float(tf[2]))
+            )
+            gids_ok.append(int(gid))
+            tfs_ok.append((float(tf[0]), float(tf[1]), float(tf[2])))
+        except Exception:
+            continue
+    if len(geoms) < 2:
+        return 0
+    # Mask gids: MotifJoin survivors ∪ (motif_locked ∩ selected).
+    allow_gids: set[int] = set()
+    realized = getattr(getattr(runner, "agent", None), "realized", None) or {}
+    survive = realized.get("survive_by_motif") or {}
+    mb = runner.motif_base
+    for mid, cnt in (survive or {}).items():
+        if int(cnt) <= 0 or int(mid) < 0 or int(mid) >= int(mb.size()):
+            continue
+        rec = mb.at(int(mid))
+        allow_gids.add(int(rec.gid_a))
+        allow_gids.add(int(rec.gid_b))
+    locked = {
+        int(i) for i in (pack_cache.get("motif_locked") or ()) if int(i) >= 0
+    }
+    sel = {int(i) for i in (pack_cache.get("compose_sel") or ())}
+    gid_list = list(pack_cache.get("compose_group_id") or ())
+    for i in locked & sel:
+        if 0 <= int(i) < len(gid_list):
+            allow_gids.add(int(gid_list[int(i)]))
+    if not allow_gids:
+        # Path-proven leaf: discover among accept-snap packed gids only.
+        allow_gids = {int(g) for g in gids_ok}
+    mask = [int(g) in allow_gids for g in gids_ok]
+    if not any(mask):
+        return 0
+    n_up = upsert_from_contacts(
+        runner.motif_base,
+        geoms,
+        gids_ok,
+        tfs_ok,
+        gap=float(min_dist),
+        min_compactness=float(motif_min_compactness),
+        ttl=int(motif_ttl),
+        max_keep=int(motif_max_keep),
+        telem=telem,
+        selection_mask=mask,
+    )
+    note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
+    telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(
+        n_up
+    )
+    return int(n_up)
+
+
+def _note_path_accept_warm(runner: Any, snap: BoardSnapshot, action: Any) -> None:
+    """Q390: remember_related + warm bump on path accept."""
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return
+    agent.remember_related(snap, allow=True)
+    mid = int(getattr(action, "motif_id", -1) or -1)
+    if mid >= 0:
+        agent.telem["related_warm"] = int(agent.telem.get("related_warm", 0) or 0) + 1
+        agent.telem["nearest_warm"] = int(agent.telem.get("nearest_warm", 0) or 0) + 1
 
 
 class Candidate(NamedTuple):
@@ -610,99 +718,6 @@ def render_polys(
     return im
 
 
-def _rule_region(board: BaseGeometry) -> Circle:
-    xmin, ymin, xmax, ymax = board.bounds
-    return Circle.from_bounds(xmin, ymin, xmax, ymax)
-
-
-def _quantize_rule_scalar(v: float, places: int = 4) -> float:
-    return round(float(v), places)
-
-
-def _fingerprint_rule_set(rule_set: PlacementRuleSet) -> tuple:
-    parts: list[tuple] = []
-    q = _quantize_rule_scalar
-    for pr in rule_set.point_rules:
-        parts.append(
-            ("p", pr.group, q(pr.pos[0]), q(pr.pos[1]), q(pr.r), q(pr.w)),
-        )
-    for cr in rule_set.circle_rules:
-        parts.append(
-            (
-                "c",
-                cr.group,
-                q(cr.circle.center.x),
-                q(cr.circle.center.y),
-                q(cr.circle.radius),
-                q(cr.r),
-                q(cr.w),
-            ),
-        )
-    for pr in rule_set.point_angle_rules:
-        parts.append(
-            (
-                "pa",
-                pr.group,
-                q(pr.pos[0]),
-                q(pr.pos[1]),
-                q(pr.a),
-                q(pr.r),
-                q(pr.w),
-            ),
-        )
-    for cr in rule_set.circle_angle_rules:
-        parts.append(
-            (
-                "ca",
-                cr.group,
-                q(cr.circle.center.x),
-                q(cr.circle.center.y),
-                q(cr.a),
-                q(cr.r),
-                q(cr.w),
-            ),
-        )
-    return tuple(sorted(parts))
-
-
-def dedupe_rule_sets(rule_sets: list[PlacementRuleSet]) -> list[PlacementRuleSet]:
-    seen: set[tuple] = set()
-    out: list[PlacementRuleSet] = []
-    for rs in rule_sets:
-        key = _fingerprint_rule_set(rs)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(rs)
-    return out
-
-
-def truncate_rule_set(
-    rule_set: PlacementRuleSet,
-    max_rules: int,
-) -> PlacementRuleSet:
-    if rule_set.size() <= max_rules:
-        return rule_set
-    weighted: list[tuple[float, object]] = []
-    for pr in rule_set.point_rules:
-        weighted.append((pr.w, pr))
-    for cr in rule_set.circle_rules:
-        weighted.append((cr.w, cr))
-    for pr in rule_set.point_angle_rules:
-        weighted.append((pr.w, pr))
-    for cr in rule_set.circle_angle_rules:
-        weighted.append((cr.w, cr))
-    weighted.sort(key=lambda item: abs(item[0]), reverse=True)
-    out = PlacementRuleSet()
-    for _, rule in weighted[:max_rules]:
-        out.append_rule(rule)
-    return out
-
-
-def active_rule_set(rule_sets: list[PlacementRuleSet]) -> PlacementRuleSet:
-    return compose_active_rule_set(rule_sets)
-
-
 def _copy_rule_set(rule_set: PlacementRuleSet) -> PlacementRuleSet:
     out = PlacementRuleSet()
     for pr in rule_set.point_rules:
@@ -772,100 +787,6 @@ def _propose_rules_for_iter(
     return active_rule_set(_make_initial_rule_sets(cfg))
 
 
-def improve_rules(
-    graphs,
-    rules,
-    n: int,
-    board: BaseGeometry | None = None,
-    *,
-    mutation_presets: list[RuleMutationSettings] | None = None,
-    rule_score_penalty: float = 0.03,
-    elite_count: int = 16,
-    seed: int = 0,
-    score_options: ScoreRulesOptions | None = None,
-    max_rules_per_set: int = 24,
-):
-    if mutation_presets is None:
-        region = _rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
-        ng = 2
-        mutation_presets = [
-            RuleMutationSettings(
-                region=region, dpos=0.25, dw=0.25, da=np.pi / 4,
-                insert_p=0.09, remove_p=0.02, mutate_p=0.1, ngroups=ng,
-            ),
-            RuleMutationSettings(
-                region=region, dpos=0.05, dw=0.05, da=np.pi / 32,
-                insert_p=0.04, remove_p=0.01, mutate_p=0.1, ngroups=ng,
-            ),
-            RuleMutationSettings(
-                region=region, dpos=0.01, dw=0.01, da=np.pi / 64,
-                insert_p=0.01, remove_p=0.02, mutate_p=0.1, ngroups=ng,
-            ),
-        ]
-    if score_options is None:
-        score_options = ScoreRulesOptions()
-        score_options.rule_complexity_penalty = rule_score_penalty
-    elif score_options.rule_complexity_penalty == 0.0:
-        score_options.rule_complexity_penalty = rule_score_penalty
-
-    parents = list(rules)
-    elites = parents
-    if graphs and parents:
-        rank_opts = ScoreRulesOptions()
-        rank_opts.latest_graph_only = score_options.latest_graph_only
-        rank_opts.count_weight = score_options.count_weight
-        rank_opts.rule_complexity_penalty = score_options.rule_complexity_penalty
-        rank_opts.select = score_options.select
-        parent_scores = score_rules(graphs, parents, rank_opts)
-        ranked = sorted(
-            zip(parent_scores, parents),
-            key=lambda item: item[0],
-            reverse=True,
-        )
-        k = min(max(elite_count, 1), len(ranked))
-        elites = [rs for _, rs in ranked[:k]]
-
-    pool: list[PlacementRuleSet] = list(parents)
-    for preset_idx, preset in enumerate(mutation_presets):
-        mutate_seed = (int(seed) + preset_idx * 10007) & 0xFFFFFFFF
-        children = augment_rules(elites, preset, seed=mutate_seed)
-        pool.extend(children)
-
-    pool = dedupe_rule_sets(pool)
-    if max_rules_per_set > 0:
-        pool = [truncate_rule_set(rs, max_rules_per_set) for rs in pool]
-    if not pool:
-        return []
-
-    fitness = score_rules(graphs, pool, score_options)
-    scored = sorted(zip(fitness, pool), key=lambda item: item[0], reverse=True)
-    return [rs for _, rs in scored[:n]]
-
-
-def score_rule_sets_with_dfs(
-    graph: PoseGraph,
-    rule_sets: list[PlacementRuleSet],
-    selection: SelectionConfig,
-    *,
-    top_k: int = 4,
-) -> list[float]:
-    """Tier-B fitness for benchmarks: nest + DFS count on latest graph (top_k by Tier A)."""
-    if not rule_sets:
-        return []
-    tier_a = score_rules([graph], rule_sets, score_rules_options(selection))
-    order = sorted(range(len(rule_sets)), key=lambda i: tier_a[i], reverse=True)
-    out = list(tier_a)
-    for idx in order[: max(top_k, 0)]:
-        rs = rule_sets[idx]
-        selected = list(nest_by_graph(graph, [rs])[0])
-        scores = score_elems(graph, rs)
-        _, final, _ = apply_dfs_refinement(
-            graph, rs, selected, scores, selection=selection,
-        )
-        out[idx] = float(len(final)) - selection.rule_score_penalty * rs.size()
-    return out
-
-
 def _append_selection_window(
     selection_window: list[tuple[np.ndarray, np.ndarray]],
     selected_t: tuple[np.ndarray, np.ndarray],
@@ -925,6 +846,13 @@ def _mcts_rule_ids(rule_sets: Sequence, k: int = 3) -> tuple[int, ...]:
     if n <= 0:
         return (0,)
     return tuple(range(min(n, max(int(k), 1))))
+
+
+def _mcts_active_rules(rule_sets: Sequence, mcts_action: Any | None):
+    rid = 0
+    if mcts_action is not None:
+        rid = int(getattr(mcts_action, "rule_id", 0) or 0)
+    return active_rule_set(list(rule_sets), rid)
 
 
 def _selection_budget_for_iter(
@@ -1070,6 +998,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     )
 
     mcts_runner = MacroMctsRunner()
+    if mcts_runner.agent is not None:
+        mcts_runner.agent.motif_cohorts = ()
     mcts_root = BoardSnapshot(
         remaining_gids=tuple(range(int(cfg.rules.ngroups))),
         coverage=0.0,
@@ -1092,6 +1022,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     _mcts_n_sims = int(_mcts_n_sims_default)
     _prev_void_nest = 0
     _archive_feed_keys: set[tuple] = set()
+    best_pack_cov = 0.0
+    best_pack_sel: list[int] | None = None
+    best_pack_sig: float = 0.0
     _base_max_transforms = int(
         getattr(cfg.sampling, "max_transforms_per_group", None) or 5000
     )
@@ -1187,6 +1120,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 parent_id=int(spine_id),
                 execute_fn=mcts_runner.execute_fn,
                 mcts_telem=mcts_telem,
+                rule_ids=_mcts_rule_ids(rule_sets),
             )
             cheap_t = _pack_cache.get("last_execute_telem") or {}
             for k in ("uh_ran", "compose_ran", "refine_ran", "cluster_copy", "cache_hit"):
@@ -1205,6 +1139,82 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     )
         mcts_parent_id = int(browse_parent_id)
         mcts_action = tip_action
+        # I1b: probe on plateau or large_void (use iter-start hint; free_kind
+        # seed below may still be empty on parent_snap).
+        path_probe = bool(plateau.on_plateau) or bool(parent_free_hint)
+        if path_probe and mcts_runner.agent is not None:
+            path = ancestors(mcts_runner, int(mcts_parent_id))
+            mcts_telem["policy_path_len"] = int(len(path))
+            mcts_telem["macro_swap_attempts"] = int(
+                mcts_telem.get("macro_swap_attempts", 0) or 0
+            )
+            # Q349/I1: probe sibling path; apply only when enable_macro_path_replay
+            # and post_pack_overlap_ok on **replay** cache.
+            if _pack_cache.get("ready") and mcts_runner.execute_fn is not None:
+                base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
+                realized = getattr(
+                    getattr(mcts_runner, "agent", None), "realized", None
+                ) or {}
+                base_r = leaf_reward(
+                    parent_snap,
+                    survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+                    macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                )
+                # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
+                with with_isolated_pack_cache(_pack_cache):
+                    alt_action, alt_reward, path_accept_snap = macro_increase_path(
+                        mcts_runner,
+                        leaf_id=int(mcts_parent_id),
+                        baseline_reward=base_r,
+                        execute_fn=mcts_runner.execute_fn,
+                        rule_ids=_mcts_rule_ids(rule_sets),
+                        telem=mcts_telem,
+                        overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(_pack_cache),
+                    )
+                if (
+                    alt_action is not None
+                    and path_accept_snap is not None
+                    and path_reward_beats(
+                        parent_snap,
+                        path_accept_snap,
+                        base_reward=base_r,
+                        alt_reward=alt_reward,
+                    )
+                ):
+                    mcts_telem["macro_path_candidate"] = 1
+                    if bool(getattr(cfg.propose, "enable_macro_path_replay", False)):
+                        mcts_action = alt_action
+                        mcts_telem["macro_path_accept"] = int(
+                            mcts_telem.get("macro_path_accept", 0) or 0
+                        ) + 1
+                        if path_accept_snap is not None:
+                            _note_path_accept_warm(
+                                mcts_runner, path_accept_snap, alt_action
+                            )
+                            _path_accept_contact_upsert(
+                                mcts_runner,
+                                path_accept_snap,
+                                part_bases=part_bases,
+                                min_dist=float(
+                                    cfg.board_min_dist_for(p_sheet)
+                                ),
+                                motif_min_compactness=float(
+                                    getattr(
+                                        cfg.propose, "motif_min_compactness", 0.35
+                                    )
+                                    or 0.35
+                                ),
+                                motif_ttl=int(
+                                    getattr(cfg.propose, "accepted_pattern_ttl", 4)
+                                    or 4
+                                ),
+                                motif_max_keep=int(
+                                    getattr(cfg.propose, "accepted_pattern_max", 4)
+                                    or 4
+                                ),
+                                pack_cache=_pack_cache,
+                                telem=mcts_telem,
+                            )
         # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
         if not str(getattr(parent_snap, "free_kind", "") or ""):
             try:
@@ -1238,16 +1248,19 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 parent_id=mcts_parent_id,
                 snapshot=parent_snap,
             )
-            if mcts_action is not None:
-                mcts_telem["mcts_rule_id"] = int(getattr(mcts_action, "rule_id", 0) or 0)
-        mcts_force_zone = None
+        if mcts_action is not None:
+            mcts_telem["mcts_rule_id"] = int(getattr(mcts_action, "rule_id", 0) or 0)
         if mcts_action is not None:
             mcts_force_zone = region_to_zone(mcts_action.region)
             if mcts_action.region == MacroRegion.Motif and int(mcts_action.motif_id) >= 0:
                 mcts_telem["motif_hit"] = int(mcts_telem["motif_hit"]) + 1
                 # Honest place_motif_ok: only after emit/accept (M0), not Motif pick.
 
-        propose_rules = _propose_rules_for_iter(cfg, rule_sets)
+        propose_rules = (
+            _mcts_active_rules(rule_sets, mcts_action)
+            if mcts_action is not None and cfg.propose.use_rule_ranking
+            else _propose_rules_for_iter(cfg, rule_sets)
+        )
         sel_iter = _selection_budget_for_iter(sel, on_plateau=plateau.on_plateau)
         sel_iter, freeze_reason = prep_selection_freeze(
             sel_iter,
@@ -1327,6 +1340,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             remaining_gids=tuple(parent_snap.remaining_gids or ()),
             void_elite_seeded=int(elite_n),
             archive_elite_n=int(arch_elite_n),
+            compose_sz=len(propose_stats.get("motif_locked") or ()),
         )
         propose_stats["archive_elite_n"] = arch_elite_n
         propose_stats["keep_history_on_sterile"] = keep_hist_sterile
@@ -1342,6 +1356,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             and mcts_action.region == MacroRegion.Motif
             else -1
         )
+        if (
+            nest_state is not None
+            and bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
+        ):
+            note_motif_ref_anchors_from_nest(mcts_runner.motif_base, nest_state)
         archived_for_propose = (
             motif_patterns_for_inject(
                 mcts_runner.motif_base,
@@ -1349,8 +1368,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 prefer_motif_id=prefer_mid,
                 part_bases=part_bases,
                 min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=False)),
-                telem=mcts_telem,
-                polish=True,
+                telem=propose_stats,
+                polish=not (
+                    bool(plateau.on_plateau)
+                    and str(parent_snap.free_kind or "") == "large_void"
+                ),
             )
             if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
             else []
@@ -1406,6 +1428,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             graph_valid_carry=graph_valid_carry,
             archived_patterns=archived_for_propose,
         )
+        pin_keys = set(propose_stats.get("archive_mix_pin_keys") or ())
         first_pass = nest_state is None
         free_prep_mid = None
         # Q128 / T1: soft-cap attract degree when prior graph ≫ nest.
@@ -1427,8 +1450,23 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             attract_kiss_band_scale=float(cfg.propose.attract_kiss_band_scale),
             attract_max_degree=int(attract_deg),
         )
-        graph_valid_carry = bind_graph_epoch(
-            mcts_runner.dg, graph, group_id, transform, propose_stats, cfg,
+        if pin_keys:
+            graph_keys = {
+                transform_row_key(np.asarray(t, dtype=np.float64))
+                for t in transform
+            }
+            propose_stats["archive_mix_pin_survive_n"] = int(
+                len(pin_keys & graph_keys)
+            )
+        graph_valid_carry = inject_cohorts_and_bind_graph(
+            mcts_runner.dg,
+            graph,
+            group_id,
+            transform,
+            propose_stats,
+            cfg,
+            patterns=archived_for_propose or None,
+            agent=mcts_runner.agent,
         )
         prop_n = int(propose_stats.get("proposal_count", 0))
         proposal_keys = propose_stats.get("proposal_keys", {})
@@ -1485,6 +1523,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     score_options=score_rules_options(sel_iter),
                     max_rules_per_set=cfg.rules.max_rules_per_set,
                 )
+                mcts_telem["rules_macro_ran"] = int(
+                    mcts_telem.get("rules_macro_ran", 0) or 0
+                ) + 1
             mcts_telem["plateau_rule_boost"] = 0
         rule_sets = run_improve_rules_rounds(
             improve_rules,
@@ -1522,7 +1563,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 p2=p2,
                 board_ctx_outline=board_ctx_outline,
                 sel_iter=sel_iter,
-                active_rules=active_rule_set(rule_sets),
+                active_rules=_mcts_active_rules(rule_sets, mcts_action),
                 make_polygon_graph_fn=make_polygon_graph,
             )
             graph = fp_result.graph
@@ -1533,7 +1574,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             free_info = fp_result.free_info
             old_len = fp_result.old_len
         else:
-            active_rules = active_rule_set(rule_sets)
+            active_rules = _mcts_active_rules(rule_sets, mcts_action)
             scores = list(score_elems(graph, active_rules))
             sheet, void_geoms_compose = board_ctx_outline
             min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
@@ -1834,6 +1875,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     max_keep=int(getattr(cfg.propose, "accepted_pattern_max", 4) or 4),
                     telem=propose_stats,
                 )
+                note_motif_ref_anchors(
+                    mcts_runner.motif_base,
+                    [int(group_id[i]) for i in selected_polys if int(i) < len(group_id)],
+                    [transform[i] for i in selected_polys if int(i) < len(transform)],
+                )
             reloc_stats = pack_stats.get("relocate") or {
                 "attempted": 0, "accepted": 0, "moved": 0,
             }
@@ -1906,6 +1952,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 refine_bp=refine_bp_credit if mcts_runner.agent is not None else None,
                 emitted_bp=emitted_bp_credit if mcts_runner.agent is not None else None,
             )
+        if mcts_runner.agent is not None:
+            mcts_runner.agent.prior_motif_graph_hit_n = int(
+                propose_stats.get("motif_graph_hit_n", 0) or 0
+            )
         # Q142: one global age tick — Motif + niche + arena idle/tombstone.
         if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True)):
             if not pattern_accept:
@@ -1951,6 +2001,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
         )
+        cov_frac = float(cov) / 100.0 if board_area > 0 else 0.0
+        if cov_frac > best_pack_cov + 1e-9:
+            best_pack_cov = cov_frac
+            best_pack_sel = list(selected_polys)
+            best_pack_sig = best_pack_geom_sig(polys, selected_polys)
         # Macro-MCTS: record expand reward (Q68/Q69); upsert contact motifs when improved.
         if mcts_action is not None and mcts_runner.agent is not None:
             mcts_parent_id, child_snap = record_outer_iter_expand(
@@ -1980,7 +2035,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 motif_max_keep=int(
                     getattr(cfg.propose, "accepted_pattern_max", 4) or 4
                 ),
+                rule_ids=_mcts_rule_ids(rule_sets),
             )
+            if child_snap is not None and mcts_action is not None:
+                realized = getattr(
+                    getattr(mcts_runner, "agent", None), "realized", None
+                ) or {}
+                outer_r = leaf_reward(
+                    child_snap,
+                    rule_id=int(getattr(mcts_action, "rule_id", 0) or 0),
+                    survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+                    macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                    member_hits=int(realized.get("member_hits", 0) or 0),
+                    materialized_motif=int(realized.get("materialized_motif", 0) or 0),
+                )
+                cheap_r = float(mcts_telem.get("last_cheap_reward", 0.0) or 0.0)
+                mcts_telem["cheap_outer_reward_delta"] = float(outer_r) - cheap_r
             _exec_last["snap"] = child_snap
             if plateau.on_plateau and float(cov) >= float(plateau.last_cov or 0.0):
                 mcts_telem["plateau_rule_boost"] = 1
@@ -2109,6 +2179,39 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             ),
         )
         rule_sets = _inject_repulsor_rules(rule_sets, cfg, p_sheet, nest_state)
+
+    if (
+        nest_state is not None
+        and best_pack_sel is not None
+        and best_pack_cov > 0.0
+        and board_area > 0
+    ):
+        restored_sel, did_restore, bp_telem = maybe_restore_best_pack(
+            best=BestPackSnapshot(
+                selected_polys=list(best_pack_sel),
+                cov=float(best_pack_cov),
+                geom_sig=float(best_pack_sig),
+            ),
+            current_selected=list(nest_state.selected_indices or ()),
+            graph=graph if "graph" in locals() else (graphs[-1] if graphs else None),
+            polys=nest_state.polys,
+            group_id=nest_state.group_id,
+            part_areas=part_areas,
+            sheet=p_sheet,
+            holes=user_holes,
+            usable_area=float(board_area),
+        )
+        if did_restore:
+            nest_state = NestState(
+                polys=nest_state.polys,
+                group_id=nest_state.group_id,
+                transform=nest_state.transform,
+                selected_indices=list(restored_sel),
+                seed_count=int(nest_state.seed_count or 0),
+                _native_geoms=nest_state.native_geoms,
+            )
+            if isinstance(propose_stats.get("void_leak"), dict):
+                propose_stats["void_leak"].update(bp_telem)
 
     # Q84: hard stop if final selection is not packing-independent.
     if nest_state is not None and nest_state.selected_indices:

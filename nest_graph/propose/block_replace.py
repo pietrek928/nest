@@ -19,6 +19,7 @@ from nest_graph.propose.placement_common import (
     selection_pairwise_independent,
 )
 from nest_graph.propose.placement_outline import outline_ring_geom
+from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
@@ -26,22 +27,6 @@ from nest_graph.utils import transform_poly
 _HOLE_PROPOSERS = frozenset({ProposerName.CLUSTER_COPY, ProposerName.POCKET_FIT})
 _HOLE_EMIT_CAP = 128
 _COHORT_RELATED_CAP = 8
-
-
-def _cohort_member_indices(
-    cohort: dict,
-    key_map: dict[tuple[int, tuple[float, float, float]], int],
-) -> list[int]:
-    idxs: list[int] = []
-    for item in cohort.get("member_keys") or []:
-        if not (isinstance(item, (list, tuple)) and len(item) == 2):
-            continue
-        gid_m, key_m = int(item[0]), item[1]
-        key_t = tuple(key_m) if not isinstance(key_m, tuple) else key_m
-        ix = key_map.get((gid_m, key_t))
-        if ix is not None:
-            idxs.append(int(ix))
-    return idxs
 
 
 def lex_count_area_better(
@@ -115,7 +100,7 @@ def try_block_cohort_swap(
     key_map = pose_key_to_index(group_id, transform)
     resolved: list[list[int]] = []
     for cohort in cohorts:
-        idxs = _cohort_member_indices(cohort, key_map)
+        idxs, _missing = cohort_member_indices(cohort, key_map)
         if len(idxs) >= 2:
             resolved.append(idxs)
     if not resolved:

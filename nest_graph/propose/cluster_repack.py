@@ -2,6 +2,7 @@
 
 import heapq
 import math
+import time
 from collections import Counter
 from typing import Sequence
 
@@ -19,6 +20,7 @@ from nest_graph.propose.placement_common import (
     is_pose_clear,
     part_base_geoms,
     part_void_adj,
+    post_pack_overlap_ok,
     selection_pairwise_independent,
 )
 from nest_graph.propose.selection_edit import SelectionEditCtx
@@ -40,7 +42,7 @@ from nest_graph.propose.placements_pattern import (
     free_pocket_anchors,
     void_seek_motif_anchors,
 )
-from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
+from nest_graph.proposer_names import ProposerName
 from nest_graph.propose.pipeline import propose_coords_with_strategy
 from nest_graph.propose.ranking import score_placement_tightness
 from nest_graph.utils import compose_transforms, transform_poly
@@ -363,6 +365,7 @@ def _motif_stamp_attempt(
     void_poly: Polygon | None = None,
     void_geoms: Sequence | None = None,
     part_bases: dict[int, Geometry] | None = None,
+    anchor_cache: dict | None = None,
 ) -> list[tuple[int, np.ndarray, BaseGeometry]] | None:
     peeled_gids = [int(group_ids[i]) for i in peeled]
     fitting = [p for p in patterns if pattern_fits_peeled(p, peeled_gids)]
@@ -370,19 +373,7 @@ def _motif_stamp_attempt(
     if not fitting:
         return None
 
-    anchors: list[tuple[float, float, float]] = []
-    # Unified void_seek anchor priority (§4) — topology/pole → pocket → (mirror via patterns).
-    anchors.extend(
-        void_seek_motif_anchors(
-            sheet,
-            kept_union,
-            min_dist=min_dist,
-            propose_cfg=propose_cfg,
-            free_space=free_space,
-            void_pole=pole,
-            patterns=fitting,
-        )
-    )
+    part_for_pocket = None
     if (
         propose_cfg.motif_use_topo_anchors
         and void_poly is not None
@@ -393,13 +384,20 @@ def _motif_stamp_attempt(
             (int(group_ids[i]) for i in peeled),
             key=lambda g: float(part_by_group[g].area) if g in part_by_group else 0.0,
         )
-        part = part_by_group.get(largest_gid)
-        if part is not None and not part.is_empty:
-            for coords, _tag in aligned_poses_for_pocket(
-                part, void_poly, min_dist=min_dist, allowed_angles=None,
-            ):
-                anchors.append(coords)
+        part_for_pocket = part_by_group.get(largest_gid)
 
+    anchors = void_seek_motif_anchors(
+        sheet,
+        kept_union,
+        min_dist=min_dist,
+        propose_cfg=propose_cfg,
+        free_space=free_space,
+        void_pole=pole,
+        patterns=fitting,
+        void_poly=void_poly,
+        part_for_pocket=part_for_pocket,
+        anchor_cache=anchor_cache,
+    )
     unique_anchors = dedupe_anchors(anchors)
     max_tries = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 10) * 2, 8)
     tries = 0
@@ -443,8 +441,12 @@ def cluster_repack_selection(
     victim_indices: Sequence[int] | None = None,
     repair_patterns: Sequence | None = None,
     archived_patterns: Sequence[ClusterPattern] = (),
+    force_bfs_peel: bool = False,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """BFS-peel a rim/void chunk; motif-stamp into free; else ranked per-part fallback."""
+    t0 = time.perf_counter()
+    anchor_cache: dict = {}
+    anchor_rebuilds = 0
     void_geoms = None
     part_bases = None
     if isinstance(sheet, SelectionEditCtx):
@@ -561,6 +563,8 @@ def cluster_repack_selection(
         if not remaining:
             break
         trial_pat = remaining[0]
+        if "anchors" not in anchor_cache:
+            anchor_rebuilds += 1
         stamped = _motif_stamp_attempt(
             remaining,
             victim,
@@ -575,6 +579,7 @@ def cluster_repack_selection(
             void_poly=void_poly,
             void_geoms=voids,
             part_bases=part_bases,
+            anchor_cache=anchor_cache,
         )
         if stamped is None:
             break
@@ -592,6 +597,7 @@ def cluster_repack_selection(
         if (
             new_area + 1e-12 >= old_area * accept_ratio
             and selection_pairwise_independent(trial_polys, new_sel)
+            and post_pack_overlap_ok(trial_polys, new_sel, fixed_obstacles=locked)
         ):
             stats["accepted"] = 1
             stats["placed"] = len(placed_idxs)
@@ -599,6 +605,8 @@ def cluster_repack_selection(
             stats["placed_idxs"] = list(placed_idxs)
             stats["kept_idxs"] = list(kept)
             stats["upsert_patterns"] = [trial_pat]
+            stats["stamp_anchor_rebuilds"] = int(anchor_rebuilds)
+            stats["repack_ms"] = int((time.perf_counter() - t0) * 1000)
             return trial_polys, trial_tr, new_sel, stats
         # Multi-try: drop the leading pattern and continue with remaining.
         remaining = remaining[1:] if remaining else []
@@ -609,7 +617,10 @@ def cluster_repack_selection(
     # Void-facing peel always routes void_seek (even when component is board_adj).
     zone = "void_seek" if void_facing or not board_adj else "border_gap"
     zone_cfg = ProposeConfig.for_place(zone, base=propose_cfg)
-    enabled = ProposeConfig.proposers_for_place(zone)
+    enabled = frozenset(
+        p for p in ProposeConfig.proposers_for_place(zone)
+        if p != ProposerName.CLUSTER_COPY
+    )
     seeds = void_pole_seed_coords(pole) if pole is not None and zone == "void_seek" else None
     victim_order = sorted(
         victim,
@@ -647,7 +658,7 @@ def cluster_repack_selection(
                 group_id=gid,
                 enabled_proposers=enabled,
                 guidance_seed_coords=seeds,
-                cluster_patterns=patterns,
+                cluster_patterns=None,
                 packed_polys=packed_polys,
                 packed_group_ids=packed_gids[: len(packed_polys)],
                 packed_transforms=packed_trs[: len(packed_polys)],
@@ -700,10 +711,15 @@ def cluster_repack_selection(
     for vi in placed_idxs:
         trial_polys[vi] = working_poly[vi]
         trial_tr[vi] = working_tr[vi]
-    if not selection_pairwise_independent(trial_polys, new_sel):
+    if not (
+        selection_pairwise_independent(trial_polys, new_sel)
+        and post_pack_overlap_ok(trial_polys, new_sel, fixed_obstacles=locked)
+    ):
         return out_polys, out_tr, sel, stats
     stats["accepted"] = 1
     stats["placed"] = len(placed_idxs)
+    stats["stamp_anchor_rebuilds"] = int(anchor_rebuilds)
+    stats["repack_ms"] = int((time.perf_counter() - t0) * 1000)
     return trial_polys, trial_tr, new_sel, stats
 
 
@@ -874,7 +890,10 @@ def cluster_relocate_selection(
                 _, trial_polys[gi] = dual_pose_from_base(part_geoms[gid], part, cand_tr)
             else:
                 trial_polys[gi] = transform_poly(part, cand_tr)
-        if not selection_pairwise_independent(trial_polys, sel):
+        if not (
+            selection_pairwise_independent(trial_polys, sel)
+            and post_pack_overlap_ok(trial_polys, sel, fixed_obstacles=locked)
+        ):
             continue
         out_polys = trial_polys
         out_tr = trial_tr

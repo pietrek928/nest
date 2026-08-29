@@ -17,7 +17,9 @@ from nest_graph.propose.placement_common import (
     is_board_adj,
     is_pose_clear,
     part_base_geoms,
+    post_pack_overlap_ok,
     selection_pairwise_independent,
+    is_pose_clear_vs_fixed_shapely,
 )
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
@@ -242,11 +244,18 @@ def local_se2_selection(
                                 as_geometry(p) for p in (list(locked) + others0)
                             ) if g is not None
                         ]
-                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)):
+                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)) and is_pose_clear_vs_fixed_shapely(
+                            snap_poly, locked,
+                        ):
                             prev_p, prev_t = out_polys[idx], out_tr[idx]
                             out_polys[idx] = snap_poly
                             out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
-                            if selection_pairwise_independent(out_polys, sel):
+                            if (
+                                selection_pairwise_independent(out_polys, sel)
+                                and post_pack_overlap_ok(
+                                    out_polys, sel, fixed_obstacles=locked,
+                                )
+                            ):
                                 poly = snap_poly
                                 tr = out_tr[idx]
                                 stats["accepted"] += 1
@@ -307,10 +316,15 @@ def local_se2_selection(
         ):
             continue
         _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
+        if not is_pose_clear_vs_fixed_shapely(cand, locked):
+            continue
         prev_p, prev_t = out_polys[idx], out_tr[idx]
         out_polys[idx] = cand
         out_tr[idx] = cand_tr
-        ok = selection_pairwise_independent(out_polys, sel)
+        ok = (
+            selection_pairwise_independent(out_polys, sel)
+            and post_pack_overlap_ok(out_polys, sel, fixed_obstacles=locked)
+        )
         if not ok:
             out_polys[idx] = prev_p
             out_tr[idx] = prev_t

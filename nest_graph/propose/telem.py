@@ -948,3 +948,191 @@ def void_elite_count(archive: dict[int, list[np.ndarray]] | None) -> int:
     if not archive:
         return 0
     return sum(len(v) for v in archive.values())
+
+
+@dataclass
+class BestPackSnapshot:
+    selected_polys: list[int]
+    cov: float
+    geom_sig: float = 0.0
+
+
+def best_pack_geom_sig(polys: Sequence, selected: Sequence[int]) -> float:
+    """Stable sig: round-4 sum of selected poly bbox areas."""
+    total = 0.0
+    for raw in selected:
+        i = int(raw)
+        if i < 0 or i >= len(polys):
+            continue
+        p = polys[i]
+        if p is None or getattr(p, "is_empty", True):
+            continue
+        minx, miny, maxx, maxy = p.bounds
+        total += (maxx - minx) * (maxy - miny)
+    return round(float(total), 4)
+
+
+def _best_pack_overlap_ok(
+    graph,
+    selected: Sequence[int],
+    polys: Sequence,
+    sheet,
+    holes: Sequence | None,
+) -> bool:
+    if graph is not None:
+        from nest_graph.elem_graph import selection_is_independent
+
+        if not selection_is_independent(graph, [int(i) for i in selected]):
+            return False
+    shapes = [polys[i] for i in selected if 0 <= int(i) < len(polys)]
+    for a, pa in enumerate(shapes):
+        if pa is None or getattr(pa, "is_empty", True):
+            continue
+        if sheet is not None and not sheet.buffer(1e-5).covers(pa):
+            return False
+        for hole in holes or ():
+            inter = pa.intersection(hole)
+            if not inter.is_empty and inter.area > 1e-6:
+                return False
+        for b in range(a + 1, len(shapes)):
+            pb = shapes[b]
+            if pb is None or getattr(pb, "is_empty", True):
+                continue
+            if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
+                return False
+    return True
+
+
+def maybe_restore_best_pack(
+    *,
+    best: BestPackSnapshot | None,
+    current_selected: list[int],
+    graph,
+    polys: Sequence,
+    group_id: Sequence[int],
+    part_areas: Sequence[float],
+    sheet,
+    holes: Sequence | None,
+    usable_area: float,
+) -> tuple[list[int], bool, dict]:
+    """Q371/Q373: restore graph-index peak pack when cov regresses ≥0.5pp."""
+    telem: dict = {}
+    if best is None or best.cov <= 0.0 or usable_area <= 0.0:
+        return list(current_selected), False, telem
+    final_cov = 0.0
+    if current_selected:
+        final_cov = sum(
+            float(part_areas[int(group_id[i])])
+            if 0 <= int(i) < len(group_id) and int(group_id[i]) < len(part_areas)
+            else 0.0
+            for i in current_selected
+        ) / float(usable_area)
+    telem["best_pack_peak_cov"] = float(best.cov)
+    telem["best_pack_final_cov"] = float(final_cov)
+    if best.cov <= final_cov + 0.005:
+        return list(current_selected), False, telem
+    if float(best.geom_sig) > 0.0:
+        cur_sig = best_pack_geom_sig(polys, best.selected_polys)
+        if abs(cur_sig - float(best.geom_sig)) > 1e-3:
+            telem["best_pack_sig_miss"] = 1
+            return list(current_selected), False, telem
+    if not _best_pack_overlap_ok(graph, best.selected_polys, polys, sheet, holes):
+        return list(current_selected), False, telem
+    telem["best_pack_restore"] = 1
+    return list(best.selected_polys), True, telem
+
+
+def hybrid_diag_suffix(leak: Mapping[str, Any]) -> str:
+    """Compact hybrid compose funnel for bench diag line."""
+    compose = int(leak.get("lock_n_compose", 0) or 0)
+    refine = int(leak.get("lock_n_refine", 0) or 0)
+    mat = int(leak.get("lock_n_materialize", 0) or 0)
+    esc = int(leak.get("refine_lock_escape", 0) or 0)
+    anc = int(leak.get("trial_packed_anchored_n", 0) or 0)
+    skip = int(leak.get("trial_packed_float_skip_n", 0) or 0)
+    pick_w = int(leak.get("hybrid_pick_wins", 0) or 0)
+    pick_t = int(leak.get("hybrid_pick_trials", 0) or 0)
+    return (
+        f"hybrid=lock:{compose}/{refine}/{mat} "
+        f"esc={esc} anc={anc}/{skip} pick={pick_w}/{pick_t}"
+    )
+
+
+def build_run_diagnostics(
+    *,
+    leak: Mapping[str, Any],
+    trajectory: Sequence[tuple[float, float, int]] | None,
+    area_coverage: float,
+    area_coverage_seed: float,
+) -> dict[str, Any]:
+    """End-of-run research snapshot: funnel ratios, cov trajectory, proposer survival."""
+    funnel = leak.get("funnel") or {}
+    stages = funnel.get("funnel_stages") or {}
+    n_props = int(stages.get("props", leak.get("props", 0)) or 0)
+    n_graph = int(stages.get("graph", leak.get("graph", 0)) or 0)
+    n_nest = int(stages.get("nest", leak.get("nest", 0)) or 0)
+    n_refine = int(stages.get("refine", leak.get("refine", 0)) or 0)
+
+    def _ratio(num: int, den: int) -> float:
+        return float(num) / float(den) if den > 0 else 0.0
+
+    cov_peak = float(area_coverage)
+    cov_iters_gain = 0
+    if trajectory:
+        cov_peak = max(float(t[1]) for t in trajectory)
+        for i in range(1, len(trajectory)):
+            if trajectory[i][1] > trajectory[i - 1][1] + 1e-9:
+                cov_iters_gain += 1
+
+    ebp = leak.get("emitted_by_proposer") or {}
+    pbp = leak.get("pool_by_proposer") or {}
+    nbp = leak.get("nest_by_proposer") or {}
+    rbp = leak.get("refine_by_proposer") or {}
+    prop_line = format_prop_accept(ebp, pbp, nbp, rbp, limit=4)
+
+    leader_hit = int(leak.get("motif_graph_leader_hit_n", 0) or 0)
+    follower_miss = int(leak.get("motif_graph_follower_miss_n", 0) or 0)
+    miss_denom = leader_hit + follower_miss
+
+    return {
+        "cov_peak": cov_peak,
+        "cov_final": float(area_coverage),
+        "cov_seed": float(area_coverage_seed),
+        "cov_delta": float(area_coverage - area_coverage_seed),
+        "cov_iters_gain": int(cov_iters_gain),
+        "bottleneck": str(funnel.get("bottleneck", "-")),
+        "nest_graph_ratio": _ratio(n_nest, n_graph),
+        "refine_nest_ratio": _ratio(n_refine, n_nest),
+        "void_props": n_props,
+        "void_graph": n_graph,
+        "void_nest": n_nest,
+        "void_refine": n_refine,
+        "follower_miss_pct": 100.0 * _ratio(follower_miss, miss_denom),
+        "prop_survival": prop_line,
+        "incumbent_hold": int(leak.get("incumbent_hold", 0) or 0),
+        "void_override": int(leak.get("void_override", 0) or 0),
+        "graph_to_nest_hollow_iters": int(
+            leak.get("graph_to_nest_hollow_iters", 0) or 0
+        ),
+        "nest_void_ratio_min": float(leak.get("nest_void_ratio_min", 1.0) or 1.0),
+        "motif_beam_wins": int(leak.get("motif_beam_wins", 0) or 0),
+        "motif_beam_trials": int(leak.get("motif_beam_trials", 0) or 0),
+        "motif_scene_max_sz": int(leak.get("motif_scene_max_sz", 0) or 0),
+        "motif_pack_max_sz": int(leak.get("motif_pack_max_sz", 0) or 0),
+        "void_core_accepted": int(leak.get("void_core_accepted", 0) or 0),
+        "colonize_pinned": int(leak.get("colonize_pinned", 0) or 0),
+        "hollow_renest": int(leak.get("hollow_renest", 0) or 0),
+        "cov_regress": float(max(0.0, cov_peak - float(area_coverage))),
+        "best_pack_restore": int(leak.get("best_pack_restore", 0) or 0),
+        "best_pack_reject": int(leak.get("best_pack_reject", 0) or 0),
+        "best_pack_peak_cov": float(leak.get("best_pack_peak_cov", 0.0) or 0.0),
+        "best_pack_final_cov": float(leak.get("best_pack_final_cov", 0.0) or 0.0),
+        "cluster_copy_graph_n": int(leak.get("cluster_copy_graph_n", 0) or 0),
+        "cluster_copy_nest_n": int(leak.get("cluster_copy_nest_n", 0) or 0),
+        "lock_n_compose": int(leak.get("lock_n_compose", 0) or 0),
+        "lock_n_refine": int(leak.get("lock_n_refine", 0) or 0),
+        "lock_n_materialize": int(leak.get("lock_n_materialize", 0) or 0),
+        "refine_lock_escape": int(leak.get("refine_lock_escape", 0) or 0),
+        "lock_survive_refine": float(leak.get("lock_survive_refine", 1.0) or 1.0),
+        "hybrid_diag": hybrid_diag_suffix(leak),
+    }

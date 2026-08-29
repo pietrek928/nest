@@ -5,7 +5,7 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
-from nest_graph.decision.epoch import materialize_final_selection
+from nest_graph.decision.epoch import realize_selection
 from nest_graph.decision.execute import (
     execute_pack,
     schedule_prep_selection_free,
@@ -255,7 +255,7 @@ def run_compose_refine_pack(
             sel_iter=ctx.sel,
             node_areas=node_areas,
             refine_seed=int(ctx.refine_seed),
-            locked_indices=list(ctx.locked_indices),
+            locked_indices=list(ctx.propose_stats.get("motif_locked") or ()),
             polys=ctx.polys,
             group_id=ctx.group_id,
             transform=ctx.transform,
@@ -709,8 +709,9 @@ def maybe_invalidate_cheap_cache(
     remaining_gids: Sequence[int] | None = None,
     void_elite_seeded: int | None = None,
     archive_elite_n: int | None = None,
+    compose_sz: int | None = None,
 ) -> None:
-    """D0 staleness guard: invalidate when pool/elite context shifts."""
+    """D0 staleness guard: invalidate when pool/elite/lock context shifts."""
     if remaining_gids is not None:
         rem_key = tuple(sorted(int(g) for g in remaining_gids))
         prev_rem = pack_cache.get("last_remaining_gids")
@@ -727,6 +728,12 @@ def maybe_invalidate_cheap_cache(
         if prev_arch >= 0 and prev_arch != int(archive_elite_n):
             invalidate_cheap_cache(pack_cache, reason="archive_elite_n")
         pack_cache["last_archive_elite_n"] = int(archive_elite_n)
+    if compose_sz is not None:
+        prev_sz = int(pack_cache.get("last_compose_sz", -1))
+        if prev_sz >= 0 and prev_sz != int(compose_sz):
+            invalidate_cheap_cache(pack_cache, reason="compose_sz")
+            pack_cache["cache_invalidate_compose"] = 1
+        pack_cache["last_compose_sz"] = int(compose_sz)
 
 
 @dataclass
@@ -956,8 +963,28 @@ def finalize_iter_mcts(
             ) <= 0:
                 prop_h *= 0.25
             runner.agent.realized["proposer_pb"] = float(prop_h)
-    materialize_final_selection(runner.dg, selected_polys, propose_stats)
+    mat = realize_selection(runner.dg, selected_polys, propose_stats)
     if runner.agent is not None:
+        sc = mat.get("survive_by_motif") or {}
+        runner.agent.realized["survive_by_motif"] = dict(sc)
+        runner.agent.realized["survive_motif_n"] = int(sum(int(v) for v in sc.values()))
+        mid = int(getattr(getattr(runner, "mcts_action", None), "motif_id", -1) or -1)
+        if mid >= 0:
+            runner.agent.realized["macro_survive_n"] = int(sc.get(mid, 0) or 0)
+        # D1d: MotifJoin survivors → motif-tagged proposer_pb when available.
+        if sc and refine_bp is not None and emitted_bp is not None:
+            motif_names = (
+                "cluster_copy", "motif", "pocket_fit", "pattern", "archive_mix",
+            )
+            tagged_e = sum(int(emitted_bp.get(n, 0) or 0) for n in motif_names)
+            tagged_r = sum(int(refine_bp.get(n, 0) or 0) for n in motif_names)
+            if tagged_e > 0:
+                prop_h = min(1.0, float(tagged_r) / float(tagged_e))
+                if int(propose_stats.get("cache_hit", 0) or 0) > 0 and int(
+                    propose_stats.get("proposal_count", 0) or 0
+                ) <= 0:
+                    prop_h *= 0.25
+                runner.agent.realized["proposer_pb"] = float(prop_h)
         credit_motif_on_nest_survival(
             runner.motif_base,
             selected_polys=selected_polys,
@@ -971,6 +998,7 @@ def finalize_iter_mcts(
             materialized_attach=int(propose_stats.get("materialized_attach", 0) or 0),
             member_hits=int(propose_stats.get("member_hits", 0) or 0),
             credit_motif=bool(credit_motif),
+            survive_by_motif=dict(sc),
             upsert_patterns=(
                 (propose_stats.get("repack") or {}).get("upsert_patterns")
             ),
@@ -985,11 +1013,264 @@ def finalize_iter_mcts(
         leak["materialized_motif"] = int(
             propose_stats.get("materialized_motif", 0) or 0
         )
+        leak["survive_motif_n"] = max(
+            int(leak.get("survive_motif_n", 0) or 0),
+            int(propose_stats.get("survive_motif_n", 0) or 0),
+            int(
+                (runner.agent.realized or {}).get("survive_motif_n", 0)
+                if runner.agent is not None
+                else 0
+            ),
+        )
+        leak["macro_survive_n"] = max(
+            int(leak.get("macro_survive_n", 0) or 0),
+            int(
+                (runner.agent.realized or {}).get("macro_survive_n", 0)
+                if runner.agent is not None
+                else 0
+            ),
+        )
         leak["motif_compose_accepted_size"] = int(
             propose_stats.get("motif_compose_accepted_size", 0) or 0
         )
         leak["motif_beam_sets"] = int(propose_stats.get("motif_beam_sets", 0) or 0)
-        leak["motif_join_n"] = int(propose_stats.get("motif_join_n", 0) or 0)
+        leak["motif_join_n"] = max(
+            int(leak.get("motif_join_n", 0) or 0),
+            int(propose_stats.get("motif_join_n", 0) or 0),
+        )
+        leak["motif_graph_hit_n"] = max(
+            int(leak.get("motif_graph_hit_n", 0) or 0),
+            int(propose_stats.get("motif_graph_hit_n", 0) or 0),
+        )
+        cohorts = propose_stats.get("motif_cohorts") or ()
+        leak["motif_cohorts_n"] = max(
+            int(leak.get("motif_cohorts_n", 0) or 0),
+            int(len(cohorts)),
+        )
+        merge_phase_gate_telem(leak, mcts_telem, propose_stats)
+
+
+def merge_phase_gate_telem(
+    leak: dict,
+    mcts_telem: dict | None,
+    propose_stats: dict,
+) -> None:
+    """Q307: phase-gate keys in void_leak for benchmark print."""
+    mt = mcts_telem or propose_stats.get("mcts") or {}
+    if isinstance(mt, dict):
+        leak["mcts_rule_id"] = int(mt.get("mcts_rule_id", leak.get("mcts_rule_id", 0)) or 0)
+        leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
+        leak["cheap_outer_reward_delta"] = float(
+            mt.get("cheap_outer_reward_delta", leak.get("cheap_outer_reward_delta", 0.0)) or 0.0
+        )
+        leak["macro_path_accept"] = int(
+            mt.get("macro_path_accept", leak.get("macro_path_accept", 0)) or 0
+        )
+        leak["macro_swap_depth"] = int(
+            mt.get("macro_swap_depth", leak.get("macro_swap_depth", 0)) or 0
+        )
+        leak["macro_swap_attempts"] = int(
+            mt.get("macro_swap_attempts", leak.get("macro_swap_attempts", 0)) or 0
+        )
+        leak["macro_path_beam_n"] = int(
+            mt.get("macro_path_beam_n", leak.get("macro_path_beam_n", 0)) or 0
+        )
+        leak["path_extend_n"] = int(
+            mt.get("path_extend_n", leak.get("path_extend_n", 0)) or 0
+        )
+        leak["path_step_macro"] = int(
+            mt.get("path_step_macro", leak.get("path_step_macro", 0)) or 0
+        )
+        leak["path_step_join"] = int(
+            mt.get("path_step_join", leak.get("path_step_join", 0)) or 0
+        )
+        leak["macro_chain_accept"] = int(
+            mt.get("macro_chain_accept", leak.get("macro_chain_accept", 0)) or 0
+        )
+        leak["path_contact_upserts"] = int(
+            mt.get("path_contact_upserts", leak.get("path_contact_upserts", 0)) or 0
+        )
+        leak["survive_motif_n"] = int(
+            mt.get("survive_motif_n", leak.get("survive_motif_n", 0))
+            or propose_stats.get("survive_motif_n", 0)
+            or 0
+        )
+        if isinstance(mt.get("path_type_hist"), (list, tuple)):
+            leak["path_type_hist"] = [int(x) for x in mt["path_type_hist"][:4]]
+        leak["replay_from_ancestor_ms"] = float(
+            mt.get("replay_from_ancestor_ms", leak.get("replay_from_ancestor_ms", 0.0)) or 0.0
+        )
+        visits = []
+        for rid in range(8):
+            v = int(
+                mt.get(f"rule_id_amaf_{rid}")
+                or propose_stats.get(f"rule_id_amaf_{rid}")
+                or 0
+            )
+            if v > 0:
+                visits.append(rid)
+        if not visits and isinstance(mt, dict):
+            for k, v in mt.items():
+                if str(k).startswith("amaf_rid_") and int(v or 0) > 0:
+                    try:
+                        visits.append(int(str(k).split("_")[-1]))
+                    except ValueError:
+                        pass
+        leak["rule_id_amaf_visits"] = int(len(set(visits)))
+    leak["archive_mix_floor_hits"] = max(
+        int(leak.get("archive_mix_floor_hits", 0) or 0),
+        int(propose_stats.get("archive_mix_floor_hits", 0) or 0),
+    )
+    leak["cluster_copy_mix_floor_hits"] = max(
+        int(leak.get("cluster_copy_mix_floor_hits", 0) or 0),
+        int(propose_stats.get("cluster_copy_mix_floor_hits", 0) or 0),
+    )
+    leak["archive_mix_skip_reason"] = str(
+        propose_stats.get("archive_mix_skip_reason", leak.get("archive_mix_skip_reason", ""))
+        or ""
+    )
+    leak["motif_floor_active"] = int(
+        propose_stats.get("motif_floor_active", leak.get("motif_floor_active", 0)) or 0
+    )
+    leak["archive_mix_attempt_n"] = max(
+        int(leak.get("archive_mix_attempt_n", 0) or 0),
+        int(propose_stats.get("archive_mix_attempt_n", 0) or 0),
+    )
+    leak["motif_clique_full_hits"] = max(
+        int(leak.get("motif_clique_full_hits", 0) or 0),
+        int(propose_stats.get("motif_clique_full_hits", 0) or 0),
+    )
+    leak["motif_graph_leader_hit_n"] = max(
+        int(leak.get("motif_graph_leader_hit_n", 0) or 0),
+        int(propose_stats.get("motif_graph_leader_hit_n", 0) or 0),
+    )
+    leak["motif_graph_follower_miss_n"] = max(
+        int(leak.get("motif_graph_follower_miss_n", 0) or 0),
+        int(propose_stats.get("motif_graph_follower_miss_n", 0) or 0),
+    )
+    leak["motif_compose_accepted_size"] = max(
+        int(leak.get("motif_compose_accepted_size", 0) or 0),
+        int(propose_stats.get("motif_compose_accepted_size", 0) or 0),
+    )
+    for hk in (
+        "lock_n_compose",
+        "lock_n_refine",
+        "lock_n_final",
+        "lock_n_materialize",
+        "refine_lock_hold",
+        "refine_lock_escape",
+        "refine_lock_n",
+        "trial_packed_anchored_n",
+        "trial_packed_float_skip_n",
+        "hybrid_pick_trials",
+        "hybrid_pick_wins",
+        "hybrid_pick_reject_indep",
+        "hybrid_pick_reject_area",
+        "motif_scene_max_sz_pre",
+        "motif_scene_max_sz_post",
+        "hollow_pattern_locks",
+        "pre_refine_lock_reject",
+        "hollow_join_lock_sets",
+        "hollow_lock_board_retry",
+        "hollow_lock_board_hit",
+        "hollow_lock_void_retry",
+        "hollow_lock_void_hit",
+        "join_in_nest_pin",
+        "void_scene_lock_accept",
+        "cache_key_compose_sz",
+        "cache_invalidate_compose",
+        "cohort_sig_amaf_visits",
+        "mcts_cohort_macro_n",
+    ):
+        if hk in propose_stats:
+            if hk.startswith("lock_survive"):
+                leak[hk] = float(propose_stats.get(hk, leak.get(hk, 1.0)) or 1.0)
+            elif hk.startswith("hybrid_pick_") or hk.startswith("refine_lock"):
+                leak[hk] = int(leak.get(hk, 0) or 0) + int(propose_stats.get(hk, 0) or 0)
+            else:
+                leak[hk] = max(
+                    int(leak.get(hk, 0) or 0),
+                    int(propose_stats.get(hk, 0) or 0),
+                )
+    if "lock_survive_refine" in propose_stats:
+        leak["lock_survive_refine"] = float(propose_stats.get("lock_survive_refine", 1.0) or 1.0)
+    leak["archive_mix_pin_survive_n"] = max(
+        int(leak.get("archive_mix_pin_survive_n", 0) or 0),
+        int(propose_stats.get("archive_mix_pin_survive_n", 0) or 0),
+    )
+    leak["motif_sequential_full"] = max(
+        int(leak.get("motif_sequential_full", 0) or 0),
+        int(propose_stats.get("motif_sequential_full", 0) or 0),
+    )
+    leak["motif_sequential_skipped_missing"] = max(
+        int(leak.get("motif_sequential_skipped_missing", 0) or 0),
+        int(propose_stats.get("motif_sequential_skipped_missing", 0) or 0),
+    )
+    leak["motif_sequential_clear_fail"] = max(
+        int(leak.get("motif_sequential_clear_fail", 0) or 0),
+        int(propose_stats.get("motif_sequential_clear_fail", 0) or 0),
+    )
+    leak["motif_sequential_packing_clear"] = max(
+        int(leak.get("motif_sequential_packing_clear", 0) or 0),
+        int(propose_stats.get("motif_sequential_packing_clear", 0) or 0),
+    )
+    leak["archive_pin_pair_restore_n"] = max(
+        int(leak.get("archive_pin_pair_restore_n", 0) or 0),
+        int(propose_stats.get("archive_pin_pair_restore_n", 0) or 0),
+    )
+    leak["compose_motif_hold"] = max(
+        int(leak.get("compose_motif_hold", 0) or 0),
+        int(propose_stats.get("compose_motif_hold", 0) or 0),
+    )
+    leak["cluster_copy_pair_lock"] = max(
+        int(leak.get("cluster_copy_pair_lock", 0) or 0),
+        int(propose_stats.get("cluster_copy_pair_lock", 0) or 0),
+    )
+    leak["cluster_copy_nest_retry"] = max(
+        int(leak.get("cluster_copy_nest_retry", 0) or 0),
+        int(propose_stats.get("cluster_copy_nest_retry", 0) or 0),
+    )
+    leak["cluster_copy_graph_n"] = max(
+        int(leak.get("cluster_copy_graph_n", 0) or 0),
+        int(propose_stats.get("cluster_copy_graph_n", 0) or 0),
+    )
+    leak["cluster_copy_nest_n"] = max(
+        int(leak.get("cluster_copy_nest_n", 0) or 0),
+        int(propose_stats.get("cluster_copy_nest_n", 0) or 0),
+    )
+    leak["hollow_cc_gap"] = max(
+        int(leak.get("hollow_cc_gap", 0) or 0),
+        int(propose_stats.get("hollow_cc_gap", 0) or 0),
+    )
+    leak["hollow_pattern_locks"] = max(
+        int(leak.get("hollow_pattern_locks", 0) or 0),
+        int(propose_stats.get("hollow_pattern_locks", 0) or 0),
+    )
+    leak["motif_packing_score_boost_n"] = max(
+        int(leak.get("motif_packing_score_boost_n", 0) or 0),
+        int(propose_stats.get("motif_packing_score_boost_n", 0) or 0),
+    )
+    leak["void_scale_applied"] = float(
+        propose_stats.get("void_scale_applied", leak.get("void_scale_applied", 0.0)) or 0.0
+    )
+    leak["colonize_skipped"] = int(
+        propose_stats.get("colonize_skipped", leak.get("colonize_skipped", 0)) or 0
+    )
+    leak["macro_path_candidate"] = int(
+        mt.get("macro_path_candidate", leak.get("macro_path_candidate", 0)) or 0
+    ) if isinstance(mt, dict) else int(leak.get("macro_path_candidate", 0) or 0)
+    leak["archive_ref_origin_n"] = int(
+        propose_stats.get("archive_ref_origin_n", leak.get("archive_ref_origin_n", 0)) or 0
+    )
+    leak["archive_mix_reject_n"] = int(
+        leak.get("archive_mix_reject_n", 0) or 0
+    ) + int(propose_stats.get("archive_mix_reject_n", 0) or 0)
+    leak["refine_score_accept"] = int(
+        propose_stats.get("refine_score_accept", leak.get("refine_score_accept", 0)) or 0
+    )
+    leak["propose_ms"] = float(
+        propose_stats.get("propose_ms", leak.get("propose_ms", 0.0)) or 0.0
+    )
 
 
 __all__ = [
@@ -997,6 +1278,7 @@ __all__ = [
     "PackIterCtx",
     "RefinePackBox",
     "finalize_iter_mcts",
+    "merge_phase_gate_telem",
     "invalidate_cheap_cache",
     "maybe_invalidate_cheap_cache",
     "rim_before_for_selection",

@@ -480,10 +480,69 @@ def main() -> None:
                             f"mat_attach={leak.get('materialized_attach', 0)} "
                             f"compose_sz={leak.get('motif_compose_accepted_size', 0)} "
                             f"beam={leak.get('motif_beam_sets', 0)} "
+                            f"seq_full={leak.get('motif_sequential_full', 0)} "
+                            f"seq_miss={leak.get('motif_sequential_skipped_missing', 0)} "
+                            f"seq_clear={leak.get('motif_sequential_clear_fail', 0)} "
+                            f"seq_pack={leak.get('motif_sequential_packing_clear', 0)} "
+                            f"pair_restore={leak.get('archive_pin_pair_restore_n', 0)} "
+                            f"pack_boost={leak.get('motif_packing_score_boost_n', 0)} "
+                            f"compose_hold={leak.get('compose_motif_hold', 0)} "
                             f"join_n={leak.get('motif_join_n', 0)} "
+                            f"graph_hit={leak.get('motif_graph_hit_n', 0)} "
+                            f"cohorts_n={leak.get('motif_cohorts_n', 0)} "
                             f"kind_survive={leak.get('kind_survive', 0)} "
                             f"motif_credit={leak.get('motif_nest_credit', leak.get('motif_credit', 0))} "
-                            f"amaf_hits={leak.get('amaf_hits', 0)}"
+                            f"amaf_hits={leak.get('amaf_hits', 0)} "
+                            f"mcts_rid={leak.get('mcts_rule_id', 0)} "
+                            f"rid_amaf={leak.get('rule_id_amaf_visits', 0)} "
+                            f"arch_mix={leak.get('archive_mix_floor_hits', 0)} "
+                            f"cc_mix={leak.get('cluster_copy_mix_floor_hits', 0)} "
+                            f"mix_skip={leak.get('archive_mix_skip_reason', '-')} "
+                            f"pin_surv={leak.get('archive_mix_pin_survive_n', 0)} "
+                            f"follower_miss={leak.get('motif_graph_follower_miss_n', 0)} "
+                            f"void_scale={float(leak.get('void_scale_applied', 0.0) or 0.0):.1f} "
+                            f"mp_cand={leak.get('macro_path_candidate', 0)} "
+                            f"arch_reject={leak.get('archive_mix_reject_n', 0)} "
+                            f"arch_origin={leak.get('archive_ref_origin_n', 0)} "
+                            f"ref_sc={leak.get('refine_score_accept', 0)} "
+                            f"mp_acc={leak.get('macro_path_accept', 0)} "
+                            f"mp_dep={leak.get('macro_swap_depth', 0)} "
+                            f"path_x={leak.get('path_extend_n', 0)} "
+                            f"p_mac={leak.get('path_step_macro', 0)} "
+                            f"p_join={leak.get('path_step_join', 0)} "
+                            f"surv_m={leak.get('survive_motif_n', 0)} "
+                            f"path_up={leak.get('path_contact_upserts', 0)} "
+                            f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "
+                            f"prop_ms={float(leak.get('propose_ms', 0.0) or 0.0):.1f}"
+                        )
+                    diag = (evaluator.last_result or {}).get("void_leak", {}).get("diag") or {}
+                    if diag:
+                        print(
+                            f"     diag cov={diag.get('cov_final', 0):.3f}/"
+                            f"{diag.get('cov_peak', 0):.3f}/"
+                            f"seed={diag.get('cov_seed', 0):.3f} "
+                            f"bn={diag.get('bottleneck', '-')} "
+                            f"void={diag.get('void_props', 0)}/"
+                            f"{diag.get('void_graph', 0)}/"
+                            f"{diag.get('void_nest', 0)}/"
+                            f"{diag.get('void_refine', 0)} "
+                            f"nest_r={float(diag.get('nest_graph_ratio', 0) or 0):.2f} "
+                            f"nvr_min={float(diag.get('nest_void_ratio_min', 1) or 1):.2f} "
+                            f"hollow_iters={int(diag.get('graph_to_nest_hollow_iters', 0) or 0)} "
+                            f"hold={int(diag.get('incumbent_hold', 0) or 0)} "
+                            f"ovr={int(diag.get('void_override', 0) or 0)} "
+                            f"beam={int(diag.get('motif_beam_wins', 0) or 0)}/"
+                            f"{int(diag.get('motif_beam_trials', 0) or 0)} "
+                            f"scene_sz={int(diag.get('motif_scene_max_sz', 0) or 0)} "
+                            f"f_miss={float(diag.get('follower_miss_pct', 0) or 0):.0f}% "
+                            f"hollow_rn={int(diag.get('hollow_renest', 0) or 0)} "
+                            f"regress={float(diag.get('cov_regress', 0) or 0):.3f} "
+                            f"best={int(diag.get('best_pack_restore', 0) or 0)} "
+                            f"brej={int(diag.get('best_pack_reject', 0) or 0)} "
+                            f"cc={int(diag.get('cluster_copy_graph_n', 0) or 0)}/"
+                            f"{int(diag.get('cluster_copy_nest_n', 0) or 0)} "
+                            f"{diag.get('hybrid_diag', '')} "
+                            f"| {diag.get('prop_survival', '')}"
                         )
 
                 avg_parts = np.mean([m.parts_final for m in case_metrics])
@@ -531,12 +590,27 @@ def main() -> None:
 
                 if args.update_baselines:
                     key = f"{case.name}|{propose}|{dfs_mode}"
-                    baselines[key] = {
-                        "parts": float(avg_parts),
-                        "area": float(avg_area),
-                        "time": float(avg_time),
-                        "kiss": float(avg_kiss),
-                    }
+                    if not all_indep:
+                        print(f"  SKIP baseline update {case.name}: independent_ok=false")
+                    elif fails:
+                        print(f"  SKIP baseline update {case.name}: gate fails {fails}")
+                    else:
+                        prev = baselines.get(key) or {}
+                        area_ok = float(avg_area) >= float(prev.get("area", 0.0) or 0.0) * 0.999
+                        parts_ok = float(avg_parts) >= float(prev.get("parts", 0.0) or 0.0) * 0.999
+                        if prev and not (area_ok and parts_ok):
+                            print(
+                                f"  SKIP baseline update {case.name}: "
+                                f"no gain vs baseline area/parts"
+                            )
+                        else:
+                            baselines[key] = {
+                                "parts": float(avg_parts),
+                                "area": float(avg_area),
+                                "time": float(avg_time),
+                                "kiss": float(avg_kiss),
+                                "independent_ok": bool(all_indep),
+                            }
 
     print(
         "\n| Case | Demand | Propose | DFS | Parts | Area | ΔParts | KissS | KissO | AUC | Time | Indep |"

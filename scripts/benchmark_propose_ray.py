@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Q274-R0: microbench Shapely vs native clip_ray_interior."""
+
+import time
+
+from shapely import LineString, box
+
+from nest_graph.geometry import Geometry
+
+
+def main() -> None:
+    region = box(0, 0, 100, 100)
+    region_g = Geometry.from_shapely(region)
+    anchors = [(10.0, 10.0), (50.0, 50.0), (90.0, 10.0)]
+    n_rays = 36
+    ray_len = 120.0
+
+    t0 = time.perf_counter()
+    shapely_n = 0
+    for ax, ay in anchors:
+        for i in range(n_rays):
+            ang = 2.0 * 3.141592653589793 * i / n_rays
+            ex = ax + ray_len * __import__("math").cos(ang)
+            ey = ay + ray_len * __import__("math").sin(ang)
+            seg = LineString([(ax, ay), (ex, ey)]).intersection(region)
+            if not seg.is_empty:
+                shapely_n += 1
+    shapely_ms = (time.perf_counter() - t0) * 1000.0
+
+    t1 = time.perf_counter()
+    native_n = 0
+    import math
+
+    for ax, ay in anchors:
+        for i in range(n_rays):
+            ang = 2.0 * math.pi * i / n_rays
+            dx = ray_len * math.cos(ang)
+            dy = ray_len * math.sin(ang)
+            pts = region_g.clip_ray_interior((ax, ay), (dx, dy), ray_len, (0.1, 0.5))
+            native_n += len(pts)
+    native_ms = (time.perf_counter() - t1) * 1000.0
+
+    print(f"shapely_ms={shapely_ms:.2f} hits={shapely_n}")
+    print(f"native_ms={native_ms:.2f} samples={native_n}")
+    print(f"from_shapely_count=1")
+
+
+if __name__ == "__main__":
+    main()

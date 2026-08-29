@@ -276,6 +276,39 @@ def test_sequential_accept_full_motif_growing_clear():
     assert telem["motif_sequential_full"] == 1
 
 
+def test_sequential_accept_partial_scene_subset():
+    """Q17/Q262 hybrid: Scene locks ≥2 present members, skip graze failures."""
+    class _G:
+        collisions = [[], [], []]
+
+    geoms = [_square(0, 0), _square(12, 0), _square(24, 0)]
+    cohorts = [{
+        "leader_key": (0.0, 0.0, 0.0),
+        "leader_gid": 0,
+        "member_keys": [
+            (0, (0.0, 0.0, 0.0)),
+            (0, (12.0, 0.0, 0.0)),
+            (0, (99.0, 0.0, 0.0)),
+        ],
+    }]
+    locked, telem = sequential_accept_motif_cohorts(
+        graph=_G(),
+        scores=[1.0, 1.0, 1.0],
+        group_id=[0, 0, 0],
+        transform=[(0.0, 0.0, 0.0), (12.0, 0.0, 0.0), (24.0, 0.0, 0.0)],
+        cohorts=cohorts,
+        candidate_geoms=geoms,
+        void_geoms=[],
+        packed_geoms=[],
+        min_dist=1.0,
+        pole=Point(0, 0),
+        max_accept=3,
+    )
+    assert set(locked) == {0, 1}
+    assert telem["motif_sequential_full"] == 1
+    assert telem["motif_sequential_partial"] == 1
+
+
 def test_refine_keeps_independent_locks():
     from nest_graph.elem_graph import (
         PoseGraph,
@@ -330,3 +363,58 @@ def test_large_void_motif_plateau_q27():
     # Reset on non-large_void.
     assert not tr.update(free_kind="full", cov=40.6, cluster_copy_refine=2)
     assert not tr.ready
+
+
+def test_inject_cohorts_from_patterns_and_dedup():
+    from nest_graph.propose.placements_pattern import ClusterPattern
+    from nest_graph.propose.pattern_archive import (
+        inject_cohorts_from_patterns,
+        merge_motif_hits,
+    )
+
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)), (1, (5.0, 0.0, 0.0))),
+        part_count=2,
+        ref_transform=(0.0, 0.0, 0.0),
+        motif_id=7,
+    )
+    group_id = [0, 1, 0, 1]
+    transform = [
+        (0.0, 0.0, 0.0),
+        (5.0, 0.0, 0.0),
+        (20.0, 0.0, 0.0),
+        (25.0, 0.0, 0.0),
+    ]
+    stats: dict = {}
+    n = inject_cohorts_from_patterns([pat], group_id, transform, stats)
+    assert n >= 1
+    assert int(stats.get("motif_graph_hit_n", 0)) >= 1
+    assert len(stats.get("motif_cohorts") or ()) >= 1
+    n_before = len(stats["motif_cohorts"])
+    merge_motif_hits(stats, None, list(stats["motif_cohorts"]))
+    assert len(stats["motif_cohorts"]) == n_before
+
+
+def test_motif_keys_cohort_helpers():
+    from nest_graph.propose.motif_keys import (
+        boost_score_indices,
+        cohort_keys_from_cohorts,
+        cohort_member_indices,
+    )
+
+    cohorts = [{
+        "leader_gid": 0,
+        "leader_key": (1.23456, 2.34567, 0.0),
+        "member_keys": [(0, (1.23456, 2.34567, 0.0)), (1, (5.0, 0.0, 0.0))],
+    }]
+    keys = cohort_keys_from_cohorts(cohorts)
+    assert (1.2346, 2.3457, 0.0) in keys[0]
+    lookup = {(0, (1.2346, 2.3457, 0.0)): 3, (1, (5.0, 0.0, 0.0)): 7}
+    idxs, missing = cohort_member_indices(cohorts[0], lookup)
+    assert idxs == [3, 7]
+    assert missing == 0
+    scores = [1.0, 2.0, 3.0, 4.0]
+    n = boost_score_indices(scores, [1, 3], 0.5)
+    assert n == 2
+    assert scores[1] == 2.5
+    assert scores[3] == 4.5
