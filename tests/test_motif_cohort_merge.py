@@ -104,16 +104,45 @@ def test_hybrid_compose_pick_join_soft():
     assert hybrid_compose_pick(
         graph=None,
         lock=[0, 1],
-        area_cand=0.89,
+        area_cand=0.85,
         area_orig=1.0,
         void_cand=2,
         void_orig=1,
         cc_n2=0,
         lex_better=False,
         join_prefer=True,
+        count_cand=10,
+        count_orig=10,
         telem=telem,
     )
     assert int(telem.get("hybrid_pick_join_soft", 0)) == 1
+    # Soft floor rejects count regression.
+    assert not hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.85,
+        area_orig=1.0,
+        void_cand=2,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        join_prefer=True,
+        count_cand=8,
+        count_orig=10,
+        telem={},
+    )
+    assert not hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.85,
+        area_orig=1.0,
+        void_cand=2,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        join_prefer=False,
+        telem={},
+    )
     assert hybrid_compose_pick(
         graph=None,
         lock=[0, 1],
@@ -124,5 +153,38 @@ def test_hybrid_compose_pick_join_soft():
         cc_n2=1,
         lex_better=False,
         join_prefer=True,
+        telem={},
+    )
+
+
+def test_hybrid_compose_pick_unlocked_void():
+    from nest_graph.propose.motif_lock import hybrid_compose_pick
+
+    telem: dict = {}
+    assert hybrid_compose_pick(
+        graph=None,
+        lock=[],
+        lock_len=0,
+        unlocked_void=True,
+        area_cand=0.89,
+        area_orig=1.0,
+        void_cand=3,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        telem=telem,
+    )
+    assert int(telem.get("hybrid_pick_wins", 0)) == 1
+    assert not hybrid_compose_pick(
+        graph=None,
+        lock=[],
+        lock_len=0,
+        unlocked_void=False,
+        area_cand=0.89,
+        area_orig=1.0,
+        void_cand=3,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
         telem={},
     )

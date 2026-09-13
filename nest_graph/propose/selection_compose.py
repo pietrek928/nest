@@ -45,6 +45,7 @@ from nest_graph.propose.motif_lock import (
     hybrid_compose_pick,
     hollow_cc_score_steer,
     motif_join_lock_sets,
+    pin_if_in_nest,
 )
 from nest_graph.propose.first_pass_border import border_kiss_indices
 from nest_graph.propose.motif_keys import merge_motif_cohorts, resolve_motif_keys
@@ -626,6 +627,7 @@ def compose_and_nest_selection(
                 cc_nest_n=int(cc_n),
                 graph_to_nest_hollow=graph_to_nest_hollow,
                 pole=getattr(free_info, "target_pt", None),
+                free_poly=free_poly,
             )
             hollow_locks = post_result.lock_sets
             hollow_telem = post_result.telem
@@ -654,22 +656,19 @@ def compose_and_nest_selection(
                     # MotifJoin fallback: if pair already in MIS, pin for refine
                     # without re-nest area penalty (hybrid_pick_reject_area).
                     if join_lock_fallback:
-                        sel_set = {int(i) for i in selected_nest}
-                        lock_set = {int(i) for i in lock}
-                        if (
-                            len(lock_set) >= 2
-                            and lock_set <= sel_set
-                            and _packing_independent(lock, graph)
-                        ):
-                            locked_motif = [int(i) for i in lock]
+                        pinned = pin_if_in_nest(
+                            lock,
+                            selected_nest,
+                            graph,
+                            propose_stats=propose_stats,
+                            source="join_in_nest",
+                        )
+                        if pinned is not None:
+                            locked_motif = pinned
                             cc_pair_won = True
                             beamed_sigs.add(sig)
                             motif_beam_trials += 1
                             motif_beam_wins += 1
-                            if propose_stats is not None:
-                                propose_stats["compose_motif_hold"] = 1
-                                propose_stats["motif_lock_source"] = "join_in_nest"
-                                propose_stats["join_in_nest_pin"] = 1
                             break
                     score_use = list(scores)
                     if void_scene_locks and void_term > 0.0:
@@ -709,6 +708,9 @@ def compose_and_nest_selection(
                         lex_better=lex_win,
                         telem=pick_telem,
                         join_prefer=bool(join_lock_fallback or void_scene_locks),
+                        void_scene=bool(void_scene_locks),
+                        count_cand=len(cc_nest),
+                        count_orig=len(selected_nest),
                     ):
                         selected_nest = cc_nest
                         locked_motif = list(lock)
@@ -729,31 +731,6 @@ def compose_and_nest_selection(
                                 else ("hybrid_join" if join_lock_fallback else "hybrid_pick")
                             )
                         break
-                    elif (
-                        void_scene_locks
-                        and cc_nest
-                        and _packing_independent(cc_nest, graph)
-                        and int(vf_cc) > int(vf_orig)
-                        and (int(vf_cc) - int(vf_orig)) >= 1
-                        and a_cc + 1e-12 >= 0.84 * a_orig
-                    ):
-                        selected_nest = cc_nest
-                        locked_motif = list(lock)
-                        cc_pair_won = True
-                        beamed_sigs.add(sig)
-                        motif_beam_trials += 1
-                        motif_beam_wins += 1
-                        if score_use is not scores:
-                            scores[:] = score_use
-                        if propose_stats is not None:
-                            propose_stats["void_scene_lock_accept"] = int(
-                                propose_stats.get("void_scene_lock_accept", 0) or 0
-                            ) + 1
-                            propose_stats["cluster_copy_pair_lock"] = 1
-                            propose_stats["cluster_copy_nest_n"] = int(cc_n2)
-                            propose_stats["compose_motif_hold"] = 1
-                            propose_stats["motif_lock_source"] = "void_scene_rise"
-                        break
                     beamed_sigs.add(sig)
                     motif_beam_trials += 1
                 if propose_stats is not None and pick_telem:
@@ -761,20 +738,17 @@ def compose_and_nest_selection(
                         if k.startswith("hybrid_pick_"):
                             propose_stats[k] = int(propose_stats.get(k, 0) or 0) + int(v)
                 if not cc_pair_won and dg is not None:
-                    sel_set = {int(i) for i in selected_nest}
                     for lock in motif_join_lock_sets(dg, graph, max_locks=4):
-                        lock_set = {int(i) for i in lock}
-                        if (
-                            len(lock_set) >= 2
-                            and lock_set <= sel_set
-                            and _packing_independent(lock, graph)
-                        ):
-                            locked_motif = [int(i) for i in lock]
+                        pinned = pin_if_in_nest(
+                            lock,
+                            selected_nest,
+                            graph,
+                            propose_stats=propose_stats,
+                            source="join_in_nest",
+                        )
+                        if pinned is not None:
+                            locked_motif = pinned
                             cc_pair_won = True
-                            if propose_stats is not None:
-                                propose_stats["compose_motif_hold"] = 1
-                                propose_stats["motif_lock_source"] = "join_in_nest"
-                                propose_stats["join_in_nest_pin"] = 1
                             break
                 if not cc_pair_won:
                     # Q377: when pick=0 on hollow, unlocked re-nest @ 0.88× + void rise.
@@ -815,15 +789,13 @@ def compose_and_nest_selection(
                             new_count=len(cc_nest),
                             new_area=a_cc,
                         )
-                        # Q377 folded: unlocked void uses lock_len=2 so void 0.88×
-                        # branch fires inside hybrid_compose_pick (one gate).
+                        # Q377: unlocked void arms void soft floor in hybrid_compose_pick.
                         unlock_telem: dict = {}
                         accept_unlock = bool(cc_nest) and hybrid_compose_pick(
                             graph=graph,
                             lock=[],
-                            lock_len=(
-                                2 if (pick_wins == 0 and void_rise) else 0
-                            ),
+                            lock_len=0,
+                            unlocked_void=bool(pick_wins == 0 and void_rise),
                             area_cand=a_cc,
                             area_orig=a_orig,
                             void_cand=int(vf_cc),
@@ -847,6 +819,34 @@ def compose_and_nest_selection(
                                     propose_stats["motif_packing_score_boost_n"] = int(
                                         propose_stats.get("motif_packing_score_boost_n", 0) or 0
                                     ) + int(n_steer)
+                            # Pin MotifJoin / Scene hollow on unlocked nest.
+                            if not locked_motif:
+                                if dg is not None:
+                                    for lock in motif_join_lock_sets(
+                                        dg, graph, max_locks=4,
+                                    ):
+                                        pinned = pin_if_in_nest(
+                                            lock,
+                                            selected_nest,
+                                            graph,
+                                            propose_stats=propose_stats,
+                                            source="join_after_unlock",
+                                        )
+                                        if pinned is not None:
+                                            locked_motif = pinned
+                                            break
+                                if not locked_motif and void_scene_locks:
+                                    for lock in hollow_locks:
+                                        pinned = pin_if_in_nest(
+                                            lock,
+                                            selected_nest,
+                                            graph,
+                                            propose_stats=propose_stats,
+                                            source="void_scene_in_nest",
+                                        )
+                                        if pinned is not None:
+                                            locked_motif = pinned
+                                            break
 
     # Beam void-core MIS before incumbent hold so fat-basin void packs can
     # survive S0 via the same void_override path (one prefer helper).

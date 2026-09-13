@@ -11,7 +11,7 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.placement_common import is_pose_clear
+from nest_graph.propose.placement_common import clearance_scene, is_pose_clear
 from nest_graph.propose.placements_pattern import emit_packing_clear
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
@@ -277,6 +277,7 @@ def propose_placements_group_fit(
     focal_ring_geom = outline_ring_geom(focal_shape)
     base_obs = list(propose_geom.base_geoms)
     voids = list(propose_geom.scene.void_geoms)
+    edge_obs, edge_scene = clearance_scene(voids, base_obs, min_dist)
 
     for contact in anchor_pts:
         snap_contact, inward = inward_at_contact(focal_shape, contact)
@@ -299,6 +300,7 @@ def propose_placements_group_fit(
             placed_geom = propose_geom.placed_at(coords)
             if not is_pose_clear(
                 placed_geom, voids, base_obs, min_dist,
+                obs=edge_obs, scene=edge_scene,
             ):
                 continue
             err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)

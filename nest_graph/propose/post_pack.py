@@ -48,6 +48,7 @@ def run_post_pack_passes(
     mean_part_area: float | None = None,
     native_pack_geoms_fn=None,
     force_bfs_peel: bool = False,
+    archived_patterns: Sequence | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity).
 
@@ -91,6 +92,7 @@ def run_post_pack_passes(
             victim_indices=victim_indices,
             repair_patterns=repair_patterns,
             force_bfs_peel=force_bfs_peel,
+            archived_patterns=list(archived_patterns or ()),
         )
         ctx.polys = out_polys
         ctx.transforms = out_tr
@@ -166,7 +168,15 @@ def run_post_pack_passes(
             out_polys, out_tr, se2_stats2 = local_se2_selection(ctx)
             if int(se2_stats2.get("moved", 0)):
                 stats["local_se2"] = se2_stats2
-    if not post_pack_overlap_ok(out_polys, sel, fixed_obstacles=fixed_obstacles):
+    # Overlap SoT uses current out_polys (authoritative after SE2/relocate).
+    # native_pack_geoms_fn is sel-ordered and can diverge from edited polys;
+    # coerce via polys keeps packing-clear consistent (telem tracks converts).
+    if not post_pack_overlap_ok(
+        out_polys,
+        sel,
+        fixed_obstacles=fixed_obstacles,
+        telem=stats,
+    ):
         stats["overlap_revert"] = 1
         return entry_polys, entry_tr, list(entry_sel), stats
     entry_area = sum(
@@ -205,6 +215,7 @@ class PostPackPrep:
     stamp_victim: Sequence[int] | None
     repair_patterns: Sequence | None = None
     force_bfs_peel: bool = False
+    archived_patterns: Sequence | None = None
 
 
 def prepare_post_pack(
@@ -224,6 +235,7 @@ def prepare_post_pack(
     free_info: Any,
     void_leak_stats: dict | None,
     propose_stats: dict | None,
+    archived_patterns: Sequence | None = None,
 ) -> PostPackPrep:
     from nest_graph.pack.execute import schedule_prep_selection_free  # cycle: execute→heavy_polish→post_pack
     sel_geoms = [
@@ -324,6 +336,7 @@ def prepare_post_pack(
         stamp_victim=None if hole_ok else stamp_victim,
         repair_patterns=None if hole_ok else repair_patterns,
         force_bfs_peel=bool(hull_reject),
+        archived_patterns=list(archived_patterns or ()) or None,
     )
 
 
@@ -372,6 +385,7 @@ def apply_post_pack_and_telem(
         mean_part_area=prep.mean_part_post,
         native_pack_geoms_fn=native_pack_geoms_fn,
         force_bfs_peel=prep.force_bfs_peel,
+        archived_patterns=list(prep.archived_patterns or ()) or None,
     )
     if isinstance(void_leak_stats, dict):
         void_leak_stats["repack"] = pack_stats.get("repack") or {

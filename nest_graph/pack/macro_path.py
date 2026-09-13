@@ -187,6 +187,13 @@ def macro_increase_path(
                 except TypeError:
                     ok = bool(overlap_ok_fn())
                 if not ok:
+                    telem["macro_path_overlap_skip"] = int(
+                        telem.get("macro_path_overlap_skip", 0) or 0
+                    ) + 1
+                    try:
+                        agent.note_macro_miss(alt)
+                    except Exception:
+                        pass
                     continue
             reward = leaf_reward(
                 child_snap,

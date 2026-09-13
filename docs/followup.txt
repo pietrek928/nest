@@ -1,7 +1,11 @@
-improve repack efficiency
-compose motifs on higher level
+improve repack efficiency - items packing still does not look good in some places - try multitrack repacking - that are different decision, u have decision graph for it to follow multiple tracks, and find good patterns
+try repacking by cascade moving elements - that will create good solution tracks and efficient patterns to repeat
 try decision graph logic to search fro good solution also on higher level - by motifs and other rules
 try by refine not only to increase coverage, but also imrpove score by rules - improve rules as part of decision graph
 dfs and graph refinement should work well on both lower and higher level - decision graph + motifs
 propose_placements_raycasting - maybe c++? are other proposers movable ?
+macro_increase_path - maybe c++? looks like could benefit from it
 benchmark methods by performance and time, and based on results plan imrpovements and optimizations
+decisions should push each others, leading to best solution path carving - make sure decision graph will lead to this, research for improvements
+research composin motifs on higher level, especially where nesting leaves empty spaces - great area of improvement there
+nesting is approaching solutions slowly - try expanding good patterns and motifs in decision graph more aggresively

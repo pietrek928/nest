@@ -200,6 +200,18 @@ def refine_cached_selection(
             else None
         ),
     )
+    pack_cache["compose_sel"] = list(selected_out)
+    if native_geoms_fn is not None and selected_out:
+        try:
+            pack_cache["compose_geoms"] = list(
+                native_geoms_fn(
+                    group_id,
+                    transform,
+                    part_bases_c,
+                )
+            )
+        except Exception:
+            pack_cache.pop("compose_geoms", None)
     coverage_out = 0.0
     try:
         coverage_out = coverage_pct_fn(
@@ -368,6 +380,7 @@ def pack_execute_snapshot(
         "compose_group_id": list(pack_cache.get("compose_group_id") or ()),
         "compose_transform": list(pack_cache.get("compose_transform") or ()),
         "motif_locked": list(pack_cache.get("motif_locked") or ()),
+        "compose_geoms": list(pack_cache.get("compose_geoms") or ()),
     }
     cheap_map[cache_key] = out
     lookup_n = int(pack_cache.get("cache_lookup_n", 0) or 0)

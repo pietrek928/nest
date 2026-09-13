@@ -733,7 +733,7 @@ def test_best_pack_geom_sig_and_restore_miss():
     sig = best_pack_geom_sig(polys, [0, 1])
     assert sig == round(1.0 + 1.0, 4)
     best = BestPackSnapshot(selected_polys=[0, 1], cov=0.9, geom_sig=sig + 1.0)
-    out, ok, telem = maybe_restore_best_pack(
+    out, ok, telem, _tf = maybe_restore_best_pack(
         best=best,
         current_selected=[0],
         graph=None,
@@ -746,5 +746,6 @@ def test_best_pack_geom_sig_and_restore_miss():
     )
     assert not ok
     assert int(telem.get("best_pack_sig_miss", 0)) == 1
+    assert int(telem.get("best_pack_overlap_reject", 0)) == 1
     assert out == [0]
 

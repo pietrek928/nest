@@ -18,7 +18,7 @@ from nest_graph.propose.motif_keys import (
     pose_in_motif_keys,
     resolve_motif_keys,
 )
-from nest_graph.utils import compose_transforms
+from nest_graph.utils import compose_transforms, invert_transform
 
 # Q278: leader world anchor at upsert time (MotifRecord has relative only).
 _motif_ref_anchors: dict[int, tuple[float, float, float]] = {}
@@ -372,34 +372,132 @@ def inject_cohorts_from_patterns(
     return n_i
 
 
+def _pair_edges_from_ids(
+    motif_base: Any,
+    mids: Sequence[int],
+) -> list[tuple[int, int, int, tuple[float, float, float]]]:
+    """(mid, gid_a, gid_b, rel_xyz) for valid MotifBase pair records."""
+    edges: list[tuple[int, int, int, tuple[float, float, float]]] = []
+    n = int(motif_base.size())
+    for mid in mids:
+        mid_i = int(mid)
+        if mid_i < 0 or mid_i >= n:
+            continue
+        rec = motif_base.at(mid_i)
+        ga, gb = int(rec.gid_a), int(rec.gid_b)
+        if ga < 0 or gb < 0 or ga == gb:
+            continue
+        rel = (
+            float(rec.relative.x),
+            float(rec.relative.y),
+            float(rec.relative.a),
+        )
+        edges.append((mid_i, ga, gb, rel))
+    return edges
+
+
+def stitch_leader_star_patterns(
+    motif_base: Any,
+    mids: Sequence[int],
+    *,
+    telem: dict | None = None,
+) -> tuple[list[ClusterPattern], set[int]]:
+    """Q237: regroup MotifBase pairs that share a hub into k-member patterns.
+
+    Returns (stitched patterns, motif ids consumed by a stitch). Unconsumed
+    pair ids should still emit via ``record_to_cluster_pattern``.
+    """
+    edges = _pair_edges_from_ids(motif_base, mids)
+    if len(edges) < 2:
+        return [], set()
+    degree: dict[int, int] = {}
+    for _mid, ga, gb, _rel in edges:
+        degree[ga] = int(degree.get(ga, 0)) + 1
+        degree[gb] = int(degree.get(gb, 0)) + 1
+    hubs = {g for g, d in degree.items() if int(d) >= 2}
+    if not hubs:
+        return [], set()
+    # Prefer higher-degree hubs; stable by gid.
+    hub_order = sorted(hubs, key=lambda g: (-int(degree[g]), int(g)))
+    used_mids: set[int] = set()
+    stitched: list[ClusterPattern] = []
+    for hub in hub_order:
+        members: list[tuple[int, tuple[float, float, float]]] = [
+            (int(hub), (0.0, 0.0, 0.0)),
+        ]
+        seen_follower: set[int] = {int(hub)}
+        star_mids: list[int] = []
+        best_mid = -1
+        best_gci = -1.0
+        for mid_i, ga, gb, rel in edges:
+            if mid_i in used_mids:
+                continue
+            if int(ga) == int(hub):
+                follower, fol_rel = int(gb), rel
+            elif int(gb) == int(hub):
+                follower, fol_rel = int(ga), invert_transform(rel)
+            else:
+                continue
+            if follower in seen_follower:
+                continue
+            seen_follower.add(follower)
+            members.append((follower, fol_rel))
+            star_mids.append(int(mid_i))
+            rec = motif_base.at(int(mid_i))
+            gci = float(getattr(rec, "gci", 0.0) or 0.0)
+            if gci > best_gci:
+                best_gci = gci
+                best_mid = int(mid_i)
+        if len(members) < 3:
+            continue
+        for mid_i in star_mids:
+            used_mids.add(int(mid_i))
+        mid_tag = int(best_mid) if best_mid >= 0 else int(star_mids[0])
+        ref = _motif_ref_anchors.get(mid_tag)
+        if ref is None:
+            ref = (0.0, 0.0, 0.0)
+        stitched.append(
+            ClusterPattern(
+                members=tuple(members),
+                part_count=len(members),
+                ref_transform=(float(ref[0]), float(ref[1]), float(ref[2])),
+                motif_id=mid_tag,
+            )
+        )
+    if telem is not None and stitched:
+        telem["star_stitch_n"] = int(telem.get("star_stitch_n", 0) or 0) + int(
+            len(stitched)
+        )
+        telem["star_stitch_members"] = int(
+            telem.get("star_stitch_members", 0) or 0
+        ) + int(sum(int(p.part_count) for p in stitched))
+    return stitched, used_mids
+
+
 def patterns_from_motif_base(
     motif_base: Any,
     *,
     max_keep: int = 4,
     prefer_motif_id: int = -1,
+    telem: dict | None = None,
 ) -> list[ClusterPattern]:
-    """Cross-iter inject list via MotifBase.list_for_inject (Q91)."""
+    """Cross-iter inject list via MotifBase.list_for_inject (Q91) + Q237 stitch."""
     if motif_base is None or int(motif_base.size()) <= 0:
         return []
-    out: list[ClusterPattern] = []
+    cand_ids: list[int] = []
     seen: set[int] = set()
     if prefer_motif_id >= 0 and prefer_motif_id < int(motif_base.size()):
-        out.append(
-            record_to_cluster_pattern(
-                motif_base.at(int(prefer_motif_id)),
-                motif_id=int(prefer_motif_id),
-            )
-        )
+        cand_ids.append(int(prefer_motif_id))
         seen.add(int(prefer_motif_id))
-    for mid in motif_base.list_for_inject(int(max_keep)):
+    # Pull a wider window so star hubs can reconstruct before max_keep trim.
+    inject_cap = max(int(max_keep) * 3, int(max_keep), 1)
+    for mid in motif_base.list_for_inject(int(inject_cap)):
         mid_i = int(mid)
         if mid_i in seen:
             continue
         seen.add(mid_i)
-        out.append(record_to_cluster_pattern(motif_base.at(mid_i), motif_id=mid_i))
-        if max_keep > 0 and len(out) >= int(max_keep):
-            break
-    if not out and int(motif_base.size()) > 0:
+        cand_ids.append(mid_i)
+    if not cand_ids and int(motif_base.size()) > 0:
         ranked = sorted(
             range(int(motif_base.size())),
             key=lambda i: (
@@ -415,9 +513,27 @@ def patterns_from_motif_base(
             if int(getattr(rec, "accept_count", 0) or 0) <= 0:
                 if int(getattr(rec, "ttl_remaining", 0) or 0) < 0:
                     continue
-            out.append(record_to_cluster_pattern(rec, motif_id=int(mid_i)))
-            if max_keep > 0 and len(out) >= int(max_keep):
+            seen.add(int(mid_i))
+            cand_ids.append(int(mid_i))
+            if len(cand_ids) >= inject_cap:
                 break
+    stitched, used = stitch_leader_star_patterns(
+        motif_base, cand_ids, telem=telem,
+    )
+    out: list[ClusterPattern] = list(stitched)
+    for mid_i in cand_ids:
+        if int(mid_i) in used:
+            continue
+        out.append(
+            record_to_cluster_pattern(
+                motif_base.at(int(mid_i)),
+                motif_id=int(mid_i),
+            )
+        )
+        if max_keep > 0 and len(out) >= int(max_keep):
+            break
+    if max_keep > 0 and len(out) > int(max_keep):
+        out = out[: int(max_keep)]
     return out
 
 
@@ -440,6 +556,7 @@ def motif_patterns_for_inject(
         motif_base,
         max_keep=int(max_keep),
         prefer_motif_id=int(prefer_motif_id),
+        telem=telem,
     )
     if pats and telem is not None:
         record_archive_ref_telem(pats, telem)
@@ -562,4 +679,5 @@ __all__ = [
     "pose_in_motif_keys",
     "record_to_cluster_pattern",
     "resolve_motif_keys",
+    "stitch_leader_star_patterns",
 ]

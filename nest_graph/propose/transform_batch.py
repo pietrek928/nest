@@ -63,7 +63,10 @@ def prune_transforms_vs_packed(
     base: Geometry | None,
     packed: Sequence[Geometry] | None,
 ) -> np.ndarray:
-    """Drop expand_rest rows that penetrate locked packed solids."""
+    """Drop expand_rest rows that penetrate locked packed solids.
+
+    Penetrating SoT via ``intersects_any`` (not guidance ``batch_check_validity``).
+    """
     if (
         transforms is None
         or transforms.size == 0
@@ -71,12 +74,14 @@ def prune_transforms_vs_packed(
         or not packed
     ):
         return transforms
+    # One list for the loop — avoid per-row list(packed) copy thrash.
+    packed_list = packed if isinstance(packed, list) else list(packed)
     keep: list[np.ndarray] = []
     for row in np.asarray(transforms, dtype=np.float64).reshape(-1, 3):
         placed = base.apply_transform(row)
         if placed is None:
             continue
-        if placed.intersects_any(list(packed)):
+        if placed.intersects_any(packed_list):
             continue
         keep.append(row)
     if not keep:

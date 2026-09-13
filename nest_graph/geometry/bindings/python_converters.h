@@ -14,3 +14,7 @@ nb::tuple vec2d_to_tuple(const Vec2d &v);
 Vec2d vec2d_from_tuple(nb::handle o);
 void points_from_iterable(nb::handle points, std::vector<Vec2d> &out);
 std::vector<Vec2d> ring_from_coords(nb::handle coords_iterable);
+std::vector<double> sample_fracs_from_python(nb::object sample_fracs);
+int coord_copy_buffer_n();
+int coord_copy_iter_n();
+void reset_coord_copy_telem();

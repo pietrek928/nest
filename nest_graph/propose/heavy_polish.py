@@ -371,11 +371,13 @@ def apply_refine_with_restore(
 
     # U1/R0: void shed without lex win → restore; also hold if refine empties void.
     # Hollow: count-up refine that sheds void *and* area must restore (lex count trap).
+    # Score accept (Q245–246) wins over U1 when norm_score_delta already cleared restore.
     if (
         free_info is not None
         and getattr(free_info, "kind", None) == "large_void"
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
+        and norm_score_delta <= score_eps
     ):
         nv_nest = count_selected_in_free(polys, nest_before_refine, free_poly)
         nv_ref = count_selected_in_free(polys, selected_polys, free_poly)

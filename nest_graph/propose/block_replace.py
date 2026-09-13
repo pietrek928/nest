@@ -13,6 +13,7 @@ from nest_graph.propose.context import cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.propose.placement_common import (
     as_geometry,
+    clearance_scene,
     is_board_adj,
     is_pose_clear,
     part_void_adj,
@@ -297,12 +298,16 @@ def _emit_hole_candidates(
         except Exception:
             coords = []
         part_g = Geometry.from_shapely(part)
+        hole_obs, hole_scene = clearance_scene(voids, packed_g, float(min_dist))
         for c in coords:
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             tr = np.asarray(c, dtype=np.float64).reshape(3)
             cand_g = part_g.apply_transform(float(tr[0]), float(tr[1]), float(tr[2]))
-            if not is_pose_clear(cand_g, voids, packed_g, float(min_dist)):
+            if not is_pose_clear(
+                cand_g, voids, packed_g, float(min_dist),
+                obs=hole_obs, scene=hole_scene,
+            ):
                 continue
             poly = transform_poly(part, tr)
             if hull is not None:

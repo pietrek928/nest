@@ -479,6 +479,12 @@ def main() -> None:
                             f"mat_motif={leak.get('materialized_motif', 0)} "
                             f"mat_attach={leak.get('materialized_attach', 0)} "
                             f"compose_sz={leak.get('motif_compose_accepted_size', 0)} "
+                            f"place_coh={leak.get('place_cohort_ready', 0)}/"
+                            f"{leak.get('place_cohort_specs_n', 0)}/"
+                            f"{leak.get('mcts_cohort_macro_n', 0)} "
+                            f"path_cred={leak.get('path_credit_n', 0)} "
+                            f"soft={leak.get('macro_path_motif_soft', 0)} "
+                            f"stitch={leak.get('star_stitch_n', 0)} "
                             f"beam={leak.get('motif_beam_sets', 0)} "
                             f"seq_full={leak.get('motif_sequential_full', 0)} "
                             f"seq_miss={leak.get('motif_sequential_skipped_missing', 0)} "
@@ -513,7 +519,8 @@ def main() -> None:
                             f"surv_m={leak.get('survive_motif_n', 0)} "
                             f"path_up={leak.get('path_contact_upserts', 0)} "
                             f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "
-                            f"prop_ms={float(leak.get('propose_ms', 0.0) or 0.0):.1f}"
+                            f"prop_ms={float(leak.get('propose_ms', 0.0) or 0.0):.1f} "
+                            f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f}"
                         )
                     diag = (evaluator.last_result or {}).get("void_leak", {}).get("diag") or {}
                     if diag:

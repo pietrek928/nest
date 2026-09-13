@@ -53,13 +53,13 @@ nfp_lite_relative(
     obs.insert(obs.end(), other_obstacles.begin(), other_obstacles.end());
 
     StaticCollisionScene<VecType> scene;
-    scene.build(obs, static_cast<Scalar>(0.5));
+    scene.build(std::move(obs), static_cast<Scalar>(0.5));
     const Scalar clearance = min_dist > static_cast<Scalar>(0) ? min_dist : static_cast<Scalar>(0);
     const Scalar margin_sq = clearance * clearance;
     const Scalar distance_margin = clearance;
 
     auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
-        if (obs.empty()) {
+        if (scene.obstacles.empty()) {
             return true;
         }
         return !scene.query_any_violation(placed, margin_sq, distance_margin);
@@ -68,7 +68,7 @@ nfp_lite_relative(
     SolidGeometry<VecType> placed0 =
         follow.rotate(pose_theta).translate(VecType({pose_x, pose_y}));
     const VecType slide({ux, uy});
-    const auto cast = cast_slide(placed0, obs, slide, max_t);
+    const auto cast = cast_slide(placed0, scene.obstacles, slide, max_t);
     if (cast.intersects_path) {
         const Scalar t_hit = cast.t_entry;
         if (std::isfinite(static_cast<double>(t_hit))
@@ -105,7 +105,7 @@ nfp_lite_relative(
         pose_x,
         pose_y,
         pose_theta,
-        obs,
+        std::move(scene.obstacles),
         static_cast<const SolidGeometry<VecType> *>(nullptr),
         dirs,
         2,

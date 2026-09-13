@@ -49,11 +49,13 @@ from nest_graph.propose.pipeline import (
 )
 from nest_graph.propose.placement_common import (
     as_geometry,
+    clearance_scene,
     is_pose_clear,
     part_base_geoms,
 )
 from nest_graph.propose.placement_outline import (
     outline_kiss_tolerance,
+    outline_ring_geom,
     outline_standoff_distance,
 )
 from nest_graph.propose.placement_perimeter import edge_inward_at_point
@@ -883,13 +885,17 @@ def first_pass_interior_fill(
             arr = by_group.get(gid)
             if arr is None or arr.shape[0] == 0:
                 continue
+            scene = placement_scene_for_part(
+                sheet, board_geom, voids, bases[gid], base_geoms=geoms,
+            )
+            pg = ProposeGeometry(
+                board, pack_union, part_poly, min_dist,
+                epsilon_ratio=eps, propose_cfg=propose_cfg,
+            )
             for row in arr:
                 coords = np.asarray(row, dtype=np.float64).reshape(3)
                 shapely_placed = transform_poly(part_poly, coords)
                 geom = bases[gid].apply_transform(coords)
-                scene = placement_scene_for_part(
-                    sheet, board_geom, voids, bases[gid], base_geoms=geoms,
-                )
                 if not placement_ok_for_outline(
                     scene,
                     geom,
@@ -901,10 +907,6 @@ def first_pass_interior_fill(
                     require_outline_kiss=False,
                 ):
                     continue
-                pg = ProposeGeometry(
-                    board, pack_union, part_poly, min_dist,
-                    epsilon_ratio=eps, propose_cfg=propose_cfg,
-                )
                 tight = score_placement_tightness(
                     (float(coords[0]), float(coords[1]), float(coords[2])),
                     pg, push, min_dist,
@@ -917,7 +919,11 @@ def first_pass_interior_fill(
         added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
         for cost, gid, coords, shapely_placed, geom in candidates:
             blocker_geoms = geoms + [row[3] for row in added]
-            if not is_pose_clear(geom, voids, blocker_geoms, min_dist):
+            fill_obs, fill_scene = clearance_scene(voids, blocker_geoms, min_dist)
+            if not is_pose_clear(
+                geom, voids, blocker_geoms, min_dist,
+                obs=fill_obs, scene=fill_scene,
+            ):
                 continue
             added.append((gid, coords, shapely_placed, geom))
             break
@@ -972,16 +978,17 @@ def sequential_border_augment(
 
     for _ in range(max_rounds):
         candidates: list[tuple[float, int, np.ndarray, Polygon, Geometry]] = []
+        outline_ring = outline_ring_geom(outline) if outline is not None else None
         for gid, part_poly in part_by_gid.items():
+            scene = placement_scene_for_part(
+                sheet, board_geom, voids, bases[gid], base_geoms=placed_geoms,
+            )
             for c in first_pass_border_coords(
                 cfg, board, part_poly, pack_polys, min_dist=min_dist,
             ):
                 coords = np.asarray(c, dtype=np.float64)
                 shapely_placed = transform_poly(part_poly, coords)
                 geom = bases[gid].apply_transform(coords)
-                scene = placement_scene_for_part(
-                    sheet, board_geom, voids, bases[gid], base_geoms=placed_geoms,
-                )
                 if not placement_ok_for_outline(
                     scene,
                     geom,
@@ -993,7 +1000,13 @@ def sequential_border_augment(
                     require_outline_kiss=True,
                 ):
                     continue
-                cost = abs(outline_standoff_distance(shapely_placed, outline) - min_dist)
+                if outline_ring is not None:
+                    try:
+                        cost = abs(float(geom.standoff_distance(outline_ring)) - min_dist)
+                    except Exception:
+                        cost = abs(outline_standoff_distance(shapely_placed, outline) - min_dist)
+                else:
+                    cost = abs(outline_standoff_distance(shapely_placed, outline) - min_dist)
                 candidates.append((cost, gid, coords, shapely_placed, geom))
         if not candidates:
             break
@@ -1001,7 +1014,11 @@ def sequential_border_augment(
         added: list[tuple[int, np.ndarray, Polygon, Geometry]] = []
         for cost, gid, coords, shapely_placed, geom in candidates:
             blocker_geoms = placed_geoms + [row[3] for row in added]
-            if not is_pose_clear(geom, voids, blocker_geoms, min_dist):
+            aug_obs, aug_scene = clearance_scene(voids, blocker_geoms, min_dist)
+            if not is_pose_clear(
+                geom, voids, blocker_geoms, min_dist,
+                obs=aug_obs, scene=aug_scene,
+            ):
                 continue
             added.append((gid, coords, shapely_placed, geom))
         if not added:

@@ -89,7 +89,12 @@ from nest_graph.propose.placements_primary import (
     propose_placements_neighbor_slide,
     propose_placements_perimeter_walk,
 )
-from nest_graph.propose.placement_common import cluster_seed_coords, is_pose_clear
+from nest_graph.propose.placement_common import (
+    as_geometry,
+    cluster_seed_coords,
+    clearance_scene,
+    is_pose_clear,
+)
 from nest_graph.propose.types import (
     PackedProposeExtras,
     PocketStats,
@@ -1150,10 +1155,9 @@ def _collect_pocket_candidates(
         )
         # Track D / Q25: Scene dry-run motif reserve only (after packing emit, before claim).
         if motif_coords and bool(getattr(cfg, "enable_motif_scene_dry_run", False)):
-            from nest_graph.propose.placement_common import as_geometry, is_pose_clear
-
             voids = list(getattr(ctx.propose_geom.scene, "void_geoms", None) or [])
             packed = list(getattr(ctx.propose_geom, "full_packed_geoms", None) or [])
+            dry_obs, dry_scene = clearance_scene(voids, packed, float(ctx.min_dist))
             kept_motif: list[tuple[float, float, float]] = []
             dropped = 0
             for coords in motif_coords:
@@ -1161,6 +1165,7 @@ def _collect_pocket_candidates(
                 cg = as_geometry(placed) if placed is not None else None
                 if cg is not None and is_pose_clear(
                     cg, voids, packed, float(ctx.min_dist),
+                    obs=dry_obs, scene=dry_scene,
                 ):
                     kept_motif.append(coords)
                 else:
@@ -2156,9 +2161,13 @@ def propose_coords_from_candidates(
                 diversity_stats_out[k] = v
     filtered_reserve: list[Tuple[float, float, float]] = []
     if reserve_coords:
-        for coords in reserve_coords:
-            c = (float(coords[0]), float(coords[1]), float(coords[2]))
-            if not geom.valid_at(c, pt_push):
+        raw = [
+            (float(coords[0]), float(coords[1]), float(coords[2]))
+            for coords in reserve_coords
+        ]
+        valid = set(filter_candidates_batch(geom, raw, pt_push))
+        for c in raw:
+            if c not in valid:
                 continue
             if geom.full_packed_geoms and not geom.passes_full_packed_collision(
                 geom.placed_at(c)
@@ -2529,10 +2538,15 @@ def _batch_pair_valid(
 ) -> bool:
     placed_a = part_a.apply_transform(coords_a)
     placed_b = part_b.apply_transform(coords_b)
-    if not is_pose_clear(placed_a, voids, obstacle_geoms, min_dist):
+    obs_a, scene_a = clearance_scene(voids, obstacle_geoms, min_dist)
+    if not is_pose_clear(
+        placed_a, voids, obstacle_geoms, min_dist, obs=obs_a, scene=scene_a,
+    ):
         return False
+    grown = [*obstacle_geoms, placed_a]
+    obs_b, scene_b = clearance_scene(voids, grown, min_dist)
     return is_pose_clear(
-        placed_b, voids, [*obstacle_geoms, placed_a], min_dist,
+        placed_b, voids, grown, min_dist, obs=obs_b, scene=scene_b,
     )
 
 
@@ -2589,10 +2603,13 @@ def _batch_pack_pair_order(
     anchor_part = Geometry.from_shapely(anchor_poly)
     follow_part = Geometry.from_shapely(follow_poly)
     pairs: list[tuple[tuple[float, float, float], tuple[float, float, float], float]] = []
+    anchor_obs, anchor_scene = clearance_scene(voids, obs, min_dist)
 
     for coords_a in anchor_seeds:
         placed_a_g = anchor_part.apply_transform(coords_a)
-        if not is_pose_clear(placed_a_g, voids, obs, min_dist):
+        if not is_pose_clear(
+            placed_a_g, voids, obs, min_dist, obs=anchor_obs, scene=anchor_scene,
+        ):
             continue
 
         # Shapely mirror only for follow proposers / free-space topology.

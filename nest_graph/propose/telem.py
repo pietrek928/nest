@@ -758,6 +758,20 @@ def merge_phase_gate_telem(
         )
         if isinstance(mt.get("path_type_hist"), (list, tuple)):
             leak["path_type_hist"] = [int(x) for x in mt["path_type_hist"][:4]]
+        leak["path_credit_n"] = int(
+            mt.get("path_credit_n", leak.get("path_credit_n", 0)) or 0
+        )
+        leak["macro_path_motif_soft"] = int(
+            mt.get("macro_path_motif_soft", leak.get("macro_path_motif_soft", 0)) or 0
+        )
+        leak["macro_path_overlap_skip"] = int(
+            mt.get("macro_path_overlap_skip", leak.get("macro_path_overlap_skip", 0))
+            or 0
+        )
+        leak["mcts_cohort_macro_n"] = max(
+            int(leak.get("mcts_cohort_macro_n", 0) or 0),
+            int(mt.get("mcts_cohort_macro_n", 0) or 0),
+        )
         leak["replay_from_ancestor_ms"] = float(
             mt.get("replay_from_ancestor_ms", leak.get("replay_from_ancestor_ms", 0.0)) or 0.0
         )
@@ -836,8 +850,26 @@ def merge_phase_gate_telem(
         "hollow_lock_board_hit",
         "hollow_lock_void_retry",
         "hollow_lock_void_hit",
+        "hollow_void_core_locks",
+        "hollow_void_core_pick",
         "join_in_nest_pin",
+        "void_scene_in_nest_pin",
         "void_scene_lock_accept",
+        "star_stitch_n",
+        "star_stitch_members",
+        "cohort_void_rank_n",
+        "place_cohort_ready",
+        "place_cohort_specs_n",
+        "path_credit_n",
+        "macro_path_motif_soft",
+        "macro_path_overlap_skip",
+        "packing_clear_native_n",
+        "packing_clear_from_shapely_n",
+        "ray_anchor_native_n",
+        "ray_anchor_from_shapely_n",
+        "region_from_shapely_n",
+        "propose_geom_reuse",
+        "best_pack_overlap_reject",
         "cache_key_compose_sz",
         "cache_invalidate_compose",
         "cohort_sig_amaf_visits",
@@ -854,7 +886,10 @@ def merge_phase_gate_telem(
                     int(propose_stats.get(hk, 0) or 0),
                 )
     if "lock_survive_refine" in propose_stats:
-        leak["lock_survive_refine"] = float(propose_stats.get("lock_survive_refine", 1.0) or 1.0)
+        leak["lock_survive_refine"] = max(
+            float(leak.get("lock_survive_refine", 0.0) or 0.0),
+            float(propose_stats.get("lock_survive_refine", 0.0) or 0.0),
+        )
     leak["archive_mix_pin_survive_n"] = max(
         int(leak.get("archive_mix_pin_survive_n", 0) or 0),
         int(propose_stats.get("archive_mix_pin_survive_n", 0) or 0),
@@ -995,6 +1030,16 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
     pf_sel = int(proposer_counts.get("_pocket_fit_selected", 0))
     pf_surv = int(proposer_counts.get("_pocket_fit_survival_pct", -1))
     densify = propose_stats.get("densify_stats") or {}
+    for _rk in (
+        "ray_anchor_native_n",
+        "ray_anchor_from_shapely_n",
+        "region_from_shapely_n",
+        "propose_geom_reuse",
+        "packing_clear_native_n",
+        "packing_clear_from_shapely_n",
+    ):
+        if _rk in densify and _rk not in propose_stats:
+            propose_stats[_rk] = densify[_rk]
     densify_f = int(densify.get("fired", proposer_counts.get("_densify_fired", 0)))
     densify_a = int(
         densify.get("accepted", proposer_counts.get("_densify_accepted", 0))
@@ -1070,8 +1115,15 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         if ctx.mcts_telem is not None:
             ctx.mcts_telem["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
             ctx.mcts_telem["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+            ctx.mcts_telem["mcts_cohort_macro_n"] = max(
+                int(ctx.mcts_telem.get("mcts_cohort_macro_n", 0) or 0),
+                int(agent.telem.get("mcts_cohort_macro_n", 0) or 0),
+            )
         propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
         propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+        propose_stats["mcts_cohort_macro_n"] = int(
+            agent.telem.get("mcts_cohort_macro_n", 0) or 0
+        )
     if ctx.mcts_telem is not None:
         propose_stats["browse_jump"] = int(ctx.mcts_telem.get("browse_jump", 0) or 0)
         propose_stats["motif_nest_credit"] = int(
@@ -1178,6 +1230,18 @@ class BestPackSnapshot:
     selected_polys: list[int]
     cov: float
     geom_sig: float = 0.0
+    transforms: list | None = None
+    seed_count: int = 0
+
+
+def record_overlap_reject(telem: dict | None, *, stage: str) -> None:
+    """One overlap-reject telem writer (best_pack / path / packing_clear)."""
+    if telem is None:
+        return
+    key = f"{stage}_overlap_reject"
+    telem[key] = int(telem.get(key, 0) or 0) + 1
+    if stage == "best_pack":
+        telem["best_pack_reject"] = int(telem.get("best_pack_reject", 0) or 0) + 1
 
 
 def best_pack_geom_sig(polys: Sequence, selected: Sequence[int]) -> float:
@@ -1201,14 +1265,21 @@ def _best_pack_overlap_ok(
     polys: Sequence,
     sheet,
     holes: Sequence | None,
+    *,
+    geoms: Sequence | None = None,
+    telem: dict | None = None,
 ) -> bool:
     if graph is not None:
         from nest_graph.graph import selection_is_independent
 
         if not selection_is_independent(graph, [int(i) for i in selected]):
             return False
+    from nest_graph.propose.placement_common import selection_packing_clear
+
+    if not selection_packing_clear(polys, selected, geoms=geoms, telem=telem):
+        return False
     shapes = [polys[i] for i in selected if 0 <= int(i) < len(polys)]
-    for a, pa in enumerate(shapes):
+    for pa in shapes:
         if pa is None or getattr(pa, "is_empty", True):
             continue
         if sheet is not None and not sheet.buffer(1e-5).covers(pa):
@@ -1216,12 +1287,6 @@ def _best_pack_overlap_ok(
         for hole in holes or ():
             inter = pa.intersection(hole)
             if not inter.is_empty and inter.area > 1e-6:
-                return False
-        for b in range(a + 1, len(shapes)):
-            pb = shapes[b]
-            if pb is None or getattr(pb, "is_empty", True):
-                continue
-            if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
                 return False
     return True
 
@@ -1237,11 +1302,15 @@ def maybe_restore_best_pack(
     sheet,
     holes: Sequence | None,
     usable_area: float,
-) -> tuple[list[int], bool, dict]:
-    """Q371/Q373: restore graph-index peak pack when cov regresses ≥0.5pp."""
+    geoms: Sequence | None = None,
+) -> tuple[list[int], bool, dict, list | None]:
+    """Q371/Q373: restore graph-index peak pack when cov regresses ≥0.5pp.
+
+    Returns ``(selected, restored, telem, transforms_or_None)``.
+    """
     telem: dict = {}
     if best is None or best.cov <= 0.0 or usable_area <= 0.0:
-        return list(current_selected), False, telem
+        return list(current_selected), False, telem, None
     final_cov = 0.0
     if current_selected:
         final_cov = sum(
@@ -1253,16 +1322,23 @@ def maybe_restore_best_pack(
     telem["best_pack_peak_cov"] = float(best.cov)
     telem["best_pack_final_cov"] = float(final_cov)
     if best.cov <= final_cov + 0.005:
-        return list(current_selected), False, telem
+        return list(current_selected), False, telem, None
     if float(best.geom_sig) > 0.0:
         cur_sig = best_pack_geom_sig(polys, best.selected_polys)
         if abs(cur_sig - float(best.geom_sig)) > 1e-3:
             telem["best_pack_sig_miss"] = 1
-            return list(current_selected), False, telem
-    if not _best_pack_overlap_ok(graph, best.selected_polys, polys, sheet, holes):
-        return list(current_selected), False, telem
+            record_overlap_reject(telem, stage="best_pack")
+            return list(current_selected), False, telem, None
+    if not _best_pack_overlap_ok(
+        graph, best.selected_polys, polys, sheet, holes, geoms=geoms, telem=telem,
+    ):
+        record_overlap_reject(telem, stage="best_pack")
+        return list(current_selected), False, telem, None
     telem["best_pack_restore"] = 1
-    return list(best.selected_polys), True, telem
+    tf_out = None
+    if best.transforms is not None:
+        tf_out = list(best.transforms)
+    return list(best.selected_polys), True, telem, tf_out
 
 
 def hybrid_diag_suffix(leak: Mapping[str, Any]) -> str:

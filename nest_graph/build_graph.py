@@ -67,6 +67,7 @@ from .propose.telem import (
     void_elite_count,
 )
 from nest_graph.pack.cheap import (
+    cheap_pack_cache_key,
     invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
     pack_execute_snapshot,
@@ -136,6 +137,7 @@ from .propose.telem import (
     BestPackSnapshot,
     best_pack_geom_sig,
     maybe_restore_best_pack,
+    record_overlap_reject,
 )
 from nest_graph.graph import region_to_zone, BoardSnapshot
 from nest_graph.pack.browse import (
@@ -183,9 +185,11 @@ score_rules = show_performance(score_rules)
 
 def _pack_cache_overlap_ok(pack_cache: dict) -> bool:
     """Q384: independence on compose fields after cheap replay."""
+    geoms = pack_cache.get("compose_geoms")
     return post_pack_overlap_ok(
         list(pack_cache.get("compose_polys") or ()),
         list(pack_cache.get("compose_sel") or ()),
+        geoms=list(geoms) if geoms else None,
     )
 
 
@@ -267,6 +271,33 @@ def _path_accept_contact_upsert(
         n_up
     )
     return int(n_up)
+
+
+def _sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
+    """Letter D: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return 0
+    cohorts = list((propose_stats or {}).get("motif_cohorts") or ())
+    agent.motif_cohorts = tuple(cohorts)
+    n_ready = 0
+    for c in cohorts:
+        if not isinstance(c, dict):
+            continue
+        if int(len(c.get("member_keys") or ())) >= 2:
+            n_ready += 1
+    if propose_stats is not None:
+        compose_sz = len(propose_stats.get("motif_locked") or ())
+        member_hits = int(propose_stats.get("member_hits", 0) or 0)
+        if member_hits <= 0 and isinstance(propose_stats.get("void_leak"), dict):
+            member_hits = int(
+                (propose_stats.get("void_leak") or {}).get("member_hits", 0) or 0
+            )
+        propose_stats["place_cohort_specs_n"] = int(n_ready)
+        propose_stats["place_cohort_ready"] = int(
+            n_ready > 0 and compose_sz >= 2 and member_hits > 0
+        )
+    return int(n_ready)
 
 
 def _note_path_accept_warm(runner: Any, snap: BoardSnapshot, action: Any) -> None:
@@ -994,6 +1025,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     best_pack_cov = 0.0
     best_pack_sel: list[int] | None = None
     best_pack_sig: float = 0.0
+    best_pack_tf: list | None = None
+    best_pack_seed_n: int = 0
     _base_max_transforms = int(
         getattr(cfg.sampling, "max_transforms_per_group", None) or 5000
     )
@@ -1081,6 +1114,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         )
         # DgP / Q107: multi-sim on NestState cache (not tip geometry).
         tip_action = None
+        _prev_ps = _pack_cache.get("propose_stats")
+        _sync_agent_motif_cohorts(
+            mcts_runner,
+            _prev_ps if isinstance(_prev_ps, dict) else None,
+        )
         if _pack_cache.get("ready") and not is_last_leaf and int(_mcts_n_sims) > 0:
             tip_action, tip_leaf = run_mcts_multi_sim(
                 mcts_runner,
@@ -1130,6 +1168,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
                 )
                 # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
+                path_overlap_ok = False
                 with with_isolated_pack_cache(_pack_cache):
                     alt_action, alt_reward, path_accept_snap = macro_increase_path(
                         mcts_runner,
@@ -1137,9 +1176,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         baseline_reward=base_r,
                         execute_fn=mcts_runner.execute_fn,
                         rule_ids=_mcts_rule_ids(rule_sets),
+                        beam=int(getattr(cfg.propose, "macro_path_beam", 4) or 4),
+                        max_depth=int(
+                            getattr(cfg.propose, "macro_path_max_depth", 3) or 3
+                        ),
                         telem=mcts_telem,
                         overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(_pack_cache),
                     )
+                    path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
                 if (
                     alt_action is not None
                     and path_accept_snap is not None
@@ -1151,15 +1195,62 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     )
                 ):
                     mcts_telem["macro_path_candidate"] = 1
-                    if bool(getattr(cfg.propose, "enable_macro_path_replay", False)):
+                    base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
+                    alt_cov = float(
+                        getattr(path_accept_snap, "coverage", 0.0) or 0.0
+                    )
+                    cov_ok = (
+                        bool(path_overlap_ok)
+                        and alt_cov + 1e-9 >= base_cov + 0.005
+                    )
+                    is_motif = (
+                        getattr(alt_action, "region", None) == MacroRegion.Motif
+                    )
+                    apply_replay = bool(
+                        getattr(cfg.propose, "enable_macro_path_replay", False)
+                    )
+                    # Letter C: Motif soft apply (or explicit replay) on cov+0.005;
+                    # else AMAF/warm credit without setting mcts_action (Q351 OFF).
+                    if not path_overlap_ok:
+                        mcts_telem["macro_path_overlap_skip"] = int(
+                            mcts_telem.get("macro_path_overlap_skip", 0) or 0
+                        ) + 1
+                        agent = getattr(mcts_runner, "agent", None)
+                        if agent is not None:
+                            agent.note_macro_miss(alt_action)
+                        cheap_by_key = _pack_cache.get("cheap_compose_by_key")
+                        if isinstance(cheap_by_key, dict):
+                            cheap_by_key.pop(
+                                cheap_pack_cache_key(
+                                    region_to_zone(
+                                        getattr(alt_action, "region", None)
+                                    ),
+                                    alt_action,
+                                    compose_sz=len(
+                                        _pack_cache.get("motif_locked") or ()
+                                    ),
+                                ),
+                                None,
+                            )
+                        record_overlap_reject(mcts_telem, stage="path")
+                    elif cov_ok and (apply_replay or is_motif):
                         mcts_action = alt_action
                         mcts_telem["macro_path_accept"] = int(
                             mcts_telem.get("macro_path_accept", 0) or 0
                         ) + 1
-                        if path_accept_snap is not None:
-                            _note_path_accept_warm(
-                                mcts_runner, path_accept_snap, alt_action
+                        if is_motif and not apply_replay:
+                            mcts_telem["macro_path_motif_soft"] = 1
+                        _note_path_accept_warm(
+                            mcts_runner, path_accept_snap, alt_action
+                        )
+                        mcts_telem["path_credit_n"] = int(
+                            mcts_telem.get("path_credit_n", 0) or 0
+                        ) + 1
+                        if bool(
+                            getattr(
+                                cfg.propose, "mutate_motif_base_on_path", False
                             )
+                        ):
                             _path_accept_contact_upsert(
                                 mcts_runner,
                                 path_accept_snap,
@@ -1184,6 +1275,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                                 pack_cache=_pack_cache,
                                 telem=mcts_telem,
                             )
+                    elif cov_ok:
+                        _note_path_accept_warm(
+                            mcts_runner, path_accept_snap, alt_action
+                        )
+                        mcts_telem["path_credit_n"] = int(
+                            mcts_telem.get("path_credit_n", 0) or 0
+                        ) + 1
+                    else:
+                        mcts_telem["macro_path_cov_skip"] = 1
         # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
         if not str(getattr(parent_snap, "free_kind", "") or ""):
             try:
@@ -1649,8 +1749,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "sheet_area": float(sheet.area) if sheet is not None else 0.0,
                 "board_area": float(board_area),
                 "selected": list(selected_polys),
+                "compose_sel": list(selected_polys),
+                "compose_polys": list(polys),
+                "compose_group_id": list(group_id),
+                "compose_transform": list(transform),
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
             })
+            _sync_agent_motif_cohorts(mcts_runner, propose_stats)
             mcts_telem["last_graph_n"] = int(len(transform))
             mcts_telem["last_nest_n"] = int(len(selected_polys))
             propose_stats["motif_sequential_repin"] = 0
@@ -1786,6 +1891,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             free_info=free_info,
             void_leak_stats=void_leak_stats if isinstance(void_leak_stats, dict) else None,
             propose_stats=propose_stats,
+            archived_patterns=archived_for_propose,
         )
         post_pack_ctx = PackIterCtx(
             graph=graph,
@@ -1971,6 +2077,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             best_pack_cov = cov_frac
             best_pack_sel = list(selected_polys)
             best_pack_sig = best_pack_geom_sig(polys, selected_polys)
+            best_pack_tf = [tuple(t) for t in transform]
+            best_pack_seed_n = int(
+                nest_state.seed_count if nest_state is not None else 0
+            )
         # Macro-MCTS: record expand reward (Q68/Q69); upsert contact motifs when improved.
         if mcts_action is not None and mcts_runner.agent is not None:
             mcts_parent_id, child_snap = record_outer_iter_expand(
@@ -2152,11 +2262,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         and best_pack_cov > 0.0
         and board_area > 0
     ):
-        restored_sel, did_restore, bp_telem = maybe_restore_best_pack(
+        restored_sel, did_restore, bp_telem, restored_tf = maybe_restore_best_pack(
             best=BestPackSnapshot(
                 selected_polys=list(best_pack_sel),
                 cov=float(best_pack_cov),
                 geom_sig=float(best_pack_sig),
+                transforms=list(best_pack_tf) if best_pack_tf is not None else None,
+                seed_count=int(best_pack_seed_n),
             ),
             current_selected=list(nest_state.selected_indices or ()),
             graph=graph if "graph" in locals() else (graphs[-1] if graphs else None),
@@ -2166,18 +2278,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sheet=p_sheet,
             holes=user_holes,
             usable_area=float(board_area),
+            geoms=list(nest_state.native_geoms or ()) or None,
         )
+        leak = propose_stats.get("void_leak")
+        if not isinstance(leak, dict):
+            leak = {}
+            propose_stats["void_leak"] = leak
+        leak.update(bp_telem)
         if did_restore:
+            tf_use = (
+                list(restored_tf)
+                if restored_tf is not None
+                else list(nest_state.transform)
+            )
             nest_state = NestState(
                 polys=nest_state.polys,
                 group_id=nest_state.group_id,
-                transform=nest_state.transform,
+                transform=tf_use,
                 selected_indices=list(restored_sel),
-                seed_count=int(nest_state.seed_count or 0),
+                seed_count=int(
+                    best_pack_seed_n
+                    if best_pack_seed_n
+                    else (nest_state.seed_count or 0)
+                ),
                 _native_geoms=nest_state.native_geoms,
             )
-            if isinstance(propose_stats.get("void_leak"), dict):
-                propose_stats["void_leak"].update(bp_telem)
 
     # Q84: hard stop if final selection is not packing-independent.
     if nest_state is not None and nest_state.selected_indices:

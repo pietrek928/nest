@@ -22,7 +22,7 @@ polish_se2_part(
     typename VecType::Scalar pose_x,
     typename VecType::Scalar pose_y,
     typename VecType::Scalar pose_theta,
-    const std::vector<SolidGeometry<VecType>> &obstacles,
+    std::vector<SolidGeometry<VecType>> obstacles,
     const SolidGeometry<VecType> *board,
     const std::vector<VecType> &dirs,
     int n_angles,
@@ -49,14 +49,14 @@ polish_se2_part(
     }
 
     StaticCollisionScene<VecType> scene;
-    scene.build(obstacles, static_cast<Scalar>(0.5));
+    scene.build(std::move(obstacles), static_cast<Scalar>(0.5));
     const Scalar clearance = min_dist > static_cast<Scalar>(0) ? min_dist : static_cast<Scalar>(0);
     const Scalar margin_sq = clearance * clearance;
     const Scalar distance_margin = clearance;
 
     auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
         (void)board;  // board membership via void solids in obstacles
-        if (obstacles.empty()) {
+        if (scene.obstacles.empty()) {
             return true;
         }
         return !scene.query_any_violation(placed, margin_sq, distance_margin);
@@ -159,7 +159,7 @@ polish_se2_part(
         }
 
         // Primary ray jammed at contact: ±tangent from scene normal.
-        if (obstacles.empty()) {
+        if (scene.obstacles.empty()) {
             return;
         }
         const auto hits = scene.query_placed(seeded, clearance);
@@ -194,7 +194,7 @@ polish_se2_part(
         const VecType t1({-nu[1], nu[0]});
         const VecType t2({nu[1], -nu[0]});
         for (const VecType &td : {t1, t2}) {
-            const auto tcast = cast_slide(seeded, obstacles, td, max_t);
+            const auto tcast = cast_slide(seeded, scene.obstacles, td, max_t);
             Scalar tt = max_t;
             if (tcast.intersects_path) {
                 tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
@@ -222,7 +222,7 @@ polish_se2_part(
             SolidGeometry<VecType> seeded =
                 part.rotate(theta).translate(VecType({pose_x, pose_y}));
 
-            const auto cast = cast_slide(seeded, obstacles, dir, max_t);
+            const auto cast = cast_slide(seeded, scene.obstacles, dir, max_t);
             try_slide_from_cast(seeded, theta, dir, cast);
         }
     }

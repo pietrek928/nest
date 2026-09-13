@@ -665,7 +665,11 @@ class ProposeConfig(BaseModel):
     enable_macro_path_replay: bool = False
     """Q351: apply macro_path alt_action only when True (default OFF)."""
     mutate_motif_base_on_path: bool = False
-    """Q389: path-accept ContactGRG upsert in evaluator when peaks are clean."""
+    """Q389: path-accept ContactGRG upsert when peaks are clean."""
+    macro_path_beam: int = 6
+    """Beam for build_graph macro_increase_path; evaluator keeps fn default 4 until D gate."""
+    macro_path_max_depth: int = 3
+    """Ancestor depth for macro_increase_path plateau swaps."""
     """Track D: Scene-filter cluster_copy motif_reserve after packing emit (Q25)."""
     large_void_motif_plateau_iters: int = 5
     """Q27: consecutive large_void flat iters before Track D."""

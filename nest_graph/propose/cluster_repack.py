@@ -16,6 +16,7 @@ from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
 from nest_graph.propose.placement_common import (
     as_geometry as _as_geometry,
+    clearance_scene,
     dual_pose_from_base,
     is_pose_clear,
     part_base_geoms,
@@ -672,10 +673,13 @@ def cluster_repack_selection(
             continue
         part_g = part_geoms[gid]
         clear: list[tuple[tuple[float, float, float], BaseGeometry, np.ndarray, Geometry]] = []
+        combined_obs, clear_scene = clearance_scene(voids, obs, min_dist)
         for c in coords:
             cand_tr = np.asarray(c, dtype=np.float64).reshape(3)
             cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
-            if not is_pose_clear(cand_g, voids, obs, min_dist):
+            if not is_pose_clear(
+                cand_g, voids, obs, min_dist, obs=combined_obs, scene=clear_scene,
+            ):
                 continue
             clear.append((c, cand, cand_tr, cand_g))
         if not clear:
@@ -854,6 +858,7 @@ def cluster_relocate_selection(
                 obs.append(og)
 
         best_delta = (0.0, 0.0)
+        reloc_obs, reloc_scene = clearance_scene(voids, obs, min_dist)
         for s in range(1, max_steps + 1):
             ox, oy = ux * step * s, uy * step * s
             ok = True
@@ -869,7 +874,10 @@ def cluster_relocate_selection(
                     ok = False
                     break
                 cand_g, _cand = dual_pose_from_base(part_geoms[gid], part, cand_tr)
-                if not is_pose_clear(cand_g, voids, obs, min_dist):
+                if not is_pose_clear(
+                    cand_g, voids, obs, min_dist,
+                    obs=reloc_obs, scene=reloc_scene,
+                ):
                     ok = False
                     break
             if not ok:

@@ -104,3 +104,28 @@ def test_clip_ray_interval_march_regression():
     assert len(native_pts) >= 1
     shapely_pts = _shapely_ray_samples(region, 1.0, 1.0, dx, dy, max_t)
     assert len(native_pts) == len(shapely_pts)
+
+
+def test_clip_ray_interior_batch_matches_scalar():
+    region = l_shape().buffer(0)
+    g = Geometry.from_shapely(region)
+    origins = [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0)]
+    directions = [(8.0, 0.0), (0.0, 8.0), (4.0, 4.0)]
+    max_t = 20.0
+    fracs = (0.1, 0.5)
+    coords_flat, offsets = g.clip_ray_interior_batch(origins, directions, max_t, fracs)
+    assert len(offsets) == len(origins) + 1
+    for i, (origin, direction) in enumerate(zip(origins, directions, strict=True)):
+        a = int(offsets[i])
+        b = int(offsets[i + 1])
+        hits = [
+            (float(coords_flat[2 * k]), float(coords_flat[2 * k + 1]))
+            for k in range(a, b)
+        ]
+        scalar = list(g.clip_ray_interior(origin, direction, max_t, fracs))
+        assert len(hits) == len(scalar)
+        for (bx, by), (sx, sy) in zip(
+            sorted(hits), sorted(scalar), strict=True,
+        ):
+            assert math.isclose(float(bx), float(sx), abs_tol=1e-9)
+            assert math.isclose(float(by), float(sy), abs_tol=1e-9)

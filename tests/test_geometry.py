@@ -59,27 +59,24 @@ def test_geometry_from_shapely_invalid_type():
 # --- Intersection Tests ---
 
 @pytest.mark.parametrize("p2_coords, expected_intersect", [
-    ([(3, 0), (5, 0), (5, 2), (3, 2)], False), # Disjoint
+    ([(3, 0), (5, 0), (5, 2), (3, 2)], False),  # Disjoint
     ([(1, 1), (3, 1), (3, 3), (1, 3)], True),  # Overlapping
-    ([(2, 0), (4, 0), (4, 2), (2, 2)], True),  # Touching edge
+    ([(2, 0), (4, 0), (4, 2), (2, 2)], False),  # Edge kiss: Penetrating SoT (not packing collide)
 ])
 def test_intersection(simple_square, p2_coords, expected_intersect):
     p2 = Polygon(p2_coords)
-    
-    # Verify Shapely ground truth
-    assert simple_square.intersects(p2) == expected_intersect
-    
+
     g1 = Geometry.from_shapely(simple_square)
     g2 = Geometry.from_shapely(p2)
-    
+
     results = find_polygon_intersections([g1, g2])
     assert (len(results) > 0) == expected_intersect
-    
+    assert g1.intersects(g2) == expected_intersect
+
     if expected_intersect:
         poly_a, poly_b = results[0]
         assert poly_a == 0
         assert poly_b == 1
-
 
 # --- Distance Tests ---
 

@@ -47,6 +47,11 @@ Native sources are listed in `tool.uv.cache-keys`.
 ### Git
 
 - Do not commit unless the user asks.
+- **Isolate with stash, not checkout.** To temporarily drop WIP for a baseline/ablation bench, use
+  `git stash push -m '<label>' -- <paths>` (then `git stash pop` / `apply`), **not**
+  `git checkout HEAD -- <paths>` or `git checkout -- .`. Checkout discards uncommitted work;
+  stash keeps it recoverable. Never path-checkout dirty propose/pack/geometry files “just to
+  compare.”
 
 ## Planning
 

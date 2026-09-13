@@ -246,6 +246,9 @@ def finalize_iter_mcts(
         sc = mat.get("survive_by_motif") or {}
         runner.agent.realized["survive_by_motif"] = dict(sc)
         runner.agent.realized["survive_motif_n"] = int(sum(int(v) for v in sc.values()))
+        runner.agent.realized["materialized_motif"] = int(
+            propose_stats.get("materialized_motif", 0) or 0
+        )
         mid = int(getattr(getattr(runner, "mcts_action", None), "motif_id", -1) or -1)
         if mid >= 0:
             runner.agent.realized["macro_survive_n"] = int(sc.get(mid, 0) or 0)

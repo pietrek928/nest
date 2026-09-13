@@ -80,20 +80,43 @@ class ProposeGeometry:
             GuidanceConfig,
         ] = {}
         self._region_g: Geometry | None = None
+        self._region_key: tuple[float, float, float, float, float] | None = None
         self._last_raycast_ms: float = 0.0
         self._last_from_shapely_count: int = 0
+        self._last_ray_anchor_native_n: int = 0
+        self._last_ray_anchor_from_shapely_n: int = 0
+        self._last_region_cache_hit: int = 0
+
+    @staticmethod
+    def _region_cache_key(region: BaseGeometry) -> tuple[float, float, float, float, float]:
+        # Identity proxy: bounds + area (Q318 / Q334 — invalidate on yield vs search).
+        minx, miny, maxx, maxy = region.bounds
+        return (
+            round(float(minx), 6),
+            round(float(miny), 6),
+            round(float(maxx), 6),
+            round(float(maxy), 6),
+            round(float(getattr(region, "area", 0.0) or 0.0), 6),
+        )
 
     def ingest_region(self, region: BaseGeometry) -> Geometry | None:
-        """Q315: one from_shapely per proposer invocation for search_region."""
+        """Q315: one from_shapely per matching search_region."""
         if region is None or getattr(region, "is_empty", True):
             self._region_g = None
+            self._region_key = None
             return None
+        self._region_key = self._region_cache_key(region)
         self._region_g = Geometry.from_shapely(region)
         self._last_from_shapely_count = int(self._last_from_shapely_count or 0) + 1
+        self._last_region_cache_hit = 0
         return self._region_g
 
     def region_geometry(self, region: BaseGeometry) -> Geometry | None:
-        if self._region_g is not None:
+        if region is None or getattr(region, "is_empty", True):
+            return None
+        key = self._region_cache_key(region)
+        if self._region_g is not None and self._region_key == key:
+            self._last_region_cache_hit = 1
             return self._region_g
         return self.ingest_region(region)
 

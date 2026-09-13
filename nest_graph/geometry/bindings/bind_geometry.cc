@@ -1,6 +1,8 @@
 #include <cmath>
 #include <limits>
+#include <string>
 
+#include <Python.h>
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
 #include <nanobind/stl/tuple.h>
@@ -61,8 +63,8 @@ std::vector<std::vector<Vec2d>> rings_from_geometry(const GeometryHolder &g) {
 std::vector<std::vector<Vec2d>> rings_from_python(nb::handle rings_handle) {
     std::vector<std::vector<Vec2d>> rings;
     for (nb::handle ring : nb::iter(rings_handle)) {
-        std::vector<Vec2d> pts;
-        points_from_iterable(ring, pts);
+        // Close-pop via ring_from_coords; open outlines allow ≥2 verts.
+        std::vector<Vec2d> pts = ring_from_coords(ring);
         if (pts.size() >= 2) {
             rings.push_back(std::move(pts));
         }
@@ -160,36 +162,26 @@ void bind_geometry_class(nb::module_ &m) {
         .def_static(
             "from_ring",
             [](nb::handle coords) {
-                std::vector<Vec2d> pts;
-                points_from_iterable(coords, pts);
-                return geometry_from_line_coords(std::move(pts));
+                return geometry_from_line_coords(ring_from_coords(coords));
             },
             nb::arg("coords"))
         .def_static(
             "from_rings",
             [](nb::handle rings_handle) {
-                std::vector<std::vector<Vec2d>> rings;
-                for (nb::handle ring : nb::iter(rings_handle)) {
-                    std::vector<Vec2d> pts;
-                    points_from_iterable(ring, pts);
-                    if (pts.size() >= 2) {
-                        rings.push_back(std::move(pts));
-                    }
-                }
-                return geometry_from_rings_coords(std::move(rings));
+                return geometry_from_rings_coords(rings_from_python(rings_handle));
             },
             nb::arg("rings"))
         .def_static(
             "from_shapely",
             [](nb::handle geom) {
-                if (geom_type_is(geom, "LineString")
-                    || geom_type_is(geom, "LinearRing")) {
-                    std::vector<Vec2d> pts = ring_from_coords(geom.attr("coords"));
-                    return geometry_from_line_coords(std::move(pts));
+                const std::string gtype = geom_type_string(geom);
+                if (gtype == "LineString" || gtype == "LinearRing") {
+                    return geometry_from_line_coords(
+                        ring_from_coords(geom.attr("coords")));
                 }
                 std::vector<std::vector<Vec2d>> outers;
                 std::vector<std::vector<Vec2d>> holes;
-                collect_from_shapely(geom, outers, holes);
+                collect_from_shapely(geom, outers, holes, true);
                 if (outers.empty()) {
                     throw nb::value_error(
                         "Geometry.from_shapely: no usable polygon rings "
@@ -202,14 +194,14 @@ void bind_geometry_class(nb::module_ &m) {
             "from_shapely_outline",
             [](nb::handle geom) {
                 // Exterior ring(s) only — line Geometry for standoff / kiss (C0).
-                if (geom_type_is(geom, "LineString")
-                    || geom_type_is(geom, "LinearRing")) {
-                    std::vector<Vec2d> pts = ring_from_coords(geom.attr("coords"));
-                    return geometry_from_line_coords(std::move(pts));
+                const std::string gtype = geom_type_string(geom);
+                if (gtype == "LineString" || gtype == "LinearRing") {
+                    return geometry_from_line_coords(
+                        ring_from_coords(geom.attr("coords")));
                 }
                 std::vector<std::vector<Vec2d>> outers;
                 std::vector<std::vector<Vec2d>> holes;
-                collect_from_shapely(geom, outers, holes);
+                collect_from_shapely(geom, outers, holes, /*include_holes=*/false);
                 if (outers.empty()) {
                     throw nb::value_error(
                         "Geometry.from_shapely_outline: no usable exterior rings");
@@ -372,6 +364,24 @@ void bind_geometry_class(nb::module_ &m) {
                 return out;
             })
         .def(
+            "boundary_rings_flat",
+            [](const GeometryHolder &g) {
+                // Flat harvest: coords xy-interleaved, ring offsets, subtractive flags.
+                nb::list coords;
+                nb::list offsets;
+                nb::list subtractive;
+                offsets.append(0);
+                for (const auto &ring : g.solid.boundary_rings) {
+                    for (const auto &p : ring.points) {
+                        coords.append(static_cast<double>(p[0]));
+                        coords.append(static_cast<double>(p[1]));
+                    }
+                    offsets.append(static_cast<int>(coords.size() / 2));
+                    subtractive.append(ring.is_subtractive);
+                }
+                return nb::make_tuple(coords, offsets, subtractive);
+            })
+        .def(
             "contains_point",
             [](const GeometryHolder &g, double x, double y) {
                 return is_point_inside_solid_space(Vec2d({x, y}), g.solid);
@@ -389,15 +399,7 @@ void bind_geometry_class(nb::module_ &m) {
                 const double oy = nb::cast<double>(origin_xy[1]);
                 const double dx = nb::cast<double>(direction_xy[0]);
                 const double dy = nb::cast<double>(direction_xy[1]);
-                std::vector<double> fracs;
-                if (!sample_fracs.is_none()) {
-                    for (nb::handle f : nb::iter(sample_fracs)) {
-                        fracs.push_back(static_cast<double>(nb::cast<double>(f)));
-                    }
-                }
-                if (fracs.empty()) {
-                    fracs = {0.1, 0.5};
-                }
+                const std::vector<double> fracs = sample_fracs_from_python(sample_fracs);
                 const auto pts = clip_ray_interior_samples(
                     g.solid, ox, oy, dx, dy, max_t, fracs);
                 nb::list out;
@@ -408,6 +410,65 @@ void bind_geometry_class(nb::module_ &m) {
             },
             nb::arg("origin_xy"),
             nb::arg("direction_xy"),
+            nb::arg("max_t"),
+            nb::arg("sample_fracs") = nb::make_tuple(0.1, 0.5))
+        .def(
+            "clip_ray_interior_batch",
+            [](const GeometryHolder &g,
+               nb::object origins_xy,
+               nb::object directions_xy,
+               double max_t,
+               nb::object sample_fracs) {
+                // Flat I/O: origins/dirs as length-2N float sequences (or list of pairs);
+                // returns (coords_flat xy-interleaved, offsets length N+1).
+                const std::vector<double> fracs = sample_fracs_from_python(sample_fracs);
+                std::vector<double> origins;
+                std::vector<double> dirs;
+                auto fill_xy = [](nb::object seq, std::vector<double> &out) {
+                    if (nb::isinstance<nb::list>(seq) || nb::isinstance<nb::sequence>(seq)) {
+                        const Py_ssize_t n = nb::len(seq);
+                        if (n > 0 && nb::isinstance<nb::tuple>(seq[0])) {
+                            out.reserve(static_cast<std::size_t>(n) * 2);
+                            for (Py_ssize_t i = 0; i < n; ++i) {
+                                nb::tuple xy = nb::cast<nb::tuple>(seq[i]);
+                                out.push_back(nb::cast<double>(xy[0]));
+                                out.push_back(nb::cast<double>(xy[1]));
+                            }
+                            return;
+                        }
+                    }
+                    for (nb::handle v : nb::iter(seq)) {
+                        out.push_back(nb::cast<double>(v));
+                    }
+                };
+                fill_xy(origins_xy, origins);
+                fill_xy(directions_xy, dirs);
+                if (origins.size() != dirs.size() || (origins.size() % 2) != 0) {
+                    throw nb::value_error(
+                        "clip_ray_interior_batch: origins/directions must be equal "
+                        "even-length flat xy or list of pairs");
+                }
+                const size_t n = origins.size() / 2;
+                nb::list coords;
+                nb::list offsets;
+                offsets.append(0);
+                for (size_t i = 0; i < n; ++i) {
+                    const double ox = origins[2 * i];
+                    const double oy = origins[2 * i + 1];
+                    const double dx = dirs[2 * i];
+                    const double dy = dirs[2 * i + 1];
+                    const auto pts = clip_ray_interior_samples(
+                        g.solid, ox, oy, dx, dy, max_t, fracs);
+                    for (const auto &p : pts) {
+                        coords.append(static_cast<double>(p[0]));
+                        coords.append(static_cast<double>(p[1]));
+                    }
+                    offsets.append(static_cast<int>(coords.size() / 2));
+                }
+                return nb::make_tuple(coords, offsets);
+            },
+            nb::arg("origins_xy"),
+            nb::arg("directions_xy"),
             nb::arg("max_t"),
             nb::arg("sample_fracs") = nb::make_tuple(0.1, 0.5))
         .def(
@@ -550,4 +611,8 @@ void bind_geometry_class(nb::module_ &m) {
         nb::arg("rings"),
         nb::arg("precision") = 1.0,
         "Mapbox polylabel on [outer, *holes] rings → (x, y, distance).");
+
+    m.def("coord_copy_buffer_n", &coord_copy_buffer_n);
+    m.def("coord_copy_iter_n", &coord_copy_iter_n);
+    m.def("reset_coord_copy_telem", &reset_coord_copy_telem);
 }

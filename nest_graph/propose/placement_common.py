@@ -6,8 +6,16 @@ from shapely import MultiPolygon, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from nest_graph.geometry import Geometry, StaticCollisionScene, find_polygon_distances_bipartite
+from nest_graph.geometry import (
+    Geometry,
+    StaticCollisionScene,
+    find_polygon_distances_bipartite,
+    find_polygon_intersections,
+    find_polygon_intersections_bipartite,
+)
+from nest_graph.propose.context import _cluster_merge_gap
 from nest_graph.propose.placement_outline import outline_ring_geom
+from nest_graph.utils import transform_poly
 
 _MAX_OBSTACLE_PARTS = 32
 # Prefer bbox safe-zone when it retains enough area for sampling; else Minkowski.
@@ -32,8 +40,6 @@ def dual_pose_from_base(
     tr: Sequence[float] | np.ndarray,
 ) -> tuple[Geometry, BaseGeometry]:
     """Native clearance pose + matching Shapely poly (one sync site)."""
-    from nest_graph.utils import transform_poly
-
     t = np.asarray(tr, dtype=np.float64).reshape(3)
     native = part_base.apply_transform(float(t[0]), float(t[1]), float(t[2]))
     return native, transform_poly(part_poly, t)
@@ -74,8 +80,6 @@ def is_board_adj(
     board_ring = ring if ring is not None else outline_ring_geom(sheet)
     if board_ring is None:
         return False
-    from nest_graph.propose.context import _cluster_merge_gap
-
     g_gap = float(gap) if gap is not None else float(
         _cluster_merge_gap([poly], min_dist, sheet)
     )
@@ -153,31 +157,135 @@ def placement_obstacles(voids, packed) -> list[Geometry]:
     return obs
 
 
-def _shapely_hard_overlap(pa: BaseGeometry, pb: BaseGeometry, tol: float = 1e-12) -> bool:
-    if pa is None or pb is None:
-        return False
-    if getattr(pa, "is_empty", False) or getattr(pb, "is_empty", False):
-        return False
-    if not pa.intersects(pb):
-        return False
-    inter = pa.intersection(pb)
-    return not inter.is_empty and float(inter.area) > tol
-
-
-def is_pose_clear_vs_fixed_shapely(
-    candidate_poly: BaseGeometry,
-    fixed_obstacles: Sequence[BaseGeometry] | None,
-    overlap_area_tol: float = 1e-12,
-) -> bool:
-    """Shapely hard-overlap gate for locked seeds (evaluator parity)."""
-    if candidate_poly is None or getattr(candidate_poly, "is_empty", False):
-        return False
-    for obs in fixed_obstacles or ():
-        if obs is None or getattr(obs, "is_empty", False):
+def _coerce_geom_list(
+    polys: Sequence | None,
+    indices: Sequence[int] | None,
+    geoms: Sequence[Geometry | None] | None,
+) -> tuple[list[Geometry], int, int]:
+    """Build Geometry list for packing-clear; returns (geoms, native_n, from_shapely_n)."""
+    out: list[Geometry] = []
+    native_n = 0
+    from_shapely_n = 0
+    if indices is None:
+        idxs = list(range(len(polys or ())))
+    else:
+        idxs = [int(i) for i in indices]
+    for ia in idxs:
+        g: Geometry | None = None
+        if geoms is not None and 0 <= ia < len(geoms) and geoms[ia] is not None:
+            g = geoms[ia]
+            if isinstance(g, Geometry):
+                native_n += 1
+                out.append(g)
+                continue
+        if polys is None or ia < 0 or ia >= len(polys):
             continue
-        if _shapely_hard_overlap(candidate_poly, obs, overlap_area_tol):
+        pa = polys[ia]
+        if pa is None or (hasattr(pa, "is_empty") and pa.is_empty):
+            continue
+        if isinstance(pa, Geometry):
+            native_n += 1
+            out.append(pa)
+            continue
+        cg = as_geometry(pa)
+        if cg is not None:
+            from_shapely_n += 1
+            out.append(cg)
+    return out, native_n, from_shapely_n
+
+
+def selection_packing_clear(
+    polys: Sequence | None,
+    selected_indices: Sequence[int],
+    *,
+    fixed_obstacles: Sequence | None = None,
+    geoms: Sequence[Geometry | None] | None = None,
+    fixed_geoms: Sequence[Geometry | None] | None = None,
+    min_dist: float = 0.0,
+    require_clearance: bool = False,
+    telem: dict | None = None,
+) -> bool:
+    """One packing-clear SoT: C++ find_polygon_intersections (Penetrating; kisses OK).
+
+    Optional ``geoms`` / ``fixed_geoms`` skip ``from_shapely``. Clearance distance
+    is only checked when ``require_clearance`` (pairwise path).
+    """
+    sel = [int(i) for i in selected_indices]
+    sel_geoms, native_n, from_n = _coerce_geom_list(polys, sel, geoms)
+    if telem is not None:
+        telem["packing_clear_native_n"] = int(
+            telem.get("packing_clear_native_n", 0) or 0
+        ) + int(native_n)
+        telem["packing_clear_from_shapely_n"] = int(
+            telem.get("packing_clear_from_shapely_n", 0) or 0
+        ) + int(from_n)
+    if len(sel_geoms) >= 2:
+        hits = find_polygon_intersections(sel_geoms)
+        if hits:
+            return False
+    if require_clearance and float(min_dist) > 0.0 and len(sel_geoms) >= 2:
+        for a in range(len(sel_geoms)):
+            for b in range(a + 1, len(sel_geoms)):
+                if float(sel_geoms[a].distance(sel_geoms[b])) < float(min_dist):
+                    return False
+    fixed_list: list[Geometry] = []
+    if fixed_geoms is not None:
+        for g in fixed_geoms:
+            if g is not None and isinstance(g, Geometry):
+                fixed_list.append(g)
+    elif fixed_obstacles:
+        for obs in fixed_obstacles:
+            if obs is None or getattr(obs, "is_empty", False):
+                continue
+            if isinstance(obs, Geometry):
+                fixed_list.append(obs)
+                continue
+            og = as_geometry(obs)
+            if og is not None:
+                fixed_list.append(og)
+                if telem is not None:
+                    telem["packing_clear_from_shapely_n"] = int(
+                        telem.get("packing_clear_from_shapely_n", 0) or 0
+                    ) + 1
+    if sel_geoms and fixed_list:
+        bi = find_polygon_intersections_bipartite(sel_geoms, fixed_list)
+        if bi:
             return False
     return True
+
+
+def is_pose_clear_vs_fixed(
+    candidate_poly: BaseGeometry | Geometry,
+    fixed_obstacles: Sequence[BaseGeometry] | None,
+    overlap_area_tol: float = 1e-12,
+    *,
+    fixed_geoms: Sequence[Geometry | None] | None = None,
+) -> bool:
+    """Hard-overlap gate vs locked seeds (packing Penetrating SoT).
+
+    ``overlap_area_tol`` ignored (Penetrating intersects).
+    """
+    del overlap_area_tol
+    if candidate_poly is None or getattr(candidate_poly, "is_empty", False):
+        return False
+    cand_g = (
+        candidate_poly
+        if isinstance(candidate_poly, Geometry)
+        else as_geometry(candidate_poly)
+    )
+    if cand_g is None:
+        return False
+    return selection_packing_clear(
+        None,
+        [0],
+        geoms=[cand_g],
+        fixed_obstacles=fixed_obstacles,
+        fixed_geoms=fixed_geoms,
+    )
+
+
+# Compat alias for call sites / tests still importing the old name.
+is_pose_clear_vs_fixed_shapely = is_pose_clear_vs_fixed
 
 
 def post_pack_overlap_ok(
@@ -186,25 +294,20 @@ def post_pack_overlap_ok(
     *,
     fixed_obstacles: Sequence[BaseGeometry] | None = None,
     overlap_area_tol: float = 1e-12,
+    geoms: Sequence[Geometry | None] | None = None,
+    fixed_geoms: Sequence[Geometry | None] | None = None,
+    telem: dict | None = None,
 ) -> bool:
-    """Match ``nesting_evaluator`` overlap_ok for post-pack poses (incl. seeds)."""
-    sel = [int(i) for i in selected_indices]
-    sel_polys = [
-        polys[i]
-        for i in sel
-        if polys[i] is not None and not getattr(polys[i], "is_empty", False)
-    ]
-    for a in range(len(sel_polys)):
-        pa = sel_polys[a]
-        for b in range(a + 1, len(sel_polys)):
-            if _shapely_hard_overlap(pa, sel_polys[b], overlap_area_tol):
-                return False
-        for obs in fixed_obstacles or ():
-            if obs is None or getattr(obs, "is_empty", False):
-                continue
-            if _shapely_hard_overlap(pa, obs, overlap_area_tol):
-                return False
-    return True
+    """Post-pack / path overlap SoT via packing Penetrating intersects."""
+    del overlap_area_tol
+    return selection_packing_clear(
+        polys,
+        selected_indices,
+        fixed_obstacles=fixed_obstacles,
+        geoms=geoms,
+        fixed_geoms=fixed_geoms,
+        telem=telem,
+    )
 
 
 def selection_pairwise_independent(
@@ -213,35 +316,23 @@ def selection_pairwise_independent(
     min_dist: float = 0.0,
     *,
     require_clearance: bool = False,
+    geoms: Sequence[Geometry | None] | None = None,
+    telem: dict | None = None,
 ) -> bool:
     """Cheap independence check on the selected subset only.
 
     Matches ``make_polygon_graph`` / C++ packing intersects: hard overlap only
     (EPA penetration depth > 1e-9). Zero-depth edge kisses are independent.
     Pass ``require_clearance=True`` to also enforce pairwise ``min_dist``.
-    Uses Geometry intersects/distance (no Shapely intersects hotspot).
     """
-    idxs = list(selected_indices)
-    geoms: list[Geometry | None] = []
-    for ia in idxs:
-        pa = polys[ia]
-        if pa is None or (hasattr(pa, "is_empty") and pa.is_empty):
-            geoms.append(None)
-        else:
-            geoms.append(as_geometry(pa))
-    for a in range(len(geoms)):
-        ga = geoms[a]
-        if ga is None:
-            continue
-        for b in range(a + 1, len(geoms)):
-            gb = geoms[b]
-            if gb is None:
-                continue
-            if ga.intersects(gb):
-                return False
-            if require_clearance and float(ga.distance(gb)) < float(min_dist):
-                return False
-    return True
+    return selection_packing_clear(
+        polys,
+        selected_indices,
+        geoms=geoms,
+        min_dist=float(min_dist),
+        require_clearance=bool(require_clearance),
+        telem=telem,
+    )
 
 
 def is_pose_clear(
@@ -249,19 +340,43 @@ def is_pose_clear(
     voids,
     packed,
     min_dist: float,
+    *,
+    obs: list[Geometry] | None = None,
+    scene: StaticCollisionScene | None = None,
 ) -> bool:
-    """Clearance SoT: StaticCollisionScene / Penetrating vs voids+packed (no fully_inside)."""
+    """Clearance SoT: StaticCollisionScene / Penetrating vs voids+packed (no fully_inside).
+
+    Optional ``obs`` must be ``placement_obstacles(...)`` (or equivalent Geometry
+    list) — not a second assembler. Optional ``scene`` reuses a prebuilt
+    ``StaticCollisionScene`` when voids+packed are fixed across candidates.
+    """
     cand_g = as_geometry(candidate)
     if cand_g is None:
         return False
-    obs = placement_obstacles(voids, packed)
-    if not obs:
+    obstacles = obs if obs is not None else placement_obstacles(voids, packed)
+    if not obstacles:
         return True
     md = float(min_dist)
     if md <= 0.0:
-        return clear_of_geoms(cand_g, obs, 0.0)
-    scene = StaticCollisionScene.build(obs, aura=0.5)
-    return bool(scene.is_valid_placement(cand_g, min_dist=md))
+        return clear_of_geoms(cand_g, obstacles, 0.0)
+    if scene is not None:
+        return bool(scene.is_valid_placement(cand_g, min_dist=md))
+    built = StaticCollisionScene.build(obstacles, aura=0.5)
+    return bool(built.is_valid_placement(cand_g, min_dist=md))
+
+
+def clearance_scene(
+    voids,
+    packed,
+    min_dist: float,
+    *,
+    obs: list[Geometry] | None = None,
+) -> tuple[list[Geometry], StaticCollisionScene | None]:
+    """One obs list + optional Scene for looped ``is_pose_clear`` (cluster_repack SoT)."""
+    obstacles = obs if obs is not None else placement_obstacles(voids, packed)
+    if float(min_dist) <= 0.0 or not obstacles:
+        return obstacles, None
+    return obstacles, StaticCollisionScene.build(obstacles, aura=0.5)
 
 
 def clear_of_geoms(candidate: Geometry, others: list[Geometry], min_dist: float) -> bool:

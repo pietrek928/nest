@@ -26,8 +26,35 @@ from nest_graph.propose.placement_common import (
     outline_ring_geom,
     placement_obstacles,
 )
-from nest_graph.propose.void_selection import pose_key_to_index
+from nest_graph.propose.void_selection import centroid_in_free, pose_key_to_index
 from nest_graph.utils import transform_row_key
+
+
+def prefer_void_core_locks(
+    locks: Sequence[Sequence[int]],
+    polys: Sequence | None,
+    free_poly,
+) -> tuple[list[list[int]], int]:
+    """Prefer locks whose members are void-core; fallback to full list if none."""
+    raw = [list(lock) for lock in locks if len(lock) >= 2]
+    if (
+        not raw
+        or polys is None
+        or free_poly is None
+        or getattr(free_poly, "is_empty", True)
+    ):
+        return raw, 0
+    preferred: list[list[int]] = []
+    for lock in raw:
+        if all(
+            0 <= int(i) < len(polys)
+            and centroid_in_free(polys[int(i)], free_poly)
+            for i in lock
+        ):
+            preferred.append([int(i) for i in lock])
+    if preferred:
+        return preferred, len(preferred)
+    return raw, 0
 
 
 @dataclass
@@ -117,11 +144,20 @@ def _rank_cohorts(
     key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
     scores: Sequence[float],
     pole: Point | None,
+    *,
+    polys: Sequence | None = None,
+    free_poly=None,
 ) -> list[dict]:
+    """Rank cohorts: more free members → closer to void pole → −leader score."""
     pole_xy: tuple[float, float] | None = None
     if pole is not None and not getattr(pole, "is_empty", True):
         pole_xy = (float(pole.x), float(pole.y))
-    ranked: list[tuple[float, float, dict]] = []
+    use_free = (
+        polys is not None
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    )
+    ranked: list[tuple[int, float, float, dict]] = []
     for cohort in cohorts:
         leader_key = cohort.get("leader_key")
         leader_gid = int(cohort.get("leader_gid", -1))
@@ -135,9 +171,16 @@ def _rank_cohorts(
         idx = key_map.get((leader_gid, lk))
         if idx is not None and idx < len(scores):
             sc = float(scores[idx])
-        ranked.append((dist, -sc, cohort))
-    ranked.sort(key=lambda x: (x[0], x[1]))
-    return [c for _d, _s, c in ranked]
+        n_free = 0
+        if use_free:
+            idxs, _miss = cohort_member_indices(cohort, key_map)
+            for i in idxs:
+                ii = int(i)
+                if 0 <= ii < len(polys) and centroid_in_free(polys[ii], free_poly):
+                    n_free += 1
+        ranked.append((-int(n_free), dist, -sc, cohort))
+    ranked.sort(key=lambda x: (x[0], x[1], x[2]))
+    return [c for _nf, _d, _s, c in ranked]
 
 
 def _scene_accept_factory(
@@ -224,7 +267,14 @@ def hollow_pattern_lock_sets(
     scene_max = [0]
     cap = max(int(max_locks), 0)
 
-    for cohort in _rank_cohorts(list(cohorts or ()), key_map, scores or (), pole):
+    for cohort in _rank_cohorts(
+        list(cohorts or ()),
+        key_map,
+        scores or (),
+        pole,
+        polys=candidate_geoms,
+        free_poly=None,
+    ):
         idxs, _miss = cohort_member_indices(cohort, key_map)
         pattern_idxs = [int(i) for i in idxs if int(i) in cc_set]
         if len(pattern_idxs) < 2 or not _packing_independent(pattern_idxs, graph):
@@ -312,8 +362,11 @@ def anchored_nest_indices(
         return [], telem
 
     board_adj: set[int] = set()
+    board_ring = outline_ring_geom(sheet)
     for i in sel:
-        if i < len(polys) and is_board_adj(polys[i], sheet, min_dist):
+        if i < len(polys) and is_board_adj(
+            polys[i], sheet, min_dist, ring=board_ring,
+        ):
             board_adj.add(i)
 
     anchored: set[int] = set(board_adj)
@@ -430,6 +483,39 @@ def motif_join_lock_sets(
     return out
 
 
+def pin_if_in_nest(
+    lock: Sequence[int],
+    selected: Sequence[int],
+    graph,
+    *,
+    propose_stats: dict | None = None,
+    source: str = "join_in_nest",
+) -> list[int] | None:
+    """One ⊆-nest pin gate: lock ⊆ selected + packing-independent → motif_locked.
+
+    ``source`` stamps ``motif_lock_source`` / pin telem (join_in_nest,
+    join_after_unlock, void_scene_in_nest).
+    """
+    lock_idxs = [int(i) for i in lock if int(i) >= 0]
+    if len(lock_idxs) < 2:
+        return None
+    lock_set = set(lock_idxs)
+    sel_set = {int(i) for i in selected}
+    if not lock_set <= sel_set:
+        return None
+    if graph is not None and not _packing_independent(lock_idxs, graph):
+        return None
+    if propose_stats is not None:
+        propose_stats["compose_motif_hold"] = 1
+        propose_stats["motif_lock_source"] = str(source)
+        propose_stats["join_in_nest_pin"] = 1
+        if source == "void_scene_in_nest":
+            propose_stats["void_scene_in_nest_pin"] = int(
+                propose_stats.get("void_scene_in_nest_pin", 0) or 0
+            ) + 1
+    return list(lock_idxs)
+
+
 def hybrid_compose_pick(
     *,
     graph,
@@ -443,8 +529,17 @@ def hybrid_compose_pick(
     telem: dict | None = None,
     lock_len: int | None = None,
     join_prefer: bool = False,
+    unlocked_void: bool = False,
+    count_cand: int | None = None,
+    count_orig: int | None = None,
+    void_scene: bool = False,
 ) -> bool:
-    """Q362: independence → cc 0.90× → void 0.88× → join 0.88× → lex area."""
+    """Q362: indep → cc 0.90× → void (0.88× / join_prefer 0.84×) → lex.
+
+    ``unlocked_void`` (Q377) arms the void soft floor without a MotifJoin lock.
+    join_prefer soft floor also requires non-decreasing selection count when
+    ``count_*`` are provided — except ``void_scene`` (Letter A: drop count gate).
+    """
     n_lock = int(lock_len if lock_len is not None else len(lock))
     if telem is not None:
         telem["hybrid_pick_trials"] = int(telem.get("hybrid_pick_trials", 0)) + 1
@@ -458,10 +553,21 @@ def hybrid_compose_pick(
         if telem is not None:
             telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
         return True
+    void_floor = 0.84 if join_prefer else 0.88
+    void_gate = (n_lock >= 2) or bool(unlocked_void)
+    count_ok = True
     if (
-        n_lock >= 2
+        join_prefer
+        and not bool(void_scene)
+        and count_cand is not None
+        and count_orig is not None
+    ):
+        count_ok = int(count_cand) >= int(count_orig)
+    if (
+        void_gate
         and void_cand > void_orig
-        and area_cand + 1e-12 >= 0.88 * area_orig
+        and count_ok
+        and area_cand + 1e-12 >= void_floor * area_orig
     ):
         if telem is not None:
             telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
@@ -469,24 +575,6 @@ def hybrid_compose_pick(
                 telem["hybrid_pick_join_soft"] = int(
                     telem.get("hybrid_pick_join_soft", 0)
                 ) + 1
-        return True
-    # MotifJoin handoff: same cc/void floors as Q362 (one gate).
-    if (
-        join_prefer
-        and n_lock >= 2
-        and (
-            (cc_n2 > 0 and area_cand + 1e-12 >= 0.90 * area_orig)
-            or (
-                void_cand > void_orig
-                and area_cand + 1e-12 >= 0.88 * area_orig
-            )
-        )
-    ):
-        if telem is not None:
-            telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
-            telem["hybrid_pick_join_soft"] = int(
-                telem.get("hybrid_pick_join_soft", 0)
-            ) + 1
         return True
     if lex_better:
         if telem is not None:
@@ -523,6 +611,7 @@ def compose_motif_pipeline(
     rcl_top_k: int = 10,
     large_void: bool = False,
     max_locks: int = 4,
+    free_poly=None,
 ) -> MotifComposeResult:
     """Unified pre_nest (soft steer) and post_hollow (anchored Scene locks) compose."""
     telem: dict = {}
@@ -544,6 +633,8 @@ def compose_motif_pipeline(
             max_accept=max_accept,
             rcl_top_k=rcl_top_k,
             large_void=large_void,
+            polys=polys,
+            free_poly=free_poly,
         )
         del _combined
         telem.update(seq_telem)
@@ -654,7 +745,11 @@ def compose_motif_pipeline(
             if k in ("hollow_pattern_locks", "hollow_flat_pair_locks", "motif_scene_max_sz"):
                 telem[k] = max(int(telem.get(k, 0) or 0), int(v or 0))
         if void_locks:
-            hollow_locks = void_locks
+            preferred, n_core = prefer_void_core_locks(
+                void_locks, polys, free_poly,
+            )
+            telem["hollow_void_core_locks"] = int(n_core)
+            hollow_locks = preferred
             telem["hollow_lock_void_hit"] = 1
     lock_sets = hollow_locks
     scene_sz = int(telem.get("motif_scene_max_sz", 0) or 0)
@@ -725,6 +820,8 @@ def sequential_accept_motif_cohorts(
     max_accept: int = 3,
     rcl_top_k: int = 10,
     large_void: bool = False,
+    polys: Sequence | None = None,
+    free_poly=None,
 ) -> tuple[list[int], dict]:
     """Pre-MIS: accept full motif cohorts under growing Scene clear.
 
@@ -742,13 +839,26 @@ def sequential_accept_motif_cohorts(
         "motif_beam_sets": 0,
         "motif_scene_max_sz": 0,
         "motif_pack_max_sz": 0,
+        "cohort_void_rank_n": 0,
     }
     if not cohorts:
         return [], telem
     key_map = pose_key_to_index(group_id, transform)
-    rcl = _rank_cohorts(list(cohorts), key_map, scores, pole)[
-        : max(int(rcl_top_k), 1)
-    ]
+    rank_polys = polys if polys is not None else candidate_geoms
+    rcl = _rank_cohorts(
+        list(cohorts),
+        key_map,
+        scores,
+        pole,
+        polys=rank_polys,
+        free_poly=free_poly,
+    )[: max(int(rcl_top_k), 1)]
+    if (
+        free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+        and rank_polys is not None
+    ):
+        telem["cohort_void_rank_n"] = int(len(rcl))
     telem["motif_sequential_rcl"] = len(rcl)
 
     voids = [g for g in (void_geoms or []) if g is not None]

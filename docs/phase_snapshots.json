@@ -44,33 +44,58 @@
   },
   "phase_void_fill_dg_loop": {
     "void_fill": {
-      "area": 0.548,
-      "parts": 49.0,
-      "time": 77.0,
+      "area": 0.560,
+      "parts": 51.7,
+      "time": 82.4,
       "independent_ok": true,
       "overlap_ok": true,
       "telem": {
-        "compose_sz": 0,
+        "compose_sz": 2,
         "path_extend_n": 72,
         "path_step_macro": 36,
         "path_step_join": 52,
-        "macro_path_accept": 8,
+        "macro_path_accept": 4,
         "path_contact_upserts": 0,
-        "survive_motif_n": 0,
-        "contact_grg_upserts": 0,
+        "survive_motif_n": 3,
+        "contact_grg_upserts": 1,
         "join_n": 8,
-        "mat_motif": 0,
+        "mat_motif": 4,
         "void_scale": 4.0,
         "pre_refine_lock_reject": 0,
         "amaf_survive_scale": 0.65,
         "best_pack_sig_miss": 0,
-        "hollow_join_lock_sets": 4,
-        "pick_join_soft": 0,
-        "seed0_area": 0.548,
-        "seed1_area": 0.548,
-        "seed2_area": 0.536
+        "hollow_void_core_locks": 0,
+        "hybrid_pick_join_soft": 1,
+        "replay_from_ancestor_ms": 4210.0,
+        "seed0_area": 0.570,
+        "seed1_area": 0.565,
+        "seed2_area": 0.544
       },
-      "note": "Letters A–C shipped 2026-08-29: Q377→hybrid_compose_pick, pre_refine_lock_reject, MotifJoin lock fallback + board Scene retry, path_reward_beats + coverage delta, amaf_survive_scale, with_isolated_pack_cache, BestPackSnapshot.geom_sig, mutate_motif_base_on_path flag. Gate 0.585 NOT met (seed0 0.548–0.573); compose_sz=0 on seed0; surv_m=0; path telem live with enable_macro_path_replay."
+      "note": "Followup A–D 2026-09-12: join_prefer void floor 0.84× in hybrid_compose_pick (delete void_scene_rise); soft void-core prefer on void-retry; unlocked_void kw; mat_motif→agent.realized; MotifBase→post_pack archived_patterns; U1∩score unify; path_ms printed (~4s/80s → defer C++ macro_increase_path). Gate 0.585 NOT met (mean 0.560; seed0 peaks seen ~0.586). Replay stays Q351 default OFF + cov+0.005 when ON."
+    }
+  },
+  "phase_dg_expand_hybrid": {
+    "void_fill": {
+      "area": 0.536,
+      "parts": 48.7,
+      "time": 89.1,
+      "independent_ok": true,
+      "overlap_ok": true,
+      "telem": {
+        "compose_sz": 2,
+        "place_cohort_ready": 1,
+        "place_cohort_specs_n": 8,
+        "mcts_cohort_macro_n": 12,
+        "path_credit_n": 1,
+        "macro_path_motif_soft": 1,
+        "macro_path_beam": 6,
+        "star_stitch_n": 0,
+        "packing_clear": 1,
+        "seed0_area": 0.533,
+        "seed1_area": 0.527,
+        "seed2_area": 0.547
+      },
+      "note": "DG expand hybrid A→B→E→C→D 2026-09-13: Q237 star-stitch inject; pin_if_in_nest; void-arm count_ok; BestPackSnapshot transforms; selection_packing_clear (Penetrating); compose_sel(+geoms) writeback; Motif soft in build_graph / S1 credit-only in evaluator; PLACE_COHORT telem-gate + agent feed; macro_path_beam=6. Gate 0.585 NOT met. Live HEAD mean same day also ~0.530 (snapshot 0.560 not reproduced); best WIP mean this session 0.564. Continue density loop without fixture retune."
     }
   }
 }

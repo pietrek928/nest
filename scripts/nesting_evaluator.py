@@ -20,6 +20,7 @@ from nest_graph.build_graph import (
     _path_accept_contact_upsert,
     _selection_budget_for_iter,
     _selection_coverage_pct,
+    _sync_agent_motif_cohorts,
     active_rule_set,
     improve_rules,
     make_polygon_graph,
@@ -47,6 +48,7 @@ from nest_graph.propose.telem import (
     best_pack_geom_sig,
     build_run_diagnostics,
     maybe_restore_best_pack,
+    record_overlap_reject,
     void_elite_count,
 )
 from nest_graph.pack.motif_credit import (
@@ -768,6 +770,11 @@ class NestingPipelineEvaluator:
                 and mcts_runner.agent is not None
                 and pack_cache.get("ready")
             ):
+                _prev_ps = pack_cache.get("propose_stats")
+                _sync_agent_motif_cohorts(
+                    mcts_runner,
+                    _prev_ps if isinstance(_prev_ps, dict) else None,
+                )
                 rem = tuple(range(max(len(self.parts), 1)))
                 max_void_ratio = float(last_void_leak.get("max_void_ratio", 0.0) or 0.0)
                 void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
@@ -823,6 +830,13 @@ class NestingPipelineEvaluator:
                             baseline_reward=base_r,
                             execute_fn=mcts_runner.execute_fn,
                             rule_ids=_mcts_rule_ids(rule_sets),
+                            beam=int(
+                                getattr(self.cfg.propose, "macro_path_beam", 4) or 4
+                            ),
+                            max_depth=int(
+                                getattr(self.cfg.propose, "macro_path_max_depth", 3)
+                                or 3
+                            ),
                             telem=mcts_telem,
                             overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(
                                 pack_cache
@@ -848,18 +862,28 @@ class NestingPipelineEvaluator:
                                 self.cfg.propose, "enable_macro_path_replay", False
                             )
                         )
-                        # S1 discover telem only in evaluator — MotifBase warm/upsert
-                        # on path packs produced overlapping peak boards (brej=1).
+                        alt_cov = float(
+                            getattr(path_accept_snap, "coverage", 0.0) or 0.0
+                        ) if path_accept_snap is not None else 0.0
+                        cov_ok = (
+                            path_accept_snap is not None
+                            and bool(path_overlap_ok)
+                            and alt_cov + 1e-9 >= base_cov + 0.005
+                        )
+                        is_motif = (
+                            getattr(alt_action, "region", None) == MacroRegion.Motif
+                        )
+                        # S1: evaluator discover telem only — do not soft-apply Motif
+                        # into mcts_action (path packs poisoned overlapping peaks).
                         if apply_path and path_accept_snap is not None and path_overlap_ok:
                             mcts_telem["macro_path_accept"] = int(
                                 mcts_telem.get("macro_path_accept", 0) or 0
                             ) + 1
-                            # Apply replay only when probe pack is overlap-clean; otherwise
-                            # telem-only (S1) so evaluator peaks are not poisoned.
-                            if float(getattr(path_accept_snap, "coverage", 0.0) or 0.0) + 1e-9 >= (
-                                base_cov + 0.005
-                            ):
+                            if cov_ok:
                                 mcts_action = alt_action
+                                mcts_telem["path_credit_n"] = int(
+                                    mcts_telem.get("path_credit_n", 0) or 0
+                                ) + 1
                             if bool(
                                 getattr(
                                     self.cfg.propose, "mutate_motif_base_on_path", False
@@ -870,7 +894,7 @@ class NestingPipelineEvaluator:
                                 ) + _path_accept_contact_upsert(
                                     mcts_runner,
                                     path_accept_snap,
-                                    part_bases=part_bases,
+                                    part_bases=part_bases_fixed,
                                     min_dist=float(
                                         self.cfg.board_min_dist_for(self.sheet)
                                     ),
@@ -897,12 +921,19 @@ class NestingPipelineEvaluator:
                                     pack_cache=pack_cache,
                                     telem=mcts_telem,
                                 )
-                            else:
-                                mcts_telem["path_contact_upserts"] = int(
-                                    mcts_telem.get("path_contact_upserts", 0) or 0
-                                )
-                        elif apply_path and path_accept_snap is not None:
+                        elif cov_ok:
+                            # Letter C credit without apply (Q351 OFF / S1).
+                            mcts_telem["path_credit_n"] = int(
+                                mcts_telem.get("path_credit_n", 0) or 0
+                            ) + 1
+                            if is_motif:
+                                mcts_telem["macro_path_motif_soft"] = 1
+                        elif apply_path:
                             mcts_telem["macro_path_overlap_skip"] = 1
+                            record_overlap_reject(mcts_telem, stage="path")
+                            agent = getattr(mcts_runner, "agent", None)
+                            if agent is not None:
+                                agent.note_macro_miss(alt_action)
                 if mcts_action is None:
                     mcts_action = mcts_runner.agent.pick_expand_action(
                         rem,
@@ -1430,6 +1461,7 @@ class NestingPipelineEvaluator:
                 free_info=free_info,
                 void_leak_stats=last_void_leak if isinstance(last_void_leak, dict) else None,
                 propose_stats=propose_stats,
+                archived_patterns=archived_for_propose,
             )
             post_pack_ctx = PackIterCtx(
                 graph=graph,
@@ -1546,6 +1578,14 @@ class NestingPipelineEvaluator:
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
                 "selected": list(selected_polys),
             })
+            _sync_agent_motif_cohorts(mcts_runner, propose_stats)
+            if isinstance(last_void_leak, dict):
+                last_void_leak["place_cohort_ready"] = int(
+                    propose_stats.get("place_cohort_ready", 0) or 0
+                )
+                last_void_leak["place_cohort_specs_n"] = int(
+                    propose_stats.get("place_cohort_specs_n", 0) or 0
+                )
             # Q185/Q189 archive telem after Motif upsert site (post-expand).
             lib_n = int(mcts_runner.motif_base.size())
             motif_refine_n = 0
@@ -1667,9 +1707,9 @@ class NestingPipelineEvaluator:
             trajectory.append((t_elapsed, cov, len(seed_polys) + len(selected_polys)))
             if usable > 0 and next_polys:
                 poly_cov = sum(float(p.area) for p in next_polys) / usable
-                if poly_cov > best_cov + 1e-9 and post_pack_overlap_ok(
-                    next_polys, range(len(next_polys)),
-                ):
+                # Peak track with gate Shapely pairwise (Q371); packing-clear SoT
+                # remains for post_pack / path. Avoid C++ false-pen rejects starving peaks.
+                if poly_cov > best_cov + 1e-9 and _shapes_pairwise_ok(next_polys):
                     best_cov = float(poly_cov)
                     best_next_polys = list(next_polys)
                     best_next_gids = list(next_gids)
@@ -1707,7 +1747,7 @@ class NestingPipelineEvaluator:
             and best_cov > 0.0
             and usable_area > 0
         ):
-            restored_sel, did_restore, bp_telem = maybe_restore_best_pack(
+            restored_sel, did_restore, bp_telem, _restored_tf = maybe_restore_best_pack(
                 best=BestPackSnapshot(
                     selected_polys=list(best_selected_polys),
                     cov=float(best_cov),
@@ -1733,9 +1773,9 @@ class NestingPipelineEvaluator:
         independent_ok = (
             selection_is_independent(graph, selected_polys) if graph is not None else False
         )
-        # Geometric overlap: hard intersections only. Graph independence already
-        # encodes clearance edges; post-compact poses may sit slightly under
-        # numeric min_dist without being graph-adjacent.
+        # Geometric overlap: Shapely area tol matches historical gate floors;
+        # packing-clear remains post_pack/path SoT (Letter E). Restore prefers
+        # peak when final fails packing-clear or regresses ≥0.5pp.
         if next_polys:
             placed_shapes = list(next_polys)
         else:
@@ -1743,7 +1783,10 @@ class NestingPipelineEvaluator:
                 transform_poly(self.parts[group_id[i]][0], transform[i])
                 for i in selected_polys
             ]
-        overlap_ok = True
+        overlap_ok = bool(_shapes_pairwise_ok(placed_shapes))
+        packing_clear_ok = bool(
+            post_pack_overlap_ok(placed_shapes, range(len(placed_shapes)))
+        )
         void_ok = True
         for a, pa in enumerate(placed_shapes):
             if pa is None or pa.is_empty:
@@ -1754,25 +1797,21 @@ class NestingPipelineEvaluator:
                 inter = pa.intersection(hole)
                 if not inter.is_empty and inter.area > 1e-6:
                     void_ok = False
-            for b in range(a + 1, len(placed_shapes)):
-                pb = placed_shapes[b]
-                if pb is None or pb.is_empty:
-                    continue
-                if pa.intersects(pb) and pa.intersection(pb).area > 1e-12:
-                    overlap_ok = False
 
         area_coverage = 0.0
         if usable_area > 0 and parts_final > 0:
             part_area = sum(float(p.area) for p in placed_shapes)
             area_coverage = part_area / usable_area
-        # Q371: restore peak nest polys with gate-overlap (not Geometry clearance).
+        # Q371 / Letter B: restore peak when regress or packing-clear fails.
         if best_next_polys is not None and usable_area > 0:
             peak_area = sum(float(p.area) for p in best_next_polys) / usable_area
             final_before = float(area_coverage)
-            gate_ok = post_pack_overlap_ok(
-                best_next_polys, range(len(best_next_polys)),
+            gate_ok = _shapes_pairwise_ok(best_next_polys)
+            want_restore = gate_ok and (
+                peak_area > final_before + 0.005
+                or (not packing_clear_ok and peak_area + 1e-9 >= final_before)
             )
-            if peak_area > final_before + 0.005 and gate_ok:
+            if want_restore:
                 # Re-validate void/board before accepting restore.
                 void_peak = True
                 for pa in best_next_polys:
@@ -1806,8 +1845,13 @@ class NestingPipelineEvaluator:
                         last_void_leak["best_pack_final_cov"] = float(final_before)
                 elif isinstance(last_void_leak, dict):
                     last_void_leak["best_pack_reject"] = 1
-            elif isinstance(last_void_leak, dict) and peak_area > final_before + 0.005:
+                    record_overlap_reject(last_void_leak, stage="best_pack")
+            elif isinstance(last_void_leak, dict) and (
+                peak_area > final_before + 0.005 or not packing_clear_ok
+            ):
                 last_void_leak["best_pack_reject"] = 0 if gate_ok else 1
+                if not gate_ok:
+                    record_overlap_reject(last_void_leak, stage="best_pack")
                 last_void_leak["best_pack_peak_cov"] = float(peak_area)
                 last_void_leak["best_pack_final_cov"] = float(final_before)
 

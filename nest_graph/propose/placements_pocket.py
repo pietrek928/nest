@@ -15,7 +15,7 @@ from nest_graph.propose.context import (
     iter_polygons,
     part_extents,
 )
-from nest_graph.propose.geometry import ProposeGeometry
+from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 from nest_graph.propose.placements_pattern import ClusterPattern
 from nest_graph.propose.void_topology import (
     polylabel,
@@ -526,19 +526,26 @@ def propose_placements_pocket_fit(
     out: list[tuple[float, float, float]] = []
     seen: set[tuple[float, float, float]] = set()
     attempted = 0
+    candidates: list[tuple[float, float, float]] = []
+    tags: list = []
     for coords, tag in tagged:
         key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
         if key in seen:
             continue
         seen.add(key)
         attempted += 1
-        if not propose_geom.valid_at(coords, pt_push):
-            continue
-        out.append(coords)
-        if tags_out is not None:
-            tags_out.append(tag)
-        if len(out) >= top_n:
-            break
+        candidates.append(coords)
+        tags.append(tag)
+    if candidates:
+        valid = set(filter_candidates_batch(propose_geom, candidates, pt_push))
+        for coords, tag in zip(candidates, tags, strict=True):
+            if coords not in valid:
+                continue
+            out.append(coords)
+            if tags_out is not None:
+                tags_out.append(tag)
+            if len(out) >= top_n:
+                break
     if attempts_out is not None:
         attempts_out.append(attempted)
     if skip_reasons_out is not None:

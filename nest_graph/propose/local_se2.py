@@ -10,7 +10,7 @@ from shapely.ops import nearest_points
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import polish_se2_part, snap_pose_to_ring
+from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
 from nest_graph.propose.placement_common import (
     as_geometry,
     dual_pose_from_base,
@@ -18,8 +18,7 @@ from nest_graph.propose.placement_common import (
     is_pose_clear,
     part_base_geoms,
     post_pack_overlap_ok,
-    selection_pairwise_independent,
-    is_pose_clear_vs_fixed_shapely,
+    is_pose_clear_vs_fixed,
 )
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
@@ -124,6 +123,10 @@ def local_se2_selection(
     }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
+    out_geoms: list[Geometry | None] = [
+        as_geometry(p) if p is not None and not getattr(p, "is_empty", False) else None
+        for p in out_polys
+    ]
     sel = [int(i) for i in selected_indices]
     if (
         not propose_cfg.enable_local_se2
@@ -244,17 +247,20 @@ def local_se2_selection(
                                 as_geometry(p) for p in (list(locked) + others0)
                             ) if g is not None
                         ]
-                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)) and is_pose_clear_vs_fixed_shapely(
-                            snap_poly, locked,
+                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)) and is_pose_clear_vs_fixed(
+                            snap_g, locked,
                         ):
                             prev_p, prev_t = out_polys[idx], out_tr[idx]
+                            prev_g = out_geoms[idx]
                             out_polys[idx] = snap_poly
                             out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
-                            if (
-                                selection_pairwise_independent(out_polys, sel)
-                                and post_pack_overlap_ok(
-                                    out_polys, sel, fixed_obstacles=locked,
-                                )
+                            out_geoms[idx] = snap_g
+                            if post_pack_overlap_ok(
+                                out_polys,
+                                sel,
+                                fixed_obstacles=locked,
+                                geoms=out_geoms,
+                                telem=stats,
                             ):
                                 poly = snap_poly
                                 tr = out_tr[idx]
@@ -264,6 +270,7 @@ def local_se2_selection(
                             else:
                                 out_polys[idx] = prev_p
                                 out_tr[idx] = prev_t
+                                out_geoms[idx] = prev_g
         else:
             assert pull_pole is not None
             cx, cy = float(poly.centroid.x), float(poly.centroid.y)
@@ -321,18 +328,24 @@ def local_se2_selection(
         ):
             continue
         _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
-        if not is_pose_clear_vs_fixed_shapely(cand, locked):
+        if not is_pose_clear_vs_fixed(_cand_g, locked):
             continue
         prev_p, prev_t = out_polys[idx], out_tr[idx]
+        prev_g = out_geoms[idx]
         out_polys[idx] = cand
         out_tr[idx] = cand_tr
-        ok = (
-            selection_pairwise_independent(out_polys, sel)
-            and post_pack_overlap_ok(out_polys, sel, fixed_obstacles=locked)
+        out_geoms[idx] = _cand_g
+        ok = post_pack_overlap_ok(
+            out_polys,
+            sel,
+            fixed_obstacles=locked,
+            geoms=out_geoms,
+            telem=stats,
         )
         if not ok:
             out_polys[idx] = prev_p
             out_tr[idx] = prev_t
+            out_geoms[idx] = prev_g
             continue
         stats["accepted"] += 1
         stats["moved"] += 1

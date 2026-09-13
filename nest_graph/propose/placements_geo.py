@@ -12,6 +12,7 @@ from nest_graph.utils import get_shape_exteriors
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import search_region_for_placement
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
+from nest_graph.propose.placement_perimeter import vertex_anchors_from_geom
 
 def densify_points(geometry, distance):
     """Adds points along the perimeter of the shape for a better Voronoi map."""
@@ -93,16 +94,21 @@ def propose_placements_voronoi(
     angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
     attract_x, attract_y = float(attract.x), float(attract.y)
 
+    raw: list[tuple[float, float, float]] = []
+    costs: list[float] = []
     for px, py in candidate_points:
         for angle in angles:
             coords = (float(px), float(py), float(angle))
-            if not propose_geom.valid_at(coords, pt_push):
-                continue
-            propositions.append({
-                "coords": coords,
-                "cost": math.hypot(px - attract_x, py - attract_y),
-            })
-
+            raw.append(coords)
+            costs.append(math.hypot(px - attract_x, py - attract_y))
+    if not raw:
+        return []
+    valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+    propositions = [
+        {"coords": c, "cost": cost}
+        for c, cost in zip(raw, costs, strict=True)
+        if c in valid
+    ]
     propositions.sort(key=lambda x: x["cost"])
     return [p["coords"] for p in propositions[:top_n]]
 
@@ -122,7 +128,7 @@ def propose_placements_raycasting(
     border_focus: bool = False,
     propose_geom: ProposeGeometry,
     pt_push: Point,
-    rim_anchor_geoms: Sequence[BaseGeometry] | None = None,
+    rim_anchor_geoms: Sequence[BaseGeometry | Geometry] | None = None,
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements by casting rays from boundary vertices into the interior.
@@ -155,21 +161,26 @@ def propose_placements_raycasting(
     if region_g is None:
         return []
 
-    # 1. Identify Anchor Points (vertices of the base and holes)
-    anchors = []
-    for line in get_shape_exteriors(anchor_source):
-        anchors.extend([Point(pt) for pt in line.coords])
+    # Prefer native region rings when the anchor source is the search region.
+    src_for_harvest: BaseGeometry | Geometry = anchor_source
+    if anchor_source is region:
+        src_for_harvest = region_g
+    anchors_xy, native_n, from_n = vertex_anchors_from_geom(src_for_harvest)
     if rim_anchor_geoms:
         for geom in rim_anchor_geoms:
             if geom is None or getattr(geom, "is_empty", True):
                 continue
-            for line in get_shape_exteriors(geom):
-                anchors.extend([Point(pt) for pt in line.coords])
+            extra, n_nat, n_fs = vertex_anchors_from_geom(geom)
+            anchors_xy.extend(extra)
+            native_n += n_nat
+            from_n += n_fs
+    propose_geom._last_ray_anchor_native_n = int(native_n)
+    propose_geom._last_ray_anchor_from_shapely_n = int(from_n)
 
     max_anchors = 200
-    if len(anchors) > max_anchors:
-        step = len(anchors) / max_anchors
-        anchors = [anchors[int(i * step)] for i in range(max_anchors)]
+    if len(anchors_xy) > max_anchors:
+        step = len(anchors_xy) / max_anchors
+        anchors_xy = [anchors_xy[int(i * step)] for i in range(max_anchors)]
 
     min_x, min_y, max_x, max_y = region.bounds
     ray_len = np.sqrt((max_x - min_x)**2 + (max_y - min_y)**2)
@@ -179,17 +190,41 @@ def propose_placements_raycasting(
 
     stride = max(1, anchor_stride)
     sample_fracs = (0.1, 0.5)
-    for anchor in anchors[::stride]:
+    origins: list[tuple[float, float]] = []
+    directions: list[tuple[float, float]] = []
+    for ax, ay in anchors_xy[::stride]:
         for r_angle in ray_angles:
             dx = ray_len * float(np.cos(r_angle))
             dy = ray_len * float(np.sin(r_angle))
-            try:
-                for x, y in region_g.clip_ray_interior(
-                    (float(anchor.x), float(anchor.y)),
-                    (dx, dy),
-                    float(ray_len),
-                    sample_fracs,
-                ):
+            origins.append((float(ax), float(ay)))
+            directions.append((dx, dy))
+    if origins:
+        try:
+            coords_flat, offsets = region_g.clip_ray_interior_batch(
+                origins, directions, float(ray_len), sample_fracs,
+            )
+            n_rays = len(offsets) - 1
+            for i in range(n_rays):
+                a = int(offsets[i])
+                b = int(offsets[i + 1])
+                for k in range(a, b):
+                    pt_x = float(coords_flat[2 * k])
+                    pt_y = float(coords_flat[2 * k + 1])
+                    for p_angle in placement_angles:
+                        coords = (pt_x, pt_y, float(p_angle))
+                        propositions.append({
+                            "coords": coords,
+                            "cost": math.hypot(pt_x - attract_x, pt_y - attract_y),
+                        })
+        except Exception:
+            for (ox, oy), (dx, dy) in zip(origins, directions, strict=True):
+                try:
+                    hits = region_g.clip_ray_interior(
+                        (ox, oy), (dx, dy), float(ray_len), sample_fracs,
+                    )
+                except Exception:
+                    hits = []
+                for x, y in hits:
                     pt_x, pt_y = float(x), float(y)
                     for p_angle in placement_angles:
                         coords = (pt_x, pt_y, float(p_angle))
@@ -197,8 +232,6 @@ def propose_placements_raycasting(
                             "coords": coords,
                             "cost": math.hypot(pt_x - attract_x, pt_y - attract_y),
                         })
-            except Exception:
-                continue
 
     propositions.sort(key=lambda x: x["cost"])
     unique_props: list[tuple[float, float, float]] = []

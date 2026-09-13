@@ -5,9 +5,72 @@ from shapely import LineString, LinearRing, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from typing import Sequence
 
+from nest_graph.geometry import Geometry
 from nest_graph.utils import get_shape_exteriors
 
 _PERIMETER_VERTEX_CAP = 200
+
+
+def harvest_boundary_ring_coords(
+    geom: BaseGeometry | Geometry | None,
+    *,
+    exteriors_only: bool = True,
+    close_rings: bool = True,
+) -> tuple[list[list[tuple[float, float]]], int, int]:
+    """One ring-harvest SoT: native flat rings or Shapely exteriors.
+
+    Matches pre-flat ``get_shape_exteriors`` when ``exteriors_only`` (skip
+    subtractive holes). Native rings are open after ingest close-pop; when
+    ``close_rings`` append the first vertex so edge-length sampling sees the
+    closing segment.
+    """
+    if geom is None or getattr(geom, "is_empty", False):
+        return [], 0, 0
+    if isinstance(geom, Geometry):
+        rings: list[list[tuple[float, float]]] = []
+        try:
+            coords_flat, offsets, subtractive = geom.boundary_rings_flat()
+            n_rings = len(offsets) - 1
+            for i in range(n_rings):
+                if exteriors_only and bool(subtractive[i]):
+                    continue
+                a = int(offsets[i])
+                b = int(offsets[i + 1])
+                ring = [
+                    (float(coords_flat[2 * k]), float(coords_flat[2 * k + 1]))
+                    for k in range(a, b)
+                ]
+                if close_rings and len(ring) >= 2 and ring[0] != ring[-1]:
+                    ring.append(ring[0])
+                if ring:
+                    rings.append(ring)
+        except Exception:
+            for ring, is_sub in geom.boundary_rings():
+                if exteriors_only and bool(is_sub):
+                    continue
+                coords = [(float(x), float(y)) for x, y in ring]
+                if close_rings and len(coords) >= 2 and coords[0] != coords[-1]:
+                    coords.append(coords[0])
+                if coords:
+                    rings.append(coords)
+        return rings, (1 if rings else 0), 0
+    rings = []
+    for line in get_shape_exteriors(geom):
+        coords = [(float(x), float(y)) for x, y in line.coords]
+        if coords:
+            rings.append(coords)
+    return rings, 0, (1 if rings else 0)
+
+
+def vertex_anchors_from_geom(
+    geom: BaseGeometry | Geometry | None,
+) -> tuple[list[tuple[float, float]], int, int]:
+    """Flatten harvested rings to vertex anchors (raycasting)."""
+    rings, native_n, from_n = harvest_boundary_ring_coords(geom)
+    anchors: list[tuple[float, float]] = []
+    for coords in rings:
+        anchors.extend(coords)
+    return anchors, native_n, from_n
 
 
 def _point_segment_distance_sq(
@@ -116,22 +179,35 @@ def edge_inward_at_point(
     return best_anchor, best_inward
 
 
-def exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Point]:
+def exterior_anchor_points(
+    geom: BaseGeometry | Geometry, samples_per_edge: int,
+) -> list[Point]:
     anchors: list[Point] = []
-    lines = list(get_shape_exteriors(geom))
-    total_length = sum(line.length for line in lines)
+    rings, _, _ = harvest_boundary_ring_coords(geom)
+    if not rings:
+        return []
+    # Length-weighted sampling stays distinct from ray vertex anchors (Letter B).
+    total_length = 0.0
+    ring_meta: list[tuple[list[tuple[float, float]], float]] = []
+    for coords in rings:
+        if len(coords) < 2:
+            continue
+        sl_sum = 0.0
+        for i in range(len(coords) - 1):
+            x0, y0 = coords[i]
+            x1, y1 = coords[i + 1]
+            sl_sum += math.hypot(x1 - x0, y1 - y0)
+        if sl_sum <= 1e-9:
+            continue
+        ring_meta.append((coords, sl_sum))
+        total_length += sl_sum
     if total_length <= 0:
         return []
-        
-    # Scale total samples by the square root of the number of components
-    # so we don't explode with 1000s of points for disjoint clusters
+
     base_samples = max(16, samples_per_edge * 4)
-    total_samples = int(base_samples * math.sqrt(len(lines)))
-    
-    for line in lines:
-        if line.length <= 0:
-            continue
-        coords = list(line.coords)
+    total_samples = int(base_samples * math.sqrt(len(ring_meta)))
+
+    for coords, line_length in ring_meta:
         seg_lens: list[float] = []
         seg_endpoints: list[tuple[tuple[float, float], tuple[float, float]]] = []
         for i in range(len(coords) - 1):
@@ -142,11 +218,10 @@ def exterior_anchor_points(geom: BaseGeometry, samples_per_edge: int) -> list[Po
             if sl > 1e-9:
                 seg_lens.append(sl)
                 seg_endpoints.append(((x0, y0), (x1, y1)))
-        
-        # Allocate samples to this line based on its fraction of total length
-        line_samples = max(1, int(round(total_samples * (line.length / total_length))))
+
+        line_samples = max(1, int(round(total_samples * (line_length / total_length))))
         line_total_sl = sum(seg_lens) or 1.0
-        
+
         for sl, ((x0, y0), (x1, y1)) in zip(seg_lens, seg_endpoints, strict=True):
             n = max(1, int(round(line_samples * (sl / line_total_sl))))
             if n == 1:
