@@ -83,7 +83,7 @@ void bind_distance_api(nb::module_ &m) {
         "find_polygon_distances",
         [](std::vector<GeometryHolder> polygons, double aura, double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(std::move(polygons)),
+                solid_ptrs_from_holders(polygons),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },
@@ -98,7 +98,7 @@ void bind_distance_api(nb::module_ &m) {
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(std::move(polygons)),
+                solid_ptrs_from_holders(polygons),
                 active_indices,
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
@@ -115,8 +115,8 @@ void bind_distance_api(nb::module_ &m) {
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solids_from_holders(std::move(set_a)),
-                solids_from_holders(std::move(set_b)),
+                solid_ptrs_from_holders(set_a),
+                solid_ptrs_from_holders(set_b),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },

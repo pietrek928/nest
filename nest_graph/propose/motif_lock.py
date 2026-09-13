@@ -636,9 +636,22 @@ def compose_motif_pipeline(
             polys=polys,
             free_poly=free_poly,
         )
-        del _combined
         telem.update(seq_telem)
-        lock_sets = [list(s) for s in (seq_telem.get("motif_lock_sets") or [])][:4]
+        union_idxs = [int(i) for i in _combined]
+        telem["motif_union_lock_idxs"] = list(union_idxs)
+        telem["motif_union_lock_n"] = int(len(union_idxs))
+        lock_sets = [list(s) for s in (seq_telem.get("motif_lock_sets") or [])]
+        # Q239: prepend validated multi-cohort union as beam seed (not MotifComposeResult field).
+        if len(union_idxs) >= 2:
+            union_sig = tuple(sorted(union_idxs))
+            if not any(tuple(sorted(int(i) for i in s)) == union_sig for s in lock_sets):
+                lock_sets.insert(0, list(union_idxs))
+                telem["motif_union_beam_prepend"] = 1
+            else:
+                telem["motif_union_beam_prepend"] = 0
+        else:
+            telem["motif_union_beam_prepend"] = 0
+        lock_sets = lock_sets[:4]
         boost_idxs = list(seq_telem.get("motif_packing_score_boost_idxs") or [])
         scene_sz = int(seq_telem.get("motif_scene_max_sz", 0) or 0)
         telem["motif_scene_max_sz_pre"] = scene_sz

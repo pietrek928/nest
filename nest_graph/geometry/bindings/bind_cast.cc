@@ -40,7 +40,7 @@ void bind_cast_api(nb::module_ &m) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide(
                 active.solid,
-                solids_from_holders(std::move(obstacles)),
+                solid_ptrs_from_holders(obstacles),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -58,7 +58,7 @@ void bind_cast_api(nb::module_ &m) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide_all(
                 active.solid,
-                solids_from_holders(std::move(obstacles)),
+                solid_ptrs_from_holders(obstacles),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -112,6 +112,7 @@ void bind_snap_api(nb::module_ &m) {
                 static_cast<Vec2d::Scalar>(px),
                 static_cast<Vec2d::Scalar>(py),
                 static_cast<Vec2d::Scalar>(pth),
+                // Polish Scene: move-into-build (D2); not sync-query ptr spans.
                 solids_from_holders(std::move(obstacles)),
                 board_ptr,
                 dir_vecs,
@@ -205,6 +206,7 @@ void bind_snap_api(nb::module_ &m) {
                 static_cast<Vec2d::Scalar>(py),
                 static_cast<Vec2d::Scalar>(pth),
                 anchor.solid,
+                // NFP Scene: move-into-build (D2).
                 solids_from_holders(std::move(other_obstacles)),
                 static_cast<Vec2d::Scalar>(min_dist),
                 static_cast<Vec2d::Scalar>(max_t));

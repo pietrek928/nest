@@ -103,6 +103,24 @@ inline void promote_containment_pairs(
 }
 
 template <class VecType>
+inline void promote_containment_pairs(
+    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<std::pair<int, int>>& potential_containments,
+    std::vector<std::pair<int, int>>& collisions
+) {
+    for (const auto &pair_id : potential_containments) {
+        const auto *a = polygons[static_cast<std::size_t>(pair_id.first)];
+        const auto *b = polygons[static_cast<std::size_t>(pair_id.second)];
+        if (a == nullptr || b == nullptr) {
+            continue;
+        }
+        if (try_add_containment_collision(*a, *b)) {
+            collisions.push_back(pair_id);
+        }
+    }
+}
+
+template <class VecType>
 inline void promote_containment_pairs_bipartite(
     const std::vector<SolidGeometry<VecType>>& setA,
     const std::vector<SolidGeometry<VecType>>& setB,
@@ -111,6 +129,25 @@ inline void promote_containment_pairs_bipartite(
 ) {
     for (const auto& pair_id : potential_containments) {
         if (try_add_containment_collision(setA[pair_id.first], setB[pair_id.second])) {
+            collisions.push_back(pair_id);
+        }
+    }
+}
+
+template <class VecType>
+inline void promote_containment_pairs_bipartite(
+    const std::vector<const SolidGeometry<VecType>*>& setA,
+    const std::vector<const SolidGeometry<VecType>*>& setB,
+    const std::vector<std::pair<int, int>>& potential_containments,
+    std::vector<std::pair<int, int>>& collisions
+) {
+    for (const auto &pair_id : potential_containments) {
+        const auto *a = setA[static_cast<std::size_t>(pair_id.first)];
+        const auto *b = setB[static_cast<std::size_t>(pair_id.second)];
+        if (a == nullptr || b == nullptr) {
+            continue;
+        }
+        if (try_add_containment_collision(*a, *b)) {
             collisions.push_back(pair_id);
         }
     }

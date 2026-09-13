@@ -184,6 +184,12 @@ class Vec {
         return items[k];
     }
 
+    // GCC 16 -Warray-bounds: false positive when inlining operator[] through
+    // std::vector::front/back on a non-empty copy (attributes Vec buffer[-1]).
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Warray-bounds"
+#endif
     template <int Kmax = 1024>
     inline T get(int k) const {
         if constexpr (Kmax <= K) {
@@ -195,6 +201,9 @@ class Vec {
             return 0;
         }
     }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     inline T operator[](int k) const {
         return get(k);

@@ -880,3 +880,4 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
 
     return guidance;
 }
+

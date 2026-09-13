@@ -27,11 +27,11 @@ template<class VecType>
 class SolidGeometry {
     using Scalar = typename VecType::Scalar;
 
-    typedef struct {
+    struct LineSolidGeometryEntry {
         std::size_t start_point;
         Circle<VecType> bounding_circle;
         bool is_subtractive = false;  // hole boundary segments (void interior)
-    } LineSolidGeometryEntry;
+    };
 
     struct BoundaryRing {
         std::vector<VecType> points;

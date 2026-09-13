@@ -294,6 +294,28 @@ inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
         active, obstacles, slide, max_t);
 }
 
+template <class VecType>
+inline ComplexCastResult<VecType> cast_slide(
+    const SolidGeometry<VecType> &active,
+    const std::vector<const SolidGeometry<VecType> *> &obstacles,
+    const VecType &slide,
+    typename VecType::Scalar max_t
+) {
+    return find_closest_polygon_cast_vs_obstacles<VecType>(
+        active, obstacles, slide, max_t);
+}
+
+template <class VecType>
+inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
+    const SolidGeometry<VecType> &active,
+    const std::vector<const SolidGeometry<VecType> *> &obstacles,
+    const VecType &slide,
+    typename VecType::Scalar max_t
+) {
+    return find_all_polygon_casts_vs_obstacles<VecType>(
+        active, obstacles, slide, max_t);
+}
+
 // Packing collide for two solids without owned 2-element sweep vectors.
 template <class VecType, class Tracer = DefaultTracer>
 inline bool solids_packing_collide(

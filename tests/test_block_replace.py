@@ -221,6 +221,59 @@ def test_sequential_beam_lock_sets_independent():
     assert set(telem["motif_lock_sets"][1]) == {2, 3}
 
 
+def test_compose_motif_pipeline_prepends_union_lock():
+    from shapely.geometry import Point
+
+    from nest_graph.propose.motif_lock import compose_motif_pipeline
+
+    class _G:
+        collisions = [[] for _ in range(4)]
+
+    geoms = [
+        _square_geom(0.0, 0.0),
+        _square_geom(2.0, 0.0),
+        _square_geom(20.0, 0.0),
+        _square_geom(22.0, 0.0),
+    ]
+    cohorts = [
+        {
+            "leader_key": (0.0, 0.0, 0.0),
+            "leader_gid": 0,
+            "member_keys": [(0, (0.0, 0.0, 0.0)), (0, (2.0, 0.0, 0.0))],
+        },
+        {
+            "leader_key": (20.0, 0.0, 0.0),
+            "leader_gid": 0,
+            "member_keys": [(0, (20.0, 0.0, 0.0)), (0, (22.0, 0.0, 0.0))],
+        },
+    ]
+    result = compose_motif_pipeline(
+        "pre_nest",
+        graph=_G(),
+        scores=[3.0, 2.0, 1.0, 1.0],
+        group_id=[0, 0, 0, 0],
+        transform=[
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (20.0, 0.0, 0.0),
+            (22.0, 0.0, 0.0),
+        ],
+        cohorts=cohorts,
+        candidate_geoms=geoms,
+        void_geoms=[],
+        packed_geoms=[],
+        min_dist=0.05,
+        pole=Point(0, 0),
+        max_accept=3,
+    )
+    assert set(result.telem["motif_union_lock_idxs"]) == {0, 1, 2, 3}
+    assert int(result.telem["motif_union_lock_n"]) == 4
+    assert result.lock_sets
+    assert set(result.lock_sets[0]) == {0, 1, 2, 3}
+    assert len(result.lock_sets) <= 4
+    assert int(result.telem.get("motif_union_beam_prepend", 0)) == 1
+
+
 def test_incumbent_map_and_lex_hold():
     from nest_graph.propose.selection_compose import (
         _lex_pick_better,

@@ -4,6 +4,7 @@ import cv2 as cv
 import numpy as np
 import os
 import time
+import zlib
 from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
 from shapely import Polygon, unary_union
@@ -273,12 +274,29 @@ def _path_accept_contact_upsert(
     return int(n_up)
 
 
+def _motif_cohort_sig(cohorts: list) -> int:
+    """Deterministic cohort fingerprint for cheap cache (M2a; no PYTHONHASHSEED)."""
+    parts: list[str] = []
+    for c in cohorts:
+        if not isinstance(c, dict):
+            continue
+        mid = int(c.get("motif_id", -1) or -1)
+        leader = int(c.get("leader_gid", -1) or -1)
+        keys = sorted(str(mk) for mk in (c.get("member_keys") or ()))
+        parts.append(f"{mid}:{leader}:{','.join(keys)}")
+    if not parts:
+        return 0
+    return int(zlib.crc32("|".join(sorted(parts)).encode("utf-8")) & 0x7FFFFFFF)
+
+
 def _sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
-    """Letter D: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
+    """Letter D/M2b: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
     agent = getattr(runner, "agent", None)
     if agent is None:
         return 0
     cohorts = list((propose_stats or {}).get("motif_cohorts") or ())
+    # Always keep cohorts on the agent (ablation winner for density); gate PLACE_COHORT
+    # expand via place_cohort_ready so soft/path still sees members (hybrid M2b).
     agent.motif_cohorts = tuple(cohorts)
     n_ready = 0
     for c in cohorts:
@@ -287,17 +305,26 @@ def _sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
         if int(len(c.get("member_keys") or ())) >= 2:
             n_ready += 1
     if propose_stats is not None:
-        compose_sz = len(propose_stats.get("motif_locked") or ())
+        compose_sz = int(propose_stats.get("motif_compose_accepted_size", 0) or 0)
+        if compose_sz <= 0:
+            compose_sz = len(propose_stats.get("motif_locked") or ())
         member_hits = int(propose_stats.get("member_hits", 0) or 0)
         if member_hits <= 0 and isinstance(propose_stats.get("void_leak"), dict):
             member_hits = int(
                 (propose_stats.get("void_leak") or {}).get("member_hits", 0) or 0
             )
+        ready = int(n_ready > 0 and compose_sz >= 2 and member_hits > 0)
         propose_stats["place_cohort_specs_n"] = int(n_ready)
-        propose_stats["place_cohort_ready"] = int(
-            n_ready > 0 and compose_sz >= 2 and member_hits > 0
+        propose_stats["place_cohort_ready"] = ready
+        propose_stats["motif_cohort_sig"] = (
+            _motif_cohort_sig(cohorts) if ready else 0
         )
-    return int(n_ready)
+        if hasattr(agent, "place_cohort_ready"):
+            agent.place_cohort_ready = bool(ready)
+        return int(n_ready)
+    if hasattr(agent, "place_cohort_ready"):
+        agent.place_cohort_ready = False
+    return 0
 
 
 def _note_path_accept_warm(runner: Any, snap: BoardSnapshot, action: Any) -> None:
@@ -1410,6 +1437,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             void_elite_seeded=int(elite_n),
             archive_elite_n=int(arch_elite_n),
             compose_sz=len(propose_stats.get("motif_locked") or ()),
+            cohort_sig=int(propose_stats.get("motif_cohort_sig", 0) or 0),
         )
         propose_stats["archive_elite_n"] = arch_elite_n
         propose_stats["keep_history_on_sterile"] = keep_hist_sterile

@@ -21,6 +21,9 @@ uv run mypy
 # C++ tests (configure once with -DNEST_GRAPH_BUILD_TESTS=ON)
 cmake -S . -B build -DNEST_GRAPH_BUILD_TESTS=ON
 cmake --build build --target geometry_cpp_tests graph_cpp_tests
+
+# C++ warnings: -Wall -Wextra -Wpedantic on first-party targets (default).
+# Strict: cmake -S . -B build -DNEST_GRAPH_WERROR=ON
 ```
 
 Native sources are listed in `tool.uv.cache-keys`.

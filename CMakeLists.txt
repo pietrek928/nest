@@ -6,6 +6,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# First-party warning flags (not global: keeps FetchContent Catch2 / nanobind quiet).
+option(NEST_GRAPH_WERROR "Treat nest_graph warnings as errors" OFF)
+add_library(nest_graph_warnings INTERFACE)
+target_compile_options(nest_graph_warnings INTERFACE
+  $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic;-Wno-unused-parameter>
+)
+if(NEST_GRAPH_WERROR)
+  target_compile_options(nest_graph_warnings INTERFACE
+    $<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Werror>
+  )
+endif()
+
 find_package(Python 3 REQUIRED COMPONENTS Interpreter Development.Module)
 
 execute_process(
@@ -13,6 +25,11 @@ execute_process(
   OUTPUT_STRIP_TRAILING_WHITESPACE
   OUTPUT_VARIABLE nanobind_ROOT)
 find_package(nanobind CONFIG REQUIRED)
+# Prefer SYSTEM so nanobind headers stay quiet under -Wall (first-party only).
+get_filename_component(NEST_NANOBIND_INCLUDE "${nanobind_ROOT}/../include" ABSOLUTE)
+if(EXISTS "${NEST_NANOBIND_INCLUDE}/nanobind/nanobind.h")
+  set(NEST_NANOBIND_SYSTEM_INCLUDE "${NEST_NANOBIND_INCLUDE}")
+endif()
 
 # Public include root for nest_graph headers (e.g. #include <vec.h>).
 add_library(nest_graph_headers INTERFACE)

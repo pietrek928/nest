@@ -78,6 +78,19 @@ inline size_t calculate_exact_sweep_capacity(
     return capacity > 0 ? capacity : polys.size() * 4;
 }
 
+template <class VecType>
+inline size_t calculate_exact_sweep_capacity(
+    const std::vector<const SolidGeometry<VecType>*>& polys
+) {
+    size_t capacity = 0;
+    for (const auto *p : polys) {
+        if (p != nullptr) {
+            capacity += p->line_parts.size();
+        }
+    }
+    return capacity > 0 ? capacity : polys.size() * 4;
+}
+
 // -------------------------------------------------------------------------
 // Shared pair indexing for sweep modes
 // -------------------------------------------------------------------------

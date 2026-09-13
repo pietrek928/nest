@@ -575,6 +575,16 @@ def compose_and_nest_selection(
                     propose_stats["motif_lock_source"] = "beam"
 
     _beam_locks(lock_sets)
+    if propose_stats is not None:
+        union_raw = propose_stats.get("motif_union_lock_idxs")
+        if (
+            isinstance(union_raw, (list, tuple))
+            and len(union_raw) >= 2
+            and locked_motif
+            and tuple(sorted(int(i) for i in locked_motif))
+            == tuple(sorted(int(i) for i in union_raw))
+        ):
+            propose_stats["motif_union_beam_win"] = 1
 
     graph_to_nest_hollow = False
     nest_void_ratio = 1.0
@@ -644,7 +654,78 @@ def compose_and_nest_selection(
             void_scene_locks = bool(
                 (hollow_telem or {}).get("hollow_lock_void_hit", 0)
             )
-            if hollow_locks:
+            # M1: soft-try sequential union under hybrid_compose_pick even if lex beam lost.
+            if (
+                graph_to_nest_hollow
+                and propose_stats is not None
+                and not locked_motif
+            ):
+                union_raw = propose_stats.get("motif_union_lock_idxs")
+                if isinstance(union_raw, (list, tuple)) and len(union_raw) >= 2:
+                    union_lock = [int(i) for i in union_raw]
+                    union_sig = tuple(sorted(union_lock))
+                    propose_stats["motif_union_hollow_tried"] = int(
+                        propose_stats.get("motif_union_hollow_tried", 0) or 0
+                    ) + 1
+                    if union_sig in beamed_sigs:
+                        propose_stats["motif_union_hollow_skip_beamed"] = int(
+                            propose_stats.get("motif_union_hollow_skip_beamed", 0) or 0
+                        ) + 1
+                    a_orig_u = float(_sel_area(selected_nest, group_id, part_areas))
+                    vf_orig_u = count_selected_in_free(
+                        polys, selected_nest, free_poly,
+                    )
+                    score_use_u = list(scores)
+                    if void_scene_locks and void_term > 0.0:
+                        for i in union_lock:
+                            ix = int(i)
+                            if 0 <= ix < len(score_use_u):
+                                score_use_u[ix] = float(score_use_u[ix]) + float(void_term)
+                    cc_nest_u = _nest_with_locks(
+                        graph,
+                        score_use_u,
+                        union_lock,
+                        group_id=group_id,
+                        part_areas=part_areas,
+                        dual=bool(dual_nest),
+                    )
+                    _cg2_u, cc_n2_u = count_proposer_on_selection(
+                        group_id, transform, cc_nest_u, pk_merged, "cluster_copy",
+                    )
+                    a_cc_u = float(_sel_area(cc_nest_u, group_id, part_areas))
+                    vf_cc_u = count_selected_in_free(
+                        polys, cc_nest_u, free_poly,
+                    )
+                    lex_win_u = _lex_pick_better(
+                        best=selected_nest,
+                        cand=cc_nest_u,
+                        group_id=group_id,
+                        part_areas=part_areas,
+                    )
+                    if hybrid_compose_pick(
+                        graph=graph,
+                        lock=union_lock,
+                        area_cand=a_cc_u,
+                        area_orig=a_orig_u,
+                        void_cand=int(vf_cc_u),
+                        void_orig=int(vf_orig_u),
+                        cc_n2=int(cc_n2_u),
+                        lex_better=lex_win_u,
+                        telem=pick_telem,
+                        join_prefer=bool(void_scene_locks),
+                        void_scene=bool(void_scene_locks),
+                        count_cand=len(cc_nest_u),
+                        count_orig=len(selected_nest),
+                    ):
+                        selected_nest = cc_nest_u
+                        locked_motif = list(union_lock)
+                        cc_pair_won = True
+                        beamed_sigs.add(union_sig)
+                        motif_beam_trials += 1
+                        motif_beam_wins += 1
+                        propose_stats["motif_union_hollow_win"] = 1
+                        propose_stats["motif_lock_source"] = "union_hollow"
+            if hollow_locks and not cc_pair_won:
                 a_orig = float(_sel_area(selected_nest, group_id, part_areas))
                 vf_orig = count_selected_in_free(
                     polys, selected_nest, free_poly,

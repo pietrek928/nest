@@ -285,6 +285,33 @@ inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
     return out;
 }
 
+// Sync-query bind path: score placed solids without deep-copying into an owned vector.
+template <class VecType>
+inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
+    const std::vector<const SolidGeometry<VecType> *> &placed,
+    const SolidGeometry<VecType> *board_ring,
+    std::vector<SolidGeometry<VecType>> packed_obstacles,
+    const SolidGeometry<VecType> *focal,
+    PlacementRankConfig cfg
+) {
+    fill_rank_scales(cfg);
+    const bool has_packed = !packed_obstacles.empty();
+    StaticCollisionScene<VecType> scene;
+    if (has_packed) {
+        scene.build(std::move(packed_obstacles), static_cast<typename VecType::Scalar>(0.5));
+    }
+    std::vector<PlacementRankResult> out;
+    out.reserve(placed.size());
+    for (const auto *p : placed) {
+        if (p == nullptr) {
+            continue;
+        }
+        out.push_back(score_placed_contact_hybrid(
+            *p, board_ring, scene, has_packed, focal, cfg));
+    }
+    return out;
+}
+
 template <class VecType>
 inline std::vector<PlacementRankResult> batch_rank_local_placements(
     const SolidGeometry<VecType> &part,

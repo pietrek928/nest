@@ -392,6 +392,10 @@ void bind_graph_mcts(nb::module_ &m) {
             [](MctsAgentHolder &h) { return h.agent.expand_frozen; },
             [](MctsAgentHolder &h, bool v) { h.agent.expand_frozen = v; })
         .def_prop_rw(
+            "place_cohort_ready",
+            [](MctsAgentHolder &h) { return h.agent.place_cohort_ready; },
+            [](MctsAgentHolder &h, bool v) { h.agent.place_cohort_ready = v; })
+        .def_prop_rw(
             "prior_motif_graph_hit_n",
             [](MctsAgentHolder &h) { return h.agent.prior_motif_graph_hit_n; },
             [](MctsAgentHolder &h, int32_t v) { h.agent.prior_motif_graph_hit_n = v; })

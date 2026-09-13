@@ -493,16 +493,11 @@ void bind_geometry_class(nb::module_ &m) {
             nb::arg("container"))
         .def(
             "footprint_inside_batch",
-            [](const GeometryHolder &outer, const std::vector<GeometryHolder> &inners) {
-                std::vector<SolidGeometry2d> inner_solids;
-                inner_solids.reserve(inners.size());
-                for (const auto &h : inners) {
-                    inner_solids.push_back(h.solid);
-                }
-                const auto flags = solid_footprint_inside(inner_solids, outer.solid);
+            [](const GeometryHolder &outer, std::vector<GeometryHolder> inners) {
+                // Avoid deep-copying all inners into a temporary solid vector.
                 nb::list out;
-                for (bool ok : flags) {
-                    out.append(ok);
+                for (const auto &h : inners) {
+                    out.append(solid_footprint_inside(h.solid, outer.solid));
                 }
                 return out;
             },
@@ -565,7 +560,7 @@ void bind_geometry_class(nb::module_ &m) {
                 const Vec2d slide_vec = slide_vector_from_handle(slide);
                 return cast_slide(
                     active.solid,
-                    solids_from_holders(std::move(obstacles)),
+                    solid_ptrs_from_holders(obstacles),
                     slide_vec,
                     static_cast<Vec2d::Scalar>(max_t));
             },

@@ -12,7 +12,7 @@ set(GRAPH_CORE_SOURCES
 
 add_library(graph_core STATIC ${GRAPH_CORE_SOURCES})
 set_target_properties(graph_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(graph_core PUBLIC nest_graph_headers)
+target_link_libraries(graph_core PUBLIC nest_graph_headers nest_graph_warnings)
 target_include_directories(graph_core PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}"
 )
@@ -24,11 +24,14 @@ nanobind_add_module(graph
   bindings/bind_decision.cc
   bindings/bind_mcts.cc
 )
-target_link_libraries(graph PRIVATE graph_core)
+target_link_libraries(graph PRIVATE graph_core nest_graph_warnings)
 target_include_directories(graph PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/bindings"
 )
+if(DEFINED NEST_NANOBIND_SYSTEM_INCLUDE)
+  target_include_directories(graph SYSTEM PRIVATE "${NEST_NANOBIND_SYSTEM_INCLUDE}")
+endif()
 
 if(DEFINED ENV{NEST_GRAPH_NATIVE})
   target_compile_options(graph PRIVATE -march=native)
@@ -65,6 +68,7 @@ if(NEST_GRAPH_BUILD_TESTS)
   target_link_libraries(graph_cpp_tests PRIVATE
     graph_core
     Catch2::Catch2WithMain
+    nest_graph_warnings
   )
   target_include_directories(graph_cpp_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"

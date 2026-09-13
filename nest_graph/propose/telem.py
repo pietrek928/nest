@@ -872,8 +872,17 @@ def merge_phase_gate_telem(
         "best_pack_overlap_reject",
         "cache_key_compose_sz",
         "cache_invalidate_compose",
+        "cache_invalidate_cohort",
+        "cache_key_cohort_sig",
         "cohort_sig_amaf_visits",
         "mcts_cohort_macro_n",
+        "motif_union_lock_n",
+        "motif_union_beam_prepend",
+        "motif_union_beam_win",
+        "motif_union_hollow_tried",
+        "motif_union_hollow_win",
+        "motif_union_hollow_skip_beamed",
+        "motif_cohort_sig",
     ):
         if hk in propose_stats:
             if hk.startswith("lock_survive"):

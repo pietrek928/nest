@@ -24,6 +24,7 @@ void bind_batch_api(nb::module_ &m) {
         .def_static(
             "build",
             [](std::vector<GeometryHolder> obstacles, double aura) {
+                // Scene owns solids: move-into-build. No pointer Scene + keep_alive.
                 StaticCollisionSceneHolder holder;
                 holder.scene.build(
                     solids_from_holders(std::move(obstacles)),
@@ -104,6 +105,7 @@ void bind_batch_api(nb::module_ &m) {
             );
             const double margin_sq = margin * margin;
             StaticCollisionScene<Vec2d> scene;
+            // Scene owns solids via move-into-build (not solid-only extract / ptr Scene).
             // search_radius is a distance margin / cast horizon, NOT an aura multiplier.
             scene.build(
                 solids_from_holders(std::move(obstacles)),

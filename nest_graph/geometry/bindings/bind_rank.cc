@@ -64,12 +64,8 @@ void bind_rank_api(nb::module_ &m) {
 
     m.def(
         "convex_hull_area_of",
-        [](const std::vector<GeometryHolder> &geoms) {
-            std::vector<const SolidGeometry2d *> ptrs;
-            ptrs.reserve(geoms.size());
-            for (const auto &g : geoms) {
-                ptrs.push_back(&g.solid);
-            }
+        [](std::vector<GeometryHolder> geoms) {
+            const auto ptrs = solid_ptrs_from_holders(geoms);
             return static_cast<double>(
                 solids_convex_hull_area(ptrs.data(), ptrs.size()));
         },
@@ -89,6 +85,7 @@ void bind_rank_api(nb::module_ &m) {
                 focal_holder = nb::cast<GeometryHolder>(focal);
                 focal_ptr = &focal_holder->solid;
             }
+            // Packed/obstacles: move-into-Scene inside batch_rank (D2).
             return batch_rank_local_placements<Vec2d>(
                 part.solid,
                 transforms,
@@ -106,24 +103,20 @@ void bind_rank_api(nb::module_ &m) {
 
     m.def(
         "batch_score_placed_contact_hybrid",
-        [](const std::vector<GeometryHolder> &placed,
+        [](std::vector<GeometryHolder> placed,
            const GeometryHolder &board_ring,
            std::vector<GeometryHolder> packed,
            nb::object focal,
            const PlacementRankConfig &config) {
-            std::vector<SolidGeometry2d> placed_solids;
-            placed_solids.reserve(placed.size());
-            for (const auto &h : placed) {
-                placed_solids.push_back(h.solid);
-            }
             const SolidGeometry2d *focal_ptr = nullptr;
             std::optional<GeometryHolder> focal_holder;
             if (!focal.is_none()) {
                 focal_holder = nb::cast<GeometryHolder>(focal);
                 focal_ptr = &focal_holder->solid;
             }
+            // Placed: ptrs into holders (no second deep-copy). Packed: move-into-Scene.
             return batch_score_placed_contact_hybrid<Vec2d>(
-                placed_solids,
+                solid_ptrs_from_holders(placed),
                 &board_ring.solid,
                 solids_from_holders(std::move(packed)),
                 focal_ptr,

@@ -21,8 +21,14 @@ from nest_graph.propose.selection_compose import (
 )
 
 
-def cheap_pack_cache_key(zone, action, *, compose_sz: int = 0) -> tuple[str, int, int, int]:
-    """Q143/S2a + Q369: cheap cache is (zone, motif_id, rule_id, compose_sz)."""
+def cheap_pack_cache_key(
+    zone,
+    action,
+    *,
+    compose_sz: int = 0,
+    cohort_sig: int = 0,
+) -> tuple[str, int, int, int, int]:
+    """Q143/S2a + Q369 + M2a: cheap cache is (zone, motif_id, rule_id, compose_sz, cohort_sig)."""
     motif_id = -1
     rule_id = 0
     if action is not None:
@@ -30,7 +36,9 @@ def cheap_pack_cache_key(zone, action, *, compose_sz: int = 0) -> tuple[str, int
             motif_id = int(action.motif_id)
         rid = int(getattr(action, "rule_id", 0) or 0)
         rule_id = rid if rid >= 0 else 0
-    return (str(zone or ""), motif_id, rule_id, int(compose_sz))
+        if cohort_sig == 0:
+            cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
+    return (str(zone or ""), motif_id, rule_id, int(compose_sz), int(cohort_sig))
 
 
 def snapshot_pack_cache(pack_cache: dict) -> dict:
@@ -241,7 +249,11 @@ def pack_execute_snapshot(
     snap = parent
     compose_sz = len(pack_cache.get("motif_locked") or ())
     pack_cache["cache_key_compose_sz"] = int(compose_sz)
-    cache_key = cheap_pack_cache_key(zone, action, compose_sz=compose_sz)
+    cohort_sig = int(getattr(action, "cohort_sig", 0) or 0) if action is not None else 0
+    pack_cache["cache_key_cohort_sig"] = int(cohort_sig)
+    cache_key = cheap_pack_cache_key(
+        zone, action, compose_sz=compose_sz, cohort_sig=cohort_sig
+    )
     cheap_map: dict = pack_cache.setdefault("cheap_by_key", {})
     pack_cache["cache_lookup_n"] = int(pack_cache.get("cache_lookup_n", 0) or 0) + 1
     if cache_key in cheap_map:
@@ -407,6 +419,7 @@ def maybe_invalidate_cheap_cache(
     void_elite_seeded: int | None = None,
     archive_elite_n: int | None = None,
     compose_sz: int | None = None,
+    cohort_sig: int | None = None,
 ) -> None:
     """D0 staleness guard: invalidate when pool/elite/lock context shifts."""
     if remaining_gids is not None:
@@ -431,6 +444,15 @@ def maybe_invalidate_cheap_cache(
             invalidate_cheap_cache(pack_cache, reason="compose_sz")
             pack_cache["cache_invalidate_compose"] = 1
         pack_cache["last_compose_sz"] = int(compose_sz)
+    if cohort_sig is not None:
+        # Soft: only invalidate on nonzero→nonzero shift (ready drop to 0 must not thrash).
+        prev_coh = int(pack_cache.get("last_cohort_sig", 0) or 0)
+        cur = int(cohort_sig)
+        if prev_coh != 0 and cur != 0 and prev_coh != cur:
+            invalidate_cheap_cache(pack_cache, reason="cohort_sig")
+            pack_cache["cache_invalidate_cohort"] = 1
+        if cur != 0:
+            pack_cache["last_cohort_sig"] = cur
 
 
 __all__ = [

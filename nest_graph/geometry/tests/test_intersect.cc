@@ -219,7 +219,8 @@ TEST_CASE("narrow_phase_contain gradient threshold parity for witness", "[poly_i
 }
 
 TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sweep]") {
-    REQUIRE(find_polygon_intersections<Vec2>({}).empty());
+    REQUIRE(find_polygon_intersections<Vec2>(std::vector<SolidGeometry2>{}).empty());
+    REQUIRE(find_polygon_intersections<Vec2>(std::vector<const SolidGeometry2 *>{}).empty());
 
     SolidGeometry2 single = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     REQUIRE(find_polygon_intersections<Vec2>({single}).empty());
@@ -485,4 +486,21 @@ TEST_CASE("evaluate_narrow_phase ContactState kiss vs penetrate", "[poly_interse
     auto db_pen = polygon_from_ring({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
     REQUIRE(find_polygon_intersections<Vec2>({da, db_touch}).empty());
     REQUIRE_FALSE(find_polygon_intersections<Vec2>({da, db_pen}).empty());
+}
+
+TEST_CASE("find_polygon_intersections ptr overload matches owned", "[poly_intersect][ptr]") {
+    auto left = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto overlap = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    auto far = polygon_from_quad({{10, 10}, {12, 10}, {12, 12}, {10, 12}});
+    std::vector<SolidGeometry2> owned{left, overlap, far};
+    std::vector<const SolidGeometry2 *> ptrs{&owned[0], &owned[1], &owned[2]};
+    auto io = find_polygon_intersections<Vec2>(owned);
+    auto ip = find_polygon_intersections<Vec2>(ptrs);
+    REQUIRE(io == ip);
+    auto bo = find_polygon_intersections<Vec2>(
+        std::vector<SolidGeometry2>{owned[0]}, std::vector<SolidGeometry2>{owned[1], owned[2]});
+    std::vector<const SolidGeometry2 *> a{&owned[0]};
+    std::vector<const SolidGeometry2 *> b{&owned[1], &owned[2]};
+    auto bp = find_polygon_intersections<Vec2>(a, b);
+    REQUIRE(bo == bp);
 }

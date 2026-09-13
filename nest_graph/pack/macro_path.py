@@ -25,6 +25,18 @@ def _realized_dict(agent: Any) -> dict:
     return dict(getattr(agent, "realized", None) or {})
 
 
+def _place_cohort_raw(agent: Any):
+    """M2b: raw cohort dicts only when readiness sticky is green."""
+    if not bool(getattr(agent, "place_cohort_ready", False)):
+        return ()
+    return getattr(agent, "motif_cohorts", None) or ()
+
+
+def _place_cohort_specs(agent: Any) -> list:
+    """M2b: PLACE_COHORT macro specs only when readiness sticky is green."""
+    return motif_cohort_specs(_place_cohort_raw(agent))
+
+
 def _sibling_actions(
     agent: Any,
     blocked_action: Any,
@@ -42,7 +54,7 @@ def _sibling_actions(
             True,
             [int(m) for m in agent._warm_motif_ids(snapshot)] if snapshot else [],
             free_kind,
-            motif_cohort_specs(getattr(agent, "motif_cohorts", None)),
+            _place_cohort_specs(agent),
             blocked_action,
         )
     )
@@ -141,7 +153,7 @@ def macro_increase_path(
                 prefer_motifs=True,
                 warm_motif_ids=agent._warm_motif_ids(anc_snap),
                 free_kind=str(getattr(anc_snap, "free_kind", "") or ""),
-                motif_cohorts=getattr(agent, "motif_cohorts", None),
+                motif_cohorts=_place_cohort_raw(agent),
             )
         else:
             siblings = _sibling_actions(

@@ -12,12 +12,15 @@ nanobind_add_module(geometry
   bindings/bind_batch.cc
   bindings/bind_rank.cc
 )
-target_link_libraries(geometry PRIVATE nest_graph_headers)
+target_link_libraries(geometry PRIVATE nest_graph_headers nest_graph_warnings)
 target_include_directories(geometry PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_SOURCE_DIR}/bindings"
   "${CMAKE_SOURCE_DIR}/nest_graph/graph"
 )
+if(DEFINED NEST_NANOBIND_SYSTEM_INCLUDE)
+  target_include_directories(geometry SYSTEM PRIVATE "${NEST_NANOBIND_SYSTEM_INCLUDE}")
+endif()
 
 if(DEFINED ENV{NEST_GRAPH_NATIVE})
   target_compile_options(geometry PRIVATE -march=native)
@@ -55,7 +58,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_gap_fixes.cc
     tests/test_snap_pose.cc
   )
-  target_link_libraries(geometry_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers)
+  target_link_libraries(geometry_cpp_tests PRIVATE Catch2::Catch2WithMain nest_graph_headers nest_graph_warnings)
   target_include_directories(geometry_cpp_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_definitions(geometry_cpp_tests PRIVATE NEST_GRAPH_DEFAULT_TRACER=DebugTracer)
 

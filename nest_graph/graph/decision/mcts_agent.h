@@ -215,6 +215,8 @@ public:
     MctsTelem telem{};
     MctsRealized realized = empty_mcts_realized();
     std::vector<MotifCohortEntry> motif_cohorts;
+    // M2b: gate PLACE_COHORT expand; cohorts stay populated for AMAF/soft path.
+    bool place_cohort_ready = false;
     int32_t prior_motif_graph_hit_n = 0;
 
     MctsAgent() = default;
@@ -694,13 +696,15 @@ public:
             free_kind = snapshot->free_kind;
         }
         std::vector<MotifCohortSpec> cohort_specs;
-        cohort_specs.reserve(motif_cohorts.size());
-        for (const MotifCohortEntry &c : motif_cohorts) {
-            MotifCohortSpec spec;
-            spec.motif_id = c.motif_id;
-            spec.leader_gid = c.leader_gid;
-            spec.member_keys_count = c.member_keys_count;
-            cohort_specs.push_back(spec);
+        if (place_cohort_ready) {
+            cohort_specs.reserve(motif_cohorts.size());
+            for (const MotifCohortEntry &c : motif_cohorts) {
+                MotifCohortSpec spec;
+                spec.motif_id = c.motif_id;
+                spec.leader_gid = c.leader_gid;
+                spec.member_keys_count = c.member_keys_count;
+                cohort_specs.push_back(spec);
+            }
         }
         std::vector<MacroAction> actions = generate_macros(
             remaining_gids,
@@ -712,14 +716,19 @@ public:
             cohort_specs
         );
         int32_t cohort_n = 0;
-        for (const MacroAction &a : actions) {
-            const CohortSigKey sig = cohort_sig_for_action(a);
-            if (sig.active() && a.motif_id >= 0) {
-                cohort_n += 1;
+        if (place_cohort_ready) {
+            for (const MacroAction &a : actions) {
+                const CohortSigKey sig = cohort_sig_for_action(a);
+                if (sig.active() && a.motif_id >= 0) {
+                    cohort_n += 1;
+                }
             }
-        }
-        if (cohort_n > 0) {
-            telem.mcts_cohort_macro_n = cohort_n;
+            if (cohort_n > 0) {
+                telem.mcts_cohort_macro_n = cohort_n;
+            }
+        } else {
+            // M2b telem: no PLACE_COHORT expand → report 0 (do not retain stale peak).
+            telem.mcts_cohort_macro_n = 0;
         }
         if (actions.empty()) {
             return nullptr;
