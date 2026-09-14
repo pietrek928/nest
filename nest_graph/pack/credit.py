@@ -128,6 +128,9 @@ def run_void_leak_and_niche_credit(
         or {}
     )
     propose_stats["void_leak"] = leak_dict
+    # Wp: merge phase-gate keys before print so build_graph void_leak shows
+    # place_coh / coh_sig / union (finalize_iter_mcts also merges later).
+    merge_phase_gate_telem(leak_dict, mcts_telem, propose_stats)
     funnel = leak_dict["funnel"]
     corners = leak_dict["corners"]
     inward = leak_dict.get("inward") or {}
@@ -147,7 +150,28 @@ def run_void_leak_and_niche_credit(
             f"erosion={int(inward.get('erosion_emitted', 0))}/"
             f"{int(inward.get('erosion_pool', 0))}"
         )
-        print(void_leak)
+        motif_wire = (
+            f" place_coh={int(leak_dict.get('place_cohort_ready', 0) or 0)}/"
+            f"{int(leak_dict.get('place_cohort_specs_n', 0) or 0)}/"
+            f"{int(leak_dict.get('mcts_cohort_macro_n', 0) or 0)}"
+            f" coh_sig={int(leak_dict.get('motif_cohort_sig', 0) or 0)}"
+            f" cache_inv_coh={int(leak_dict.get('cache_invalidate_cohort', 0) or 0)}"
+            f" union_n={int(leak_dict.get('motif_union_lock_n', 0) or 0)}"
+            f" union_win={int(leak_dict.get('motif_union_beam_win', 0) or 0)}/"
+            f"{int(leak_dict.get('motif_union_hollow_win', 0) or 0)}"
+            f" compose_sz={int(leak_dict.get('motif_compose_accepted_size', 0) or 0)}"
+        )
+        grow_rej = leak_dict.get("grow_reject_first_obstacle")
+        if grow_rej is not None or "grow_reject_later_glue" in leak_dict:
+            motif_wire += (
+                f" grow_rej="
+                f"{int(leak_dict.get('grow_reject_first_obstacle', 0) or 0)}/"
+                f"{int(leak_dict.get('grow_reject_later_obstacle', 0) or 0)}/"
+                f"{int(leak_dict.get('grow_reject_later_glue', 0) or 0)}/"
+                f"{int(leak_dict.get('grow_reject_geom_missing', 0) or 0)}/"
+                f"{int(leak_dict.get('grow_reject_none_cg', 0) or 0)}"
+            )
+        print(f"{void_leak}{motif_wire}")
     bottleneck = str(funnel.get("bottleneck") or "")
     large_void = str(getattr(free_info, "kind", "") or "") == "large_void"
     hollow = bool(

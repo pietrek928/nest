@@ -85,6 +85,29 @@ def _compose_from_ctx(
     candidate_geoms = ctx.native_geoms_fn(
         ctx.group_id, ctx.transform, ctx.part_bases,
     )
+    # W1 first_packed: rebuild nest packed from transforms (emit SoT), then
+    # prepend seed solids so obstacle union stays seeds∪nest without mutating
+    # board void_geoms (3b / board_ctx SoT).
+    void_geoms = list(overrides.pop("void_geoms", ctx.void_geoms) or [])
+    packed_geoms = list(overrides.pop("packed_geoms", ctx.packed_geoms))
+    pgid = overrides.pop("packed_group_id", ctx.packed_group_id)
+    ptf = overrides.pop("packed_transform", ctx.packed_transform)
+    if (
+        pgid is not None
+        and ptf is not None
+        and len(pgid) == len(ptf)
+        and len(pgid) > 0
+    ):
+        try:
+            rebuilt = ctx.native_geoms_fn(pgid, ptf, ctx.part_bases)
+            if rebuilt:
+                seed_geoms = [g for g in (ctx.seed_void_geoms or []) if g is not None]
+                packed_geoms = list(seed_geoms) + list(rebuilt)
+                if ctx.propose_stats is not None:
+                    ctx.propose_stats["w1_obstacle_sot"] = 1
+                    ctx.propose_stats["w1_packed_rebuilt_n"] = int(len(rebuilt))
+        except Exception:
+            pass
     kwargs = compose_nest_kwargs(
         graph=ctx.graph,
         rule_sets=ctx.rule_sets,
@@ -94,7 +117,7 @@ def _compose_from_ctx(
         group_id=ctx.group_id,
         transform=ctx.transform,
         candidate_geoms=candidate_geoms,
-        packed_geoms=list(overrides.pop("packed_geoms", ctx.packed_geoms)),
+        packed_geoms=packed_geoms,
         part_areas=ctx.part_areas,
         free_info=overrides.pop("free_info", ctx.free_info),
         cfg=ctx.cfg,
@@ -106,12 +129,13 @@ def _compose_from_ctx(
         sheet_diag=float(ctx.sheet_diag),
         propose_stats=ctx.propose_stats,
         ngroups=int(ctx.ngroups),
-        packed_group_id=overrides.pop("packed_group_id", ctx.packed_group_id),
-        packed_transform=overrides.pop("packed_transform", ctx.packed_transform),
+        packed_group_id=pgid,
+        packed_transform=ptf,
         last_leaf=overrides.pop("last_leaf", ctx.is_last_leaf),
-        void_geoms=overrides.pop("void_geoms", ctx.void_geoms),
+        void_geoms=void_geoms,
         locked_seed=overrides.pop("locked_seed", ctx.locked_seed),
         dg=ctx.dg,
+        motif_base=overrides.pop("motif_base", ctx.motif_base),
     )
     kwargs.update(overrides)
     composed = compose_and_nest_selection(**kwargs)

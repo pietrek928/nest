@@ -102,6 +102,27 @@ def compose_cached_selection(
     candidate_geoms = native_geoms_fn(
         group_id, transform, part_bases_c,
     )
+    void_geoms = list(pack_cache.get("void_geoms") or [])
+    packed_geoms = list(pack_cache.get("packed_geoms") or [])
+    pgid = pack_cache.get("packed_group_id")
+    ptf = pack_cache.get("packed_transform")
+    if (
+        pgid is not None
+        and ptf is not None
+        and len(pgid) == len(ptf)
+        and len(pgid) > 0
+    ):
+        try:
+            rebuilt = native_geoms_fn(pgid, ptf, part_bases_c)
+            if rebuilt:
+                seed_geoms = [
+                    g for g in (pack_cache.get("seed_void_geoms") or []) if g is not None
+                ]
+                packed_geoms = list(seed_geoms) + list(rebuilt)
+                propose_stats_c["w1_obstacle_sot"] = 1
+                propose_stats_c["w1_packed_rebuilt_n"] = int(len(rebuilt))
+        except Exception:
+            pass
     composed = compose_and_nest_selection(
         **compose_nest_kwargs(
             graph=graph,
@@ -112,7 +133,7 @@ def compose_cached_selection(
             group_id=group_id,
             transform=transform,
             candidate_geoms=candidate_geoms,
-            packed_geoms=list(pack_cache.get("packed_geoms") or []),
+            packed_geoms=packed_geoms,
             part_areas=part_areas_c,
             free_info=free_info_c,
             cfg=cfg_c,
@@ -124,11 +145,12 @@ def compose_cached_selection(
             sheet_diag=sheet_diag,
             propose_stats=propose_stats_c,
             ngroups=int(cfg_c.rules.ngroups),
-            packed_group_id=pack_cache.get("packed_group_id"),
-            packed_transform=pack_cache.get("packed_transform"),
+            packed_group_id=pgid,
+            packed_transform=ptf,
             last_leaf=False,
-            void_geoms=pack_cache.get("void_geoms"),
+            void_geoms=void_geoms,
             dg=pack_cache.get("dg"),
+            motif_base=pack_cache.get("motif_base"),
         )
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
@@ -249,7 +271,14 @@ def pack_execute_snapshot(
     snap = parent
     compose_sz = len(pack_cache.get("motif_locked") or ())
     pack_cache["cache_key_compose_sz"] = int(compose_sz)
-    cohort_sig = int(getattr(action, "cohort_sig", 0) or 0) if action is not None else 0
+    # Wp/M2a: pack_cache motif_cohort_sig is SoT (synced from propose); action attr fallback.
+    cohort_sig = int(pack_cache.get("motif_cohort_sig", 0) or 0)
+    if cohort_sig == 0 and action is not None:
+        cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
+    if cohort_sig == 0:
+        ps = pack_cache.get("propose_stats")
+        if isinstance(ps, dict):
+            cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
     pack_cache["cache_key_cohort_sig"] = int(cohort_sig)
     cache_key = cheap_pack_cache_key(
         zone, action, compose_sz=compose_sz, cohort_sig=cohort_sig

@@ -288,5 +288,68 @@
       "scrap_raised": false,
       "note": "M4 gate hold: keep scrap 0.585. Track best 0.586 (bind+motif path). Do not raise scrap \u2014 not consistently above historical ON 0.587 (D3/abl spikes 0.594 unreproduced). Fixture FAIL vs 0.585 ignored for letter pass."
     }
+  },
+  "phase_wang_motif_wp": {
+    "void_fill": {
+      "area": 0.573,
+      "parts": 53,
+      "time": 87.05,
+      "independent_ok": true,
+      "note": "Wp: M2a pack_cache cohort_sig SoT; evaluator voids/packed; MotifBase on PackIterCtx/pack_cache; leak print place_coh/coh_sig/union. Dual best 0.573 (pre snap 0.558 outlier; ablate without wire also ~0.542). Wire telem on build_graph void_leak."
+    }
+  },
+  "phase_wang_motif_w0": {
+    "void_fill": {
+      "area": 0.579,
+      "parts": 52,
+      "time": 88.26,
+      "independent_ok": true,
+      "w1_branch": "first_obstacle",
+      "grow_rej_example": "16/0/0/0/0",
+      "note": "W0 telem-only. Branch: first_obstacle dominates (later_glue=0). grow_rej on bench+build_graph. Floor cleared 0.579 \u2265 Wp 0.573. W1 skip glue; obstacle/geom patch."
+    }
+  },
+  "phase_wang_motif_w1": {
+    "void_fill": {
+      "area": 0.594,
+      "independent_ok": true,
+      "w1_skipped": "glue",
+      "w1_branch": "first_packed",
+      "note": "W1: skip glue. first_packed dominates. Ship packed-rebuild SoT (seeds\u222anest transforms) + Scene voids / Penetrating packed grow hybrid. w1_sot + grow_touch telem. Floor cleared \u2265 W0 0.579.",
+      "parts": 53
+    }
+  },
+  "phase_wang_motif_w2": {
+    "void_fill": {
+      "area": 0.595,
+      "independent_ok": true,
+      "note": "W2: continue on geom_missing/None (not break). Optional fail-first dropped after degrade research (reorder did not lift seq_full). Dual peak 0.595 \u2265 W1 floor 0.594."
+    }
+  },
+  "phase_wang_motif_w3": {
+    "void_fill": {
+      "area": 0.595,
+      "independent_ok": true,
+      "note": "W3: beamed_tried in-pass dedup; beamed_sigs winners only; hollow_lock_retry / after_beam_loss telem. Dual peak this gate 0.595 \u2265 W1 floor 0.594."
+    }
+  },
+  "phase_wang_motif_w4": {
+    "void_fill": {
+      "area": 0.595,
+      "independent_ok": true,
+      "note": "W4: bonded-component tie-break before beam + [:4] cut; motif_lock_bonded_max telem. Dual peak this gate 0.595 \u2265 W1 floor 0.594."
+    }
+  },
+  "phase_wang_motif_w5": {
+    "void_fill": {
+      "area": 0.595,
+      "independent_ok": true,
+      "scrap_gate": 0.585,
+      "track_best": 0.595,
+      "track_target": 0.586,
+      "scrap_raised": false,
+      "track_status": "improved_vs_m4",
+      "note": "W5 gate hold: scrap stays 0.585. Track peak 0.595 \u2265 M4 target 0.586. Do not raise scrap (not consistently >0.587). Grow still often first_packed / seq_full\u22480; motif compose telem live on void_leak."
+    }
   }
 }

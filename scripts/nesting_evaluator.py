@@ -24,6 +24,7 @@ from nest_graph.build_graph import (
     active_rule_set,
     improve_rules,
     make_polygon_graph,
+    nest_state_extra_voids,
     void_elite_tuple_from_archive,
 )
 from nest_graph.graph import region_to_zone, BoardSnapshot, MacroRegion
@@ -1156,6 +1157,7 @@ class NestingPipelineEvaluator:
             )
             # Q105: dual = last leaf OR large_void (same SoT as build_graph).
             dual_nest = dual_nest_for(free_info, last_leaf=is_last_leaf)
+            seed_voids = nest_state_extra_voids(nest_state) or []
             pack_box = RefinePackBox()
             pack_ctx = PackIterCtx(
                 graph=graph,
@@ -1186,6 +1188,9 @@ class NestingPipelineEvaluator:
                 refine_seed=int(rng.integers(1, 2**31)),
                 first_pass=first_pass,
                 native_geoms_fn=_native_geoms_from_transforms,
+                motif_base=mcts_runner.motif_base,
+                seed_count=int(nest_state.seed_count or 0) if nest_state else 0,
+                seed_void_geoms=list(seed_voids),
             )
             pack_ctx.enable_3b = True
             mid_result, pin_all_blocked_streak = run_mid_pack_stages(
@@ -1566,8 +1571,9 @@ class NestingPipelineEvaluator:
                 "cfg": self.cfg,
                 "free_info": free_info,
                 "propose_stats": dict(propose_stats),
-                "packed_geoms": [],
-                "void_geoms": [],
+                "packed_geoms": list(packed_geoms),
+                "void_geoms": list(void_geoms_compose or []),
+                "seed_void_geoms": list(seed_voids),
                 "sheet": self.sheet,
                 "sheet_area": board_area_f,
                 "board_area": board_area_f,
@@ -1577,14 +1583,21 @@ class NestingPipelineEvaluator:
                 "compose_transform": list(transform),
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
                 "selected": list(selected_polys),
+                "motif_base": mcts_runner.motif_base,
             })
             _sync_agent_motif_cohorts(mcts_runner, propose_stats)
+            pack_cache["motif_cohort_sig"] = int(
+                propose_stats.get("motif_cohort_sig", 0) or 0
+            )
             if isinstance(last_void_leak, dict):
                 last_void_leak["place_cohort_ready"] = int(
                     propose_stats.get("place_cohort_ready", 0) or 0
                 )
                 last_void_leak["place_cohort_specs_n"] = int(
                     propose_stats.get("place_cohort_specs_n", 0) or 0
+                )
+                last_void_leak["motif_cohort_sig"] = int(
+                    propose_stats.get("motif_cohort_sig", 0) or 0
                 )
             # Q185/Q189 archive telem after Motif upsert site (post-expand).
             lib_n = int(mcts_runner.motif_base.size())

@@ -309,6 +309,23 @@ def test_sequential_accept_partial_scene_subset():
     assert telem["motif_sequential_partial"] == 1
 
 
+def test_w1_packed_penetrating_accepts_touch_rejects_overlap():
+    """W1 first_packed: hybrid factory still accepts touch, rejects overlap."""
+    from nest_graph.geometry import Geometry
+    from nest_graph.propose.motif_lock import _motif_grow_accept_factory
+
+    packed = [Geometry.from_shapely(_square(0, 0))]
+    touch = Geometry.from_shapely(_square(10.5, 0))
+    overlap = Geometry.from_shapely(_square(5, 0))
+    telem: dict = {}
+    accept = _motif_grow_accept_factory(
+        [], 1.0, packed_penetrating=True, touch_telem=telem,
+    )
+    assert accept(touch, packed)
+    assert int(telem.get("grow_member_touch_n", 0) or 0) >= 1
+    assert not accept(overlap, packed)
+
+
 def test_refine_keeps_independent_locks():
     from nest_graph.graph import (
         PoseGraph,

@@ -1146,6 +1146,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_runner,
             _prev_ps if isinstance(_prev_ps, dict) else None,
         )
+        if isinstance(_prev_ps, dict):
+            _pack_cache["motif_cohort_sig"] = int(
+                _prev_ps.get("motif_cohort_sig", 0) or 0
+            )
         if _pack_cache.get("ready") and not is_last_leaf and int(_mcts_n_sims) > 0:
             tip_action, tip_leaf = run_mcts_multi_sim(
                 mcts_runner,
@@ -1255,6 +1259,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                                     alt_action,
                                     compose_sz=len(
                                         _pack_cache.get("motif_locked") or ()
+                                    ),
+                                    cohort_sig=int(
+                                        _pack_cache.get("motif_cohort_sig", 0) or 0
                                     ),
                                 ),
                                 None,
@@ -1692,6 +1699,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             free_prep_mid = free_prep
             sheet_diag = sheet_diag_from(sheet)
             dual_nest = dual_nest_for(free_info, last_leaf=is_last_leaf)
+            seed_voids = nest_state_extra_voids(nest_state) or []
             pack_box = RefinePackBox()
             pack_ctx = PackIterCtx(
                 graph=graph,
@@ -1722,6 +1730,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 refine_seed=int(rng.integers(0, 2**31)),
                 first_pass=first_pass,
                 native_geoms_fn=_native_geoms_from_transforms,
+                motif_base=mcts_runner.motif_base,
+                seed_count=int(nest_state.seed_count or 0) if nest_state else 0,
+                # W1: keep seeds in packed (not void_geoms) so 3b/board voids SoT
+                # stays board-only; compose rebuilds nest solids then prepends seeds.
+                seed_void_geoms=list(seed_voids),
             )
             pack_ctx.enable_3b = True
             mid_result, pin_all_blocked_streak = run_mid_pack_stages(
@@ -1773,6 +1786,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "packed_group_id": packed_group_id,
                 "packed_transform": packed_transform,
                 "void_geoms": list(void_geoms_compose or []),
+                "seed_void_geoms": list(seed_voids),
                 "sheet": sheet,
                 "sheet_area": float(sheet.area) if sheet is not None else 0.0,
                 "board_area": float(board_area),
@@ -1784,6 +1798,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
             })
             _sync_agent_motif_cohorts(mcts_runner, propose_stats)
+            _pack_cache["motif_cohort_sig"] = int(
+                propose_stats.get("motif_cohort_sig", 0) or 0
+            )
+            _pack_cache["motif_base"] = mcts_runner.motif_base
             mcts_telem["last_graph_n"] = int(len(transform))
             mcts_telem["last_nest_n"] = int(len(selected_polys))
             propose_stats["motif_sequential_repin"] = 0

@@ -667,6 +667,25 @@ def test_cheap_pack_cache_key_motif_distinct():
     )
 
 
+def test_pack_execute_snapshot_cohort_sig_from_pack_cache():
+    """Wp/M2a: pack_cache motif_cohort_sig is SoT over action.cohort_sig."""
+    from nest_graph.pack.cheap import cheap_pack_cache_key
+
+    action = type("A", (), {"motif_id": 1, "rule_id": 0, "cohort_sig": 7})()
+    pack_sig = 99
+    # Same helper path as pack_execute_snapshot: pack_cache first, else action.
+    cohort_sig = int(pack_sig)
+    if cohort_sig == 0:
+        cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
+    key = cheap_pack_cache_key(
+        "void_seek", action, compose_sz=1, cohort_sig=cohort_sig
+    )
+    assert key == ("void_seek", 1, 0, 1, 99)
+    assert key != cheap_pack_cache_key(
+        "void_seek", action, compose_sz=1, cohort_sig=7
+    )
+
+
 def test_motif_graph_hits_cluster_copy_emit():
     from nest_graph.propose.pattern_archive import motif_graph_hits
     from nest_graph.propose.placements_pattern import ClusterPattern

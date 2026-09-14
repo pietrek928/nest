@@ -30,6 +30,75 @@ from nest_graph.propose.void_selection import centroid_in_free, pose_key_to_inde
 from nest_graph.utils import transform_row_key
 
 
+def _lock_bonded_components(
+    idxs: Sequence[int],
+    *,
+    candidate_geoms: Sequence | None = None,
+    contact_gap: float = 0.0,
+) -> int:
+    """Connected components among lock idxs via geom contact (≤ gap)."""
+    nodes = [int(i) for i in idxs if int(i) >= 0]
+    if len(nodes) <= 1:
+        return len(nodes)
+    parent = {i: i for i in nodes}
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    gap = float(contact_gap)
+    if candidate_geoms is not None:
+        geoms: list[tuple[int, Geometry]] = []
+        for i in nodes:
+            if i >= len(candidate_geoms):
+                continue
+            g = candidate_geoms[i]
+            cg = as_geometry(g) if not isinstance(g, Geometry) else g
+            if cg is not None:
+                geoms.append((i, cg))
+        for ai, (ia, ga) in enumerate(geoms):
+            for ib, gb in geoms[ai + 1 :]:
+                if not clear_of_geoms(ga, [gb], gap):
+                    _union(ia, ib)
+    else:
+        # Cohort-only fallback: treat as a path (single component).
+        for a, b in zip(nodes, nodes[1:]):
+            _union(a, b)
+    return len({_find(i) for i in nodes})
+
+
+def _sort_lock_sets_bonded(
+    lock_sets: list[list[int]],
+    *,
+    candidate_geoms: Sequence | None = None,
+    contact_gap: float = 0.0,
+) -> tuple[list[list[int]], int]:
+    """W4: prefer single bonded component, then larger size."""
+    if len(lock_sets) <= 1:
+        max_b = 1 if lock_sets and _lock_bonded_components(
+            lock_sets[0], candidate_geoms=candidate_geoms, contact_gap=contact_gap,
+        ) <= 1 else 0
+        return lock_sets, max_b
+    scored: list[tuple[int, int, list[int]]] = []
+    bonded_max = 0
+    for lock in lock_sets:
+        comps = _lock_bonded_components(
+            lock, candidate_geoms=candidate_geoms, contact_gap=contact_gap,
+        )
+        bonded = 1 if comps <= 1 else 0
+        bonded_max = max(bonded_max, bonded)
+        scored.append((-bonded, -len(lock), list(lock)))
+    scored.sort(key=lambda t: (t[0], t[1]))
+    return [lock for _b, _n, lock in scored], bonded_max
+
+
 def prefer_void_core_locks(
     locks: Sequence[Sequence[int]],
     polys: Sequence | None,
@@ -100,17 +169,56 @@ def _growing_subset_indices(
     candidate_geoms: Sequence | None,
     trial_packed: list,
     accept: Callable[[Geometry, list], bool],
+    reject_telem: dict | None = None,
+    *,
+    classify_voids: Sequence | None = None,
+    classify_min_dist: float | None = None,
 ) -> tuple[list[int], list[Geometry], list]:
-    """Greedy growing subset: keep members that pass accept(cg, trial)."""
+    """Greedy growing subset: keep members that pass accept(cg, trial).
+
+    W0/W1: when ``reject_telem`` is set, attribute each reject (no accept change):
+    first/later obstacle vs ``trial_packed`` alone, later_glue vs kept co-members,
+    geom_missing, none_cg. Optional void/packed split for first_obstacle (W1).
+    """
     kept: list[int] = []
     geoms: list[Geometry] = []
     trial = list(trial_packed)
+    split_voids = [g for g in (classify_voids or []) if g is not None]
+    split_md = float(classify_min_dist) if classify_min_dist is not None else None
+
+    def _bump(key: str) -> None:
+        if reject_telem is None:
+            return
+        reject_telem[key] = int(reject_telem.get(key, 0) or 0) + 1
+
     for i in idxs:
         if candidate_geoms is None or i >= len(candidate_geoms):
-            break
+            _bump("grow_reject_geom_missing")
+            continue  # W2: do not truncate later members
         geom = candidate_geoms[i]
         cg = as_geometry(geom) if not isinstance(geom, Geometry) else geom
-        if cg is None or not accept(cg, trial):
+        if cg is None:
+            _bump("grow_reject_none_cg")
+            continue
+        if not accept(cg, trial):
+            if reject_telem is not None:
+                if not kept:
+                    if split_md is not None:
+                        void_ok = is_pose_clear(cg, split_voids, [], split_md)
+                        packed_ok = is_pose_clear(
+                            cg, [], list(trial_packed), split_md,
+                        )
+                        if not void_ok and packed_ok:
+                            _bump("grow_reject_first_void")
+                        elif void_ok and not packed_ok:
+                            _bump("grow_reject_first_packed")
+                        else:
+                            _bump("grow_reject_first_both")
+                    _bump("grow_reject_first_obstacle")
+                elif not accept(cg, list(trial_packed)):
+                    _bump("grow_reject_later_obstacle")
+                else:
+                    _bump("grow_reject_later_glue")
             continue
         trial.append(cg)
         geoms.append(cg)
@@ -196,6 +304,43 @@ def _scene_accept_factory(
     return _scene_accept
 
 
+def _motif_grow_accept_factory(
+    void_geoms: Sequence | None,
+    min_dist: float,
+    *,
+    packed_penetrating: bool = False,
+    touch_telem: dict | None = None,
+) -> Callable[[Geometry, list], bool]:
+    """Grow accept for motif locks (W1 first_packed hybrid).
+
+    World voids stay Scene ``min_dist``. When ``packed_penetrating``, trial packed
+    uses Penetrating margin 0 (emit SoT) — not packing-clear → lock_sets (Q262);
+    still requires ``_packing_independent`` before grow. Co-members in ``trial``
+    share the same packed tier.
+    """
+    voids = [g for g in (void_geoms or []) if g is not None]
+    min_dist_f = float(min_dist)
+    if not packed_penetrating:
+        return _scene_accept_factory(void_geoms, min_dist)
+
+    def _hybrid_accept(cg: Geometry, trial: list) -> bool:
+        if not is_pose_clear(cg, voids, [], min_dist_f):
+            return False
+        if not trial:
+            return True
+        if clear_of_geoms(cg, list(trial), 0.0):
+            if touch_telem is not None and not is_pose_clear(
+                cg, [], list(trial), min_dist_f,
+            ):
+                touch_telem["grow_member_touch_n"] = int(
+                    touch_telem.get("grow_member_touch_n", 0) or 0
+                ) + 1
+            return True
+        return False
+
+    return _hybrid_accept
+
+
 def scene_pair_locks_from_indices(
     *,
     graph,
@@ -222,7 +367,7 @@ def scene_pair_locks_from_indices(
                 if any(int(u) == b for u in collisions[a]):
                     continue
             pair_idxs, _, _ = _growing_subset_indices(
-                [a, b], candidate_geoms, base_packed, scene_accept,
+                [a, b], candidate_geoms, base_packed, scene_accept, None,
             )
             if len(pair_idxs) < 2:
                 continue
@@ -255,13 +400,30 @@ def hollow_pattern_lock_sets(
 
     Prefer growing Scene subset per stamped cohort; fallback to flat cc pairs.
     """
-    telem = {"hollow_pattern_locks": 0, "hollow_flat_pair_locks": 0}
+    telem = {
+        "hollow_pattern_locks": 0,
+        "hollow_flat_pair_locks": 0,
+        "grow_reject_first_obstacle": 0,
+        "grow_reject_first_void": 0,
+        "grow_reject_first_packed": 0,
+        "grow_reject_first_both": 0,
+        "grow_reject_later_obstacle": 0,
+        "grow_reject_later_glue": 0,
+        "grow_reject_geom_missing": 0,
+        "grow_reject_none_cg": 0,
+        "grow_member_touch_n": 0,
+    }
     cc_set = {int(i) for i in cc_pool}
     if len(cc_set) < 2:
         return [], telem
 
     base_packed: list = [g for g in (packed_geoms or []) if g is not None]
-    scene_accept = _scene_accept_factory(void_geoms, min_dist)
+    scene_accept = _motif_grow_accept_factory(
+        void_geoms,
+        min_dist,
+        packed_penetrating=True,
+        touch_telem=telem,
+    )
     lock_sets: list[list[int]] = []
     seen: set[tuple[int, ...]] = set()
     scene_max = [0]
@@ -280,7 +442,13 @@ def hollow_pattern_lock_sets(
         if len(pattern_idxs) < 2 or not _packing_independent(pattern_idxs, graph):
             continue
         beam_idxs, _, _ = _growing_subset_indices(
-            pattern_idxs, candidate_geoms, base_packed, scene_accept,
+            pattern_idxs,
+            candidate_geoms,
+            base_packed,
+            scene_accept,
+            telem,
+            classify_voids=void_geoms,
+            classify_min_dist=float(min_dist),
         )
         if len(beam_idxs) >= 2:
             _append_lock_set(lock_sets, seen, beam_idxs, scene_max=scene_max)
@@ -853,6 +1021,18 @@ def sequential_accept_motif_cohorts(
         "motif_scene_max_sz": 0,
         "motif_pack_max_sz": 0,
         "cohort_void_rank_n": 0,
+        "grow_reject_first_obstacle": 0,
+        "grow_reject_first_void": 0,
+        "grow_reject_first_packed": 0,
+        "grow_reject_first_both": 0,
+        "grow_reject_later_obstacle": 0,
+        "grow_reject_later_glue": 0,
+        "grow_reject_geom_missing": 0,
+        "grow_reject_none_cg": 0,
+        "grow_member_touch_n": 0,
+        "w1_skipped": "glue",
+        "w1_packed_penetrating": 1,
+        "w1_obstacle_sot": 0,
     }
     if not cohorts:
         return [], telem
@@ -879,7 +1059,13 @@ def sequential_accept_motif_cohorts(
     growing_packed: list = list(base_packed)
     beam_cap = 4
     min_dist_f = float(min_dist)
-    scene_accept = _scene_accept_factory(void_geoms, min_dist)
+    # W1 first_packed: Scene voids + Penetrating packed (emit SoT for nest).
+    scene_accept = _motif_grow_accept_factory(
+        void_geoms,
+        min_dist,
+        packed_penetrating=True,
+        touch_telem=telem,
+    )
 
     def _pack_accept(cg: Geometry, trial: list) -> bool:
         return clear_of_geoms(cg, placement_obstacles(voids or [], trial), 0.0)
@@ -899,9 +1085,16 @@ def sequential_accept_motif_cohorts(
             ) + 1
         if not _packing_independent(idxs, graph):
             continue
+        order_idxs = list(idxs)
         if len(lock_sets) < beam_cap:
             beam_idxs, _beam_geoms, _ = _growing_subset_indices(
-                idxs, candidate_geoms, base_packed, scene_accept,
+                order_idxs,
+                candidate_geoms,
+                base_packed,
+                scene_accept,
+                telem,
+                classify_voids=void_geoms,
+                classify_min_dist=min_dist_f,
             )
             if len(beam_idxs) >= 2:
                 lock_sets.append(beam_idxs)
@@ -923,7 +1116,13 @@ def sequential_accept_motif_cohorts(
             if blocked:
                 continue
         scene_idxs, member_geoms, _ = _growing_subset_indices(
-            idxs, candidate_geoms, growing_packed, scene_accept,
+            order_idxs,
+            candidate_geoms,
+            growing_packed,
+            scene_accept,
+            telem,
+            classify_voids=void_geoms,
+            classify_min_dist=min_dist_f,
         )
         if len(scene_idxs) >= 2:
             if len(scene_idxs) < len(idxs):
@@ -944,7 +1143,13 @@ def sequential_accept_motif_cohorts(
             continue
         if large_void:
             pack_idxs, _pack_geoms, _ = _growing_subset_indices(
-                idxs, candidate_geoms, growing_packed, _pack_accept,
+                order_idxs,
+                candidate_geoms,
+                growing_packed,
+                _pack_accept,
+                telem,
+                classify_voids=void_geoms,
+                classify_min_dist=0.0,
             )
             if len(pack_idxs) >= 2:
                 telem["motif_sequential_packing_clear"] = int(

@@ -45,6 +45,9 @@ class PackIterCtx:
     enable_3b: bool = True
     locked_seed: Sequence | None = None
     native_geoms_fn: Callable | None = None
+    motif_base: Any = None
+    seed_count: int = 0
+    seed_void_geoms: list = field(default_factory=list)
 
 
 @dataclass
