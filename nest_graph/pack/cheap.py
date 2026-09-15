@@ -1,8 +1,10 @@
 """Cheap MCTS expand cache adapter (Q143)."""
 
+import time
 from contextlib import contextmanager
 from typing import Sequence
 
+from nest_graph.pack.cache_key import cheap_lock_fingerprint, cheap_pack_cache_key
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
 from nest_graph.graph import BoardSnapshot
@@ -19,26 +21,6 @@ from nest_graph.propose.selection_compose import (
     compose_nest_kwargs,
     sheet_diag_from,
 )
-
-
-def cheap_pack_cache_key(
-    zone,
-    action,
-    *,
-    compose_sz: int = 0,
-    cohort_sig: int = 0,
-) -> tuple[str, int, int, int, int]:
-    """Q143/S2a + Q369 + M2a: cheap cache is (zone, motif_id, rule_id, compose_sz, cohort_sig)."""
-    motif_id = -1
-    rule_id = 0
-    if action is not None:
-        if int(getattr(action, "motif_id", -1) or -1) >= 0:
-            motif_id = int(action.motif_id)
-        rid = int(getattr(action, "rule_id", 0) or 0)
-        rule_id = rid if rid >= 0 else 0
-        if cohort_sig == 0:
-            cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
-    return (str(zone or ""), motif_id, rule_id, int(compose_sz), int(cohort_sig))
 
 
 def snapshot_pack_cache(pack_cache: dict) -> dict:
@@ -123,6 +105,7 @@ def compose_cached_selection(
                 propose_stats_c["w1_packed_rebuilt_n"] = int(len(rebuilt))
         except Exception:
             pass
+    _compose_t0 = time.perf_counter()
     composed = compose_and_nest_selection(
         **compose_nest_kwargs(
             graph=graph,
@@ -151,7 +134,11 @@ def compose_cached_selection(
             void_geoms=void_geoms,
             dg=pack_cache.get("dg"),
             motif_base=pack_cache.get("motif_base"),
+            survive_by_motif=pack_cache.get("survive_by_motif") or {},
         )
+    )
+    propose_stats_c["compose_ms"] = float(
+        (time.perf_counter() - _compose_t0) * 1000.0
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
     pack_cache["motif_locked"] = list(propose_stats_c.get("motif_locked") or ())
@@ -280,9 +267,21 @@ def pack_execute_snapshot(
         if isinstance(ps, dict):
             cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
     pack_cache["cache_key_cohort_sig"] = int(cohort_sig)
+    lock_fp = cheap_lock_fingerprint(pack_cache.get("motif_locked"))
+    pack_cache["cache_key_lock_fp"] = int(lock_fp)
     cache_key = cheap_pack_cache_key(
-        zone, action, compose_sz=compose_sz, cohort_sig=cohort_sig
+        zone,
+        action,
+        compose_sz=compose_sz,
+        cohort_sig=cohort_sig,
+        lock_fp=lock_fp,
     )
+    # Mirror key dims into propose_stats for void_leak / letter telem (Q271/P5).
+    ps = pack_cache.get("propose_stats")
+    if isinstance(ps, dict):
+        ps["cache_key_compose_sz"] = int(compose_sz)
+        ps["cache_key_cohort_sig"] = int(cohort_sig)
+        ps["cache_key_lock_fp"] = int(lock_fp)
     cheap_map: dict = pack_cache.setdefault("cheap_by_key", {})
     pack_cache["cache_lookup_n"] = int(pack_cache.get("cache_lookup_n", 0) or 0) + 1
     if cache_key in cheap_map:
@@ -472,6 +471,9 @@ def maybe_invalidate_cheap_cache(
         if prev_sz >= 0 and prev_sz != int(compose_sz):
             invalidate_cheap_cache(pack_cache, reason="compose_sz")
             pack_cache["cache_invalidate_compose"] = 1
+            ps = pack_cache.get("propose_stats")
+            if isinstance(ps, dict):
+                ps["cache_invalidate_compose"] = 1
         pack_cache["last_compose_sz"] = int(compose_sz)
     if cohort_sig is not None:
         # Soft: only invalidate on nonzero→nonzero shift (ready drop to 0 must not thrash).
@@ -480,11 +482,15 @@ def maybe_invalidate_cheap_cache(
         if prev_coh != 0 and cur != 0 and prev_coh != cur:
             invalidate_cheap_cache(pack_cache, reason="cohort_sig")
             pack_cache["cache_invalidate_cohort"] = 1
+            ps = pack_cache.get("propose_stats")
+            if isinstance(ps, dict):
+                ps["cache_invalidate_cohort"] = 1
         if cur != 0:
             pack_cache["last_cohort_sig"] = cur
 
 
 __all__ = [
+    "cheap_lock_fingerprint",
     "cheap_pack_cache_key",
     "compose_cached_selection",
     "invalidate_cheap_cache",

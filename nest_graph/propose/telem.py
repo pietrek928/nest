@@ -378,11 +378,23 @@ def build_motif_telem(
     archive_len: int,
 ) -> dict:
     """motif_telem dict (keys unchanged until M2 renames)."""
+
+    def _skip(name: str) -> int:
+        return int(
+            skip_map.get(f"motif_{name}", 0) or skip_map.get(name, 0) or 0
+        )
+
     motif_telem = {
-        "full_motif_clear": int(skip_map.get("motif_full_motif_clear", 0)),
-        "fallback_leader": int(skip_map.get("motif_fallback_leader", 0)),
-        "lattice_anchors_added": int(skip_map.get("motif_lattice_anchors_added", 0)),
-        "lattice_anchors_kept": int(skip_map.get("motif_lattice_anchors_kept", 0)),
+        "full_motif_clear": _skip("full_motif_clear"),
+        "fallback_leader": _skip("fallback_leader"),
+        "leader_fail": _skip("leader_fail"),
+        "collide": _skip("collide") or _skip("motif_collide"),
+        "lattice_anchors_added": _skip("lattice_anchors_added"),
+        "lattice_anchors_kept": _skip("lattice_anchors_kept"),
+        "foreign_clear_fail_sheet": _skip("foreign_clear_fail_sheet"),
+        "foreign_clear_fail_obs": _skip("foreign_clear_fail_obs"),
+        "foreign_clear_fail_empty": _skip("foreign_clear_fail_empty"),
+        "soft_foreign_incumbent_n": _skip("soft_foreign_incumbent_n"),
         "motif_key_boost_hits": 0,
         "motif_refine_hits": int(motif_refine_n),
         "accepted_patterns_n": int(propose_stats.get("accepted_patterns_n", 0)),
@@ -768,12 +780,13 @@ def merge_phase_gate_telem(
             mt.get("macro_path_overlap_skip", leak.get("macro_path_overlap_skip", 0))
             or 0
         )
-        leak["mcts_cohort_macro_n"] = max(
-            int(leak.get("mcts_cohort_macro_n", 0) or 0),
-            int(mt.get("mcts_cohort_macro_n", 0) or 0),
-        )
+        # G0: current-iter overwrite (C++ clears; do not max-accumulate).
+        leak["mcts_cohort_macro_n"] = int(mt.get("mcts_cohort_macro_n", 0) or 0)
         leak["replay_from_ancestor_ms"] = float(
             mt.get("replay_from_ancestor_ms", leak.get("replay_from_ancestor_ms", 0.0)) or 0.0
+        )
+        leak["path_probe_skip"] = int(
+            mt.get("path_probe_skip", leak.get("path_probe_skip", 0)) or 0
         )
         visits = []
         for rid in range(8):
@@ -841,6 +854,12 @@ def merge_phase_gate_telem(
         "hybrid_pick_wins",
         "hybrid_pick_reject_indep",
         "hybrid_pick_reject_area",
+        "hybrid_pick_join_soft",
+        "hybrid_pick_survive_soft",
+        "hybrid_pick_sticky_soft",
+        "foreign_clear_fail_sheet",
+        "foreign_clear_fail_obs",
+        "foreign_clear_fail_empty",
         "motif_scene_max_sz_pre",
         "motif_scene_max_sz_post",
         "hollow_pattern_locks",
@@ -869,6 +888,7 @@ def merge_phase_gate_telem(
         "motif_union_hollow_skip_beamed",
         "motif_union_hollow_after_beam_loss",
         "place_cohort_ready",
+        "place_cohort_ready_hard",
         "place_cohort_specs_n",
         "path_credit_n",
         "macro_path_motif_soft",
@@ -879,8 +899,11 @@ def merge_phase_gate_telem(
         "ray_anchor_from_shapely_n",
         "region_from_shapely_n",
         "propose_geom_reuse",
+        "densify_obs_reuse",
         "best_pack_overlap_reject",
         "cache_key_compose_sz",
+        "cache_key_cohort_sig",
+        "cache_key_lock_fp",
         "cache_invalidate_compose",
         "cohort_sig_amaf_visits",
         "mcts_cohort_macro_n",
@@ -888,11 +911,19 @@ def merge_phase_gate_telem(
         "grow_reject_first_void",
         "grow_reject_first_packed",
         "grow_reject_first_both",
+        "grow_reject_first_seed",
+        "grow_reject_first_mapped",
+        "grow_reject_first_unmapped",
         "grow_reject_later_obstacle",
         "grow_reject_later_glue",
         "grow_reject_geom_missing",
         "grow_reject_none_cg",
         "grow_member_touch_n",
+        "grow_classify_seed_n",
+        "grow_classify_mapped_n",
+        "grow_classify_unmapped_n",
+        "soft_incumbent_n",
+        "grow_order_tier_n",
         "w1_packed_penetrating",
         "w1_obstacle_sot",
         "w1_packed_rebuilt_n",
@@ -900,6 +931,18 @@ def merge_phase_gate_telem(
         "hollow_lock_retry_n",
         "motif_union_hollow_after_beam_loss",
         "motif_lock_bonded_max",
+        "full_motif_clear",
+        "fallback_leader",
+        "leader_fail",
+        "lattice_anchors_added",
+        "lattice_anchors_kept",
+        "motif_coemit_followers",
+        "foreign_clear_fail_sheet",
+        "foreign_clear_fail_obs",
+        "foreign_clear_fail_empty",
+        "soft_foreign_incumbent_n",
+        "foreign_clear_soft_ok",
+        "cohort_sig_amaf_visits",
     ):
         if hk in propose_stats:
             if hk.startswith("lock_survive"):
@@ -993,6 +1036,42 @@ def merge_phase_gate_telem(
     leak["propose_ms"] = float(
         propose_stats.get("propose_ms", leak.get("propose_ms", 0.0)) or 0.0
     )
+    leak["compose_ms"] = float(
+        propose_stats.get("compose_ms", leak.get("compose_ms", 0.0)) or 0.0
+    )
+    leak["mpg_ms"] = float(
+        propose_stats.get("mpg_ms", leak.get("mpg_ms", 0.0)) or 0.0
+    )
+    leak["mpg_xform_ms"] = float(
+        propose_stats.get("mpg_xform_ms", leak.get("mpg_xform_ms", 0.0)) or 0.0
+    )
+    leak["mpg_valid_ms"] = float(
+        propose_stats.get("mpg_valid_ms", leak.get("mpg_valid_ms", 0.0)) or 0.0
+    )
+    leak["mpg_edge_ms"] = float(
+        propose_stats.get("mpg_edge_ms", leak.get("mpg_edge_ms", 0.0)) or 0.0
+    )
+    leak["graph_edges_n"] = int(
+        propose_stats.get("graph_edges_n", leak.get("graph_edges_n", 0)) or 0
+    )
+    leak["graph_valid_n"] = int(
+        propose_stats.get("graph_valid_n", leak.get("graph_valid_n", 0)) or 0
+    )
+    leak["dfs_loose_ms"] = float(
+        propose_stats.get("dfs_loose_ms", leak.get("dfs_loose_ms", 0.0)) or 0.0
+    )
+    leak["finalize_ms"] = float(
+        propose_stats.get("finalize_ms", leak.get("finalize_ms", 0.0)) or 0.0
+    )
+    leak["ray_ms"] = float(
+        propose_stats.get("ray_ms", leak.get("ray_ms", 0.0)) or 0.0
+    )
+    leak["erosion_ms"] = float(
+        propose_stats.get("erosion_ms", leak.get("erosion_ms", 0.0)) or 0.0
+    )
+    leak["pocket_ms"] = float(
+        propose_stats.get("pocket_ms", leak.get("pocket_ms", 0.0)) or 0.0
+    )
 
 
 @dataclass
@@ -1041,7 +1120,9 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         ctx.polys, ctx.selected_polys, ctx.free_poly,
     )
     n_void_props = count_props_in_free(proposed_list, ctx.free_poly)
-    n_void_graph = count_graph_in_free(ctx.polys, ctx.free_poly)
+    n_void_graph = int(propose_stats.get("graph_void_n", -1) or -1)
+    if n_void_graph < 0:
+        n_void_graph = count_graph_in_free(ctx.polys, ctx.free_poly)
     zones = propose_stats.get("zones_used") or []
     hijack = int(zones_have_void_hijack(zones))
     outline_cov = float(propose_stats.get("outline_cov", 0.0))
@@ -1061,8 +1142,14 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         "ray_anchor_from_shapely_n",
         "region_from_shapely_n",
         "propose_geom_reuse",
+        "densify_obs_reuse",
         "packing_clear_native_n",
         "packing_clear_from_shapely_n",
+        "motif_coemit_followers",
+        "foreign_clear_fail_sheet",
+        "foreign_clear_fail_obs",
+        "foreign_clear_fail_empty",
+        "soft_foreign_incumbent_n",
     ):
         if _rk in densify and _rk not in propose_stats:
             propose_stats[_rk] = densify[_rk]
@@ -1141,9 +1228,9 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         if ctx.mcts_telem is not None:
             ctx.mcts_telem["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
             ctx.mcts_telem["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
-            ctx.mcts_telem["mcts_cohort_macro_n"] = max(
-                int(ctx.mcts_telem.get("mcts_cohort_macro_n", 0) or 0),
-                int(agent.telem.get("mcts_cohort_macro_n", 0) or 0),
+            # G0: current-iter overwrite (match C++ / propose_stats).
+            ctx.mcts_telem["mcts_cohort_macro_n"] = int(
+                agent.telem.get("mcts_cohort_macro_n", 0) or 0
             )
         propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
         propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
@@ -1380,6 +1467,38 @@ def hybrid_diag_suffix(leak: Mapping[str, Any]) -> str:
     return (
         f"hybrid=lock:{compose}/{refine}/{mat} "
         f"esc={esc} anc={anc}/{skip} pick={pick_w}/{pick_t}"
+    )
+
+
+def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
+    """D0/G0: Decision-Graph expand funnel (path / Motif / PoseGraph wall-clock)."""
+    return (
+        f"dg_funnel "
+        f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f} "
+        f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "
+        f"place_coh={int(leak.get('place_cohort_ready', 0) or 0)}/"
+        f"{int(leak.get('place_cohort_specs_n', 0) or 0)}/"
+        f"{int(leak.get('mcts_cohort_macro_n', 0) or 0)} "
+        f"pick={int(leak.get('hybrid_pick_trials', 0) or 0)}/"
+        f"{int(leak.get('hybrid_pick_wins', 0) or 0)}/"
+        f"{int(leak.get('hybrid_pick_reject_indep', 0) or 0)}/"
+        f"{int(leak.get('hybrid_pick_reject_area', 0) or 0)}/"
+        f"{int(leak.get('hybrid_pick_join_soft', 0) or 0)} "
+        f"compose_sz={int(leak.get('motif_compose_accepted_size', 0) or 0)} "
+        f"refine_ms={float(leak.get('refine_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('dfs_loose_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('finalize_ms', 0.0) or 0.0):.1f} "
+        f"mpg={float(leak.get('mpg_ms', 0.0) or 0.0):.1f}/"
+        f"{int(leak.get('graph_valid_n', 0) or 0)} "
+        f"prop={float(leak.get('propose_ms', 0.0) or 0.0):.1f} "
+        f"compose={float(leak.get('compose_ms', 0.0) or 0.0):.1f} "
+        f"mpg_x={float(leak.get('mpg_xform_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_valid_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_edge_ms', 0.0) or 0.0):.1f} "
+        f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
+        f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"
+        f"{int(leak.get('void_override', 0) or 0)} "
+        f"path_skip={int(leak.get('path_probe_skip', 0) or 0)}"
     )
 
 

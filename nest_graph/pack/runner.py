@@ -84,6 +84,7 @@ class MacroMctsRunner:
                 motif_base=self.motif_base,
                 execute_fn=self.execute_fn,
                 telem=self.agent.telem,
+                realized=dict(getattr(self.agent, "realized", None) or {}),
             )
             child = self.agent.expand(leaf, action, result.reward)
             result.snapshot.arena_node_id = child

@@ -15,6 +15,7 @@ worth doing; do it before carving up the collect stages.
 from typing import TYPE_CHECKING, Any, List, Optional, Sequence, Tuple, Union
 import logging
 import math
+import time
 from dataclasses import replace
 from math import hypot
 
@@ -515,6 +516,8 @@ def _void_seek_densify(
     border_only_propose: bool,
     push: Point,
     collect_cloud_keys: set[tuple[float, float, float]] | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    foreign_out: dict[int, list] | None = None,
 ) -> tuple[np.ndarray, str, bool, bool, str | None, dict]:
     """Sterile densify + optional free_space_cloud (Q146: densify reuses explorer emit)."""
     telem: dict = {
@@ -631,7 +634,16 @@ def _void_seek_densify(
         densify_cfg, propose_cfg.place_proposer_pool_scales,
     )
     densify_cfg = floor_void_seek_budgets(densify_cfg)
-    densify_obs = simplify_obstacle_union(placed, min_dist)
+    # G7: reuse primary full-union obstacles when densify wants the same.
+    primary_full = bool(getattr(cfg, "use_full_packed_obstacle", False))
+    if primary_full and obstacle_shape is not None and not getattr(
+        obstacle_shape, "is_empty", True,
+    ):
+        densify_obs = obstacle_shape
+        telem["densify_obs_reuse"] = 1
+    else:
+        densify_obs = simplify_obstacle_union(placed, min_dist)
+        telem["densify_obs_reuse"] = 0
     if densify_obs is None or densify_obs.is_empty:
         densify_obs = obstacle_shape_for_propose(
             placed,
@@ -685,6 +697,8 @@ def _void_seek_densify(
         cascade_zone="void_seek",
         cascade_stats_out=group_cascade,
         diversity_stats_out=group_diversity,
+        part_by_group=part_by_group,
+        foreign_out=foreign_out,
     )
     for name, n in densify_counts.items():
         n_u = len(densify_keys.get(name) or ())
@@ -1019,6 +1033,9 @@ class _CollectState:
         self.board_edge_reserved = False
         self.inward_bridge_emitted = False
         self.cascade_zone: str | None = None
+        self.ray_ms = 0.0
+        self.erosion_ms = 0.0
+        self.pocket_ms = 0.0
         if cascade_stats_out is not None:
             cascade_stats_out.setdefault("cascade_stopped_after", "none")
             cascade_stats_out.setdefault("cascade_skipped_proposers", [])
@@ -1103,6 +1120,7 @@ def _collect_pocket_candidates(
         tags: list[str] = []
         attempts: list[int] = []
         skips: list[str] = []
+        _pocket_t0 = time.perf_counter()
         pocket_coords = propose_placements_pocket_fit(
             ctx.shape_to_place,
             ctx.sheet,
@@ -1122,6 +1140,7 @@ def _collect_pocket_candidates(
             free_space=extras.free_space,
             skip_reasons_out=skips,
         )
+        state.pocket_ms += (time.perf_counter() - _pocket_t0) * 1000.0
         state.ext("pocket_fit", pocket_coords, max_items=len(pocket_coords))
         if stats is not None:
             stats.tags.extend(tags)
@@ -1152,6 +1171,9 @@ def _collect_pocket_candidates(
             void_pole=extras.void_pole if extras.void_pole is not None else ctx.void_pole,
             skip_reasons=motif_skips,
             cohorts_out=motif_cohorts,
+            part_by_group=extras.part_by_group,
+            foreign_out=extras.foreign_out,
+            hard_packed_geoms=extras.hard_packed_geoms,
         )
         # Track D / Q25: Scene dry-run motif reserve only (after packing emit, before claim).
         if motif_coords and bool(getattr(cfg, "enable_motif_scene_dry_run", False)):
@@ -1358,6 +1380,7 @@ def _collect_explorer_candidates(
     if _proposer_enabled("erosion", ctx.enabled_proposers) and not state.inward_bridge_emitted:
         er_cap = state.explorer_cap(pool)
         if er_cap > 0:
+            _er_t0 = time.perf_counter()
             state.ext(
                 "erosion",
                 propose_placements_erosion(
@@ -1376,6 +1399,7 @@ def _collect_explorer_candidates(
                 ),
                 max_items=er_cap,
             )
+            state.erosion_ms += (time.perf_counter() - _er_t0) * 1000.0
     if _proposer_enabled("raycasting", ctx.enabled_proposers) and not state.inward_bridge_emitted:
         rc_cap = state.explorer_cap(pool)
         if rc_cap > 0:
@@ -1388,6 +1412,7 @@ def _collect_explorer_candidates(
                 not in (PlaceZone.VOID_SEEK.value, "void_seek")
             ):
                 rim_anchors = extras.packed_polys
+            _ray_t0 = time.perf_counter()
             state.ext(
                 "raycasting",
                 propose_placements_raycasting(
@@ -1406,7 +1431,9 @@ def _collect_explorer_candidates(
                     pt_push=ctx.pt_push,
                     rim_anchor_geoms=rim_anchors,
                 ),
+                max_items=rc_cap,
             )
+            state.ray_ms += (time.perf_counter() - _ray_t0) * 1000.0
     if (
         _proposer_enabled("voronoi", ctx.enabled_proposers)
         and cfg.use_voronoi
@@ -1589,21 +1616,24 @@ def _collect_expand_candidates(
         and _proposer_enabled("selection_expand", ctx.enabled_proposers)
     ):
         # Light emit — mixer still adds a thin expand remainder.
+        # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         n = 1
+        pool_div = 16 if state.cascade_zone == "void_seek" else 4
         state.ext(
             "selection_expand",
             propose_placements_selection_expand(seeds, n=n, rng=rng),
-            max_items=max(8, cfg.candidate_pool // 4),
+            max_items=max(4, cfg.candidate_pool // pool_div),
         )
     if (
         seeds
         and _proposer_enabled("history_expand", ctx.enabled_proposers)
         and bool(getattr(cfg, "use_history_expand", True))
     ):
+        hist_div = 32 if state.cascade_zone == "void_seek" else 8
         state.ext(
             "history_expand",
             propose_placements_history_expand(seeds, n=1, rng=rng),
-            max_items=max(4, cfg.candidate_pool // 8),
+            max_items=max(2, cfg.candidate_pool // hist_div),
         )
 
 
@@ -1759,6 +1789,16 @@ def _collect_candidates(
 
     _collect_cast_refine_candidates(ctx, state)
     _collect_expand_candidates(ctx, extras, state, group_id=group_id)
+    if state.cascade_stats_out is not None:
+        state.cascade_stats_out["ray_ms"] = float(
+            state.cascade_stats_out.get("ray_ms", 0.0) or 0.0
+        ) + float(state.ray_ms)
+        state.cascade_stats_out["erosion_ms"] = float(
+            state.cascade_stats_out.get("erosion_ms", 0.0) or 0.0
+        ) + float(state.erosion_ms)
+        state.cascade_stats_out["pocket_ms"] = float(
+            state.cascade_stats_out.get("pocket_ms", 0.0) or 0.0
+        ) + float(state.pocket_ms)
     return _filter_distant_collisions(state.candidates, ctx.propose_geom)
 
 
@@ -2252,6 +2292,8 @@ def propose_coords_with_strategy(
     cascade_zone: str | None = None,
     cascade_stats_out: dict | None = None,
     diversity_stats_out: dict | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    foreign_out: dict[int, list] | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -2302,6 +2344,10 @@ def propose_coords_with_strategy(
         void_pole=void_pole,
     )
     pocket_stats = PocketStats()
+    # R1: soft foreign schedule available via hard_packed_geoms / two-tier clear.
+    # void_fill dual: soft-all coemit↑ but area <0.581; same_clear-gated soft →
+    # coemit=0 (same_clear rare). Leave densify on legacy full obs; unit tests
+    # cover soft path. Do not invent keys / second mix floor.
     extras = PackedProposeExtras(
         packed_polys=packed_polys,
         packed_group_ids=packed_group_ids,
@@ -2310,6 +2356,9 @@ def propose_coords_with_strategy(
         cluster_patterns=cluster_patterns,
         pocket_stats=pocket_stats,
         void_pole=void_pole,
+        part_by_group=part_by_group,
+        foreign_out=foreign_out,
+        hard_packed_geoms=None,
     )
     candidates = _collect_candidates(
         ctx,
@@ -3071,6 +3120,8 @@ def proposed_transforms_for_groups(
     motif_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     motif_skip_agg: dict[str, int] = {}
     motif_cohorts_agg: list = []
+    part_by_group = _batch_parts_by_group(parts)
+    motif_coemit_by_gid: dict[int, list] = {}
     densify_fired = 0
     densify_accepted = 0
     densify_reasons: list[str] = []
@@ -3516,6 +3567,8 @@ def proposed_transforms_for_groups(
             cascade_zone=zone,
             cascade_stats_out=group_cascade,
             diversity_stats_out=group_diversity,
+            part_by_group=part_by_group,
+            foreign_out=motif_coemit_by_gid,
         )
         pocket_emitted += int(pocket_stats.get("emitted", 0))
         pocket_attempted += int(pocket_stats.get("attempted", 0))
@@ -3567,6 +3620,15 @@ def proposed_transforms_for_groups(
             int(cascade_agg.get("inward_rc_cap", 0) or 0),
             int(group_cascade.get("inward_rc_cap", 0) or 0),
         )
+        cascade_agg["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0) + float(
+            group_cascade.get("ray_ms", 0.0) or 0.0
+        )
+        cascade_agg["erosion_ms"] = float(
+            cascade_agg.get("erosion_ms", 0.0) or 0.0
+        ) + float(group_cascade.get("erosion_ms", 0.0) or 0.0)
+        cascade_agg["pocket_ms"] = float(
+            cascade_agg.get("pocket_ms", 0.0) or 0.0
+        ) + float(group_cascade.get("pocket_ms", 0.0) or 0.0)
         for k, v in group_diversity.items():
             if isinstance(v, (int, float)):
                 diversity_agg[k] = diversity_agg.get(k, 0) + v
@@ -3647,6 +3709,8 @@ def proposed_transforms_for_groups(
                 collect_cloud_keys=set(
                     group_proposer_keys.get("free_space_cloud") or ()
                 ),
+                part_by_group=part_by_group,
+                foreign_out=motif_coemit_by_gid,
             )
         )
         if fired:
@@ -3703,6 +3767,32 @@ def proposed_transforms_for_groups(
 
         out[group_id] = arr
 
+    # P1: merge packing-clear foreign motif co-emits into per-gid proposal pools.
+    coemit_n = 0
+    for fgid, coords_list in motif_coemit_by_gid.items():
+        if not coords_list:
+            continue
+        coemit_n += len(coords_list)
+        extra = propositions_to_ndarray(coords_list)
+        base = out.get(int(fgid), np.zeros((0, 3), dtype=np.float64))
+        if base.size == 0:
+            merged = extra
+        else:
+            merged = np.concatenate([base, extra], axis=0)
+        out[int(fgid)] = dedupe_transforms(merged)
+        fold_emit_motif_keys(
+            motif_keys_by_group,
+            group_id=int(fgid),
+            cluster_copy_keys=tuple(
+                transform_row_key(c) for c in coords_list
+            ),
+        )
+        proposer_keys_agg.setdefault("cluster_copy", set()).update(
+            transform_row_key(c) for c in coords_list
+        )
+    if coemit_n:
+        motif_skip_agg["motif_coemit_followers"] = int(coemit_n)
+
     if proposer_counts_out is not None:
         proposer_counts_out.clear()
         proposer_counts_out.update(total_counts)
@@ -3738,6 +3828,20 @@ def proposed_transforms_for_groups(
         }
         densify_stats_out["motif_skip"] = dict(motif_skip_agg)
         densify_stats_out["motif_cohorts"] = list(motif_cohorts_agg)
+        densify_stats_out["motif_coemit_followers"] = int(
+            motif_skip_agg.get("motif_coemit_followers", 0)
+        )
+        for _fk in (
+            "foreign_clear_fail_sheet",
+            "foreign_clear_fail_obs",
+            "foreign_clear_fail_empty",
+            "soft_foreign_incumbent_n",
+        ):
+            densify_stats_out[_fk] = int(
+                motif_skip_agg.get(_fk, 0)
+                or motif_skip_agg.get(f"motif_{_fk}", 0)
+                or 0
+            )
         densify_stats_out["emitted_by_proposer"] = dict(emitted_by_proposer)
         densify_stats_out["pool_by_proposer"] = dict(pool_by_proposer)
         densify_stats_out["pocket_by_tag"] = dict(pocket_by_tag)
@@ -3761,6 +3865,13 @@ def proposed_transforms_for_groups(
         )
         densify_stats_out["inward_rc_cap"] = int(
             cascade_agg.get("inward_rc_cap", 0) or 0
+        )
+        densify_stats_out["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0)
+        densify_stats_out["erosion_ms"] = float(
+            cascade_agg.get("erosion_ms", 0.0) or 0.0
+        )
+        densify_stats_out["pocket_ms"] = float(
+            cascade_agg.get("pocket_ms", 0.0) or 0.0
         )
         densify_stats_out["nms_kept"] = int(diversity_agg.get("nms_kept", 0))
         densify_stats_out["nms_dropped"] = int(diversity_agg.get("nms_dropped", 0))

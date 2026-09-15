@@ -5,7 +5,7 @@ policy (G22/G24) cannot drift. Propose ranking stays in ``ranking.py``.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 from shapely import Point
@@ -30,6 +30,7 @@ from nest_graph.propose.void_selection import (
     count_selected_in_free,
     FreeCentroidPredicate,
     pose_key_to_index,
+    pose_key_to_verts,
     transform_row_key,
     void_attractor_radius,
     void_core_then_rim,
@@ -52,6 +53,7 @@ from nest_graph.propose.first_pass_border import border_kiss_indices
 from nest_graph.propose.motif_keys import merge_motif_cohorts, resolve_motif_keys
 from nest_graph.board import board_context_from_geometry
 from nest_graph.pack.epoch import bind_epoch
+from nest_graph.pack.cache_key import cheap_lock_fingerprint
 from shapely.geometry import Polygon
 import math
 
@@ -74,8 +76,19 @@ def _motif_key_density(
     return float(hits) / float(len(sel))
 
 
-def dual_nest_for(free_info: Any, *, last_leaf: bool = False, do_heavy: bool | None = None) -> bool:
-    """Q105: dual lex when last leaf OR large_void basin."""
+def dual_nest_for(
+    free_info: Any,
+    *,
+    last_leaf: bool = False,
+    do_heavy: bool | None = None,
+    sterile_hold: bool = False,
+) -> bool:
+    """Q105: dual lex when last leaf OR large_void basin.
+
+    ``sterile_hold`` reserved for D1b experiments; currently unused so dual
+    stays on for large_void (ablation: skipping dual regressed void_fill).
+    """
+    del sterile_hold
     if do_heavy is not None:
         last_leaf = bool(do_heavy)
     if bool(last_leaf):
@@ -166,6 +179,10 @@ def compose_nest_kwargs(
     locked_seed: Sequence[int] | None = None,
     dg=None,
     motif_base=None,
+    survive_by_motif: dict | None = None,
+    grow_classify_seed: Sequence | None = None,
+    grow_classify_mapped: Sequence | None = None,
+    grow_classify_unmapped: Sequence | None = None,
 ) -> dict:
     """One kwargs dict for ``compose_and_nest_selection`` (Uh + mid + evaluator)."""
     return {
@@ -196,6 +213,10 @@ def compose_nest_kwargs(
         "locked_seed": locked_seed,
         "dg": dg,
         "motif_base": motif_base,
+        "survive_by_motif": survive_by_motif,
+        "grow_classify_seed": grow_classify_seed,
+        "grow_classify_mapped": grow_classify_mapped,
+        "grow_classify_unmapped": grow_classify_unmapped,
     }
 
 
@@ -233,11 +254,13 @@ def _map_incumbent_indices(
     packed_group_id: Sequence[int] | None,
     packed_transform: Sequence | None,
     graph,
+    key_map: dict | None = None,
 ) -> list[int]:
     """Map last packed (gid, key) into this graph; empty if not packing-independent."""
     if not packed_group_id or packed_transform is None:
         return []
-    key_map = pose_key_to_index(group_id, transform)
+    if key_map is None:
+        key_map = pose_key_to_index(group_id, transform)
     idxs: list[int] = []
     for gid, tr in zip(packed_group_id, packed_transform, strict=False):
         ix = key_map.get((int(gid), transform_row_key(tr)))
@@ -307,6 +330,18 @@ def nest_border_kiss_selection(
     if not border and not locked_list:
         return []
     return _nest_with_locks(graph, nest_scores, locked_list, dual=False)
+
+
+def _survive_mid_total(survive_by_motif: Mapping | None, propose_stats: dict | None) -> int:
+    """Last-iter MotifJoin survival count for R3 hybrid_compose_pick soft floor."""
+    if propose_stats is not None:
+        n = int(propose_stats.get("survive_motif_n", 0) or 0)
+        if n > 0:
+            return n
+    sc = survive_by_motif or {}
+    if isinstance(sc, Mapping):
+        return int(sum(int(v) for v in sc.values()) or 0)
+    return 0
 
 
 def _lex_pick_better(
@@ -385,6 +420,10 @@ def compose_and_nest_selection(
     locked_seed: Sequence[int] | None = None,
     dg=None,
     motif_base=None,
+    survive_by_motif: dict | None = None,
+    grow_classify_seed: Sequence | None = None,
+    grow_classify_mapped: Sequence | None = None,
+    grow_classify_unmapped: Sequence | None = None,
 ) -> ComposedSelection:
     """Apply void/geom boosts, pick nest seed, prepare refine_scores (G22/G24).
 
@@ -394,8 +433,11 @@ def compose_and_nest_selection(
     beamed when ``dual_nest`` (L2; locks kill local_swap inside one nest call).
     ``motif_base`` (Wp): optional MotifBase for bonded lock ranking (W4);
     staged on PackIterCtx / pack_cache / kwargs — not propose_stats.
+    ``survive_by_motif``: last-iter MotifJoin survival soft prior for RCL (P3).
     """
     free_poly = free_info.target_poly
+    survive_mid = dict(survive_by_motif or {})
+    survive_mid_n = _survive_mid_total(survive_mid, propose_stats)
     nest_rules = rule_sets
     refine_rules = active_rules
     scores = list(scores)
@@ -405,6 +447,30 @@ def compose_and_nest_selection(
         min_dist, sheet_diag, cfg.rules.place_rule_radius,
     )
     use_nest_by_scores = bool(scores)
+
+    # G6: one FreeCentroid + pose key maps for boosts / hollow / void-core.
+    free_predicate: FreeCentroidPredicate | None = None
+    if (
+        free_info is not None
+        and getattr(free_info, "kind", None) == "large_void"
+        and free_poly is not None
+        and not getattr(free_poly, "is_empty", True)
+    ):
+        free_predicate = FreeCentroidPredicate.from_shapely(
+            free_poly,
+            float(min_dist) * 0.25,
+            geoms=candidate_geoms,
+        )
+    key_to_verts = (
+        pose_key_to_verts(group_id, transform)
+        if group_id is not None and transform is not None
+        else None
+    )
+    key_to_ix = (
+        pose_key_to_index(group_id, transform)
+        if group_id is not None and transform is not None
+        else None
+    )
 
     geom_stats: dict = {}
     boost_hits = apply_void_selection_boosts(
@@ -426,6 +492,8 @@ def compose_and_nest_selection(
         sheet_area=sheet_area,
         geom_stats_out=geom_stats,
         dg=dg,
+        free_predicate=free_predicate.with_margin(0.0) if free_predicate else None,
+        key_to_verts=key_to_verts,
     )
     if geom_stats and propose_stats is not None:
         propose_stats["geom_ms"] = geom_stats.get("geom_ms", 0.0)
@@ -452,6 +520,7 @@ def compose_and_nest_selection(
         free_info=free_info,
         free_poly=free_poly,
         void_term=void_term,
+        predicate=free_predicate.with_margin(0.0) if free_predicate else None,
     )
     if propose_stats is not None:
         propose_stats["nest_void_term_hits"] = int(nest_void_hits)
@@ -496,6 +565,13 @@ def compose_and_nest_selection(
             large_void=bool(
                 free_info is not None and getattr(free_info, "kind", None) == "large_void"
             ),
+            polys=polys,
+            free_poly=free_poly,
+            classify_seed=grow_classify_seed,
+            classify_mapped=grow_classify_mapped,
+            classify_unmapped=grow_classify_unmapped,
+            motif_base=motif_base,
+            survive_by_motif=survive_mid,
         )
         lock_sets = list(pre_result.lock_sets)
         boost_hits = dict(boost_hits)
@@ -615,8 +691,17 @@ def compose_and_nest_selection(
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     ):
-        n_void_graph_pre = count_graph_in_free(polys, free_poly)
-        n_void_nest_pre = count_selected_in_free(polys, selected_nest, free_poly)
+        n_void_graph_pre = count_graph_in_free(
+            polys,
+            free_poly,
+            predicate=free_predicate.with_margin(0.0) if free_predicate else None,
+        )
+        n_void_nest_pre = count_selected_in_free(
+            polys,
+            selected_nest,
+            free_poly,
+            predicate=free_predicate.with_margin(0.0) if free_predicate else None,
+        )
         if n_void_graph_pre > 0:
             nest_void_ratio = float(n_void_nest_pre) / float(n_void_graph_pre)
         graph_to_nest_hollow = bool(
@@ -626,9 +711,15 @@ def compose_and_nest_selection(
         if propose_stats is not None:
             propose_stats["nest_void_ratio"] = float(nest_void_ratio)
             propose_stats["graph_to_nest_hollow"] = int(graph_to_nest_hollow)
+            propose_stats["graph_void_n"] = int(n_void_graph_pre)
         if pk_merged:
             cc_g, cc_n = count_proposer_on_selection(
-                group_id, transform, selected_nest, pk_merged, "cluster_copy",
+                group_id,
+                transform,
+                selected_nest,
+                pk_merged,
+                "cluster_copy",
+                key_to_verts=key_to_verts,
             )
             if propose_stats is not None:
                 propose_stats["cluster_copy_graph_n"] = int(cc_g)
@@ -659,6 +750,11 @@ def compose_and_nest_selection(
                 graph_to_nest_hollow=graph_to_nest_hollow,
                 pole=getattr(free_info, "target_pt", None),
                 free_poly=free_poly,
+                classify_seed=grow_classify_seed,
+                classify_mapped=grow_classify_mapped,
+                classify_unmapped=grow_classify_unmapped,
+                motif_base=motif_base,
+                survive_by_motif=survive_mid,
             )
             hollow_locks = post_result.lock_sets
             hollow_telem = post_result.telem
@@ -668,6 +764,9 @@ def compose_and_nest_selection(
                     "grow_reject_first_void",
                     "grow_reject_first_packed",
                     "grow_reject_first_both",
+                    "grow_reject_first_seed",
+                    "grow_reject_first_mapped",
+                    "grow_reject_first_unmapped",
                     "grow_reject_later_obstacle",
                     "grow_reject_later_glue",
                     "grow_reject_geom_missing",
@@ -737,6 +836,7 @@ def compose_and_nest_selection(
                         )
                         _cg2_u, cc_n2_u = count_proposer_on_selection(
                             group_id, transform, cc_nest_u, pk_merged, "cluster_copy",
+                            key_to_verts=key_to_verts,
                         )
                         a_cc_u = float(_sel_area(cc_nest_u, group_id, part_areas))
                         vf_cc_u = count_selected_in_free(
@@ -762,6 +862,8 @@ def compose_and_nest_selection(
                             void_scene=bool(void_scene_locks),
                             count_cand=len(cc_nest_u),
                             count_orig=len(selected_nest),
+                            motif_complete=True,
+                            survive_mid=survive_mid_n,
                         ):
                             selected_nest = cc_nest_u
                             locked_motif = list(union_lock)
@@ -784,23 +886,23 @@ def compose_and_nest_selection(
                         propose_stats["hollow_lock_retry_n"] = int(
                             propose_stats.get("hollow_lock_retry_n", 0) or 0
                         ) + 1
-                    # MotifJoin fallback: if pair already in MIS, pin for refine
-                    # without re-nest area penalty (hybrid_pick_reject_area).
-                    if join_lock_fallback:
-                        pinned = pin_if_in_nest(
-                            lock,
-                            selected_nest,
-                            graph,
-                            propose_stats=propose_stats,
-                            source="join_in_nest",
-                        )
-                        if pinned is not None:
-                            locked_motif = pinned
-                            cc_pair_won = True
-                            beamed_sigs.add(sig)
-                            motif_beam_trials += 1
-                            motif_beam_wins += 1
-                            break
+                    # G4: pin when lock already in MIS before any hollow re-nest.
+                    pinned = pin_if_in_nest(
+                        lock,
+                        selected_nest,
+                        graph,
+                        propose_stats=propose_stats,
+                        source=(
+                            "join_in_nest" if join_lock_fallback else "hollow_in_nest"
+                        ),
+                    )
+                    if pinned is not None:
+                        locked_motif = pinned
+                        cc_pair_won = True
+                        beamed_sigs.add(sig)
+                        motif_beam_trials += 1
+                        motif_beam_wins += 1
+                        break
                     score_use = list(scores)
                     if void_scene_locks and void_term > 0.0:
                         for i in lock:
@@ -817,6 +919,7 @@ def compose_and_nest_selection(
                     )
                     _cg2, cc_n2 = count_proposer_on_selection(
                         group_id, transform, cc_nest, pk_merged, "cluster_copy",
+                        key_to_verts=key_to_verts,
                     )
                     a_cc = float(_sel_area(cc_nest, group_id, part_areas))
                     vf_cc = count_selected_in_free(
@@ -842,6 +945,8 @@ def compose_and_nest_selection(
                         void_scene=bool(void_scene_locks),
                         count_cand=len(cc_nest),
                         count_orig=len(selected_nest),
+                        motif_complete=True,
+                        survive_mid=survive_mid_n,
                     ):
                         selected_nest = cc_nest
                         locked_motif = list(lock)
@@ -908,6 +1013,7 @@ def compose_and_nest_selection(
                             cc_nest = []
                         _cg2, cc_n2 = count_proposer_on_selection(
                             group_id, transform, cc_nest, pk_merged, "cluster_copy",
+                            key_to_verts=key_to_verts,
                         ) if cc_nest else (0, 0)
                         a_cc = float(_sel_area(cc_nest, group_id, part_areas)) if cc_nest else 0.0
                         vf_cc = count_selected_in_free(
@@ -981,18 +1087,8 @@ def compose_and_nest_selection(
 
     # Beam void-core MIS before incumbent hold so fat-basin void packs can
     # survive S0 via the same void_override path (one prefer helper).
-    free_predicate: FreeCentroidPredicate | None = None
-    if (
-        free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
-        and free_poly is not None
-        and not getattr(free_poly, "is_empty", True)
-    ):
+    if free_predicate is not None:
         interior_m = float(min_dist) * 0.25
-        free_predicate = FreeCentroidPredicate.from_shapely(
-            free_poly,
-            interior_m,
-        )
         core_stats: dict = {}
         void_seed = (
             list(locked_motif)
@@ -1023,9 +1119,14 @@ def compose_and_nest_selection(
         if propose_stats is not None:
             propose_stats.update(core_stats)
         take_void_core = False
+        pred0 = free_predicate.with_margin(0.0)
         if void_first:
-            vf_void = count_selected_in_free(polys, void_first, free_poly)
-            rim_void = count_selected_in_free(polys, selected_nest, free_poly)
+            vf_void = count_selected_in_free(
+                polys, void_first, free_poly, predicate=pred0,
+            )
+            rim_void = count_selected_in_free(
+                polys, selected_nest, free_poly, predicate=pred0,
+            )
             vf_area = float(_sel_area(void_first, group_id, part_areas))
             rim_area = float(_sel_area(selected_nest, group_id, part_areas))
             if graph_to_nest_hollow and vf_void > rim_void and (
@@ -1061,6 +1162,7 @@ def compose_and_nest_selection(
         packed_group_id=packed_group_id,
         packed_transform=packed_transform,
         graph=graph,
+        key_map=key_to_ix,
     )
     incumbent_hold = 0
     void_override_flag = 0
@@ -1081,8 +1183,13 @@ def compose_and_nest_selection(
             and not getattr(free_poly, "is_empty", True)
             and len(incumbent) > 0
         ):
-            void_cand = count_selected_in_free(polys, selected_nest, free_poly)
-            void_inc = count_selected_in_free(polys, incumbent, free_poly)
+            pred0 = free_predicate.with_margin(0.0) if free_predicate else None
+            void_cand = count_selected_in_free(
+                polys, selected_nest, free_poly, predicate=pred0,
+            )
+            void_inc = count_selected_in_free(
+                polys, incumbent, free_poly, predicate=pred0,
+            )
             void_gain = int(void_cand) - int(void_inc)
             cand_area = float(_sel_area(selected_nest, group_id, part_areas))
             inc_area = float(_sel_area(incumbent, group_id, part_areas))
@@ -1125,15 +1232,27 @@ def compose_and_nest_selection(
                     )
                 )
                 try:
+                    nest_polys = [
+                        polys[i] for i in selected_nest if 0 <= int(i) < len(polys)
+                    ]
+                    inc_polys = [
+                        polys[i] for i in incumbent if 0 <= int(i) < len(polys)
+                    ]
+                    nest_pack = (
+                        [candidate_geoms[i] for i in selected_nest
+                         if candidate_geoms is not None and 0 <= int(i) < len(candidate_geoms)]
+                        if candidate_geoms is not None else None
+                    )
+                    inc_pack = (
+                        [candidate_geoms[i] for i in incumbent
+                         if candidate_geoms is not None and 0 <= int(i) < len(candidate_geoms)]
+                        if candidate_geoms is not None else None
+                    )
                     cov_cand = float(outline_coverage_ratio(
-                        [polys[i] for i in selected_nest if 0 <= int(i) < len(polys)],
-                        outline,
-                        float(min_dist),
+                        nest_polys, outline, float(min_dist), pack_geoms=nest_pack,
                     ))
                     cov_inc = float(outline_coverage_ratio(
-                        [polys[i] for i in incumbent if 0 <= int(i) < len(polys)],
-                        outline,
-                        float(min_dist),
+                        inc_polys, outline, float(min_dist), pack_geoms=inc_pack,
                     ))
                     if cov_cand + 1e-9 < cov_inc - drop_allow:
                         void_override = False
@@ -1164,6 +1283,27 @@ def compose_and_nest_selection(
             ):
                 void_override = True
                 void_override_flag = 1
+            # D2b/G5: Motif locks soft-escape sterile rim hold (sticky compose).
+            # When prior compose_sz≥2, deepen escape (looser area floor).
+            motif_lock_n = len(locked_motif) if locked_motif else 0
+            prior_compose_sz = int(
+                (propose_stats or {}).get("motif_compose_accepted_size", 0) or 0
+            )
+            escape_area = 0.80 if prior_compose_sz >= 2 else 0.84
+            escape_count = 0.70 if prior_compose_sz >= 2 else 0.75
+            if (
+                not void_override
+                and motif_lock_n >= 2
+                and void_gain >= 1
+                and cand_area + 1e-12 >= escape_area * inc_area
+                and len(selected_nest) >= int(escape_count * len(incumbent))
+            ):
+                void_override = True
+                void_override_flag = 1
+                if propose_stats is not None:
+                    propose_stats["motif_lock_void_escape"] = 1
+                    if prior_compose_sz >= 2:
+                        propose_stats["motif_lock_void_escape_deep"] = 1
             if not void_override:
                 # Q187/Q198: motif soft override — key-hit fraction (not MotifBase GCI).
                 # Q199: if incumbent has 0 key-hit (stringy rim), allow cand with dens>0.
@@ -1311,6 +1451,7 @@ def compose_and_nest_selection(
         propose_stats["motif_locked"] = list(locked_motif)
         compose_sz = len(locked_motif)
         propose_stats["motif_compose_accepted_size"] = int(compose_sz)
+        propose_stats["cache_key_lock_fp"] = cheap_lock_fingerprint(locked_motif)
         propose_stats["lock_n_compose"] = int(compose_sz)
         propose_stats["refine_lock_n"] = int(compose_sz)
         propose_stats["motif_beam_sets"] = int(len(lock_sets))
@@ -1345,6 +1486,7 @@ def compose_and_nest_selection(
             propose_stats["motif_locked"] = list(locked_motif)
             compose_sz = len(locked_motif)
             propose_stats["motif_compose_accepted_size"] = int(compose_sz)
+            propose_stats["cache_key_lock_fp"] = cheap_lock_fingerprint(locked_motif)
             propose_stats["lock_n_compose"] = int(compose_sz)
             propose_stats["refine_lock_n"] = int(compose_sz)
             if int(swap_telem.get("block_cohort_accepted", 0) or 0) > 0:

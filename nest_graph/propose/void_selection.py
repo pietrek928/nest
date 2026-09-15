@@ -6,7 +6,7 @@ so this module stays free of ``graph`` imports.
 """
 
 import time
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 from shapely import Point
@@ -241,6 +241,7 @@ def apply_void_centroid_score_term(
     free_info,
     free_poly: BaseGeometry | None,
     void_term: float,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
     """Add free-centroid void term to nest/refine scores (L1; one SoT).
 
@@ -254,13 +255,13 @@ def apply_void_centroid_score_term(
         or getattr(free_poly, "is_empty", True)
     ):
         return 0
-    pred = FreeCentroidPredicate(free_poly, 0.0)
+    pred = predicate or FreeCentroidPredicate(free_poly, 0.0)
     hits = 0
     for i, poly in enumerate(polys):
         if i >= len(scores):
             break
         try:
-            if pred.covers_part(poly):
+            if pred.covers_part(poly, index=int(i)):
                 scores[i] = float(scores[i]) + float(void_term)
                 hits += 1
         except Exception:
@@ -273,11 +274,13 @@ def boost_free_centroid_scores(
     scores: list[float],
     free_poly: BaseGeometry | None,
     weight: float,
+    *,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
     """Extra in-free score boost for graph_to_nest hollow compose retry."""
     if weight <= 0.0 or free_poly is None or getattr(free_poly, "is_empty", True):
         return 0
-    pred = FreeCentroidPredicate(free_poly, 0.0)
+    pred = predicate or FreeCentroidPredicate(free_poly, 0.0)
     hits = 0
     for i, poly in enumerate(polys):
         if i >= len(scores):
@@ -315,6 +318,7 @@ def boost_void_island_scores(
     pole: Point | None = None,
     pole_radius: float = 0.0,
     sheet_diag: float = 0.0,
+    predicate: FreeCentroidPredicate | None = None,
 ) -> int:
     """EMS-style distance-to-pole boost for Python DFS/finalize scores.
 
@@ -324,11 +328,9 @@ def boost_void_island_scores(
     """
     if weight <= 0.0 or not scores:
         return 0
-    pred = (
-        FreeCentroidPredicate(free_poly, 0.0)
-        if free_poly is not None and not free_poly.is_empty
-        else None
-    )
+    pred = predicate
+    if pred is None and free_poly is not None and not free_poly.is_empty:
+        pred = FreeCentroidPredicate(free_poly, 0.0)
     diag = float(sheet_diag)
     if diag <= 1e-12 and free_poly is not None and not free_poly.is_empty:
         minx, miny, maxx, maxy = free_poly.bounds
@@ -373,11 +375,26 @@ def boost_keyed_proposal_scores(
     keys_by_group: dict[int, set[tuple[float, float, float]]] | None,
     *,
     weight: float,
+    key_to_verts: Mapping[
+        tuple[int, tuple[float, float, float]], Sequence[int]
+    ] | None = None,
 ) -> int:
     """Add ``weight`` to scores whose (group, transform key) is in ``keys_by_group``."""
     if weight <= 0.0 or not scores or not keys_by_group:
         return 0
     n = 0
+    if key_to_verts is not None:
+        for gid, keys in keys_by_group.items():
+            if not keys:
+                continue
+            gi = int(gid)
+            for key in keys:
+                for i in key_to_verts.get((gi, key), ()):
+                    ix = int(i)
+                    if 0 <= ix < len(scores):
+                        scores[ix] = float(scores[ix]) + float(weight)
+                        n += 1
+        return n
     for i, sc in enumerate(scores):
         if i >= len(group_id) or i >= len(transforms):
             break
@@ -582,6 +599,10 @@ def apply_void_selection_boosts(
     sheet_area: float = 0.0,
     geom_stats_out: dict | None = None,
     dg=None,
+    free_predicate: FreeCentroidPredicate | None = None,
+    key_to_verts: Mapping[
+        tuple[int, tuple[float, float, float]], Sequence[int]
+    ] | None = None,
 ) -> dict[str, int]:
     """Apply void-island, pocket-key, small-part, and selection-geom score boosts."""
     hits = {
@@ -615,6 +636,7 @@ def apply_void_selection_boosts(
             pole=free_info.target_pt,
             pole_radius=void_r,
             sheet_diag=sheet_diag,
+            predicate=free_predicate,
         )
     if pocket_w > 0.0 and propose_stats is not None:
         keys = propose_stats.get("pocket_keys") or {}
@@ -624,6 +646,7 @@ def apply_void_selection_boosts(
             scores,
             keys,
             weight=pocket_w,
+            key_to_verts=key_to_verts,
         )
         pose_kind_hits = boost_scores_by_pose_kind(
             dg,
@@ -647,6 +670,7 @@ def apply_void_selection_boosts(
                 scores,
                 void_kind,
                 weight=pocket_w,
+                key_to_verts=key_to_verts,
             )
     if motif_w > 0.0 and propose_stats is not None:
         densify = propose_stats.get("densify_stats") or {}
@@ -657,7 +681,11 @@ def apply_void_selection_boosts(
         for name, keys in pk.items():
             merged_pk.setdefault(name, set()).update(keys or ())
         for gid, kset in proposer_survivors_on_graph(
-            group_id, transform, merged_pk, VOID_EMIT_PROPOSERS,
+            group_id,
+            transform,
+            merged_pk,
+            VOID_EMIT_PROPOSERS,
+            key_to_verts=key_to_verts,
         ).items():
             motif_keys.setdefault(int(gid), set()).update(kset)
         if (
@@ -673,6 +701,7 @@ def apply_void_selection_boosts(
             scores,
             motif_keys,
             weight=motif_w,
+            key_to_verts=key_to_verts,
         )
         cohort_keys = cohort_keys_from_cohorts(propose_stats.get("motif_cohorts"))
         if cohort_keys and int(propose_stats.get("motif_graph_hit_n", 0) or 0) > 0:
@@ -682,6 +711,7 @@ def apply_void_selection_boosts(
                 scores,
                 cohort_keys,
                 weight=float(motif_w) * 0.35,
+                key_to_verts=key_to_verts,
             )
     # Open basin (high void ratio): prefer large parts for scrap density;
     # swiss-cheese / modest voids keep small-part pocket fill.

@@ -6,6 +6,7 @@ from typing import Any, Callable
 from nest_graph.cohort_specs import generate_macros, motif_cohort_specs
 from nest_graph.graph import (
     BoardSnapshot,
+    MacroRegion,
     PathKind,
     leaf_reward,
     path_reward_beats,
@@ -19,6 +20,50 @@ from nest_graph.graph import (
 def ancestors(runner: Any, node_id: int) -> list[int]:
     """Parent-walk from root to node_id (Q304)."""
     return list(runner.arena.ancestors(int(node_id)))
+
+
+def path_probe_budget(
+    *,
+    on_plateau: bool,
+    parent_free_hint: bool,
+    agent: Any,
+    tip_action: Any,
+    beam: int,
+    max_depth: int,
+) -> tuple[bool, int, int]:
+    """D1/G1: run/shrink macro_increase_path from place_cohort_ready + Motif tip.
+
+    Returns ``(run, beam, max_depth)``. Skip when ready=0 and tip is not Motif
+    (even if large_void hint); shrink beam/depth when Motif tip but ready=0.
+    G1: when ready but macros idle (``mcts_cohort_macro_n==0``) and tip is not
+    Motif, shrink (or skip if beam would collapse) — same helper, no second gate.
+    """
+    if not (bool(on_plateau) or bool(parent_free_hint)):
+        return False, int(beam), int(max_depth)
+    ready = bool(getattr(agent, "place_cohort_ready", False)) if agent is not None else False
+    tip_motif = (
+        tip_action is not None
+        and getattr(tip_action, "region", None) == MacroRegion.Motif
+    )
+    telem = getattr(agent, "telem", None) if agent is not None else None
+    macros_n = 0
+    if isinstance(telem, dict):
+        macros_n = int(telem.get("mcts_cohort_macro_n", 0) or 0)
+    elif telem is not None:
+        macros_n = int(getattr(telem, "mcts_cohort_macro_n", 0) or 0)
+    if ready:
+        # G1: ready but PLACE_COHORT macros idle and tip not Motif → mild shrink
+        # (never skip while ready — dual miss when skip-on-collapse).
+        if macros_n <= 0 and not tip_motif:
+            return (
+                True,
+                max(2, int(beam) // 2),
+                max(2, int(max_depth) - 1),
+            )
+        return True, max(1, int(beam)), max(1, int(max_depth))
+    if tip_motif:
+        return True, max(1, int(beam) // 2), max(1, int(max_depth) - 1)
+    return False, int(beam), int(max_depth)
 
 
 def _realized_dict(agent: Any) -> dict:
@@ -269,10 +314,9 @@ def macro_increase_path(
     telem["path_type_hist"] = [
         int(prev_hist[i]) + int(path_type_hist[i]) for i in range(4)
     ]
-    telem["replay_from_ancestor_ms"] = float(
-        telem.get("replay_from_ancestor_ms", 0.0) or 0.0
-    ) + (time.perf_counter() - t0) * 1000.0
+    # G0: per-call overwrite (not +=) so dg_funnel path_ms is this probe only.
+    telem["replay_from_ancestor_ms"] = (time.perf_counter() - t0) * 1000.0
     return best_action, best_reward, best_snap
 
 
-__all__ = ["ancestors", "macro_increase_path"]
+__all__ = ["ancestors", "macro_increase_path", "path_probe_budget"]

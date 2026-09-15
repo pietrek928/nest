@@ -108,6 +108,27 @@ def test_leaf_reward_terms():
     assert leaf_reward(snap_void) > leaf_reward(snap_base)
 
 
+def test_cheap_expand_slave_motif_reward_parity():
+    from nest_graph.pack.slave_pack import cheap_expand_slave
+    from nest_graph.graph import MacroAction, MacroRegion, MotifBase
+
+    parent = BoardSnapshot(coverage=0.4, remaining_gids=(0, 1), free_kind="large_void")
+    action = MacroAction()
+    action.region = MacroRegion.Motif
+    action.motif_id = 1
+    action.rule_id = 0
+    realized = {"member_hits": 8, "materialized_motif": 1, "survive_motif_n": 2}
+    res = cheap_expand_slave(
+        parent,
+        action,
+        motif_base=MotifBase(),
+        realized=realized,
+        telem={},
+    )
+    bare = leaf_reward(res.snapshot, rule_id=0)
+    assert res.reward > bare
+
+
 def test_polish_patterns_at_inject_keeps_on_missing_bases():
     from nest_graph.propose.pattern_archive import polish_patterns_at_inject
     from nest_graph.propose.placements_pattern import ClusterPattern

@@ -102,6 +102,44 @@ def test_format_prop_accept_orders_by_emit_and_limits():
     assert line == "pocket_fit:e9/p5/n2/r1"
 
 
+def test_format_dg_expand_funnel_keys():
+    from nest_graph.propose.telem import format_dg_expand_funnel
+
+    line = format_dg_expand_funnel(
+        {
+            "replay_from_ancestor_ms": 12.5,
+            "cheap_outer_reward_delta": 0.01,
+            "place_cohort_ready": 1,
+            "place_cohort_specs_n": 3,
+            "mcts_cohort_macro_n": 2,
+            "hybrid_pick_trials": 4,
+            "hybrid_pick_wins": 1,
+            "hybrid_pick_reject_indep": 0,
+            "hybrid_pick_reject_area": 3,
+            "hybrid_pick_join_soft": 1,
+            "motif_compose_accepted_size": 2,
+            "refine_ms": 100.0,
+            "mpg_ms": 50.0,
+            "graph_valid_n": 100,
+            "incumbent_hold": 1,
+            "void_override": 0,
+        }
+    )
+    assert line.startswith("dg_funnel ")
+    assert "path_ms=12.5" in line
+    assert "cheap_d=0.010" in line
+    assert "place_coh=1/3/2" in line
+    assert "pick=4/1/0/3/1" in line
+    assert "compose_sz=2" in line
+    assert "refine_ms=100.0" in line
+    assert "mpg=50.0/100" in line
+    assert "hold=1/0" in line
+    assert "prop=" in line
+    assert "compose=" in line
+    assert "mpg_x=" in line
+    assert "ray=" in line
+
+
 def test_count_props_near_pole_uses_radius():
     props = [np.array([[0.0, 0.0, 0.0], [5.0, 5.0, 0.0]])]
     assert count_props_near_pole(props, Point(0.0, 0.0), 1.0) == 1

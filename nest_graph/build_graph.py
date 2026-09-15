@@ -68,6 +68,7 @@ from .propose.telem import (
     void_elite_count,
 )
 from nest_graph.pack.cheap import (
+    cheap_lock_fingerprint,
     cheap_pack_cache_key,
     invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
@@ -156,7 +157,7 @@ from nest_graph.pack.execute import (
     run_mcts_multi_sim,
     schedule_prep_selection_free,
 )
-from nest_graph.pack.macro_path import ancestors, macro_increase_path
+from nest_graph.pack.macro_path import ancestors, macro_increase_path, path_probe_budget
 from nest_graph.graph import leaf_reward, path_reward_beats
 from nest_graph.pack.motif_credit import (
     credit_motif_on_nest_survival,
@@ -313,9 +314,14 @@ def _sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
             member_hits = int(
                 (propose_stats.get("void_leak") or {}).get("member_hits", 0) or 0
             )
-        ready = int(n_ready > 0 and compose_sz >= 2 and member_hits > 0)
+        hard = bool(n_ready > 0 and compose_sz >= 2 and member_hits > 0)
+        # D4 soft: drop member_hits chicken-egg for PLACE_COHORT expand when
+        # compose_sz≥2 already sticky (AMAF/cohort still learn; hard telem kept).
+        soft = bool(n_ready > 0 and compose_sz >= 2)
+        ready = int(soft)
         propose_stats["place_cohort_specs_n"] = int(n_ready)
         propose_stats["place_cohort_ready"] = ready
+        propose_stats["place_cohort_ready_hard"] = int(hard)
         propose_stats["motif_cohort_sig"] = (
             _motif_cohort_sig(cohorts) if ready else 0
         )
@@ -541,36 +547,37 @@ def make_polygon_graph(
     attract_contact_weight: float = 8.0,
     attract_kiss_band_scale: float = 2.0,
     attract_max_degree: int = 8,
+    part_bases: dict | None = None,
+    out_native_geoms: list | None = None,
 ):
     sheet, void_geoms = board_context_from_geometry(b, user_holes=user_holes)
     if extra_voids:
         void_geoms.extend(extra_voids)
-    board_geom = Geometry.from_shapely(sheet)
     pad = default_sheet_padding(b)
     guidance_cfg = guidance_config_for_graph(
         min_dist,
         board_bounds=padded_board_bounds(b, pad),
         epsilon_ratio=epsilon_ratio,
     )
-    bases = _base_geometries(polygons)
+    bases = part_bases if part_bases is not None else _base_geometries(polygons)
 
+    _xform_t0 = time.perf_counter()
+    # G2: collect (i, p, t) only — validity first; transform survivors after.
     candidates: list[tuple] = []
-    placed_solids: list[Geometry] = []
     for i, item in enumerate(polygons):
         if len(item) == 2:
             p, transforms = item
         else:
             p, _w, transforms = item
-        base = bases[i]
         for t in transforms:
-            placed = base.apply_transform(t)
-            candidates.append((i, p, t, placed, base))
-            placed_solids.append(placed)
+            candidates.append((i, p, t))
+    mpg_xform_ms = (time.perf_counter() - _xform_t0) * 1000.0
 
     by_group: dict[int, list[int]] = {}
-    for k, (i, _p, _t, _placed, _base) in enumerate(candidates):
+    for k, (i, _p, _t) in enumerate(candidates):
         by_group.setdefault(i, []).append(k)
 
+    _valid_t0 = time.perf_counter()
     valid_by_k: dict[int, bool] = {}
     for group_i, indices in by_group.items():
         base = bases[group_i]
@@ -588,14 +595,17 @@ def make_polygon_graph(
         )
         for k, ok in zip(indices, flags, strict=True):
             valid_by_k[k] = ok
+    mpg_valid_ms = (time.perf_counter() - _valid_t0) * 1000.0
 
     pending: list[tuple] = []
-    for k, (i, p, t, placed, base) in enumerate(candidates):
+    pending_geoms: list[Geometry] = []
+    for k, (i, p, t) in enumerate(candidates):
         if not valid_by_k.get(k, False):
             continue
+        placed = bases[i].apply_transform(t)
         pending.append((i, p, t, placed))
+        pending_geoms.append(placed)
 
-    pending_geoms = [placed for _i, _p, _t, placed in pending]
     gids = [i for i, _p, _t, _placed in pending]
     angles = [float(t[2]) for _i, _p, t, _placed in pending]
     selected_polys = [transform_poly(p, t) for _i, p, t, _placed in pending]
@@ -612,7 +622,19 @@ def make_polygon_graph(
             kiss_band_scale=attract_kiss_band_scale,
             max_degree=attract_max_degree,
         )
+    _edge_t0 = time.perf_counter()
     graph = build_pose_graph(gids, pending_geoms, angles, attract_pairs=attract_pairs)
+    mpg_edge_ms = (time.perf_counter() - _edge_t0) * 1000.0
+    if propose_stats is not None:
+        propose_stats["mpg_xform_ms"] = float(mpg_xform_ms)
+        propose_stats["mpg_valid_ms"] = float(mpg_valid_ms)
+        propose_stats["mpg_edge_ms"] = float(mpg_edge_ms)
+        propose_stats["graph_edges_n"] = int(
+            sum(len(graph.collisions[i]) for i in range(len(pending_geoms))) // 2
+        )
+    if out_native_geoms is not None:
+        out_native_geoms.clear()
+        out_native_geoms.extend(pending_geoms)
 
     return graph, selected_polys, selected_group_id, selected_transform
 
@@ -1177,10 +1199,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     )
         mcts_parent_id = int(browse_parent_id)
         mcts_action = tip_action
-        # I1b: probe on plateau or large_void (use iter-start hint; free_kind
-        # seed below may still be empty on parent_snap).
-        path_probe = bool(plateau.on_plateau) or bool(parent_free_hint)
-        if path_probe and mcts_runner.agent is not None:
+        # G0: per-iter path telem (skip never clears cumulative lie).
+        mcts_telem["replay_from_ancestor_ms"] = 0.0
+        mcts_telem["path_probe_skip"] = 0
+        # I1b/D1: probe on plateau or large_void; skip when place_cohort_ready=0
+        # and tip is not Motif (path_probe_budget). Shrink beam when Motif tip only.
+        run_path, path_beam, path_depth = path_probe_budget(
+            on_plateau=bool(plateau.on_plateau),
+            parent_free_hint=bool(parent_free_hint),
+            agent=getattr(mcts_runner, "agent", None),
+            tip_action=tip_action,
+            beam=int(getattr(cfg.propose, "macro_path_beam", 4) or 4),
+            max_depth=int(getattr(cfg.propose, "macro_path_max_depth", 3) or 3),
+        )
+        if not run_path:
+            mcts_telem["path_probe_skip"] = 1
+        if run_path and mcts_runner.agent is not None:
             path = ancestors(mcts_runner, int(mcts_parent_id))
             mcts_telem["policy_path_len"] = int(len(path))
             mcts_telem["macro_swap_attempts"] = int(
@@ -1197,6 +1231,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     parent_snap,
                     survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
                     macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                    member_hits=int(realized.get("member_hits", 0) or 0),
+                    materialized_motif=int(
+                        realized.get("materialized_motif", 0) or 0
+                    ),
                 )
                 # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
                 path_overlap_ok = False
@@ -1207,10 +1245,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         baseline_reward=base_r,
                         execute_fn=mcts_runner.execute_fn,
                         rule_ids=_mcts_rule_ids(rule_sets),
-                        beam=int(getattr(cfg.propose, "macro_path_beam", 4) or 4),
-                        max_depth=int(
-                            getattr(cfg.propose, "macro_path_max_depth", 3) or 3
-                        ),
+                        beam=int(path_beam),
+                        max_depth=int(path_depth),
                         telem=mcts_telem,
                         overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(_pack_cache),
                     )
@@ -1262,6 +1298,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                                     ),
                                     cohort_sig=int(
                                         _pack_cache.get("motif_cohort_sig", 0) or 0
+                                    ),
+                                    lock_fp=cheap_lock_fingerprint(
+                                        _pack_cache.get("motif_locked")
                                     ),
                                 ),
                                 None,
@@ -1396,6 +1435,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             "dfs_mode": str(polish_budget.dfs_mode.value),
             "freeze_improve_reason": freeze_reason,
         }
+        # P3: last-iter MotifJoin survival soft prior for next-iter RCL.
+        _survive_prior = {}
+        if mcts_runner.agent is not None:
+            _survive_prior = dict(
+                (mcts_runner.agent.realized or {}).get("survive_by_motif") or {}
+            )
+        propose_stats["survive_by_motif"] = dict(_survive_prior)
+        propose_stats["survive_motif_n"] = int(
+            sum(int(v) for v in _survive_prior.values())
+        )
         keep_hist_sterile = bool(
             (sat_info.sat_override or had_void_override)
             and bool(getattr(cfg.propose, "keep_history_on_void_sterile", True))
@@ -1485,6 +1534,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         propose_stats["motif_library_n"] = int(mcts_runner.motif_base.size())
         propose_stats["nfp_lite_ok"] = int(mcts_telem.get("nfp_lite_ok", 0))
         propose_stats["dg_force_zone"] = mcts_force_zone
+        propose_stats["last_graph_n"] = int(mcts_telem.get("last_graph_n", 0) or 0)
+        propose_stats["last_nest_n"] = int(mcts_telem.get("last_nest_n", 0) or 0)
         if mcts_force_zone:
             enabled_z = ProposeConfig.proposers_for_place(str(mcts_force_zone))
             propose_stats["enabled_proposers_n"] = (
@@ -1511,6 +1562,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     "enable_motif_scene_dry_run": True,
                 }),
             })
+        _propose_t0 = time.perf_counter()
         selected_t = build_transform_batch(
             cfg,
             selected_t,
@@ -1532,6 +1584,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             graph_valid_carry=graph_valid_carry,
             archived_patterns=archived_for_propose,
         )
+        propose_stats["propose_ms"] = (time.perf_counter() - _propose_t0) * 1000.0
         pin_keys = set(propose_stats.get("archive_mix_pin_keys") or ())
         first_pass = nest_state is None
         free_prep_mid = None
@@ -1542,6 +1595,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         if prev_graph_n > max(4 * max(prev_nest_n, 1), 200):
             attract_deg = min(attract_deg, 3)
             propose_stats["attract_degree_capped"] = int(attract_deg)
+        _mpg_t0 = time.perf_counter()
+        mpg_natives: list = []
         graph, polys, group_id, transform = make_polygon_graph(
             p_outline,
             [(p1, selected_t[0]), (p2, selected_t[1])],
@@ -1553,7 +1608,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             attract_contact_weight=float(cfg.propose.attract_contact_weight),
             attract_kiss_band_scale=float(cfg.propose.attract_kiss_band_scale),
             attract_max_degree=int(attract_deg),
+            part_bases=part_bases,
+            out_native_geoms=mpg_natives,
         )
+        propose_stats["mpg_ms"] = (time.perf_counter() - _mpg_t0) * 1000.0
+        propose_stats["graph_valid_n"] = int(len(transform))
         if pin_keys:
             graph_keys = {
                 transform_row_key(np.asarray(t, dtype=np.float64))
@@ -1698,7 +1757,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             packed_transform = free_prep.packed_transform
             free_prep_mid = free_prep
             sheet_diag = sheet_diag_from(sheet)
-            dual_nest = dual_nest_for(free_info, last_leaf=is_last_leaf)
+            dual_nest = dual_nest_for(
+                free_info,
+                last_leaf=is_last_leaf,
+                sterile_hold=bool(
+                    int(mcts_telem.get("last_incumbent_hold", 0) or 0)
+                ),
+            )
             seed_voids = nest_state_extra_voids(nest_state) or []
             pack_box = RefinePackBox()
             pack_ctx = PackIterCtx(
@@ -1730,7 +1795,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 refine_seed=int(rng.integers(0, 2**31)),
                 first_pass=first_pass,
                 native_geoms_fn=_native_geoms_from_transforms,
+                graph_native_geoms=list(mpg_natives) if mpg_natives else None,
                 motif_base=mcts_runner.motif_base,
+                survive_by_motif=dict(_survive_prior),
                 seed_count=int(nest_state.seed_count or 0) if nest_state else 0,
                 # W1: keep seeds in packed (not void_geoms) so 3b/board voids SoT
                 # stays board-only; compose rebuilds nest solids then prepends seeds.
@@ -1802,8 +1869,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 propose_stats.get("motif_cohort_sig", 0) or 0
             )
             _pack_cache["motif_base"] = mcts_runner.motif_base
+            _pack_cache["survive_by_motif"] = dict(_survive_prior)
             mcts_telem["last_graph_n"] = int(len(transform))
             mcts_telem["last_nest_n"] = int(len(selected_polys))
+            mcts_telem["last_incumbent_hold"] = int(
+                propose_stats.get("incumbent_hold", 0) or 0
+            )
             propose_stats["motif_sequential_repin"] = 0
             track_d = bool(large_void_motif_plateau.ready)
             propose_stats["large_void_motif_plateau"] = track_d
@@ -2114,6 +2185,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         )
         if isinstance(propose_stats.get("void_leak"), dict):
             propose_stats["void_leak"]["motif_telem"] = motif_telem
+            for _mk in (
+                "full_motif_clear",
+                "fallback_leader",
+                "leader_fail",
+                "collide",
+                "lattice_anchors_added",
+                "lattice_anchors_kept",
+                "foreign_clear_fail_sheet",
+                "foreign_clear_fail_obs",
+                "foreign_clear_fail_empty",
+                "soft_foreign_incumbent_n",
+            ):
+                propose_stats["void_leak"][_mk] = max(
+                    int(propose_stats["void_leak"].get(_mk, 0) or 0),
+                    int(motif_telem.get(_mk, 0) or 0),
+                )
         propose_stats["motif_telem"] = motif_telem
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
@@ -2286,19 +2373,24 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     trim_history(history[1], selected_t[1], sc.history_max),
                 )
         seed_n = nest_state.seed_count if nest_state is not None else 0
+        nest_natives = (
+            list(mpg_natives)
+            if mpg_natives and len(mpg_natives) == len(polys)
+            else _native_geoms_from_transforms(
+                group_id,
+                transform,
+                part_bases,
+                seed_polys=polys,
+                seed_count=seed_n,
+            )
+        )
         nest_state = NestState(
             polys=polys,
             group_id=group_id,
             transform=transform,
             selected_indices=list(selected_polys),
             seed_count=seed_n,
-            _native_geoms=_native_geoms_from_transforms(
-                group_id,
-                transform,
-                part_bases,
-                seed_polys=polys,
-                seed_count=seed_n,
-            ),
+            _native_geoms=nest_natives,
         )
         rule_sets = _inject_repulsor_rules(rule_sets, cfg, p_sheet, nest_state)
 

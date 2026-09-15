@@ -36,6 +36,9 @@ class PackedProposeExtras:
     cluster_patterns: Sequence | None = None
     pocket_stats: PocketStats | None = None
     void_pole: Point | None = None
+    part_by_group: dict[int, Polygon] | None = None
+    foreign_out: dict[int, list] | None = None
+    hard_packed_geoms: Sequence | None = None
 
 
 @dataclass

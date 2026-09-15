@@ -116,6 +116,51 @@ def test_hybrid_compose_pick_join_soft():
         telem=telem,
     )
     assert int(telem.get("hybrid_pick_join_soft", 0)) == 1
+    # R3: Motif-complete × survive_mid arms 0.84× without join_prefer.
+    telem_s: dict = {}
+    assert hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.85,
+        area_orig=1.0,
+        void_cand=2,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        motif_complete=True,
+        survive_mid=1,
+        telem=telem_s,
+    )
+    assert int(telem_s.get("hybrid_pick_survive_soft", 0)) == 1
+    # D2: Motif-complete sticky without survive_mid / void-rise at 0.90×.
+    telem_st: dict = {}
+    assert hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.91,
+        area_orig=1.0,
+        void_cand=1,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        motif_complete=True,
+        survive_mid=0,
+        telem=telem_st,
+    )
+    assert int(telem_st.get("hybrid_pick_sticky_soft", 0)) == 1
+    assert not hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.85,
+        area_orig=1.0,
+        void_cand=1,
+        void_orig=1,
+        cc_n2=0,
+        lex_better=False,
+        motif_complete=True,
+        survive_mid=0,
+        telem={},
+    )
     # Soft floor rejects count regression.
     assert not hybrid_compose_pick(
         graph=None,

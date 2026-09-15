@@ -62,6 +62,104 @@ def test_macro_increase_path_rejects_overlap_fail():
     assert blocked["ok"] is False or telem.get("macro_swap_attempts", 0) >= 0
 
 
+def test_path_probe_budget_skips_when_ready_zero_non_motif():
+    from nest_graph.pack.macro_path import path_probe_budget
+    from nest_graph.graph import MacroAction, MacroRegion
+
+    class _Agent:
+        place_cohort_ready = False
+
+    sheet = MacroAction()
+    sheet.region = MacroRegion.Sheet
+    run, beam, depth = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_Agent(),
+        tip_action=sheet,
+        beam=6,
+        max_depth=3,
+    )
+    assert run is False
+
+    class _Ready:
+        place_cohort_ready = True
+        telem = {"mcts_cohort_macro_n": 2}
+
+    run2, beam2, depth2 = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_Ready(),
+        tip_action=sheet,
+        beam=6,
+        max_depth=3,
+    )
+    assert run2 is True
+    assert beam2 == 6 and depth2 == 3
+
+    motif = MacroAction()
+    motif.region = MacroRegion.Motif
+    motif.motif_id = 1
+    run3, beam3, depth3 = path_probe_budget(
+        on_plateau=True,
+        parent_free_hint=False,
+        agent=_Agent(),
+        tip_action=motif,
+        beam=6,
+        max_depth=3,
+    )
+    assert run3 is True
+    assert beam3 == 3 and depth3 == 2
+
+
+def test_path_probe_budget_shrinks_ready_macros_idle():
+    """G1: ready∧macros=0∧non-Motif tip → shrink (not full beam)."""
+    from nest_graph.pack.macro_path import path_probe_budget
+    from nest_graph.graph import MacroAction, MacroRegion
+
+    class _ReadyIdle:
+        place_cohort_ready = True
+        telem = {"mcts_cohort_macro_n": 0}
+
+    sheet = MacroAction()
+    sheet.region = MacroRegion.Sheet
+    run, beam, depth = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_ReadyIdle(),
+        tip_action=sheet,
+        beam=6,
+        max_depth=3,
+    )
+    assert run is True
+    assert beam == 3 and depth == 2
+    # Mild floor: beam/depth never collapse below 2 while ready.
+    run_lo, beam_lo, depth_lo = path_probe_budget(
+        on_plateau=True,
+        parent_free_hint=False,
+        agent=_ReadyIdle(),
+        tip_action=sheet,
+        beam=2,
+        max_depth=2,
+    )
+    assert run_lo is True
+    assert beam_lo == 2 and depth_lo == 2
+
+    class _ReadyLive:
+        place_cohort_ready = True
+        telem = {"mcts_cohort_macro_n": 4}
+
+    run2, beam2, depth2 = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_ReadyLive(),
+        tip_action=sheet,
+        beam=6,
+        max_depth=3,
+    )
+    assert run2 is True
+    assert beam2 == 6 and depth2 == 3
+
+
 def test_record_to_cluster_pattern_ref_anchor():
     from nest_graph.propose.pattern_archive import (
         note_motif_ref_anchors,

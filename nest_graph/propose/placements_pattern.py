@@ -22,7 +22,12 @@ from nest_graph.propose.void_topology import (
     polylabel,
     topology_pocket_poles,
 )
-from nest_graph.utils import compose_transforms, relative_transform, transform_poly
+from nest_graph.utils import (
+    compose_transforms,
+    relative_transform,
+    transform_poly,
+    transform_row_key,
+)
 
 
 @dataclass(frozen=True)
@@ -625,6 +630,43 @@ def emit_packing_clear(
     return not placed.intersects_any(list(obs))
 
 
+def _foreign_member_packing_status(
+    part: Polygon,
+    coords: tuple[float, float, float],
+    propose_geom: ProposeGeometry,
+    *,
+    obstacles: Sequence | None = None,
+) -> str:
+    """Penetrating foreign clear status: ``ok`` | ``empty`` | ``sheet`` | ``obs``."""
+    placed_m = transform_poly(part, coords)
+    if placed_m is None or placed_m.is_empty:
+        return "empty"
+    if not propose_geom.sheet.buffer(1e-5).covers(placed_m.centroid):
+        return "sheet"
+    native = _as_native_geom(placed_m)
+    if native is None:
+        return "empty"
+    obs = list(obstacles) if obstacles is not None else []
+    if not obs:
+        return "ok"
+    if native.intersects_any(obs):
+        return "obs"
+    return "ok"
+
+
+def _foreign_member_packing_clear(
+    part: Polygon,
+    coords: tuple[float, float, float],
+    propose_geom: ProposeGeometry,
+    *,
+    obstacles: Sequence | None = None,
+) -> bool:
+    """Penetrating packing-clear for a foreign solid vs obstacles (+ sheet cover)."""
+    return _foreign_member_packing_status(
+        part, coords, propose_geom, obstacles=obstacles
+    ) == "ok"
+
+
 def _full_motif_packing_clear(
     pat: ClusterPattern,
     t_anchor: tuple[float, float, float],
@@ -635,7 +677,14 @@ def _full_motif_packing_clear(
     *,
     obstacles: Sequence | None = None,
 ) -> bool:
-    """True if every motif member is packing-clear at ``t_anchor``."""
+    """True if every motif member is packing-clear at ``t_anchor``.
+
+    Same-group uses ``emit_packing_clear``. Foreign members with ``part_by_group``
+    use Penetrating solid-vs-obstacles (``transform_poly`` → ``_as_native_geom`` →
+    ``intersects_any``) plus sheet cover. Unknown foreign solids are skipped.
+    ``shape_to_place`` is unused (kept for call-site compatibility).
+    """
+    _ = shape_to_place
     for gid, t_rel_m in pat.members:
         t_m = compose_transforms(t_anchor, t_rel_m)
         if int(gid) == int(group_id):
@@ -643,11 +692,12 @@ def _full_motif_packing_clear(
                 return False
             continue
         if part_by_group is not None and int(gid) in part_by_group:
-            # Other groups: centroid must stay on board (no foreign ProposeGeometry).
-            placed_m = transform_poly(part_by_group[int(gid)], t_m)
-            if placed_m is None or placed_m.is_empty:
-                return False
-            if not propose_geom.sheet.buffer(1e-5).covers(placed_m.centroid):
+            if not _foreign_member_packing_clear(
+                part_by_group[int(gid)],
+                t_m,
+                propose_geom,
+                obstacles=obstacles,
+            ):
                 return False
         else:
             # Unknown foreign solid: require leader-cell clear only (leader path).
@@ -655,8 +705,32 @@ def _full_motif_packing_clear(
     return True
 
 
-def _motif_abs_key(coords: tuple[float, float, float]) -> tuple[float, float, float]:
-    return (round(float(coords[0]), 4), round(float(coords[1]), 4), round(float(coords[2]), 4))
+def foreign_hard_packed_for_stamp(
+    full_packed: Sequence | None,
+    packed_group_id: Sequence[int] | None,
+    packed_transform: Sequence | None,
+    *,
+    seed_geoms: Sequence | None = None,
+) -> tuple[list | None, int]:
+    """R1: P2 soft schedule for foreign Penetrating clear at stamp.
+
+    When nest packed gid/tr align with geoms, self-map treats all nest-packed as
+    soft (mapped); hard = seed_geoms only (board seeds usually live in void_geoms).
+    Returns ``(None, 0)`` when alignment missing so stamp keeps full-packed foreign
+    obs (legacy / unit tests).
+    """
+    packed = [g for g in (full_packed or []) if g is not None]
+    if (
+        not packed
+        or packed_group_id is None
+        or packed_transform is None
+        or len(packed_group_id) != len(packed_transform)
+        or len(packed_group_id) != len(packed)
+    ):
+        return None, 0
+    seeds = [g for g in (seed_geoms or []) if g is not None]
+    # Self-map → all nest-packed soft; hard = explicit seeds only.
+    return list(seeds), len(packed)
 
 
 def stamp_motif_leader_follower(
@@ -670,12 +744,21 @@ def stamp_motif_leader_follower(
     part_by_group: dict[int, Polygon] | None = None,
     skip_reasons: dict[str, int] | None = None,
     cohorts_out: list | None = None,
+    foreign_out: dict[int, list] | None = None,
+    hard_packed_geoms: Sequence | None = None,
 ) -> list[tuple[float, float, float]]:
     """Propose-side motif stamp: full-motif packing clear, else same-group leader only.
 
-    Emits single-group candidate transforms under packing clearance (not Scene
-    margin). Selection/repack uses ``stamp_motif_at_anchor`` (atomic peeled
-    placement under ``is_pose_clear``) with ``pattern_fallback`` as the partial path.
+    Emits same-group candidate transforms under packing clearance (not Scene
+    margin). On full clear, packing-clear foreign members are co-emitted into
+    ``foreign_out`` (Q17: cohort ``member_keys`` = emitted abs keys only).
+    Selection/repack uses ``stamp_motif_at_anchor`` (atomic peeled placement under
+    ``is_pose_clear``) with ``pattern_fallback`` as the partial path.
+
+    ``hard_packed_geoms`` (R1): foreign Penetrating clear uses this packed list
+    (P2 soft schedule — seed∪unmapped, or empty for voids-only). Same-group emit
+    still uses full ``propose_geom.full_packed_geoms``. ``None`` = full packed for
+    foreign too (legacy / unit tests).
     """
     if not patterns or not anchors:
         if skip_reasons is not None:
@@ -686,11 +769,20 @@ def stamp_motif_leader_follower(
 
     from nest_graph.propose.placement_common import placement_obstacles
 
-    obs = placement_obstacles(
-        propose_geom.scene.void_geoms,
-        propose_geom.full_packed_geoms,
-    )
+    voids = propose_geom.scene.void_geoms
+    full_packed = list(propose_geom.full_packed_geoms or [])
+    obs = placement_obstacles(voids, full_packed)
+    if hard_packed_geoms is None:
+        obs_foreign = obs
+        soft_n = 0
+    else:
+        hard = [g for g in hard_packed_geoms if g is not None]
+        obs_foreign = placement_obstacles(voids, hard)
+        soft_n = max(0, len(full_packed) - len(hard))
+    if skip_reasons is not None and soft_n > 0:
+        skip_reasons["soft_foreign_incumbent_n"] = int(soft_n)
     seen: set[tuple[float, float, float]] = set()
+    foreign_seen: set[tuple[int, tuple[float, float, float]]] = set()
     out: list[tuple[float, float, float]] = []
 
     def _maybe_add(coords: tuple[float, float, float]) -> bool:
@@ -712,27 +804,74 @@ def stamp_motif_leader_follower(
                 skip_reasons["no_rels"] = skip_reasons.get("no_rels", 0) + 1
             continue
         for t_anchor in anchors:
-            full_clear = _full_motif_packing_clear(
-                pat,
-                t_anchor,
-                group_id,
-                shape_to_place,
-                propose_geom,
-                part_by_group,
-                obstacles=obs,
-            )
-            if full_clear:
-                # Emit every same-group member under this anchor; cohort = emitted keys only
-                # (Q17: lock requires in-graph followers — do not record unemitted abs keys).
+            # Same-group packing-clear drives emit (restore prior full_clear rate).
+            # Foreign co-emit is independent: only when that solid clears (P1 hybrid).
+            same_clear = True
+            for t_rel in rels:
+                coords = compose_transforms(t_anchor, t_rel)
+                if not emit_packing_clear(propose_geom, coords, obstacles=obs):
+                    same_clear = False
+                    break
+            if same_clear and part_by_group is not None:
+                # Optional: also require foreign clear for the full_motif_clear
+                # telem bit — but do not block same-group emit on foreign fail.
+                pass
+            soft_mode = hard_packed_geoms is not None
+            if same_clear:
                 emitted_members: list[tuple[int, tuple[float, float, float]]] = []
                 leader_key = None
-                for t_rel in rels:
+                for gid_m, t_rel in pat.members:
                     coords = compose_transforms(t_anchor, t_rel)
-                    if _maybe_add(coords):
-                        key = _motif_abs_key(coords)
-                        emitted_members.append((int(group_id), key))
-                        if leader_key is None:
-                            leader_key = key
+                    gid_i = int(gid_m)
+                    if gid_i == int(group_id):
+                        if _maybe_add(coords):
+                            key = transform_row_key(coords)
+                            emitted_members.append((gid_i, key))
+                            if leader_key is None:
+                                leader_key = key
+                        continue
+                    if (
+                        foreign_out is None
+                        or part_by_group is None
+                        or gid_i not in part_by_group
+                    ):
+                        continue
+                    # Hard clear first; soft-obs retry only when soft_mode (R1).
+                    fstat = _foreign_member_packing_status(
+                        part_by_group[gid_i],
+                        coords,
+                        propose_geom,
+                        obstacles=obs,
+                    )
+                    if fstat != "ok" and soft_mode:
+                        fstat_soft = _foreign_member_packing_status(
+                            part_by_group[gid_i],
+                            coords,
+                            propose_geom,
+                            obstacles=obs_foreign,
+                        )
+                        if fstat_soft == "ok":
+                            fstat = "ok"
+                            if skip_reasons is not None:
+                                skip_reasons["foreign_clear_soft_ok"] = (
+                                    skip_reasons.get("foreign_clear_soft_ok", 0) + 1
+                                )
+                    if fstat != "ok":
+                        if skip_reasons is not None:
+                            sk = f"foreign_clear_fail_{fstat}"
+                            skip_reasons[sk] = skip_reasons.get(sk, 0) + 1
+                        continue
+                    key = transform_row_key(coords)
+                    fseen = (gid_i, key)
+                    if fseen in foreign_seen:
+                        continue
+                    foreign_seen.add(fseen)
+                    foreign_out.setdefault(gid_i, []).append(coords)
+                    emitted_members.append((gid_i, key))
+                    if skip_reasons is not None:
+                        skip_reasons["coemit_followers"] = (
+                            skip_reasons.get("coemit_followers", 0) + 1
+                        )
                 if (
                     cohorts_out is not None
                     and leader_key is not None
@@ -789,6 +928,9 @@ def propose_placements_cluster_copy(
     void_pole: Point | None = None,
     skip_reasons: dict[str, int] | None = None,
     cohorts_out: list | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
+    foreign_out: dict[int, list] | None = None,
+    hard_packed_geoms: Sequence | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Emit absolute transforms for group_id via shared leader-follower stamp."""
     if not patterns or sheet.is_empty:
@@ -829,6 +971,9 @@ def propose_placements_cluster_copy(
         propose_geom=propose_geom,
         anchors=anchors,
         top_n=top_n,
+        part_by_group=part_by_group,
         skip_reasons=skip_reasons,
         cohorts_out=cohorts_out,
+        foreign_out=foreign_out,
+        hard_packed_geoms=hard_packed_geoms,
     )

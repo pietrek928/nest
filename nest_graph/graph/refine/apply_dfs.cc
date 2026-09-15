@@ -1,11 +1,18 @@
 #include "refine/apply_dfs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <numeric>
 
 #include "refine/finalize.h"
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsed_ms(Clock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+}
 
 float selection_score_sum(
     const std::vector<Tscore> &scores,
@@ -145,7 +152,13 @@ ApplyDfsResult apply_dfs_refinement(
     int refine_seed,
     const DecisionGraph *dg) {
     ApplyDfsResult out;
-    const PoseGraph graph_sorted = sort_graph(graph, rule_set, false);
+    // G2: only LegacyAlternating / HeadPipeline need forward sorted graph.
+    const bool need_fwd = (
+        mode == DfsMode::LegacyAlternating || mode == DfsMode::HeadPipeline);
+    PoseGraph graph_sorted;
+    if (need_fwd) {
+        graph_sorted = sort_graph(graph, rule_set, false);
+    }
     const PoseGraph graph_sorted_rev = sort_graph(graph, rule_set, true);
     std::vector<Tvertex> pre_finalize = selected;
 
@@ -240,20 +253,25 @@ ApplyDfsResult apply_dfs_refinement(
     }
 
     if (mode == DfsMode::MergedLooseFinalizeEnd) {
+        const auto t_loose = Clock::now();
         for (int pass_i = 0; pass_i < dfs_passes; ++pass_i) {
             RefineSelectionOptions loose = base_refine_options(
                 cfg, true, node_areas, dfs_refine_seed(refine_seed, pass_i), dg);
             selected = refine_selection(graph_sorted_rev, selected, scores, loose);
         }
+        out.dfs_loose_ms = elapsed_ms(t_loose);
         pre_finalize = selected;
         out.pre_finalize = pre_finalize;
+        const auto t_fin = Clock::now();
         out.final_sel = dfs_finalize_selection(graph, selected, scores, finalize_opts);
+        out.finalize_ms = elapsed_ms(t_fin);
         out.score_sum = selection_score_sum(scores, out.final_sel);
         return out;
     }
 
     if (mode == DfsMode::MergedLooseTightFinalizeEnd
         || mode == DfsMode::HighPassLoose) {
+        const auto t_loose = Clock::now();
         for (int pass_i = 0; pass_i < dfs_passes; ++pass_i) {
             RefineSelectionOptions loose = base_refine_options(
                 cfg, true, node_areas, dfs_refine_seed(refine_seed, pass_i), dg);
@@ -262,14 +280,18 @@ ApplyDfsResult apply_dfs_refinement(
             selected = refine_selection(graph_sorted_rev, selected, scores, loose);
             selected = refine_selection(graph, selected, scores, tight);
         }
+        out.dfs_loose_ms = elapsed_ms(t_loose);
         pre_finalize = selected;
         out.pre_finalize = pre_finalize;
+        const auto t_fin = Clock::now();
         out.final_sel = dfs_finalize_selection(graph, selected, scores, finalize_opts);
+        out.finalize_ms = elapsed_ms(t_fin);
         out.score_sum = selection_score_sum(scores, out.final_sel);
         return out;
     }
 
     // merged_loose_tight (default): finalize after each outer pass + growth
+    const auto t_loose = Clock::now();
     for (int pass_i = 0; pass_i < dfs_passes; ++pass_i) {
         RefineSelectionOptions loose = base_refine_options(
             cfg, true, node_areas, dfs_refine_seed(refine_seed, pass_i), dg);
@@ -278,7 +300,9 @@ ApplyDfsResult apply_dfs_refinement(
         selected = refine_selection(graph_sorted_rev, selected, scores, loose);
         selected = refine_selection(graph, selected, scores, tight);
     }
+    out.dfs_loose_ms = elapsed_ms(t_loose);
     pre_finalize = selected;
+    const auto t_fin = Clock::now();
     std::vector<Tvertex> final_sel = dfs_finalize_selection(
         graph, selected, scores, finalize_opts);
     std::vector<Tvertex> grown = increase_selection_dfs(
@@ -287,6 +311,7 @@ ApplyDfsResult apply_dfs_refinement(
     if (grown.size() > final_sel.size()) {
         final_sel = dfs_finalize_selection(graph, grown, scores, finalize_opts);
     }
+    out.finalize_ms = elapsed_ms(t_fin);
     out.pre_finalize = pre_finalize;
     out.final_sel = final_sel;
     out.score_sum = selection_score_sum(scores, final_sel);

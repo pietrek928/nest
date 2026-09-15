@@ -242,6 +242,14 @@ def bind_graph_epoch(
     bind_epoch(dg, graph, propose_stats, group_id, transform)
     ngroups = int(getattr(cfg.rules, "ngroups", 0) or len(group_id))
     carry_max = int(getattr(cfg.propose, "graph_valid_carry_max", 512) or 512)
+    # D1b: fat graph vs thin nest → soft-cap carry (PoseGraph bloat).
+    prev_graph = int(
+        propose_stats.get("last_graph_n", propose_stats.get("graph_valid_n", 0)) or 0
+    )
+    prev_nest = int(propose_stats.get("last_nest_n", 0) or 0)
+    if prev_graph > 200 and prev_nest * 4 < prev_graph:
+        carry_max = min(carry_max, 256)
+        propose_stats["carry_thin"] = 1
     if bool(getattr(cfg.propose, "enable_graph_valid_carry", True)):
         carry = graph_valid_carry_by_group(
             group_id, transform, ngroups=ngroups, max_keep=carry_max,

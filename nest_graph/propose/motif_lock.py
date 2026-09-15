@@ -26,7 +26,11 @@ from nest_graph.propose.placement_common import (
     outline_ring_geom,
     placement_obstacles,
 )
-from nest_graph.propose.void_selection import centroid_in_free, pose_key_to_index
+from nest_graph.propose.void_selection import (
+    centroid_in_free,
+    pose_key_to_index,
+    transform_row_key,
+)
 from nest_graph.utils import transform_row_key
 
 
@@ -164,6 +168,103 @@ class LargeVoidMotifPlateau:
         return self.ready
 
 
+def partition_packed_for_grow_classify(
+    *,
+    seed_geoms: Sequence | None,
+    rebuilt_geoms: Sequence | None,
+    packed_group_id: Sequence[int] | None,
+    packed_transform: Sequence | None,
+    group_id: Sequence[int],
+    transform: Sequence,
+) -> tuple[list, list, list]:
+    """P0: split grow obstacles into seed / graph-mapped / unmapped (telem + P2)."""
+    seeds = [g for g in (seed_geoms or []) if g is not None]
+    mapped: list = []
+    unmapped: list = []
+    rebuilt = list(rebuilt_geoms or [])
+    if (
+        not rebuilt
+        or packed_group_id is None
+        or packed_transform is None
+        or len(packed_group_id) != len(packed_transform)
+        or len(packed_group_id) != len(rebuilt)
+    ):
+        return seeds, mapped, list(rebuilt)
+    key_map = pose_key_to_index(group_id, transform)
+    for gid, tr, geom in zip(packed_group_id, packed_transform, rebuilt, strict=False):
+        if geom is None:
+            continue
+        key = transform_row_key(tr)
+        if key_map.get((int(gid), key)) is not None:
+            mapped.append(geom)
+        else:
+            unmapped.append(geom)
+    return seeds, mapped, unmapped
+
+
+def _grow_hard_packed(
+    packed_geoms: Sequence | None,
+    classify_seed: Sequence | None,
+    classify_mapped: Sequence | None,
+    classify_unmapped: Sequence | None,
+) -> tuple[list, int]:
+    """P2 soft-obstacle: hard = seed ∪ unmapped; soft_incumbent_n = |mapped|.
+
+    When the classify partition is empty/unused, fall back to full ``packed_geoms``.
+    Seeds and unmapped stay hard; never soft-tier them. Soft mapped stay out of
+    grow obstacles (conflicts still gated by graph.collisions + packing independence).
+    """
+    seed = [g for g in (classify_seed or ()) if g is not None]
+    mapped = [g for g in (classify_mapped or ()) if g is not None]
+    unmapped = [g for g in (classify_unmapped or ()) if g is not None]
+    if seed or mapped or unmapped:
+        return list(seed) + list(unmapped), len(mapped)
+    return [g for g in (packed_geoms or []) if g is not None], 0
+
+
+def order_idxs_seed_unmapped_mapped(
+    idxs: Sequence[int],
+    candidate_geoms: Sequence | None,
+    *,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
+    void_geoms: Sequence | None = None,
+    min_dist: float = 0.0,
+) -> list[int]:
+    """R2: grow order seed→unmapped→mapped tiers — hard-clear members first.
+
+    Members that Scene-clear against seed∪unmapped (hard packed) are tried before
+    those that only work with soft-mapped omitted. No clearance-fragility oracle
+    (W2 fail-first ban). Empty classify → stable original order.
+    """
+    order = [int(i) for i in idxs]
+    seed = [g for g in (classify_seed or ()) if g is not None]
+    mapped = [g for g in (classify_mapped or ()) if g is not None]
+    unmapped = [g for g in (classify_unmapped or ()) if g is not None]
+    if not (seed or mapped or unmapped) or candidate_geoms is None:
+        return order
+    hard, _soft = _grow_hard_packed(None, seed, mapped, unmapped)
+    voids = [g for g in (void_geoms or ()) if g is not None]
+    md = float(min_dist)
+    hard_ok: list[int] = []
+    rest: list[int] = []
+    for i in order:
+        if i < 0 or i >= len(candidate_geoms):
+            rest.append(i)
+            continue
+        geom = candidate_geoms[i]
+        cg = as_geometry(geom) if not isinstance(geom, Geometry) else geom
+        if cg is None:
+            rest.append(i)
+            continue
+        if is_pose_clear(cg, voids, hard, md):
+            hard_ok.append(i)
+        else:
+            rest.append(i)
+    return hard_ok + rest
+
+
 def _growing_subset_indices(
     idxs: Sequence[int],
     candidate_geoms: Sequence | None,
@@ -173,23 +274,44 @@ def _growing_subset_indices(
     *,
     classify_voids: Sequence | None = None,
     classify_min_dist: float | None = None,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
 ) -> tuple[list[int], list[Geometry], list]:
     """Greedy growing subset: keep members that pass accept(cg, trial).
 
     W0/W1: when ``reject_telem`` is set, attribute each reject (no accept change):
     first/later obstacle vs ``trial_packed`` alone, later_glue vs kept co-members,
     geom_missing, none_cg. Optional void/packed split for first_obstacle (W1).
+    P0: when packed rejects, further split seed / mapped / unmapped.
     """
     kept: list[int] = []
     geoms: list[Geometry] = []
     trial = list(trial_packed)
     split_voids = [g for g in (classify_voids or []) if g is not None]
     split_md = float(classify_min_dist) if classify_min_dist is not None else None
+    seed_obs = [g for g in (classify_seed or []) if g is not None]
+    mapped_obs = [g for g in (classify_mapped or []) if g is not None]
+    unmapped_obs = [g for g in (classify_unmapped or []) if g is not None]
+    split_packed_tiers = bool(seed_obs or mapped_obs or unmapped_obs)
 
     def _bump(key: str) -> None:
         if reject_telem is None:
             return
         reject_telem[key] = int(reject_telem.get(key, 0) or 0) + 1
+
+    def _bump_packed_tier(cg: Geometry) -> None:
+        if not split_packed_tiers or split_md is None:
+            return
+        if seed_obs and not is_pose_clear(cg, [], seed_obs, split_md):
+            _bump("grow_reject_first_seed")
+            return
+        if mapped_obs and not is_pose_clear(cg, [], mapped_obs, split_md):
+            _bump("grow_reject_first_mapped")
+            return
+        if unmapped_obs and not is_pose_clear(cg, [], unmapped_obs, split_md):
+            _bump("grow_reject_first_unmapped")
+            return
 
     for i in idxs:
         if candidate_geoms is None or i >= len(candidate_geoms):
@@ -212,8 +334,11 @@ def _growing_subset_indices(
                             _bump("grow_reject_first_void")
                         elif void_ok and not packed_ok:
                             _bump("grow_reject_first_packed")
+                            _bump_packed_tier(cg)
                         else:
                             _bump("grow_reject_first_both")
+                            if not packed_ok:
+                                _bump_packed_tier(cg)
                     _bump("grow_reject_first_obstacle")
                 elif not accept(cg, list(trial_packed)):
                     _bump("grow_reject_later_obstacle")
@@ -247,6 +372,52 @@ def _append_lock_set(
     scene_max[0] = max(scene_max[0], len(idxs))
 
 
+def _cohort_motif_id(cohort: Mapping[str, Any]) -> int:
+    raw = cohort.get("motif_id", -1)
+    if raw is None:
+        return -1
+    return int(raw)
+
+
+def _cohort_motif_complete(
+    cohort: Mapping[str, Any],
+    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
+    motif_base: Any | None,
+) -> int:
+    """1 when MotifBase pair both resolve in cohort key_map (Q90 pairs, not N-way)."""
+    idxs, missing = cohort_member_indices(cohort, key_map)
+    mid = _cohort_motif_id(cohort)
+    n_base = 0
+    if motif_base is not None:
+        try:
+            n_base = int(motif_base.size())
+        except Exception:
+            n_base = 0
+    if motif_base is not None and 0 <= mid < n_base:
+        rec = motif_base.at(mid)
+        ga = int(getattr(rec, "gid_a", -1))
+        gb = int(getattr(rec, "gid_b", -1))
+        resolved_by_gid: dict[int, int] = {}
+        for item in cohort.get("member_keys") or ():
+            if not isinstance(item, (list, tuple)) or len(item) < 2:
+                continue
+            gid_m = int(item[0])
+            key_t = transform_row_key(item[1])
+            if key_map.get((gid_m, key_t)) is None:
+                continue
+            resolved_by_gid[gid_m] = int(resolved_by_gid.get(gid_m, 0) or 0) + 1
+        if ga < 0 or gb < 0:
+            return 0
+        if ga == gb:
+            return 1 if int(resolved_by_gid.get(ga, 0) or 0) >= 2 else 0
+        return 1 if (
+            int(resolved_by_gid.get(ga, 0) or 0) >= 1
+            and int(resolved_by_gid.get(gb, 0) or 0) >= 1
+        ) else 0
+    # Fallback: full in-graph member_keys (≥ pair size).
+    return 1 if missing == 0 and len(idxs) >= 2 else 0
+
+
 def _rank_cohorts(
     cohorts: Sequence[dict],
     key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
@@ -255,8 +426,10 @@ def _rank_cohorts(
     *,
     polys: Sequence | None = None,
     free_poly=None,
+    motif_base: Any | None = None,
+    survive_by_motif: Mapping[int, int] | None = None,
 ) -> list[dict]:
-    """Rank cohorts: more free members → closer to void pole → −leader score."""
+    """One RCL lex: (−complete, −survive, −n_free, pole_dist, −leader_score)."""
     pole_xy: tuple[float, float] | None = None
     if pole is not None and not getattr(pole, "is_empty", True):
         pole_xy = (float(pole.x), float(pole.y))
@@ -265,7 +438,8 @@ def _rank_cohorts(
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     )
-    ranked: list[tuple[int, float, float, dict]] = []
+    survive = survive_by_motif or {}
+    ranked: list[tuple[int, int, int, float, float, dict]] = []
     for cohort in cohorts:
         leader_key = cohort.get("leader_key")
         leader_gid = int(cohort.get("leader_gid", -1))
@@ -280,15 +454,18 @@ def _rank_cohorts(
         if idx is not None and idx < len(scores):
             sc = float(scores[idx])
         n_free = 0
+        idxs, _miss = cohort_member_indices(cohort, key_map)
         if use_free:
-            idxs, _miss = cohort_member_indices(cohort, key_map)
             for i in idxs:
                 ii = int(i)
                 if 0 <= ii < len(polys) and centroid_in_free(polys[ii], free_poly):
                     n_free += 1
-        ranked.append((-int(n_free), dist, -sc, cohort))
-    ranked.sort(key=lambda x: (x[0], x[1], x[2]))
-    return [c for _nf, _d, _s, c in ranked]
+        complete = _cohort_motif_complete(cohort, key_map, motif_base)
+        mid = _cohort_motif_id(cohort)
+        survive_mid = int(survive.get(mid, 0) or 0) if mid >= 0 else 0
+        ranked.append((-complete, -survive_mid, -int(n_free), dist, -sc, cohort))
+    ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+    return [c for _c, _s, _nf, _d, _sc, c in ranked]
 
 
 def _scene_accept_factory(
@@ -352,13 +529,18 @@ def scene_pair_locks_from_indices(
     scores: Sequence[float] | None = None,
     max_pairs: int = 3,
 ) -> list[list[int]]:
-    """Independent index pairs that pass Scene growing clear."""
+    """Independent index pairs that pass motif grow clear (W1 hybrid accept).
+
+    Callers pass hard-packed obstacles (P2: seed ∪ unmapped) as ``packed_geoms``.
+    """
     idxs = sorted({int(i) for i in indices if int(i) >= 0})
     if len(idxs) < 2:
         return []
     collisions = getattr(graph, "collisions", None)
     base_packed: list = [g for g in (packed_geoms or []) if g is not None]
-    scene_accept = _scene_accept_factory(void_geoms, min_dist)
+    scene_accept = _motif_grow_accept_factory(
+        void_geoms, min_dist, packed_penetrating=True,
+    )
 
     ranked: list[tuple[float, list[int]]] = []
     for ai, a in enumerate(idxs):
@@ -395,6 +577,12 @@ def hollow_pattern_lock_sets(
     scores: Sequence[float] | None = None,
     pole: Point | None = None,
     max_locks: int = 4,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
+    free_poly=None,
+    motif_base: Any | None = None,
+    survive_by_motif: Mapping[int, int] | None = None,
 ) -> tuple[list[list[int]], dict]:
     """Cohort-first Scene lock sets when cc_graph≥2 but cc_nest=0 (Q359 unify).
 
@@ -407,17 +595,24 @@ def hollow_pattern_lock_sets(
         "grow_reject_first_void": 0,
         "grow_reject_first_packed": 0,
         "grow_reject_first_both": 0,
+        "grow_reject_first_seed": 0,
+        "grow_reject_first_mapped": 0,
+        "grow_reject_first_unmapped": 0,
         "grow_reject_later_obstacle": 0,
         "grow_reject_later_glue": 0,
         "grow_reject_geom_missing": 0,
         "grow_reject_none_cg": 0,
         "grow_member_touch_n": 0,
+        "soft_incumbent_n": 0,
     }
     cc_set = {int(i) for i in cc_pool}
     if len(cc_set) < 2:
         return [], telem
 
-    base_packed: list = [g for g in (packed_geoms or []) if g is not None]
+    base_packed, soft_n = _grow_hard_packed(
+        packed_geoms, classify_seed, classify_mapped, classify_unmapped,
+    )
+    telem["soft_incumbent_n"] = int(soft_n)
     scene_accept = _motif_grow_accept_factory(
         void_geoms,
         min_dist,
@@ -435,7 +630,9 @@ def hollow_pattern_lock_sets(
         scores or (),
         pole,
         polys=candidate_geoms,
-        free_poly=None,
+        free_poly=free_poly,
+        motif_base=motif_base,
+        survive_by_motif=survive_by_motif,
     ):
         idxs, _miss = cohort_member_indices(cohort, key_map)
         pattern_idxs = [int(i) for i in idxs if int(i) in cc_set]
@@ -449,6 +646,9 @@ def hollow_pattern_lock_sets(
             telem,
             classify_voids=void_geoms,
             classify_min_dist=float(min_dist),
+            classify_seed=classify_seed,
+            classify_mapped=classify_mapped,
+            classify_unmapped=classify_unmapped,
         )
         if len(beam_idxs) >= 2:
             _append_lock_set(lock_sets, seen, beam_idxs, scene_max=scene_max)
@@ -459,7 +659,7 @@ def hollow_pattern_lock_sets(
                 indices=pattern_idxs,
                 candidate_geoms=candidate_geoms,
                 void_geoms=void_geoms,
-                packed_geoms=packed_geoms,
+                packed_geoms=base_packed,
                 min_dist=min_dist,
                 scores=scores,
                 max_pairs=1,
@@ -474,7 +674,7 @@ def hollow_pattern_lock_sets(
             indices=sorted(cc_set),
             candidate_geoms=candidate_geoms,
             void_geoms=void_geoms,
-            packed_geoms=packed_geoms,
+            packed_geoms=base_packed,
             min_dist=min_dist,
             scores=scores,
             max_pairs=cap,
@@ -701,12 +901,18 @@ def hybrid_compose_pick(
     count_cand: int | None = None,
     count_orig: int | None = None,
     void_scene: bool = False,
+    motif_complete: bool = False,
+    survive_mid: int = 0,
 ) -> bool:
     """Q362: indep → cc 0.90× → void (0.88× / join_prefer 0.84×) → lex.
 
     ``unlocked_void`` (Q377) arms the void soft floor without a MotifJoin lock.
     join_prefer soft floor also requires non-decreasing selection count when
     ``count_*`` are provided — except ``void_scene`` (Letter A: drop count gate).
+    R3: Motif-complete × last-iter survive_mid also arms 0.84× and drops count gate
+    (same as void_scene soft — no third credit path / no void_pins).
+    D2: Motif-complete × n_lock≥2 sticky soft (compose_sz stick) without survive_mid —
+    same 0.84× + skip void-rise / count gate as R3 when survive_mid was idle.
     """
     n_lock = int(lock_len if lock_len is not None else len(lock))
     if telem is not None:
@@ -721,27 +927,47 @@ def hybrid_compose_pick(
         if telem is not None:
             telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
         return True
-    void_floor = 0.84 if join_prefer else 0.88
+    # D2: Motif-complete sticky at 0.90× when void non-decreasing (cc bar, no cc_n2).
+    sticky_soft = bool(motif_complete) and n_lock >= 2
+    if (
+        sticky_soft
+        and int(survive_mid) <= 0
+        and area_cand + 1e-12 >= 0.90 * area_orig
+        and void_cand >= void_orig
+    ):
+        if telem is not None:
+            telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
+            telem["hybrid_pick_sticky_soft"] = int(
+                telem.get("hybrid_pick_sticky_soft", 0)
+            ) + 1
+        return True
+    survive_soft = sticky_soft and int(survive_mid) > 0
+    void_floor = 0.84 if (join_prefer or survive_soft) else 0.88
     void_gate = (n_lock >= 2) or bool(unlocked_void)
     count_ok = True
     if (
         join_prefer
         and not bool(void_scene)
+        and not survive_soft
         and count_cand is not None
         and count_orig is not None
     ):
         count_ok = int(count_cand) >= int(count_orig)
     if (
         void_gate
-        and void_cand > void_orig
         and count_ok
         and area_cand + 1e-12 >= void_floor * area_orig
+        and (void_cand > void_orig or survive_soft)
     ):
         if telem is not None:
             telem["hybrid_pick_wins"] = int(telem.get("hybrid_pick_wins", 0)) + 1
-            if join_prefer:
+            if join_prefer or survive_soft:
                 telem["hybrid_pick_join_soft"] = int(
                     telem.get("hybrid_pick_join_soft", 0)
+                ) + 1
+            if survive_soft:
+                telem["hybrid_pick_survive_soft"] = int(
+                    telem.get("hybrid_pick_survive_soft", 0)
                 ) + 1
         return True
     if lex_better:
@@ -780,6 +1006,11 @@ def compose_motif_pipeline(
     large_void: bool = False,
     max_locks: int = 4,
     free_poly=None,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
+    motif_base: Any | None = None,
+    survive_by_motif: Mapping[int, int] | None = None,
 ) -> MotifComposeResult:
     """Unified pre_nest (soft steer) and post_hollow (anchored Scene locks) compose."""
     telem: dict = {}
@@ -803,6 +1034,11 @@ def compose_motif_pipeline(
             large_void=large_void,
             polys=polys,
             free_poly=free_poly,
+            classify_seed=classify_seed,
+            classify_mapped=classify_mapped,
+            classify_unmapped=classify_unmapped,
+            motif_base=motif_base,
+            survive_by_motif=survive_by_motif,
         )
         telem.update(seq_telem)
         union_idxs = [int(i) for i in _combined]
@@ -861,6 +1097,12 @@ def compose_motif_pipeline(
         scores=scores,
         pole=pole,
         max_locks=max_locks,
+        classify_seed=classify_seed,
+        classify_mapped=classify_mapped,
+        classify_unmapped=classify_unmapped,
+        free_poly=free_poly,
+        motif_base=motif_base,
+        survive_by_motif=survive_by_motif,
     )
     telem.update(hollow_telem)
     # Hollow Scene vs full anchored nest often rejects void motifs; retry Scene
@@ -887,6 +1129,12 @@ def compose_motif_pipeline(
             scores=scores,
             pole=pole,
             max_locks=max_locks,
+            classify_seed=classify_seed,
+            classify_mapped=classify_mapped,
+            classify_unmapped=classify_unmapped,
+            free_poly=free_poly,
+            motif_base=motif_base,
+            survive_by_motif=survive_by_motif,
         )
         telem["hollow_lock_board_retry"] = 1
         for k, v in board_telem.items():
@@ -902,8 +1150,14 @@ def compose_motif_pipeline(
         and bool(graph_to_nest_hollow)
         and int(hollow_telem.get("hollow_cc_gap", 0) or 0) > 0
     ):
-        # Scene growing against anchored nest blocks all void pairs; retry void
-        # solids only (still is_pose_clear — not packing-clear lock).
+        # Retry Scene vs voids + hard packed only (seeds∪unmapped). Do not use
+        # packed_geoms=[] — that allowed locks overlapping live solids (overlap_ok).
+        hard_packed, _soft_n = _grow_hard_packed(
+            packed_geoms,
+            classify_seed,
+            classify_mapped,
+            classify_unmapped,
+        )
         void_locks, void_telem = resolve_hollow_cc_lock_sets(
             graph=graph,
             group_id=group_id,
@@ -915,11 +1169,17 @@ def compose_motif_pipeline(
             graph_to_nest_hollow=True,
             candidate_geoms=candidate_geoms,
             void_geoms=void_geoms,
-            packed_geoms=[],
+            packed_geoms=hard_packed,
             min_dist=min_dist,
             scores=scores,
             pole=pole,
             max_locks=max_locks,
+            classify_seed=classify_seed,
+            classify_mapped=classify_mapped,
+            classify_unmapped=classify_unmapped,
+            free_poly=free_poly,
+            motif_base=motif_base,
+            survive_by_motif=survive_by_motif,
         )
         telem["hollow_lock_void_retry"] = 1
         for k, v in void_telem.items():
@@ -955,6 +1215,12 @@ def resolve_hollow_cc_lock_sets(
     scores: Sequence[float] | None = None,
     pole: Point | None = None,
     max_locks: int = 4,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
+    free_poly=None,
+    motif_base: Any | None = None,
+    survive_by_motif: Mapping[int, int] | None = None,
 ) -> tuple[list[list[int]], dict]:
     """One gate: build pattern lock sets when cc gap + hollow basin."""
     telem: dict = {"hollow_cc_gap": 0}
@@ -981,6 +1247,12 @@ def resolve_hollow_cc_lock_sets(
         scores=scores,
         pole=pole,
         max_locks=max_locks,
+        classify_seed=classify_seed,
+        classify_mapped=classify_mapped,
+        classify_unmapped=classify_unmapped,
+        free_poly=free_poly,
+        motif_base=motif_base,
+        survive_by_motif=survive_by_motif,
     )
     telem.update(pat_telem)
     return lock_sets, telem
@@ -1003,6 +1275,11 @@ def sequential_accept_motif_cohorts(
     large_void: bool = False,
     polys: Sequence | None = None,
     free_poly=None,
+    classify_seed: Sequence | None = None,
+    classify_mapped: Sequence | None = None,
+    classify_unmapped: Sequence | None = None,
+    motif_base: Any | None = None,
+    survive_by_motif: Mapping[int, int] | None = None,
 ) -> tuple[list[int], dict]:
     """Pre-MIS: accept full motif cohorts under growing Scene clear.
 
@@ -1025,11 +1302,15 @@ def sequential_accept_motif_cohorts(
         "grow_reject_first_void": 0,
         "grow_reject_first_packed": 0,
         "grow_reject_first_both": 0,
+        "grow_reject_first_seed": 0,
+        "grow_reject_first_mapped": 0,
+        "grow_reject_first_unmapped": 0,
         "grow_reject_later_obstacle": 0,
         "grow_reject_later_glue": 0,
         "grow_reject_geom_missing": 0,
         "grow_reject_none_cg": 0,
         "grow_member_touch_n": 0,
+        "soft_incumbent_n": 0,
         "w1_skipped": "glue",
         "w1_packed_penetrating": 1,
         "w1_obstacle_sot": 0,
@@ -1045,6 +1326,8 @@ def sequential_accept_motif_cohorts(
         pole,
         polys=rank_polys,
         free_poly=free_poly,
+        motif_base=motif_base,
+        survive_by_motif=survive_by_motif,
     )[: max(int(rcl_top_k), 1)]
     if (
         free_poly is not None
@@ -1055,10 +1338,21 @@ def sequential_accept_motif_cohorts(
     telem["motif_sequential_rcl"] = len(rcl)
 
     voids = [g for g in (void_geoms or []) if g is not None]
-    base_packed: list = [g for g in (packed_geoms or []) if g is not None]
+    # P2: hard obstacles = seed ∪ unmapped; soft mapped excluded from grow base.
+    base_packed, soft_n = _grow_hard_packed(
+        packed_geoms, classify_seed, classify_mapped, classify_unmapped,
+    )
+    telem["soft_incumbent_n"] = int(soft_n)
     growing_packed: list = list(base_packed)
     beam_cap = 4
     min_dist_f = float(min_dist)
+    grow_classify = {
+        "classify_voids": void_geoms,
+        "classify_min_dist": min_dist_f,
+        "classify_seed": classify_seed,
+        "classify_mapped": classify_mapped,
+        "classify_unmapped": classify_unmapped,
+    }
     # W1 first_packed: Scene voids + Penetrating packed (emit SoT for nest).
     scene_accept = _motif_grow_accept_factory(
         void_geoms,
@@ -1085,7 +1379,19 @@ def sequential_accept_motif_cohorts(
             ) + 1
         if not _packing_independent(idxs, graph):
             continue
-        order_idxs = list(idxs)
+        order_idxs = order_idxs_seed_unmapped_mapped(
+            idxs,
+            candidate_geoms,
+            classify_seed=classify_seed,
+            classify_mapped=classify_mapped,
+            classify_unmapped=classify_unmapped,
+            void_geoms=void_geoms,
+            min_dist=min_dist_f,
+        )
+        if order_idxs != list(idxs):
+            telem["grow_order_tier_n"] = int(
+                telem.get("grow_order_tier_n", 0) or 0
+            ) + 1
         if len(lock_sets) < beam_cap:
             beam_idxs, _beam_geoms, _ = _growing_subset_indices(
                 order_idxs,
@@ -1093,8 +1399,7 @@ def sequential_accept_motif_cohorts(
                 base_packed,
                 scene_accept,
                 telem,
-                classify_voids=void_geoms,
-                classify_min_dist=min_dist_f,
+                **grow_classify,
             )
             if len(beam_idxs) >= 2:
                 lock_sets.append(beam_idxs)
@@ -1121,8 +1426,7 @@ def sequential_accept_motif_cohorts(
             growing_packed,
             scene_accept,
             telem,
-            classify_voids=void_geoms,
-            classify_min_dist=min_dist_f,
+            **grow_classify,
         )
         if len(scene_idxs) >= 2:
             if len(scene_idxs) < len(idxs):
@@ -1150,6 +1454,9 @@ def sequential_accept_motif_cohorts(
                 telem,
                 classify_voids=void_geoms,
                 classify_min_dist=0.0,
+                classify_seed=classify_seed,
+                classify_mapped=classify_mapped,
+                classify_unmapped=classify_unmapped,
             )
             if len(pack_idxs) >= 2:
                 telem["motif_sequential_packing_clear"] = int(

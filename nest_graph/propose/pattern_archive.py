@@ -142,6 +142,35 @@ def motif_to_cluster_patterns(motif_base: Any, action: Any) -> list[ClusterPatte
     return [record_to_cluster_pattern(motif_base.at(mid), motif_id=mid)]
 
 
+def _cohort_member_keys_for_leader(
+    members: Sequence,
+    world_a: tuple[float, float, float],
+    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
+    *,
+    require_all: bool = False,
+) -> list[tuple[int, tuple[float, float, float]]]:
+    """Q387: stamp every in-graph member under a leader pose (full cohort).
+
+    When ``require_all`` is True (clique hit), return [] if any follower is
+    missing from ``key_map`` (or the leader pose itself is absent).
+    """
+    key_a = transform_row_key(world_a)
+    gid_a = int(members[0][0])
+    if require_all and (gid_a, key_a) not in key_map:
+        return []
+    out: list[tuple[int, tuple[float, float, float]]] = [(gid_a, key_a)]
+    for gid_m, t_m in members[1:]:
+        rel = (float(t_m[0]), float(t_m[1]), float(t_m[2]))
+        world_m = compose_transforms(world_a, rel)
+        key_m = transform_row_key(world_m)
+        if (int(gid_m), key_m) not in key_map:
+            if require_all:
+                return []
+            continue
+        out.append((int(gid_m), key_m))
+    return out
+
+
 def _pattern_full_clique_hit(
     pat: ClusterPattern,
     group_id: Sequence[int],
@@ -157,39 +186,12 @@ def _pattern_full_clique_hit(
         if int(gid) != int(gid_a):
             continue
         world_a = (float(t[0]), float(t[1]), float(t[2]))
-        key_a = transform_row_key(world_a)
-        if (int(gid_a), key_a) not in key_map:
-            continue
-        ok = True
-        for gid_m, t_m in members[1:]:
-            rel = (float(t_m[0]), float(t_m[1]), float(t_m[2]))
-            world_m = compose_transforms(world_a, rel)
-            key_m = transform_row_key(world_m)
-            if (int(gid_m), key_m) not in key_map:
-                ok = False
-                break
-        if ok:
+        keys = _cohort_member_keys_for_leader(
+            members, world_a, key_map, require_all=True,
+        )
+        if len(keys) >= 2:
             return True
     return False
-
-
-def _cohort_member_keys_for_leader(
-    members: Sequence,
-    world_a: tuple[float, float, float],
-    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
-) -> list[tuple[int, tuple[float, float, float]]]:
-    """Q387: stamp every in-graph member under a leader pose (full cohort)."""
-    key_a = transform_row_key(world_a)
-    gid_a = int(members[0][0])
-    out: list[tuple[int, tuple[float, float, float]]] = [(gid_a, key_a)]
-    for gid_m, t_m in members[1:]:
-        rel = (float(t_m[0]), float(t_m[1]), float(t_m[2]))
-        world_m = compose_transforms(world_a, rel)
-        key_m = transform_row_key(world_m)
-        if (int(gid_m), key_m) not in key_map:
-            continue
-        out.append((int(gid_m), key_m))
-    return out
 
 
 def _ref_transform_pair_cohort(

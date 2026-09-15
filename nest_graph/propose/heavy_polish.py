@@ -67,6 +67,10 @@ class PolishBudget:
     run_3b: bool
     run_post_pack: bool
     freeze_improve_rules: bool
+    # G3: mid-only overrides (None → SelectionConfig defaults).
+    refine_explore_shuffle: bool | None = None
+    dfs_refine_max_stagnant_passes: int | None = None
+    dfs_finalize_repair_passes: int | None = None
 
     @property
     def mcts_heavy(self) -> int:
@@ -75,17 +79,23 @@ class PolishBudget:
 
 
 def polish_budget_mid(sel: SelectionConfig | None = None) -> PolishBudget:
-    """Cheap expand / mid-iter: one finalize_end DFS pass; no 3b/se2."""
+    """Cheap expand / mid-iter: one finalize_end DFS pass; no 3b/se2.
+
+    D1b: loose-only finalize_end (skip tight) — mid refine_ms was ~half wall on
+    fat PoseGraphs; last leaf still uses MERGED_LOOSE_TIGHT via polish_budget_last.
+    G3: attribution showed dfs_loose ≫ finalize → disable explore_shuffle mid-only.
+    """
     tries = None
     if sel is not None:
         tries = min(int(sel.dfs_max_tries), 2)
     return PolishBudget(
         dfs_passes=1,
-        dfs_mode=DfsMode.MERGED_LOOSE_TIGHT_FINALIZE_END,
+        dfs_mode=DfsMode.MERGED_LOOSE_FINALIZE_END,
         dfs_max_tries=tries,
         run_3b=False,
         run_post_pack=False,
         freeze_improve_rules=True,
+        refine_explore_shuffle=False,
     )
 
 
@@ -255,6 +265,8 @@ def apply_refine_with_restore(
         propose_stats["refine_rejected"] = False
         propose_stats["rim_drop"] = 0.0
         propose_stats["refine_ms"] = 0.0
+        propose_stats["dfs_loose_ms"] = 0.0
+        propose_stats["finalize_ms"] = 0.0
         propose_stats["void_refine_hold"] = 0
         propose_stats["pre_refine_lock_reject"] = 0
         return list(selected_nest)
@@ -279,6 +291,7 @@ def apply_refine_with_restore(
         "mode": budget.dfs_mode,
         "dg": dg,
         "propose_cfg": propose_cfg,
+        "budget": budget,
     }
     if budget.dfs_max_tries is not None:
         dfs_kwargs["dfs_max_tries"] = int(budget.dfs_max_tries)
@@ -292,6 +305,12 @@ def apply_refine_with_restore(
         **dfs_kwargs,
     )
     propose_stats["refine_ms"] = (time.perf_counter() - t0) * 1000.0
+    propose_stats["dfs_loose_ms"] = float(
+        getattr(apply_dfs_fn, "last_dfs_loose_ms", 0.0) or 0.0
+    )
+    propose_stats["finalize_ms"] = float(
+        getattr(apply_dfs_fn, "last_finalize_ms", 0.0) or 0.0
+    )
 
     restore_refine = False
     void_refine_hold = 0
@@ -476,7 +495,12 @@ def prune_selection_to_independent_set(
     return list(_prune_selection_native(graph, selected, scores))
 
 
-def _dfs_dispatcher_config(sel: SelectionConfig, *, propose_cfg=None) -> DfsDispatcherConfig:
+def _dfs_dispatcher_config(
+    sel: SelectionConfig,
+    *,
+    propose_cfg=None,
+    budget: PolishBudget | None = None,
+) -> DfsDispatcherConfig:
     cfg = DfsDispatcherConfig()
     cfg.dfs_max_tries = int(sel.dfs_max_tries)
     cfg.dfs_refine_max_passes = int(sel.dfs_refine_max_passes)
@@ -487,6 +511,15 @@ def _dfs_dispatcher_config(sel: SelectionConfig, *, propose_cfg=None) -> DfsDisp
     cfg.refine_lexicographic_area = bool(getattr(sel, "refine_lexicographic_area", True))
     cfg.dfs_finalize_repair_passes = int(sel.dfs_finalize_repair_passes)
     cfg.dfs_finalize_max_component = int(sel.dfs_finalize_max_component)
+    if budget is not None:
+        if budget.refine_explore_shuffle is not None:
+            cfg.refine_explore_shuffle = bool(budget.refine_explore_shuffle)
+        if budget.dfs_refine_max_stagnant_passes is not None:
+            cfg.dfs_refine_max_stagnant_passes = int(
+                budget.dfs_refine_max_stagnant_passes
+            )
+        if budget.dfs_finalize_repair_passes is not None:
+            cfg.dfs_finalize_repair_passes = int(budget.dfs_finalize_repair_passes)
     cfg.dg_aware_refine = bool(
         getattr(propose_cfg, "dg_aware_refine", True) if propose_cfg is not None else True
     )
@@ -649,6 +682,7 @@ def apply_dfs_refinement(
     locked_indices: Sequence[int] | None = None,
     dg=None,
     propose_cfg=None,
+    budget: PolishBudget | None = None,
 ) -> tuple[list[int], list[int], float]:
     """Refine selection; return (pre_finalize, final, score_sum_final).
 
@@ -661,10 +695,12 @@ def apply_dfs_refinement(
     mode_val = mode if mode is not None else sel.dfs_mode
     locks = [int(i) for i in (locked_indices or [])]
     finalize_opts = finalize_options(sel, locked_indices=locks)
+    if budget is not None and budget.dfs_finalize_repair_passes is not None:
+        finalize_opts.repair_passes = int(budget.dfs_finalize_repair_passes)
     areas = list(node_areas) if node_areas is not None else None
     seed = int(refine_seed) if refine_seed is not None else -1
-    cfg = _dfs_dispatcher_config(sel, propose_cfg=propose_cfg)
-    pre, final, score_sum = _apply_dfs_refinement_native(
+    cfg = _dfs_dispatcher_config(sel, propose_cfg=propose_cfg, budget=budget)
+    pre, final, score_sum, dfs_loose_ms, finalize_ms = _apply_dfs_refinement_native(
         graph,
         rule_set,
         list(selected),
@@ -678,4 +714,11 @@ def apply_dfs_refinement(
         seed,
         dg,
     )
+    # Stash for apply_refine_with_restore / propose_stats (G0 attribution).
+    apply_dfs_refinement.last_dfs_loose_ms = float(dfs_loose_ms)
+    apply_dfs_refinement.last_finalize_ms = float(finalize_ms)
     return list(pre), list(final), float(score_sum)
+
+
+apply_dfs_refinement.last_dfs_loose_ms = 0.0
+apply_dfs_refinement.last_finalize_ms = 0.0

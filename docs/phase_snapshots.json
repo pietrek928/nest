@@ -351,5 +351,239 @@
       "track_status": "improved_vs_m4",
       "note": "W5 gate hold: scrap stays 0.585. Track peak 0.595 \u2265 M4 target 0.586. Do not raise scrap (not consistently >0.587). Grow still often first_packed / seq_full\u22480; motif compose telem live on void_leak."
     }
+  },
+  "phase_motif_void_dg_p0": {
+    "void_fill": {
+      "area": 0.549,
+      "independent_ok": true,
+      "grow_tier_example": "0/16/0",
+      "grow_cls_example": "6/44/0",
+      "branch": "mapped",
+      "note": "P0 telem-only: grow_reject_first_seed/mapped/unmapped + funnel print (full_clear/fb_lead/lat/coh_amaf). Branch: grow_tier mapped-dominated (0/16/0) with grow_cls seeds present — P2 soft-mapped is seq_full lever; follower_miss~1893 + seq_full=0 keep P1 co-emit. HEAD ablate also noisy (~0.572 + occasional overlap_ok fail); P0 peak this gate 0.549. Classify lists passed via compose kwargs (not propose_stats Geometry)."
+    }
+  },
+  "phase_motif_void_dg_p1": {
+    "void_fill": {
+      "area": 0.550,
+      "independent_ok": true,
+      "note": "P1: transform_row_key SoT; foreign Penetrating co-emit via foreign_out + densify merge/fold; same-group clear drives emit (foreign independent). Pytest coemit OK. Bench coemit=0/follower_miss still high — foreign rarely clears at shared anchors on void_fill; supply path shipped. Floor ≥ P0 0.549."
+    }
+  },
+  "phase_motif_void_dg_p2": {
+    "void_fill": {
+      "area": 0.548,
+      "independent_ok": true,
+      "seq_full": 1,
+      "soft_incumbent_n": 28,
+      "note": "P2: grow hard=seed∪unmapped; soft_inc=mapped. Dual: seq_full 1–3 (was 0), grow_1st cleared, soft_inc~28–43. Area noisy 0.534–0.548 (compose_sz often 0 — locks die at hybrid pick). P3 RCL Motif-complete+survive to lift compose_sz. Indep held."
+    }
+  },
+  "phase_motif_void_dg_p3": {
+    "void_fill": {
+      "area": 0.564,
+      "independent_ok": true,
+      "seq_full": 3,
+      "compose_sz": 2,
+      "note": "P3: _rank_cohorts lex Motif-complete+survive+n_free; hollow free_poly; PackIterCtx.survive_by_motif. Dual peak 0.564 with compose_sz=2/seq_full=2–3/surv_m>0. Void-retry uses hard packed (not []). Occasional overlap_ok noise earlier; later duals indep OK. Floor ≥ P2 0.548."
+    }
+  },
+  "phase_motif_void_dg_p4": {
+    "void_fill": {
+      "area": 0.564,
+      "independent_ok": true,
+      "note": "P4 mix verify: arch_mix/pin_surv fire on void_fill; cc_mix occasional; coemit=0 so no foreign-floor patch. No second mix floor. Floor = P3 0.564."
+    }
+  },
+  "phase_motif_void_dg_p5": {
+    "void_fill": {
+      "area": 0.581,
+      "independent_ok": true,
+      "lock_fp_wired": true,
+      "note": "P5: cheap_pack_cache_key 6-tuple + cheap_lock_fingerprint (leaf pack/cache_key.py); Q384 restore kept; propose_stats cache_key_lock_fp from compose. Dual peak 0.581 ≥ P4 0.564 (noise 0.506–0.581); lock_fp=0 when compose_sz=0. Scrap 0.585 not met."
+    }
+  },
+  "phase_motif_hybrid_r0": {
+    "void_fill": {
+      "area": 0.545,
+      "independent_ok": true,
+      "pick": "10/0/0/10/0",
+      "foreign_fail": "0/0/0",
+      "coemit": 0,
+      "compose_sz": 2,
+      "seq_full": 1,
+      "branch": "pick_reject_area",
+      "note": "R0 telem: foreign_clear_fail_sheet/obs/empty + pick trials/wins/rej_indep/rej_area/join_soft. Dual: pick=10/0/0/10/0 (area reject dominates); foreign_fail=0/0/0 + coemit=0 (foreign clear rarely attempted or soft-obs needed); compose_sz=2/seq_full=1. Floor track still P6 0.581; R0 telem-only area noise 0.545. Next: R1 soft-obs foreign."
+    }
+  },
+  "phase_motif_hybrid_r1": {
+    "void_fill": {
+      "area": 0.549,
+      "independent_ok": true,
+      "coemit": 0,
+      "soft_densify": false,
+      "note": "R1: hard_packed_geoms + two-tier foreign clear + foreign_hard_packed_for_stamp API; unit soft coemit OK. Dual research: soft-all densify coemit=402–522 but area 0.52–0.53 degrade; same_clear-gated soft → coemit=0 (same_clear rare). Densify left on legacy full obs (evidence soft cannot lift coemit safely). pick reject_area still dominates. Floor noise vs P6 0.581."
+    }
+  },
+  "phase_motif_hybrid_r2": {
+    "void_fill": {
+      "area": 0.521,
+      "independent_ok": true,
+      "grow_ord": 0,
+      "seq_full": 3,
+      "note": "R2: order_idxs_seed_unmapped_mapped (hard-clear first). Dual grow_ord=0 (all cohort members already hard-clear vs seed∪unmapped — reorder noop); seq_full=3; pick=10/0/0/10/0 still. Area noise 0.521. Next: R3 hybrid_compose_pick survive soft."
+    }
+  },
+  "phase_motif_hybrid_r3": {
+    "void_fill": {
+      "area": 0.529,
+      "independent_ok": true,
+      "compose_sz": 2,
+      "note": "R3: hybrid_compose_pick Motif-complete×survive_mid → 0.84× + void-rise soft. Unit survive_soft OK. Dual: surv_m often 0 so survive_soft idle; pick reject_area still dominates (8/8); compose_sz intermittent 0–2. Floor noise vs P6 0.581. Next R4 steer or skip."
+    }
+  },
+  "phase_motif_hybrid_r4": {
+    "void_fill": {
+      "area": 0.529,
+      "independent_ok": true,
+      "pack_boost": 0,
+      "skipped": true,
+      "note": "R4 skip: pack_boost=0 from empty motif_packing_score_boost_idxs (seq packing-clear cold), not motif_w=0 (default 50). Deepen weight would no-op. No packing-clear→locks. Carry R3 floor."
+    }
+  },
+  "phase_motif_hybrid_r5": {
+    "void_fill": {
+      "area": 0.573,
+      "independent_ok": true,
+      "scrap_gate": 0.585,
+      "track_best": 0.573,
+      "track_target": 0.595,
+      "scrap_raised": false,
+      "track_status": "below_wang_peak",
+      "note": "R5 gate hold: scrap stays 0.585. Dual this gate 0.573; session revive peak ~0.573 (soft-all coemit spike degraded area earlier). Not consistently >0.587. No track claim vs Wang 0.595. pick reject_area remains primary bottleneck; R1 soft densify skipped by evidence; R4 steer skipped (empty boost_idxs)."
+    }
+  },
+  "phase_dg_expand_d0": {
+    "void_fill": {
+      "area": 0.528,
+      "independent_ok": true,
+      "path_ms": 7659.3,
+      "cheap_d": 0.0,
+      "place_coh": "1/6/0",
+      "pick": "10/0/0/10/0",
+      "compose_sz": 2,
+      "refine_ms": 1049.7,
+      "mpg": "367.0/814",
+      "hold": "0/1",
+      "track_floor": 0.573,
+      "note": "D0: format_dg_expand_funnel + mpg_ms around make_polygon_graph; leak mpg/gvalid. Dual telem present; area noise 0.528 vs R5 floor 0.573. Bottleneck: path_ms~7.7s with place_coh ready but mcts_cohort_macro_n=0; pick reject_area 10/10. Next D1 gate path when ready=0/no Motif tip."
+    }
+  },
+  "phase_dg_expand_d1": {
+    "void_fill": {
+      "area": 0.545,
+      "independent_ok": true,
+      "path_ms": 0.0,
+      "time": 76.81,
+      "place_coh": "0/2/0",
+      "compose_sz": 0,
+      "mpg": "337.0/811",
+      "track_floor": 0.573,
+      "note": "D1: path_probe_budget skips when place_cohort_ready=0 and tip not Motif; Motif-tip shrinks beam/depth. Dual path_ms 7659→0, wall 92→77s, area 0.545≥D0 0.528. Evaluator tip=None so ready=0 skips. Next D1b pool/refine thin."
+    }
+  },
+  "phase_dg_expand_d1b": {
+    "void_fill": {
+      "area": 0.571,
+      "independent_ok": true,
+      "time": 71.73,
+      "refine_ms": 883.2,
+      "mpg": "338.4/749",
+      "path_ms": 0.0,
+      "expand": "e384",
+      "track_floor": 0.573,
+      "note": "D1b: mid polish MERGED_LOOSE_FINALIZE_END; void_seek collect expand max_items //8;//16; carry_thin when fat graph/thin nest. Mixer extra thin + dual sterile_hold skip ablated (0.503 degrade). Re-gate 0.571≥D1 0.545, wall 76→72s. Next D2 sticky compose_sz."
+    }
+  },
+  "phase_dg_expand_d2": {
+    "void_fill": {
+      "area": 0.536,
+      "independent_ok": true,
+      "compose_sz": 0,
+      "sticky": "0.90× Motif-complete void-flat",
+      "track_floor": 0.573,
+      "note": "D2: hybrid_compose_pick Motif-complete sticky at 0.90× + void non-decreasing (0.84× sticky crashed to 0.488). Dual sticky often idle; area noise 0.535–0.536 (D1b 0.571 unreproduced on ablate 0.498). Unit sticky OK. Next D2b Motif-lock void escape."
+    }
+  },
+  "phase_dg_expand_d2b": {
+    "void_fill": {
+      "area": 0.519,
+      "independent_ok": true,
+      "compose_sz": 2,
+      "place_coh": "1/6/0",
+      "hold": "0/1",
+      "track_floor": 0.573,
+      "note": "D2b: motif_lock_void_escape when locks≥2 + void_gain≥1 @ 0.84× area. Dual compose_sz=2 place_coh=1; area 0.519 ≥0.9× D2 0.536. Next D3 tip leaf_reward Motif parity + cheap lock_fp."
+    }
+  },
+  "phase_dg_expand_d3": {
+    "void_fill": {
+      "area": 0.528,
+      "independent_ok": true,
+      "compose_sz": 2,
+      "place_coh": "1/2/0",
+      "lock_fp": 1128556218,
+      "cheap_d": 0.0,
+      "time": 66.21,
+      "track_floor": 0.573,
+      "note": "D3: tip cheap_expand_slave leaf_reward Motif parity (member_hits/mat_motif/survive); path probe base_r same. lock_fp already on cheap_pack_cache_key. Dual 0.528≥D2b 0.519; compose_sz=2 lock_fp live. Next D4 soft place_cohort_ready."
+    }
+  },
+  "phase_dg_expand_d4": {
+    "void_fill": {
+      "area": 0.551,
+      "independent_ok": true,
+      "place_coh": "0/1/0",
+      "coh_amaf": 0,
+      "time": 67.33,
+      "track_floor": 0.573,
+      "note": "D4: soft place_cohort_ready = n_ready∧compose_sz≥2 (drop member_hits chicken-egg); hard telem kept. Dual 0.551≥D3 0.528; this seed compose_sz=0 so macros idle; mcts_cohort_macro_n often 0 when leaders not remaining. No further PLACE_COHORT invent. Next D5 scrap hold."
+    }
+  },
+  "phase_dg_expand_d5": {
+    "void_fill": {
+      "area": 0.534,
+      "independent_ok": true,
+      "scrap_gate": 0.585,
+      "track_best": 0.571,
+      "track_target": 0.595,
+      "scrap_raised": false,
+      "track_status": "below_wang_peak",
+      "note": "D5 gate hold: scrap stays 0.585. Session peak D1b 0.571 (D4 0.551); not consistently >0.587. No track claim vs Wang 0.595. Shipped: dg_funnel+mpg, path_probe_budget, mid loose finalize, void expand/carry thin, Motif sticky 0.90 + lock void escape, tip Motif leaf_reward parity, soft place_cohort_ready."
+    }
+  },
+  "phase_dg_expand_g8": {
+    "void_fill": {
+      "area": 0.516,
+      "parts": 45.0,
+      "time": 73.1,
+      "independent_ok": true,
+      "scrap_gate": 0.585,
+      "track_best": 0.571,
+      "track_target": 0.595,
+      "scrap_raised": false,
+      "track_status": "below_wang_peak",
+      "telem": {
+        "compose_sz": 2,
+        "path_ms": 1796.4,
+        "propose_ms": 7853.8,
+        "compose_ms": 325.2,
+        "mpg_xform_ms": 0.2,
+        "dfs_loose_ms": 917.5,
+        "ray_ms": 1946.0,
+        "place_coh": "1/9/10/0",
+        "densify_obs_reuse": 1
+      },
+      "note": "G8 gate hold (merged G0–G7): scrap stays 0.585; floor/track_best 0.571 unreproduced on seed0 (dual 0.516 in D5 noise band ~0.52–0.58). No scrap raise (not consistently >0.587). No Wang claim. Shipped: honest path/cohort telem + attribution; path idle shrink; geom dedup; mid PolishBudget shuffle off; hollow pin_if_in_nest; deep Motif void escape; FreeCentroid+pose_key hoist; densify full-union obs reuse (explorer cascade scale ablated on miss)."
+    }
   }
 }

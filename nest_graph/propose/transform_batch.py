@@ -715,6 +715,13 @@ def build_transform_batch(
                 }
             propose_stats_out["zones_used"] = zones_used
             propose_stats_out["densify_stats"] = densify_stats
+            propose_stats_out["ray_ms"] = float(densify_stats.get("ray_ms", 0.0) or 0.0)
+            propose_stats_out["erosion_ms"] = float(
+                densify_stats.get("erosion_ms", 0.0) or 0.0
+            )
+            propose_stats_out["pocket_ms"] = float(
+                densify_stats.get("pocket_ms", 0.0) or 0.0
+            )
             propose_stats_out["proposed_by_group"] = {
                 gid: np.asarray(arr, dtype=np.float64)
                 for gid, arr in propose_by_group.items()
@@ -797,6 +804,7 @@ def build_transform_batch(
             and not border_batch
         )
         expand_n = sc.selection_expand_n
+        hist_expand_n = int(sc.history_expand_n)
         shuffle_passes = int(sc.shuffle_passes)
         if not empty_sheet:
             # Collect already emits selection_expand; keep mixer expand thin.
@@ -830,7 +838,7 @@ def build_transform_batch(
         if sel.shape[0] > 0:
             expand_parts.extend(transform_selection(sel, expand_n, rng))
             if hist.shape[0] > 0:
-                expand_parts.extend(transform_history(hist, sc.history_expand_n, rng))
+                expand_parts.extend(transform_history(hist, hist_expand_n, rng))
         if window.shape[0] > 0:
             # Window elites fold into history niche; light expand into remainder.
             if hist_niche.shape[0] == 0:

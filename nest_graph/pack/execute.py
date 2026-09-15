@@ -543,6 +543,7 @@ def run_mcts_multi_sim(
             motif_base=runner.motif_base,
             execute_fn=execute_fn,
             telem=agent.telem,
+            realized=dict(getattr(agent, "realized", None) or {}),
         )
         child = agent.expand(leaf, action, result.reward)
         mcts_telem["last_cheap_reward"] = float(result.reward)

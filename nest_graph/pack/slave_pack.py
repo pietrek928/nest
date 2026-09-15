@@ -268,12 +268,14 @@ def cheap_expand_slave(
     motif_base: MotifBase,
     execute_fn: Callable[..., BoardSnapshot] | None = None,
     telem: dict | None = None,
+    realized: dict | None = None,
 ) -> ExpandResult:
     """
     Run one cheap expand.
 
     ``execute_fn`` if provided: (parent, zone, action, patterns) -> BoardSnapshot.
     Default stub advances coverage slightly for unit tests without full nest.
+    D3: tip ``leaf_reward`` Motif parity with outer ``record_mcts_expand``.
     """
     t0 = time.perf_counter()
     zone = region_to_zone(action.region)
@@ -307,4 +309,13 @@ def cheap_expand_slave(
             motif_ids_used=parent.motif_ids_used,
         )
     timed_expand_ms(telem, t0)
-    return ExpandResult(snapshot=snap, reward=leaf_reward(snap), ok=True)
+    real = dict(realized or {})
+    reward = leaf_reward(
+        snap,
+        rule_id=int(getattr(action, "rule_id", 0) or 0),
+        member_hits=int(real.get("member_hits", 0) or 0),
+        materialized_motif=int(real.get("materialized_motif", 0) or 0),
+        survive_motif_n=int(real.get("survive_motif_n", 0) or 0),
+        macro_survive_n=int(real.get("macro_survive_n", 0) or 0),
+    )
+    return ExpandResult(snapshot=snap, reward=reward, ok=True)

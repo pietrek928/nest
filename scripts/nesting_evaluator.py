@@ -39,7 +39,7 @@ from nest_graph.pack.execute import (
     record_outer_iter_expand,
     schedule_prep_selection_free,
 )
-from nest_graph.pack.macro_path import ancestors, macro_increase_path
+from nest_graph.pack.macro_path import ancestors, macro_increase_path, path_probe_budget
 from nest_graph.graph import leaf_reward, path_reward_beats
 from nest_graph.pack.stages import run_mid_pack_stages, run_post_pack_stage
 from nest_graph.propose.placement_common import post_pack_overlap_ok
@@ -741,6 +741,9 @@ class NestingPipelineEvaluator:
         prev_void_nest = 0
         inward_peak_state: dict[str, int] = {}
         letter_peak_state: dict[str, int] = {}
+        last_graph_n = 0
+        last_nest_n = 0
+        last_incumbent_hold = 0
 
         for iter_idx in range(self.case.iters):
             first_pass = nest_state is None
@@ -812,7 +815,24 @@ class NestingPipelineEvaluator:
                     ),
                 }
                 path_probe = bool(plateau.on_plateau) or parent_free_hint
-                if path_probe and mcts_runner.execute_fn is not None:
+                # G0: per-iter path telem.
+                mcts_telem["replay_from_ancestor_ms"] = 0.0
+                mcts_telem["path_probe_skip"] = 0
+                # Evaluator probes before tip MCTS; tip_action is None here (D1
+                # Motif-tip shrink only applies on build_graph tip path).
+                run_path, path_beam, path_depth = path_probe_budget(
+                    on_plateau=bool(plateau.on_plateau),
+                    parent_free_hint=bool(parent_free_hint),
+                    agent=getattr(mcts_runner, "agent", None),
+                    tip_action=None,
+                    beam=int(getattr(self.cfg.propose, "macro_path_beam", 4) or 4),
+                    max_depth=int(
+                        getattr(self.cfg.propose, "macro_path_max_depth", 3) or 3
+                    ),
+                )
+                if path_probe and not run_path:
+                    mcts_telem["path_probe_skip"] = 1
+                if run_path and mcts_runner.execute_fn is not None:
                     path = ancestors(mcts_runner, int(mcts_parent_id))
                     mcts_telem["policy_path_len"] = int(len(path))
                     base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
@@ -821,6 +841,10 @@ class NestingPipelineEvaluator:
                         parent_snap,
                         survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
                         macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                        member_hits=int(realized.get("member_hits", 0) or 0),
+                        materialized_motif=int(
+                            realized.get("materialized_motif", 0) or 0
+                        ),
                     )
                     # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
                     path_overlap_ok = False
@@ -831,13 +855,8 @@ class NestingPipelineEvaluator:
                             baseline_reward=base_r,
                             execute_fn=mcts_runner.execute_fn,
                             rule_ids=_mcts_rule_ids(rule_sets),
-                            beam=int(
-                                getattr(self.cfg.propose, "macro_path_beam", 4) or 4
-                            ),
-                            max_depth=int(
-                                getattr(self.cfg.propose, "macro_path_max_depth", 3)
-                                or 3
-                            ),
+                            beam=int(path_beam),
+                            max_depth=int(path_depth),
                             telem=mcts_telem,
                             overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(
                                 pack_cache
@@ -1046,6 +1065,9 @@ class NestingPipelineEvaluator:
                 len(ProposeConfig.proposers_for_place("void_seek") or ())
                 if use_dg_mix else 0
             )
+            propose_stats["last_graph_n"] = int(last_graph_n)
+            propose_stats["last_nest_n"] = int(last_nest_n)
+            mcts_telem["last_incumbent_hold"] = int(last_incumbent_hold)
             cut_sterile_boost = bool(
                 use_dg_mix
                 and (
@@ -1054,6 +1076,7 @@ class NestingPipelineEvaluator:
                 )
             )
             propose_stats["cut_sterile_hist_boost"] = cut_sterile_boost
+            _propose_t0 = time.perf_counter()
             selected_t = build_transform_batch(
                 self.cfg, selected_t, history, rng,
                 board=self.sheet,
@@ -1069,6 +1092,7 @@ class NestingPipelineEvaluator:
                 graph_valid_carry=graph_valid_carry,
                 archived_patterns=archived_for_propose or None,
             )
+            propose_stats["propose_ms"] = (time.perf_counter() - _propose_t0) * 1000.0
             flat_parts = [
                 (self.parts[group_idx][0], transforms)
                 for group_idx, transforms in enumerate(selected_t)
@@ -1078,6 +1102,8 @@ class NestingPipelineEvaluator:
                 str(last_void_leak.get("free_kind") or "") == "large_void"
             )
             iter_min_dist = self._min_dist(first_pass=tight_clearance)
+            _mpg_t0 = time.perf_counter()
+            mpg_natives: list = []
             graph, polys, group_id, transform = make_polygon_graph(
                 self.case.board,
                 flat_parts,
@@ -1089,7 +1115,13 @@ class NestingPipelineEvaluator:
                 attract_contact_weight=float(self.cfg.propose.attract_contact_weight),
                 attract_kiss_band_scale=float(self.cfg.propose.attract_kiss_band_scale),
                 attract_max_degree=int(self.cfg.propose.attract_max_degree),
+                part_bases=part_bases_fixed,
+                out_native_geoms=mpg_natives,
             )
+            propose_stats["mpg_ms"] = (time.perf_counter() - _mpg_t0) * 1000.0
+            propose_stats["graph_valid_n"] = int(len(transform))
+            if mpg_natives:
+                propose_stats["_mpg_natives"] = mpg_natives
             pin_keys = set(propose_stats.get("archive_mix_pin_keys") or ())
             if pin_keys:
                 graph_keys = {
@@ -1155,8 +1187,14 @@ class NestingPipelineEvaluator:
             candidate_geoms = _native_geoms_from_transforms(
                 group_id, transform, part_bases,
             )
-            # Q105: dual = last leaf OR large_void (same SoT as build_graph).
-            dual_nest = dual_nest_for(free_info, last_leaf=is_last_leaf)
+            # Q105/D1b: dual = last leaf OR large_void; skip when prior sterile hold.
+            dual_nest = dual_nest_for(
+                free_info,
+                last_leaf=is_last_leaf,
+                sterile_hold=bool(
+                    int(mcts_telem.get("last_incumbent_hold", 0) or 0)
+                ),
+            )
             seed_voids = nest_state_extra_voids(nest_state) or []
             pack_box = RefinePackBox()
             pack_ctx = PackIterCtx(
@@ -1270,6 +1308,12 @@ class NestingPipelineEvaluator:
             last_void_leak = leak_orch.leak_dict
             void_elite_by_group = leak_orch.void_elite_by_group
             n_void_graph = leak_orch.n_void_graph
+            last_graph_n = int(len(transform))
+            last_nest_n = int(len(selected_polys))
+            last_incumbent_hold = int(propose_stats.get("incumbent_hold", 0) or 0)
+            mcts_telem["last_graph_n"] = last_graph_n
+            mcts_telem["last_nest_n"] = last_nest_n
+            mcts_telem["last_incumbent_hold"] = last_incumbent_hold
             if leak_orch.had_void_override:
                 had_void_override = True
             prev_void_nest = leak_orch.prev_void_nest

@@ -269,6 +269,10 @@ def proposer_survivors_on_graph(
     transform: Sequence,
     proposer_keys: Mapping[str, set[tuple[float, float, float]]] | None,
     names: frozenset[str] | None = None,
+    *,
+    key_to_verts: Mapping[
+        tuple[int, tuple[float, float, float]], Sequence[int]
+    ] | None = None,
 ) -> dict[int, set[tuple[float, float, float]]]:
     """Emit keys that actually exist on the current graph (pool → MIS SoT)."""
     if not proposer_keys or not group_id or not transform:
@@ -280,6 +284,11 @@ def proposer_survivors_on_graph(
     if not tagged:
         return {}
     out: dict[int, set[tuple[float, float, float]]] = {}
+    if key_to_verts is not None:
+        for (gid, key), _idxs in key_to_verts.items():
+            if key in tagged:
+                out.setdefault(int(gid), set()).add(key)
+        return out
     for i, tr in enumerate(transform):
         if i >= len(group_id):
             break
@@ -295,6 +304,10 @@ def count_proposer_on_selection(
     selected: Sequence[int],
     proposer_keys: Mapping[str, set[tuple[float, float, float]]] | None,
     name: str,
+    *,
+    key_to_verts: Mapping[
+        tuple[int, tuple[float, float, float]], Sequence[int]
+    ] | None = None,
 ) -> tuple[int, int]:
     """Return (on_graph, in_selection) for one proposer's projected keys."""
     if not proposer_keys:
@@ -305,6 +318,14 @@ def count_proposer_on_selection(
     on_graph = 0
     in_sel = 0
     sel_set = {int(i) for i in selected}
+    if key_to_verts is not None:
+        for (gid, key), idxs in key_to_verts.items():
+            if key not in keys:
+                continue
+            n = len(idxs)
+            on_graph += n
+            in_sel += sum(1 for i in idxs if int(i) in sel_set)
+        return on_graph, in_sel
     for i, tr in enumerate(transform):
         if i >= len(group_id):
             break

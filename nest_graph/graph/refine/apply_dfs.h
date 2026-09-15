@@ -73,6 +73,8 @@ struct ApplyDfsResult {
     std::vector<Tvertex> pre_finalize;
     std::vector<Tvertex> final_sel;
     float score_sum = 0.f;
+    double dfs_loose_ms = 0.0;
+    double finalize_ms = 0.0;
 };
 
 std::vector<Tvertex> prune_selection_to_independent_set(

@@ -16,6 +16,7 @@ from nest_graph.propose.pattern_archive import note_motif_hollow_miss
 from nest_graph.propose.telem import (
     VoidLeakGatherCtx,
     archive_void_elite_transforms,
+    format_dg_expand_funnel,
     gather_void_leak_inputs,
     merge_phase_gate_telem,
     void_elite_count,
@@ -172,6 +173,7 @@ def run_void_leak_and_niche_credit(
                 f"{int(leak_dict.get('grow_reject_none_cg', 0) or 0)}"
             )
         print(f"{void_leak}{motif_wire}")
+        print(format_dg_expand_funnel(leak_dict))
     bottleneck = str(funnel.get("bottleneck") or "")
     large_void = str(getattr(free_info, "kind", "") or "") == "large_void"
     hollow = bool(

@@ -1,5 +1,6 @@
 """Outer-iter pack stages (compose/refine/mid/first-pass/post)."""
 
+import time
 from typing import Any, Callable, Sequence
 
 from nest_graph.graph import score_elems
@@ -36,6 +37,7 @@ from nest_graph.propose.first_pass_border import (
     first_pass_layered_selection,
 )
 from nest_graph.propose.void_selection import pin_nest_void_independent
+from nest_graph.propose.motif_lock import partition_packed_for_grow_classify
 
 
 def rim_before_for_selection(
@@ -82,9 +84,15 @@ def _compose_from_ctx(
 ) -> None:
     """Shared compose+nest body for mid-pack and Uh post-rim."""
     assert ctx.native_geoms_fn is not None
-    candidate_geoms = ctx.native_geoms_fn(
-        ctx.group_id, ctx.transform, ctx.part_bases,
-    )
+    if (
+        ctx.graph_native_geoms is not None
+        and len(ctx.graph_native_geoms) == len(ctx.group_id)
+    ):
+        candidate_geoms = list(ctx.graph_native_geoms)
+    else:
+        candidate_geoms = ctx.native_geoms_fn(
+            ctx.group_id, ctx.transform, ctx.part_bases,
+        )
     # W1 first_packed: rebuild nest packed from transforms (emit SoT), then
     # prepend seed solids so obstacle union stays seeds∪nest without mutating
     # board void_geoms (3b / board_ctx SoT).
@@ -92,6 +100,9 @@ def _compose_from_ctx(
     packed_geoms = list(overrides.pop("packed_geoms", ctx.packed_geoms))
     pgid = overrides.pop("packed_group_id", ctx.packed_group_id)
     ptf = overrides.pop("packed_transform", ctx.packed_transform)
+    grow_classify_seed: list = []
+    grow_classify_mapped: list = []
+    grow_classify_unmapped: list = []
     if (
         pgid is not None
         and ptf is not None
@@ -106,6 +117,21 @@ def _compose_from_ctx(
                 if ctx.propose_stats is not None:
                     ctx.propose_stats["w1_obstacle_sot"] = 1
                     ctx.propose_stats["w1_packed_rebuilt_n"] = int(len(rebuilt))
+                grow_classify_seed, grow_classify_mapped, grow_classify_unmapped = (
+                    partition_packed_for_grow_classify(
+                        seed_geoms=seed_geoms,
+                        rebuilt_geoms=rebuilt,
+                        packed_group_id=pgid,
+                        packed_transform=ptf,
+                        group_id=ctx.group_id,
+                        transform=ctx.transform,
+                    )
+                )
+                if ctx.propose_stats is not None:
+                    # Counts only on propose_stats (no Geometry lists — avoid cache/leak churn).
+                    ctx.propose_stats["grow_classify_seed_n"] = int(len(grow_classify_seed))
+                    ctx.propose_stats["grow_classify_mapped_n"] = int(len(grow_classify_mapped))
+                    ctx.propose_stats["grow_classify_unmapped_n"] = int(len(grow_classify_unmapped))
         except Exception:
             pass
     kwargs = compose_nest_kwargs(
@@ -131,14 +157,23 @@ def _compose_from_ctx(
         ngroups=int(ctx.ngroups),
         packed_group_id=pgid,
         packed_transform=ptf,
-        last_leaf=overrides.pop("last_leaf", ctx.is_last_leaf),
+        last_leaf=bool(overrides.pop("last_leaf", ctx.is_last_leaf)),
         void_geoms=void_geoms,
         locked_seed=overrides.pop("locked_seed", ctx.locked_seed),
-        dg=ctx.dg,
+        dg=overrides.pop("dg", ctx.dg),
         motif_base=overrides.pop("motif_base", ctx.motif_base),
+        survive_by_motif=overrides.pop("survive_by_motif", ctx.survive_by_motif),
+        grow_classify_seed=grow_classify_seed,
+        grow_classify_mapped=grow_classify_mapped,
+        grow_classify_unmapped=grow_classify_unmapped,
     )
     kwargs.update(overrides)
+    _compose_t0 = time.perf_counter()
     composed = compose_and_nest_selection(**kwargs)
+    if ctx.propose_stats is not None:
+        ctx.propose_stats["compose_ms"] = float(
+            (time.perf_counter() - _compose_t0) * 1000.0
+        )
     box.composed = composed
     large_void = bool(
         composed.free_info is not None

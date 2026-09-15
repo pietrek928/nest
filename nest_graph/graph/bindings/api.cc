@@ -84,7 +84,11 @@ void bind_graph_api(nb::module_ &m) {
                 refine_seed,
                 dg);
             return std::make_tuple(
-                result.pre_finalize, result.final_sel, result.score_sum);
+                result.pre_finalize,
+                result.final_sel,
+                result.score_sum,
+                result.dfs_loose_ms,
+                result.finalize_ms);
         },
         nb::arg("graph"),
         nb::arg("rule_set"),
