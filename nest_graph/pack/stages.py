@@ -12,6 +12,8 @@ from nest_graph.pack.ctx import (
 )
 from nest_graph.pack.execute import execute_pack, schedule_prep_selection_free
 from nest_graph.pack.geoms import selection_coverage_pct
+from nest_graph.pack.slave_pack import write_propose_kiss_ledger
+from nest_graph.propose.placement_common import as_geometry
 from nest_graph.propose.block_replace import maybe_block_hole_renest
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.heavy_polish import (
@@ -173,6 +175,26 @@ def _compose_from_ctx(
     if ctx.propose_stats is not None:
         ctx.propose_stats["compose_ms"] = float(
             (time.perf_counter() - _compose_t0) * 1000.0
+        )
+        # Ds1: kiss ledger for BoardSnapshot / leaf_reward (same 2·gap band).
+        sel = list(composed.selected_nest or ())
+        kiss_geoms = []
+        for i in sel:
+            ii = int(i)
+            if candidate_geoms is not None and 0 <= ii < len(candidate_geoms):
+                g = candidate_geoms[ii]
+                if g is not None:
+                    kiss_geoms.append(g)
+                    continue
+            if 0 <= ii < len(ctx.polys):
+                gg = as_geometry(ctx.polys[ii])
+                if gg is not None:
+                    kiss_geoms.append(gg)
+        write_propose_kiss_ledger(
+            ctx.propose_stats,
+            kiss_geoms,
+            gap=float(kwargs.get("min_dist", ctx.min_dist) or ctx.min_dist),
+            feed_snapshot=True,
         )
     box.composed = composed
     large_void = bool(

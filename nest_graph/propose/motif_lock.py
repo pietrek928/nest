@@ -11,6 +11,7 @@ from typing import Any
 from shapely.geometry import Point
 
 from nest_graph.geometry import Geometry
+from nest_graph.graph import Se2
 from nest_graph.propose.block_replace import _packing_independent
 from nest_graph.propose.motif_keys import (
     boost_score_indices,
@@ -31,7 +32,7 @@ from nest_graph.propose.void_selection import (
     pose_key_to_index,
     transform_row_key,
 )
-from nest_graph.utils import transform_row_key
+from nest_graph.utils import relative_transform, transform_row_key
 
 
 def _lock_bonded_components(
@@ -231,18 +232,22 @@ def order_idxs_seed_unmapped_mapped(
     classify_unmapped: Sequence | None = None,
     void_geoms: Sequence | None = None,
     min_dist: float = 0.0,
+    within_tier_key: Callable[[int], float] | None = None,
 ) -> list[int]:
     """R2: grow order seed→unmapped→mapped tiers — hard-clear members first.
 
     Members that Scene-clear against seed∪unmapped (hard packed) are tried before
     those that only work with soft-mapped omitted. No clearance-fragility oracle
     (W2 fail-first ban). Empty classify → stable original order.
+    F5a: optional ``within_tier_key`` sorts each tier (e.g. ``−motif_adj_hits``).
     """
     order = [int(i) for i in idxs]
     seed = [g for g in (classify_seed or ()) if g is not None]
     mapped = [g for g in (classify_mapped or ()) if g is not None]
     unmapped = [g for g in (classify_unmapped or ()) if g is not None]
     if not (seed or mapped or unmapped) or candidate_geoms is None:
+        if within_tier_key is not None and order:
+            return sorted(order, key=within_tier_key)
         return order
     hard, _soft = _grow_hard_packed(None, seed, mapped, unmapped)
     voids = [g for g in (void_geoms or ()) if g is not None]
@@ -262,7 +267,35 @@ def order_idxs_seed_unmapped_mapped(
             hard_ok.append(i)
         else:
             rest.append(i)
+    if within_tier_key is not None:
+        hard_ok.sort(key=within_tier_key)
+        rest.sort(key=within_tier_key)
     return hard_ok + rest
+
+
+def _motif_adj_within_tier_key(
+    group_id: Sequence[int],
+    transform: Sequence,
+    packed: Sequence[int],
+    motif_base: Any | None,
+) -> Callable[[int], float] | None:
+    """F5a: sort key = −motif_adj_hits for one member vs packed (max-adj first)."""
+    if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
+        return None
+
+    def _key(i: int) -> float:
+        return -float(
+            motif_adj_hits(
+                [int(i)],
+                group_id=group_id,
+                transform=transform,
+                packed=packed,
+                motif_base=motif_base,
+                weight_accept=True,
+            )
+        )
+
+    return _key
 
 
 def _growing_subset_indices(
@@ -418,6 +451,103 @@ def _cohort_motif_complete(
     return 1 if missing == 0 and len(idxs) >= 2 else 0
 
 
+def motif_adj_hits(
+    lock: Sequence[int],
+    *,
+    group_id: Sequence[int],
+    transform: Sequence,
+    packed: Sequence[int],
+    motif_base: Any,
+    weight_accept: bool = True,
+) -> int:
+    """Count MotifBase-compatible contacts of lock vs packed (Wang adj).
+
+    Uses ``find_nearest`` on relative SE2; optional ``accept_count`` weight.
+    One shared helper for hybrid soft arm / RCL / sequential grow order.
+    """
+    if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
+        return 0
+    lock_idxs = [int(i) for i in lock if int(i) >= 0]
+    if len(lock_idxs) < 1:
+        return 0
+    packed_idxs = [int(i) for i in packed if int(i) >= 0]
+    peers = list(dict.fromkeys(lock_idxs + packed_idxs))
+    n_g = len(group_id)
+    n_t = len(transform)
+    hits = 0
+    seen_pairs: set[tuple[int, int]] = set()
+    for ia in lock_idxs:
+        if ia >= n_g or ia >= n_t:
+            continue
+        ga = int(group_id[ia])
+        ta = (
+            float(transform[ia][0]),
+            float(transform[ia][1]),
+            float(transform[ia][2]),
+        )
+        for ib in peers:
+            if ib == ia or ib >= n_g or ib >= n_t:
+                continue
+            pair = (ia, ib) if ia < ib else (ib, ia)
+            if pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            gb = int(group_id[ib])
+            tb = (
+                float(transform[ib][0]),
+                float(transform[ib][1]),
+                float(transform[ib][2]),
+            )
+            rel = relative_transform(ta, tb)
+            rec = None
+            try:
+                rec = motif_base.find_nearest(
+                    ga, gb, Se2(rel[0], rel[1], rel[2]),
+                )
+                if rec is None:
+                    rel_ba = relative_transform(tb, ta)
+                    rec = motif_base.find_nearest(
+                        gb, ga, Se2(rel_ba[0], rel_ba[1], rel_ba[2]),
+                    )
+            except Exception:
+                rec = None
+            if rec is None:
+                continue
+            if weight_accept:
+                hits += max(int(getattr(rec, "accept_count", 0) or 0), 1)
+            else:
+                hits += 1
+    return int(hits)
+
+
+def _adj_by_cohort_map(
+    cohorts: Sequence[dict],
+    key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
+    *,
+    group_id: Sequence[int],
+    transform: Sequence,
+    packed: Sequence[int],
+    motif_base: Any | None,
+) -> dict[int, int]:
+    """Per-cohort-index MotifBase adj for one RCL lex (M2)."""
+    if motif_base is None:
+        return {}
+    out: dict[int, int] = {}
+    for ci, cohort in enumerate(cohorts):
+        idxs, _miss = cohort_member_indices(cohort, key_map)
+        if len(idxs) < 2:
+            continue
+        out[ci] = motif_adj_hits(
+            idxs,
+            group_id=group_id,
+            transform=transform,
+            packed=packed,
+            motif_base=motif_base,
+            weight_accept=True,
+        )
+    return out
+
+
 def _rank_cohorts(
     cohorts: Sequence[dict],
     key_map: Mapping[tuple[int, tuple[float, float, float]], Any],
@@ -428,6 +558,7 @@ def _rank_cohorts(
     free_poly=None,
     motif_base: Any | None = None,
     survive_by_motif: Mapping[int, int] | None = None,
+    adj_by_cohort: Mapping[int, int] | None = None,
 ) -> list[dict]:
     """One RCL lex: (−complete, −survive, −n_free, pole_dist, −leader_score)."""
     pole_xy: tuple[float, float] | None = None
@@ -465,6 +596,8 @@ def _rank_cohorts(
         survive_mid = int(survive.get(mid, 0) or 0) if mid >= 0 else 0
         ranked.append((-complete, -survive_mid, -int(n_free), dist, -sc, cohort))
     ranked.sort(key=lambda x: (x[0], x[1], x[2], x[3], x[4]))
+    # adj_by_cohort reserved for M4 grow order (RCL sort regressed early vs M0).
+    _ = adj_by_cohort
     return [c for _c, _s, _nf, _d, _sc, c in ranked]
 
 
@@ -903,6 +1036,7 @@ def hybrid_compose_pick(
     void_scene: bool = False,
     motif_complete: bool = False,
     survive_mid: int = 0,
+    adj_hits: int = 0,
 ) -> bool:
     """Q362: indep → cc 0.90× → void (0.88× / join_prefer 0.84×) → lex.
 
@@ -913,10 +1047,15 @@ def hybrid_compose_pick(
     (same as void_scene soft — no third credit path / no void_pins).
     D2: Motif-complete × n_lock≥2 sticky soft (compose_sz stick) without survive_mid —
     same 0.84× + skip void-rise / count gate as R3 when survive_mid was idle.
+    M2: ``adj_hits`` is telem-only (soft-arm / RCL −adj regressed early; helper kept).
     """
     n_lock = int(lock_len if lock_len is not None else len(lock))
     if telem is not None:
         telem["hybrid_pick_trials"] = int(telem.get("hybrid_pick_trials", 0)) + 1
+        if int(adj_hits) > 0:
+            telem["motif_adj_hits"] = max(
+                int(telem.get("motif_adj_hits", 0) or 0), int(adj_hits)
+            )
     if graph is not None and n_lock >= 2 and not _packing_independent(lock, graph):
         if telem is not None:
             telem["hybrid_pick_reject_indep"] = int(
@@ -968,6 +1107,10 @@ def hybrid_compose_pick(
             if survive_soft:
                 telem["hybrid_pick_survive_soft"] = int(
                     telem.get("hybrid_pick_survive_soft", 0)
+                ) + 1
+            if sticky_soft and int(adj_hits) > 0:
+                telem["hybrid_pick_adj_soft"] = int(
+                    telem.get("hybrid_pick_adj_soft", 0)
                 ) + 1
         return True
     if lex_better:
@@ -1379,6 +1522,13 @@ def sequential_accept_motif_cohorts(
             ) + 1
         if not _packing_independent(idxs, graph):
             continue
+        # F5a: within-tier −motif_adj_hits after hard/soft tier split. Wait until a
+        # Motif seed lock exists so cold-start cohort order stays R2-only.
+        adj_key = None
+        if len(locked) >= 2:
+            adj_key = _motif_adj_within_tier_key(
+                group_id, transform, list(locked), motif_base,
+            )
         order_idxs = order_idxs_seed_unmapped_mapped(
             idxs,
             candidate_geoms,
@@ -1387,7 +1537,10 @@ def sequential_accept_motif_cohorts(
             classify_unmapped=classify_unmapped,
             void_geoms=void_geoms,
             min_dist=min_dist_f,
+            within_tier_key=adj_key,
         )
+        if adj_key is not None:
+            telem["grow_adj_order"] = int(telem.get("grow_adj_order", 0) or 0) + 1
         if order_idxs != list(idxs):
             telem["grow_order_tier_n"] = int(
                 telem.get("grow_order_tier_n", 0) or 0

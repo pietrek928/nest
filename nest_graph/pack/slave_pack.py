@@ -19,6 +19,37 @@ from nest_graph.graph import (
 )
 from nest_graph.utils import relative_transform
 
+# F2: share H1 kiss identity (placements_pattern._same_gid_leader_rel = min |Δxy|).
+_SAME_GID_KISS_XY = 0.5
+_KISS_DEMOTE_GCI = 0.25
+
+
+def _same_gid_rels_kiss(rels: Sequence[tuple[float, float, float]]) -> bool:
+    """True when ≥2 same-gid relatives are near-coincident (H1 kiss dual)."""
+    if len(rels) < 2:
+        return False
+    lim2 = _SAME_GID_KISS_XY * _SAME_GID_KISS_XY
+    for i, a in enumerate(rels):
+        ax, ay = float(a[0]), float(a[1])
+        for b in rels[i + 1 :]:
+            dx = ax - float(b[0])
+            dy = ay - float(b[1])
+            if dx * dx + dy * dy <= lim2:
+                return True
+    return False
+
+
+def _same_gid_leader_rel(
+    rels: Sequence[tuple[float, float, float]],
+) -> tuple[float, float, float]:
+    """Identity-primary leader: nearest-to-origin relative (H1)."""
+    if not rels:
+        return (0.0, 0.0, 0.0)
+    return min(
+        (tuple(float(x) for x in r[:3]) for r in rels),
+        key=lambda r: float(r[0]) * float(r[0]) + float(r[1]) * float(r[1]),
+    )
+
 
 @dataclass(slots=True)
 class ExpandResult:
@@ -47,6 +78,69 @@ def _pair_compactness(ga, gb) -> float:
     if hull <= 1e-12:
         return 0.0
     return float(clamp01(area_sum / hull))
+
+
+def contact_kiss_ledger(
+    geoms: Sequence,
+    *,
+    gap: float,
+) -> tuple[int, float]:
+    """Ds1: kiss_pairs + mean_compactness from the ContactGRG distance band.
+
+    Same ``≤ 2·gap`` predicate as ``upsert_from_contacts`` — ledger only, no Motif upsert.
+    """
+    from nest_graph.geometry import find_polygon_distances
+
+    n = len(geoms)
+    if n < 2:
+        return 0, 0.0
+    contact = 2.0 * float(gap)
+    contact_eps = contact + 1e-9
+    aura = max(contact, 0.5) * 2.0
+    try:
+        results = find_polygon_distances(list(geoms), aura=aura)
+    except Exception:
+        return 0, 0.0
+    comps: list[float] = []
+    for r in results:
+        i = int(r.polyA_idx)
+        j = int(r.polyB_idx)
+        if i < 0 or j < 0 or i >= n or j >= n or i >= j:
+            continue
+        dist = 0.0 if bool(r.intersect) else float(r.distance)
+        if (not bool(r.intersect)) and dist > contact_eps:
+            continue
+        comps.append(_pair_compactness(geoms[i], geoms[j]))
+    if not comps:
+        return 0, 0.0
+    return int(len(comps)), float(sum(comps) / float(len(comps)))
+
+
+def write_propose_kiss_ledger(
+    propose_stats: dict | None,
+    geoms: Sequence,
+    *,
+    gap: float,
+    feed_snapshot: bool = True,
+) -> tuple[int, float]:
+    """Write ``kiss_pairs`` / ``mean_compactness`` into propose_stats (BoardSnapshot SoT).
+
+    ``feed_snapshot=False`` writes telem-only (void_leak) without biasing leaf_reward.
+    """
+    kiss_n, mean_c = contact_kiss_ledger(geoms, gap=float(gap))
+    if propose_stats is not None:
+        leak = propose_stats.get("void_leak")
+        if not isinstance(leak, dict):
+            leak = {}
+            propose_stats["void_leak"] = leak
+        leak["kiss_pairs"] = int(kiss_n)
+        leak["mean_compactness"] = float(mean_c)
+        if feed_snapshot:
+            # Soft cap: kiss/packed in leaf_reward stays ≤1 (avoid reward hijack).
+            packed_n = max(len(geoms), 1)
+            propose_stats["kiss_pairs"] = int(min(kiss_n, packed_n))
+            propose_stats["mean_compactness"] = float(mean_c)
+    return int(kiss_n), float(mean_c)
 
 
 def motif_floor_compactness(
@@ -147,6 +241,8 @@ def upsert_from_contacts(
 
     floor = motif_floor_compactness(motif_base, min_compactness)
     n_up = 0
+    n_demote = 0
+    lim2 = _SAME_GID_KISS_XY * _SAME_GID_KISS_XY
     if patterns:
         n_pat = _upsert_leader_star_patterns(
             motif_base,
@@ -187,17 +283,24 @@ def upsert_from_contacts(
             abs(area_j - area_i) <= 1e-12 and gid_j < gid_i
         ):
             ia, ib = j, i
-            area_a, area_b = area_j, area_i
         else:
             ia, ib = i, j
-            area_a, area_b = area_i, area_j
-        del area_a, area_b
         t_a = transforms[ia]
         t_b = transforms[ib]
         rel = relative_transform(
             (float(t_a[0]), float(t_a[1]), float(t_a[2])),
             (float(t_b[0]), float(t_b[1]), float(t_b[2])),
         )
+        # F2: soft-demote near-origin same-gid kiss tiles on dense packs only
+        # (late densify / post-ckpt). Early cold MotifBase stays full-gci.
+        if (
+            n >= 60
+            and int(gids[ia]) == int(gids[ib])
+        ):
+            xy2 = float(rel[0]) * float(rel[0]) + float(rel[1]) * float(rel[1])
+            if xy2 <= lim2 and xy2 > 1e-12:
+                gci = float(gci) * _KISS_DEMOTE_GCI
+                n_demote += 1
         edge = ContactEdge()
         edge.gid_a = int(gids[ia])
         edge.gid_b = int(gids[ib])
@@ -215,6 +318,11 @@ def upsert_from_contacts(
     if telem is not None:
         telem["contact_grg_upserts"] = int(telem.get("contact_grg_upserts", 0)) + n_up
         telem["motif_floor"] = float(floor)
+        if n_demote > 0:
+            telem["kiss_demote"] = int(telem.get("kiss_demote", 0) or 0) + int(n_demote)
+        kiss_n, mean_c = contact_kiss_ledger(geoms, gap=float(gap))
+        telem["kiss_pairs"] = int(kiss_n)
+        telem["mean_compactness"] = float(mean_c)
     return n_up
 
 

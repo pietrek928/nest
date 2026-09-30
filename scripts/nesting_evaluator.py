@@ -34,15 +34,27 @@ from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_c
 from nest_graph.pack.epoch import inject_cohorts_and_bind_graph
 from nest_graph.pack.execute import (
     board_snapshot_from_selection,
+    ensure_motif_tip_for_fuel,
     make_execute_fn,
     prep_selection_freeze,
     record_outer_iter_expand,
     schedule_prep_selection_free,
 )
-from nest_graph.pack.macro_path import ancestors, macro_increase_path, path_probe_budget
-from nest_graph.graph import leaf_reward, path_reward_beats
+from nest_graph.pack.macro_path import (
+    ancestors,
+    macro_increase_path,
+    path_accept_apply,
+    path_accept_eligible,
+    path_probe_budget,
+)
+from nest_graph.graph import leaf_reward
 from nest_graph.pack.stages import run_mid_pack_stages, run_post_pack_stage
-from nest_graph.propose.placement_common import post_pack_overlap_ok
+from nest_graph.propose.placement_common import (
+    post_pack_overlap_ok,
+    resolve_group_allowed_angles,
+    selection_pairwise_independent,
+)
+from nest_graph.propose.placements_pattern import seed_motif_base_from_mates
 from nest_graph.propose.telem import (
     BestPackSnapshot,
     archive_void_elite_transforms,
@@ -106,7 +118,6 @@ from nest_graph.propose import (
     effective_ranking_mode,
     obstacle_shape_for_propose,
 )
-from nest_graph.propose.placement_common import selection_pairwise_independent
 from nest_graph.propose.context import (
     outline_coverage_ratio,
     part_is_concave,
@@ -718,6 +729,11 @@ class NestingPipelineEvaluator:
         mcts_runner = MacroMctsRunner()
         if mcts_runner.agent is not None:
             mcts_runner.agent.motif_cohorts = ()
+        _mate_seed_n = seed_motif_base_from_mates(
+            mcts_runner.motif_base,
+            list(self.parts),
+            min_dist=float(self._min_dist(first_pass=True)),
+        )
         mcts_parent_id = 0
         mcts_action = None
         pack_cache: dict = {"ready": False}
@@ -863,97 +879,104 @@ class NestingPipelineEvaluator:
                             ),
                         )
                         path_overlap_ok = bool(_pack_cache_overlap_ok(pack_cache))
-                    if (
-                        alt_action is not None
-                        and path_accept_snap is not None
-                        and not path_reward_beats(
-                            parent_snap,
-                            path_accept_snap,
-                            base_reward=base_r,
-                            alt_reward=alt_reward,
-                        )
-                    ):
-                        alt_action = None
-                        path_accept_snap = None
-                    if alt_action is not None:
+                    eligible, cov_ok, _bc, _ac = path_accept_eligible(
+                        alt_action=alt_action,
+                        path_accept_snap=path_accept_snap,
+                        parent_snap=parent_snap,
+                        base_reward=base_r,
+                        alt_reward=float(alt_reward),
+                        path_overlap_ok=path_overlap_ok,
+                    )
+                    if eligible:
                         mcts_telem["macro_path_candidate"] = 1
-                        apply_path = bool(
-                            getattr(
-                                self.cfg.propose, "enable_macro_path_replay", False
-                            )
-                        )
-                        alt_cov = float(
-                            getattr(path_accept_snap, "coverage", 0.0) or 0.0
-                        ) if path_accept_snap is not None else 0.0
-                        cov_ok = (
-                            path_accept_snap is not None
-                            and bool(path_overlap_ok)
-                            and alt_cov + 1e-9 >= base_cov + 0.005
-                        )
-                        is_motif = (
-                            getattr(alt_action, "region", None) == MacroRegion.Motif
-                        )
-                        # S1: evaluator discover telem only — do not soft-apply Motif
-                        # into mcts_action (path packs poisoned overlapping peaks).
-                        if apply_path and path_accept_snap is not None and path_overlap_ok:
-                            mcts_telem["macro_path_accept"] = int(
-                                mcts_telem.get("macro_path_accept", 0) or 0
-                            ) + 1
-                            if cov_ok:
-                                mcts_action = alt_action
-                                mcts_telem["path_credit_n"] = int(
-                                    mcts_telem.get("path_credit_n", 0) or 0
-                                ) + 1
-                            if bool(
+                        decision = path_accept_apply(
+                            mode="evaluator",
+                            cov_ok=cov_ok,
+                            path_overlap_ok=path_overlap_ok,
+                            alt_action=alt_action,
+                            enable_macro_path_replay=bool(
+                                getattr(
+                                    self.cfg.propose, "enable_macro_path_replay", False
+                                )
+                            ),
+                            mutate_motif_base_on_path=bool(
                                 getattr(
                                     self.cfg.propose, "mutate_motif_base_on_path", False
                                 )
-                            ):
-                                mcts_telem["path_contact_upserts"] = int(
-                                    mcts_telem.get("path_contact_upserts", 0) or 0
-                                ) + _path_accept_contact_upsert(
-                                    mcts_runner,
-                                    path_accept_snap,
-                                    part_bases=part_bases_fixed,
-                                    min_dist=float(
-                                        self.cfg.board_min_dist_for(self.sheet)
-                                    ),
-                                    motif_min_compactness=float(
-                                        getattr(
-                                            self.cfg.propose,
-                                            "motif_min_compactness",
-                                            0.35,
-                                        )
-                                        or 0.35
-                                    ),
-                                    motif_ttl=int(
-                                        getattr(
-                                            self.cfg.propose, "accepted_pattern_ttl", 4
-                                        )
-                                        or 4
-                                    ),
-                                    motif_max_keep=int(
-                                        getattr(
-                                            self.cfg.propose, "accepted_pattern_max", 4
-                                        )
-                                        or 4
-                                    ),
-                                    pack_cache=pack_cache,
-                                    telem=mcts_telem,
-                                )
-                        elif cov_ok:
-                            # Letter C credit without apply (Q351 OFF / S1).
-                            mcts_telem["path_credit_n"] = int(
-                                mcts_telem.get("path_credit_n", 0) or 0
-                            ) + 1
-                            if is_motif:
-                                mcts_telem["macro_path_motif_soft"] = 1
-                        elif apply_path:
+                            ),
+                            telem=mcts_telem,
+                        )
+                        if decision["overlap_skip"]:
                             mcts_telem["macro_path_overlap_skip"] = 1
                             record_overlap_reject(mcts_telem, stage="path")
                             agent = getattr(mcts_runner, "agent", None)
                             if agent is not None:
                                 agent.note_macro_miss(alt_action)
+                        elif decision["tip_install"]:
+                            mcts_telem["macro_path_accept"] = int(
+                                mcts_telem.get("macro_path_accept", 0) or 0
+                            ) + 1
+                            # P: Motif soft path_tip_apply counted in path_accept_apply.
+                            # Early Motif soft tip-swap/credit/upsert regressed area —
+                            # only mutate tip + warm on replay.
+                            apply_tip = (
+                                not decision.get("motif_soft")
+                                or bool(
+                                    getattr(
+                                        self.cfg.propose,
+                                        "enable_macro_path_replay",
+                                        False,
+                                    )
+                                )
+                            )
+                            if apply_tip:
+                                mcts_action = alt_action
+                                if decision["credit"]:
+                                    mcts_telem["path_credit_n"] = int(
+                                        mcts_telem.get("path_credit_n", 0) or 0
+                                    ) + 1
+                                if decision["upsert"]:
+                                    mcts_telem["path_contact_upserts"] = int(
+                                        mcts_telem.get("path_contact_upserts", 0) or 0
+                                    ) + _path_accept_contact_upsert(
+                                        mcts_runner,
+                                        path_accept_snap,
+                                        part_bases=part_bases_fixed,
+                                        min_dist=float(
+                                            self.cfg.board_min_dist_for(self.sheet)
+                                        ),
+                                        motif_min_compactness=float(
+                                            getattr(
+                                                self.cfg.propose,
+                                                "motif_min_compactness",
+                                                0.35,
+                                            )
+                                            or 0.35
+                                        ),
+                                        motif_ttl=int(
+                                            getattr(
+                                                self.cfg.propose,
+                                                "accepted_pattern_ttl",
+                                                4,
+                                            )
+                                            or 4
+                                        ),
+                                        motif_max_keep=int(
+                                            getattr(
+                                                self.cfg.propose,
+                                                "accepted_pattern_max",
+                                                4,
+                                            )
+                                            or 4
+                                        ),
+                                        pack_cache=pack_cache,
+                                        telem=mcts_telem,
+                                    )
+                        elif decision["credit"]:
+                            # S1: evaluator discover telem only — no Motif soft tip.
+                            mcts_telem["path_credit_n"] = int(
+                                mcts_telem.get("path_credit_n", 0) or 0
+                            ) + 1
                 if mcts_action is None:
                     mcts_action = mcts_runner.agent.pick_expand_action(
                         rem,
@@ -961,6 +984,17 @@ class NestingPipelineEvaluator:
                         parent_id=int(mcts_parent_id),
                         snapshot=parent_snap,
                     )
+                # D: Motif tip when MotifBase fuel (shared with build_graph).
+                # Force only on last leaf so Motif telem is live without mid-iter zone thrash.
+                mcts_telem["motif_base_seed_n"] = int(_mate_seed_n)
+                mcts_action = ensure_motif_tip_for_fuel(
+                    mcts_action,
+                    motif_base=mcts_runner.motif_base,
+                    remaining_gids=rem,
+                    mcts_telem=mcts_telem,
+                    seed_n=int(_mate_seed_n),
+                    force=bool(is_last_leaf),
+                )
                 if mcts_action is not None:
                     mcts_force_zone = region_to_zone(mcts_action.region)
                     mcts_telem["mcts_rule_id"] = int(
@@ -1061,6 +1095,7 @@ class NestingPipelineEvaluator:
                 )
             propose_stats["accepted_patterns_n"] = len(archived_for_propose)
             propose_stats["motif_library_n"] = int(mcts_runner.motif_base.size())
+            propose_stats["motif_base_seed_n"] = int(_mate_seed_n)
             propose_stats["enabled_proposers_n"] = (
                 len(ProposeConfig.proposers_for_place("void_seek") or ())
                 if use_dg_mix else 0
@@ -1304,6 +1339,7 @@ class NestingPipelineEvaluator:
                     getattr(self.cfg.propose, "stratified_void_elite_quota", 15)
                 ),
                 print_funnel=False,
+                sheet=self.sheet,
             )
             last_void_leak = leak_orch.leak_dict
             void_elite_by_group = leak_orch.void_elite_by_group
@@ -1369,11 +1405,13 @@ class NestingPipelineEvaluator:
                 "repack_accepted",
                 "repack_attempted",
                 "cluster_copy_emitted",
+                "motif_hit",
             ):
                 cur = int(
                     propose_stats.get(key, 0)
                     or last_void_leak.get(key, 0)
                     or densify.get(key, 0)
+                    or (mcts_telem or {}).get(key, 0)
                     or 0
                 )
                 if key == "accepted_patterns_archived":
@@ -1535,6 +1573,25 @@ class NestingPipelineEvaluator:
                 void_leak_stats=last_void_leak if isinstance(last_void_leak, dict) else None,
                 polish_budget=polish_budget,
             )
+            se2_stats = (pack_stats or {}).get("local_se2") or {}
+            propose_stats["local_se2"] = se2_stats
+            propose_stats["gls_attempted"] = int(se2_stats.get("gls_attempted", 0) or 0)
+            propose_stats["gls_insert_moved"] = int(
+                se2_stats.get("gls_insert_moved", 0) or 0
+            )
+            propose_stats["gls_separate_moved"] = int(
+                se2_stats.get("gls_separate_moved", 0) or 0
+            )
+            if isinstance(last_void_leak, dict):
+                last_void_leak["gls_attempted"] = int(
+                    propose_stats["gls_attempted"]
+                )
+                last_void_leak["gls_insert_moved"] = int(
+                    propose_stats["gls_insert_moved"]
+                )
+                last_void_leak["gls_separate_moved"] = int(
+                    propose_stats["gls_separate_moved"]
+                )
             if post_prep.push_pt is not None and post_prep.free_post.kind == "large_void":
                 assert selection_pairwise_independent(polys, selected_polys)
             motif_ttl = int(
@@ -1594,11 +1651,20 @@ class NestingPipelineEvaluator:
                         "survive_motif_n",
                         "macro_survive_n",
                         "macro_chain_accept",
+                        "motif_hit",
+                        "motif_tip_force",
+                        "motif_tip_prefer",
                     ):
                         if pk in (mcts_telem or {}):
-                            last_void_leak[pk] = int(mcts_telem.get(pk, 0) or 0)
+                            last_void_leak[pk] = max(
+                                int(last_void_leak.get(pk, 0) or 0),
+                                int(mcts_telem.get(pk, 0) or 0),
+                            )
                         elif pk in propose_stats:
-                            last_void_leak[pk] = int(propose_stats.get(pk, 0) or 0)
+                            last_void_leak[pk] = max(
+                                int(last_void_leak.get(pk, 0) or 0),
+                                int(propose_stats.get(pk, 0) or 0),
+                            )
             # Warm cheap-pack cache for next-iter path replay.
             pack_cache.clear()
             pack_cache.update({

@@ -45,6 +45,201 @@ def _slide_dirs(ux: float, uy: float) -> list[tuple[float, float]]:
     return out
 
 
+def _try_polish_accept(
+    *,
+    idx: int,
+    part_g: Geometry,
+    part: BaseGeometry,
+    tr: np.ndarray,
+    dirs: list[tuple[float, float]],
+    voids: Sequence,
+    locked: Sequence,
+    out_polys: list,
+    out_tr: list,
+    out_geoms: list,
+    sel: Sequence[int],
+    group_ids: Sequence[int],
+    min_dist: float,
+    max_t: float,
+    n_angles: int,
+    stats: dict,
+    mode: str = "slide",
+    pole: tuple[float, float] | None = None,
+    telem_key: str = "se2_native_accepted",
+) -> bool:
+    """One polish_se2 try + post_pack_overlap_ok restore (shared by pole/GLS)."""
+    others = [
+        out_polys[j]
+        for j in sel
+        if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
+    ]
+    packed = [
+        g for g in (as_geometry(p) for p in (list(locked) + others)) if g is not None
+    ]
+    obs_with_voids = [*voids, *packed]
+    polished = polish_se2_part(
+        part_g,
+        (float(tr[0]), float(tr[1]), float(tr[2])),
+        obs_with_voids,
+        None,
+        dirs,
+        n_angles=n_angles,
+        max_t=float(max_t),
+        min_dist=float(min_dist),
+        mode=mode,
+        pole=pole,
+    )
+    if polished is None:
+        return False
+    bx, by, bth = polished
+    cand_tr = np.asarray([bx, by, bth], dtype=np.float64)
+    if (
+        abs(cand_tr[0] - tr[0]) < 1e-12
+        and abs(cand_tr[1] - tr[1]) < 1e-12
+        and abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi) < 1e-12
+    ):
+        return False
+    _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
+    if not is_pose_clear_vs_fixed(_cand_g, locked):
+        return False
+    prev_p, prev_t = out_polys[idx], out_tr[idx]
+    prev_g = out_geoms[idx]
+    out_polys[idx] = cand
+    out_tr[idx] = cand_tr
+    out_geoms[idx] = _cand_g
+    ok = post_pack_overlap_ok(
+        out_polys,
+        sel,
+        fixed_obstacles=locked,
+        geoms=out_geoms,
+        telem=stats,
+    )
+    if not ok:
+        out_polys[idx] = prev_p
+        out_tr[idx] = prev_t
+        out_geoms[idx] = prev_g
+        return False
+    stats["accepted"] += 1
+    stats["moved"] += 1
+    stats[telem_key] = int(stats.get(telem_key, 0) or 0) + 1
+    return True
+
+
+def gls_insert_separate_pass(
+    *,
+    out_polys: list,
+    out_tr: list,
+    out_geoms: list,
+    sel: Sequence[int],
+    group_ids: Sequence[int],
+    part_by_group: dict,
+    part_geoms: dict[int, Geometry],
+    voids: Sequence,
+    locked: Sequence,
+    board_set: set[int],
+    min_dist: float,
+    sheet_diag: float,
+    n_angles: int,
+    max_coarse: int,
+    coarse_step: float,
+    stats: dict,
+) -> None:
+    """N3: Sparrow-style GLS — insert toward nearest peer, then separate if tight.
+
+    Scene-clear polish only; ``post_pack_overlap_ok`` restore keeps independence.
+    """
+    stats.setdefault("gls_attempted", 0)
+    stats.setdefault("gls_insert_moved", 0)
+    stats.setdefault("gls_separate_moved", 0)
+    gap = max(float(min_dist), 0.0)
+    contact = 2.0 * gap + 1e-9
+    for idx in list(sel):
+        if int(idx) in board_set:
+            continue
+        poly = out_polys[idx]
+        tr = out_tr[idx]
+        gid = int(group_ids[idx])
+        part = part_by_group.get(gid)
+        if part is None or poly is None or poly.is_empty or gid not in part_geoms:
+            continue
+        cx, cy = float(poly.centroid.x), float(poly.centroid.y)
+        best_d = float("inf")
+        best_peer = None
+        for j in sel:
+            if int(j) == int(idx):
+                continue
+            pj = out_polys[j]
+            if pj is None or pj.is_empty:
+                continue
+            d = float(poly.distance(pj))
+            if d < best_d:
+                best_d = d
+                best_peer = pj
+        if best_peer is None:
+            continue
+        px, py = float(best_peer.centroid.x), float(best_peer.centroid.y)
+        dx, dy = px - cx, py - cy
+        dist0 = math.hypot(dx, dy)
+        if dist0 < 1e-9:
+            continue
+        ux, uy = dx / dist0, dy / dist0
+        part_g = part_geoms[gid]
+        max_t = max(sheet_diag, coarse_step * max_coarse, dist0)
+        stats["gls_attempted"] = int(stats.get("gls_attempted", 0) or 0) + 1
+        # Insert: slide toward peer when gap is large.
+        if best_d > contact:
+            moved = _try_polish_accept(
+                idx=int(idx),
+                part_g=part_g,
+                part=part,
+                tr=np.asarray(tr, dtype=np.float64),
+                dirs=_slide_dirs(ux, uy),
+                voids=voids,
+                locked=locked,
+                out_polys=out_polys,
+                out_tr=out_tr,
+                out_geoms=out_geoms,
+                sel=sel,
+                group_ids=group_ids,
+                min_dist=min_dist,
+                max_t=max_t,
+                n_angles=n_angles,
+                stats=stats,
+                mode="slide",
+                telem_key="gls_insert_moved",
+            )
+            if moved:
+                poly = out_polys[idx]
+                tr = out_tr[idx]
+                best_d = float(poly.distance(best_peer)) if poly is not None else best_d
+        # Separate: push away when still tighter than gap.
+        if best_d < gap and poly is not None and not poly.is_empty:
+            cx2, cy2 = float(poly.centroid.x), float(poly.centroid.y)
+            dx2, dy2 = cx2 - px, cy2 - py
+            n2 = math.hypot(dx2, dy2)
+            if n2 > 1e-9:
+                _try_polish_accept(
+                    idx=int(idx),
+                    part_g=part_g,
+                    part=part,
+                    tr=np.asarray(tr, dtype=np.float64),
+                    dirs=_slide_dirs(dx2 / n2, dy2 / n2),
+                    voids=voids,
+                    locked=locked,
+                    out_polys=out_polys,
+                    out_tr=out_tr,
+                    out_geoms=out_geoms,
+                    sel=sel,
+                    group_ids=group_ids,
+                    min_dist=min_dist,
+                    max_t=max(sheet_diag, gap * 4.0),
+                    n_angles=n_angles,
+                    stats=stats,
+                    mode="slide",
+                    telem_key="gls_separate_moved",
+                )
+
+
 def exterior_tangent_dirs(
     sheet: Polygon,
     poly: BaseGeometry,
@@ -120,6 +315,9 @@ def local_se2_selection(
         "se2_native_accepted": 0,
         "pole_distance_delta": 0.0,
         "theta_changed_count": 0,
+        "gls_attempted": 0,
+        "gls_insert_moved": 0,
+        "gls_separate_moved": 0,
     }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
@@ -362,4 +560,22 @@ def local_se2_selection(
             if dth > 1e-9:
                 stats["theta_changed_count"] += 1
 
+    gls_insert_separate_pass(
+        out_polys=out_polys,
+        out_tr=out_tr,
+        out_geoms=out_geoms,
+        sel=sel,
+        group_ids=group_ids,
+        part_by_group=part_by_group,
+        part_geoms=part_geoms,
+        voids=voids,
+        locked=locked,
+        board_set=board_set,
+        min_dist=float(min_dist),
+        sheet_diag=float(sheet_diag),
+        n_angles=n_angles,
+        max_coarse=max_coarse,
+        coarse_step=float(coarse_step),
+        stats=stats,
+    )
     return out_polys, out_tr, stats

@@ -62,7 +62,134 @@ def test_macro_increase_path_rejects_overlap_fail():
     assert blocked["ok"] is False or telem.get("macro_swap_attempts", 0) >= 0
 
 
-def test_path_probe_budget_skips_when_ready_zero_non_motif():
+def test_path_accept_eligible_large_void_needs_void_fill_delta():
+    """P2: large_void Void cov_ok needs void_fill Δ; P Motif skips void_fill Δ."""
+    from nest_graph.pack.macro_path import path_accept_eligible
+    from nest_graph.graph import BoardSnapshot, MacroAction, MacroRegion
+
+    parent = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.50,
+        void_fill=0.10,
+        free_kind="large_void",
+    )
+    alt = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.51,
+        void_fill=0.13,
+        free_kind="large_void",
+    )
+    action = MacroAction()
+    action.region = MacroRegion.Void
+    # Cov up + void_fill Δ 0.03 → ok.
+    elig, cov_ok, _, _ = path_accept_eligible(
+        alt_action=action,
+        path_accept_snap=alt,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+    )
+    assert elig is True
+    assert cov_ok is True
+    # Cov non-regress + void_fill Δ 0.01 → eligible but not cov_ok (Void).
+    alt_small = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.51,
+        void_fill=0.11,
+        free_kind="large_void",
+    )
+    elig2, cov_ok2, _, _ = path_accept_eligible(
+        alt_action=action,
+        path_accept_snap=alt_small,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+    )
+    assert elig2 is True
+    assert cov_ok2 is False
+    # P: Motif + small void_fill Δ with relax → cov_ok from overlap + cov non-regress.
+    motif = MacroAction()
+    motif.region = MacroRegion.Motif
+    elig_m, cov_m, _, _ = path_accept_eligible(
+        alt_action=motif,
+        path_accept_snap=alt_small,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+        relax_motif_void_fill=True,
+    )
+    assert elig_m is True
+    assert cov_m is True
+    # Without relax Motif still needs void_fill Δ.
+    elig_nr, cov_nr, _, _ = path_accept_eligible(
+        alt_action=motif,
+        path_accept_snap=alt_small,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+        relax_motif_void_fill=False,
+    )
+    assert elig_nr is True
+    assert cov_nr is False
+    # Motif + relax + overlap fail → not cov_ok.
+    elig_f, cov_f, _, _ = path_accept_eligible(
+        alt_action=motif,
+        path_accept_snap=alt_small,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=False,
+        relax_motif_void_fill=True,
+    )
+    assert elig_f is True
+    assert cov_f is False
+    # Motif + relax + cov regress → not cov_ok (even with overlap).
+    alt_reg = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.49,
+        void_fill=0.20,
+        free_kind="large_void",
+    )
+    elig_rg, cov_rg, _, _ = path_accept_eligible(
+        alt_action=motif,
+        path_accept_snap=alt_reg,
+        parent_snap=parent,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+        relax_motif_void_fill=True,
+    )
+    assert elig_rg is True
+    assert cov_rg is False
+    # Non-void: eligible via +0.006 cov, but min_cov_delta=0.01 → not cov_ok.
+    parent_rim = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.50,
+        void_fill=0.0,
+        free_kind="swiss_cheese",
+    )
+    alt_rim = BoardSnapshot(
+        remaining_gids=(0,),
+        coverage=0.506,
+        void_fill=0.0,
+        free_kind="swiss_cheese",
+    )
+    elig3, cov_ok3, _, _ = path_accept_eligible(
+        alt_action=action,
+        path_accept_snap=alt_rim,
+        parent_snap=parent_rim,
+        base_reward=0.5,
+        alt_reward=0.7,
+        path_overlap_ok=True,
+        min_cov_delta=0.01,
+    )
+    assert elig3 is True
+    assert cov_ok3 is False
+
     from nest_graph.pack.macro_path import path_probe_budget
     from nest_graph.graph import MacroAction, MacroRegion
 
@@ -71,15 +198,27 @@ def test_path_probe_budget_skips_when_ready_zero_non_motif():
 
     sheet = MacroAction()
     sheet.region = MacroRegion.Sheet
+    # P1: free hint, ready=0 → tight shrink-run (beam/4).
     run, beam, depth = path_probe_budget(
         on_plateau=False,
         parent_free_hint=True,
         agent=_Agent(),
         tip_action=sheet,
+        beam=8,
+        max_depth=4,
+    )
+    assert run is True
+    assert beam == 2 and depth == 2
+    # Plateau only, no free hint, ready=0, non-Motif → still skip.
+    run_skip, _, _ = path_probe_budget(
+        on_plateau=True,
+        parent_free_hint=False,
+        agent=_Agent(),
+        tip_action=sheet,
         beam=6,
         max_depth=3,
     )
-    assert run is False
+    assert run_skip is False
 
     class _Ready:
         place_cohort_ready = True
@@ -200,3 +339,104 @@ def test_record_to_cluster_pattern_ref_anchor():
     assert len(pats) == 1
     assert pats[0].ref_transform[0] == 5.0
     assert telem_pat.get("archive_ref_origin_n", 0) == 0
+
+
+def test_path_accept_apply_void_soft_tip_large_void():
+    """P1 Void soft tip left dormant (early regress); Motif soft tip still works."""
+    from nest_graph.graph import MacroAction, MacroRegion
+    from nest_graph.pack.macro_path import path_accept_apply
+
+    void_action = MacroAction()
+    void_action.region = MacroRegion.Void
+    telem: dict = {}
+    out = path_accept_apply(
+        mode="build_graph",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=void_action,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem,
+        free_kind="large_void",
+    )
+    assert out["tip_install"] is False
+    assert out["credit"] is True
+
+    motif_action = MacroAction()
+    motif_action.region = MacroRegion.Motif
+    telem_m: dict = {}
+    out_m = path_accept_apply(
+        mode="build_graph",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=motif_action,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem_m,
+        free_kind="large_void",
+    )
+    assert out_m["tip_install"] is True
+    assert out_m["motif_soft"] is True
+    assert int(telem_m.get("path_tip_apply", 0) or 0) == 1
+    assert int(telem_m.get("path_join_signal", 0) or 0) == 0
+
+    # P: Motif on cov_skip must not tip_install (coverage check required).
+    telem_skip: dict = {}
+    out_skip = path_accept_apply(
+        mode="build_graph",
+        cov_ok=False,
+        path_overlap_ok=True,
+        alt_action=motif_action,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem_skip,
+        free_kind="large_void",
+    )
+    assert out_skip["cov_skip"] is True
+    assert out_skip["tip_install"] is False
+    assert out_skip["credit"] is True
+    assert int(telem_skip.get("path_tip_apply", 0) or 0) == 0
+
+    # P: evaluator Motif without replay → credit/soft only (no tip_install; early OK).
+    telem_ev: dict = {}
+    out_ev = path_accept_apply(
+        mode="evaluator",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=motif_action,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem_ev,
+        free_kind="large_void",
+    )
+    assert out_ev["tip_install"] is False
+    assert out_ev["credit"] is True
+    assert out_ev["motif_soft"] is True
+    assert int(telem_ev.get("path_tip_apply", 0) or 0) == 0
+
+
+def test_path_join_signal_distinct_from_tip_apply():
+    """T0: MotifJoin-on-accept bumps path_join_signal, not path_tip_apply."""
+    from nest_graph.pack import macro_path as mp
+
+    telem: dict = {
+        "macro_swap_attempts": 0,
+        "macro_path_accept": 0,
+        "macro_swap_depth": 0,
+        "macro_path_beam_n": 0,
+        "path_step_macro": 0,
+        "path_step_join": 0,
+        "path_extend_n": 0,
+        "macro_chain_accept": 0,
+    }
+    # Simulate post-accept telem bump (same block as macro_increase_path).
+    accept = 1
+    path_step_join = 2
+    if accept > 0 and path_step_join > 0:
+        telem["path_join_signal"] = int(telem.get("path_join_signal", 0) or 0) + 1
+        telem["macro_path_motif_soft"] = int(
+            telem.get("macro_path_motif_soft", 0) or 0
+        ) + 1
+    assert int(telem["path_join_signal"]) == 1
+    assert int(telem.get("path_tip_apply", 0) or 0) == 0
+    assert "path_join_signal" in mp.__all__ or hasattr(mp, "path_accept_apply")

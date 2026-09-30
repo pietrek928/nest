@@ -371,6 +371,11 @@ class OutputConfig(BaseModel):
     video_fps: int = 5
     render_size: int = 1024
     progress: bool = True
+    # Dckpt: save NestState(+DG memory) after this many iters (0 = off).
+    checkpoint_iter: int = 0
+    checkpoint_path: str = "artifacts/checkpoints/void_fill_seed0_iter20.npz"
+    resume_checkpoint: str = ""
+    extra_iters: int = 8
 
 
 
@@ -656,6 +661,10 @@ class ProposeConfig(BaseModel):
     motif_lattice_depth: int = 3
     motif_lattice_top_k: int = 10
     """After pole-distance sort, keep at most this many motif anchors."""
+    motif_lattice_min_step: float = 0.0
+    """Min |Δxy| for lattice period (0=off). Opt-in for large_void densify (M3)."""
+    motif_lattice_2d: bool = True
+    """When True with min_step>0 and void pole, emit v0⊕v1 integer combos (M3)."""
     enable_motif_mirror_anchors: bool = False
     """AABB sheet mirrors of ref_transform (default off once lattice ships)."""
     enable_motif_sequential_accept: bool = True
@@ -665,7 +674,7 @@ class ProposeConfig(BaseModel):
     enable_macro_path_replay: bool = False
     """Q351: apply macro_path alt_action only when True (default OFF)."""
     mutate_motif_base_on_path: bool = False
-    """Q389: path-accept ContactGRG upsert when peaks are clean."""
+    """Dp1/Q389: path-accept ContactGRG upsert when peaks are clean (default OFF)."""
     macro_path_beam: int = 6
     """Beam for build_graph macro_increase_path; evaluator keeps fn default 4 until D gate."""
     macro_path_max_depth: int = 3
@@ -696,6 +705,10 @@ class ProposeConfig(BaseModel):
     """If >0 and pool full with mean kiss score above threshold, skip explorers."""
     cascade_explorer_budget_scale: float = 0.35
     """Shrink explorer max_items by this factor when cascade soft-scales (rich snipers / non-void)."""
+    enable_mcts_densify_presets: bool = False
+    """Gate MacroAction.preset_id × densify_presets (plateau staging only)."""
+    densify_presets_path: str = "artifacts/tune/densify_presets.yaml"
+    """YAML emitted by analyze_decision_matrix (preset 0 = baseline)."""
     use_pose_nms: bool = False
     """SE(2) spatial-hash NMS on ranked pool (reserve-safe merge after)."""
     pose_nms_eps: float = 1.0
@@ -852,7 +865,7 @@ class ProposeConfig(BaseModel):
                 "use_group_edge_seeds": False,
                 "use_side_pack": True,
                 "use_neighbor_slide": False,
-                "cast_squeeze_top_k": 4,
+                "cast_squeeze_top_k": 8,
                 "candidate_pool": 1024,
                 "max_proposals": 512,
                 "raycast_num_rays": 8,
@@ -1165,6 +1178,13 @@ class BuildGraphConfig(BaseModel):
                 video_fps=_env_int("NEST_VIDEO_FPS", 5),
                 render_size=_env_int("NEST_RENDER_SIZE", 1024),
                 progress=_env_bool("NEST_PROGRESS", True),
+                checkpoint_iter=_env_int("NEST_CHECKPOINT_ITER", 0),
+                checkpoint_path=os.environ.get(
+                    "NEST_CHECKPOINT_PATH",
+                    "artifacts/checkpoints/void_fill_seed0_iter20.npz",
+                ),
+                resume_checkpoint=os.environ.get("NEST_RESUME_CHECKPOINT", ""),
+                extra_iters=_env_int("NEST_EXTRA_ITERS", 8),
             ),
         )
 

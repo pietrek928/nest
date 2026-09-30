@@ -308,6 +308,81 @@ def test_incumbent_map_and_lex_hold():
     )
 
 
+def test_incumbent_map_key_miss_proj_snap_telem():
+    """L0: raw miss + projected hit increments key_miss and proj_snap."""
+    from nest_graph.propose.selection_compose import _map_incumbent_indices
+    from nest_graph.propose.transform_batch import project_row_key
+    from nest_graph.propose.void_selection import transform_row_key
+
+    class _G:
+        collisions = [[], []]
+
+    # Graph only has projected angle π/2; packed uses θ=0 → snaps to π/2.
+    allowed = (1.5707963267948966,)
+    packed_tr = (1.0, 2.0, 0.0)
+    proj = project_row_key(packed_tr, allowed)
+    assert proj != transform_row_key(packed_tr)
+    group_id = [0, 0]
+    transform = [(0.0, 0.0, 0.0), proj]
+    stats: dict = {}
+    mapped = _map_incumbent_indices(
+        group_id=group_id,
+        transform=transform,
+        packed_group_id=[0],
+        packed_transform=[packed_tr],
+        graph=_G(),
+        group_allowed_angles=(allowed,),
+        propose_stats=stats,
+        use_projected_keys=False,
+    )
+    assert mapped == []
+    assert int(stats.get("incumbent_key_miss", 0)) == 1
+    assert int(stats.get("incumbent_proj_snap", 0)) == 1
+    mapped2 = _map_incumbent_indices(
+        group_id=group_id,
+        transform=transform,
+        packed_group_id=[0],
+        packed_transform=[packed_tr],
+        graph=_G(),
+        group_allowed_angles=(allowed,),
+        propose_stats={},
+        use_projected_keys=True,
+    )
+    assert mapped2 == [1]
+
+
+def test_incumbent_map_projected_greedy_indep():
+    """L1: colliding projected set keeps a greedy independent subset."""
+    from nest_graph.propose.selection_compose import _map_incumbent_indices
+    from nest_graph.propose.transform_batch import project_row_key
+
+    class _G:
+        # 0 collides with 1; 2 free.
+        collisions = [[1], [0], []]
+
+    allowed = (1.5707963267948966,)
+    packed_a = (1.0, 2.0, 0.0)
+    packed_b = (3.0, 4.0, 0.0)
+    proj_a = project_row_key(packed_a, allowed)
+    proj_b = project_row_key(packed_b, allowed)
+    group_id = [0, 0, 0]
+    transform = [proj_a, proj_b, (9.0, 9.0, 1.5707963267948966)]
+    stats: dict = {}
+    mapped = _map_incumbent_indices(
+        group_id=group_id,
+        transform=transform,
+        packed_group_id=[0, 0],
+        packed_transform=[packed_a, packed_b],
+        graph=_G(),
+        group_allowed_angles=(allowed,),
+        propose_stats=stats,
+        use_projected_keys=True,
+    )
+    assert int(stats.get("incumbent_proj_snap", 0)) == 2
+    assert int(stats.get("incumbent_proj_indep_n", 0)) == 1
+    assert mapped == [0]
+
+
 def test_void_hold_override_count_floor():
     """Void colonization may beat hold only when count ≥ 0.9× incumbent."""
     from nest_graph.propose.void_selection import count_selected_in_free

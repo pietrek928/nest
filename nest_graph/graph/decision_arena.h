@@ -92,6 +92,8 @@ struct MacroAction {
     MacroRegion region = MacroRegion::Sheet;
     int32_t rule_id = -1;
     int32_t motif_id = -1;
+    /** Densify ProposeConfig preset (0 = shipped baseline). Not a PlacementRuleSet index. */
+    int32_t preset_id = 0;
 };
 
 struct DecisionNode {
@@ -176,9 +178,16 @@ public:
         return static_cast<float>(children) < cap;
     }
 
-    /** C0: AMAF ledger key = (region, rule_id, motif_id). */
-    void amaf_record(int32_t region, int32_t rule_id, int32_t motif_id, float reward, bool miss) {
-        const auto key = std::make_tuple(region, rule_id, motif_id);
+    /** C0/DgPreset: AMAF ledger key = (region, rule_id, motif_id, preset_id). */
+    void amaf_record(
+        int32_t region,
+        int32_t rule_id,
+        int32_t motif_id,
+        float reward,
+        bool miss,
+        int32_t preset_id = 0
+    ) {
+        const auto key = std::make_tuple(region, rule_id, motif_id, preset_id);
         AmafEntry &e = amaf_[key];
         e.visits += 1;
         e.total_reward += reward;
@@ -187,8 +196,13 @@ public:
         }
     }
 
-    float amaf_mean(int32_t region, int32_t rule_id, int32_t motif_id) const {
-        const auto key = std::make_tuple(region, rule_id, motif_id);
+    float amaf_mean(
+        int32_t region,
+        int32_t rule_id,
+        int32_t motif_id,
+        int32_t preset_id = 0
+    ) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id, preset_id);
         auto it = amaf_.find(key);
         if (it == amaf_.end() || it->second.visits <= 0) {
             return 0.f;
@@ -196,8 +210,13 @@ public:
         return it->second.total_reward / static_cast<float>(it->second.visits);
     }
 
-    int32_t amaf_visits(int32_t region, int32_t rule_id, int32_t motif_id) const {
-        const auto key = std::make_tuple(region, rule_id, motif_id);
+    int32_t amaf_visits(
+        int32_t region,
+        int32_t rule_id,
+        int32_t motif_id,
+        int32_t preset_id = 0
+    ) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id, preset_id);
         auto it = amaf_.find(key);
         if (it == amaf_.end()) {
             return 0;
@@ -205,8 +224,13 @@ public:
         return it->second.visits;
     }
 
-    int32_t amaf_misses(int32_t region, int32_t rule_id, int32_t motif_id) const {
-        const auto key = std::make_tuple(region, rule_id, motif_id);
+    int32_t amaf_misses(
+        int32_t region,
+        int32_t rule_id,
+        int32_t motif_id,
+        int32_t preset_id = 0
+    ) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id, preset_id);
         auto it = amaf_.find(key);
         if (it == amaf_.end()) {
             return 0;
@@ -226,11 +250,16 @@ public:
             / static_cast<float>(n.visits)
         );
         const int32_t region = static_cast<int32_t>(n.action.region);
-        const int32_t av = amaf_visits(region, n.action.rule_id, n.action.motif_id);
+        const int32_t av = amaf_visits(
+            region, n.action.rule_id, n.action.motif_id, n.action.preset_id
+        );
         if (av > 0) {
             const float beta = static_cast<float>(av)
                 / (static_cast<float>(av) + static_cast<float>(n.visits) + 1e-9f);
-            mean = beta * amaf_mean(region, n.action.rule_id, n.action.motif_id)
+            mean = beta
+                    * amaf_mean(
+                        region, n.action.rule_id, n.action.motif_id, n.action.preset_id
+                    )
                 + (1.f - beta) * mean;
         }
         return mean + explore;
@@ -245,5 +274,5 @@ private:
 
     std::vector<DecisionNode> arena_;
     std::vector<BoardSnapshot> snapshots_;
-    std::map<std::tuple<int32_t, int32_t, int32_t>, AmafEntry> amaf_;
+    std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, AmafEntry> amaf_;
 };

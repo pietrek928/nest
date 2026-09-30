@@ -1,0 +1,128 @@
+# DG path densify letter floors (S0 snapshot on current tree)
+#
+# Early: GATE FAIL area vs case.floors (0.500 < fixture floor); letter floor = this snapshot.
+# Late: peak mid-run 54.5%/64 then void_override cascade to 45.0%/43 (Δcov=-0.0227).
+
+s0:
+  early:
+    area: 0.4996212121212122
+    parts: 42
+    independent_ok: true
+    time_s: 91.1
+    hold: 0
+    void_override: 1
+    bottleneck: graph_to_nest
+    nest_void_ratio: 0.08
+    path_ms: 5902.8
+    path_skip: 0
+    peak_cov: 0.500
+    final_cov: 0.500
+    regress: 0.0
+  late:
+    delta_cov: -0.0227
+    delta_parts: -11
+    area: 0.4500
+    parts: 43
+    independent_ok: true
+    ckpt_cov: 0.4727
+    ckpt_parts: 54
+    peak_cov: 0.545
+    peak_parts: 64
+    final_cov: 0.450
+    regress: 0.095
+    note: void_override fires often; path_skip=1 early then path_ms=0
+  conclusion: |
+    S0: large pool + void_override regress on late (54.5→45.0). Early 0.500/42.
+    Next S1: tighten drop_allow when rim high so override cannot dump ≥10pp.
+
+s1:
+  early:
+    area: 0.542
+    parts: 51
+    independent_ok: true
+    time_s: 78.57
+    hold: 0
+    void_override: 0
+    vs_s0: gain
+  late:
+    delta_cov: 0.0239
+    delta_parts: 3
+    area: 0.4966
+    parts: 57
+    peak_cov: 0.545
+    final_cov: 0.497
+    regress: 0.048
+    vs_s0: gain
+  conclusion: |
+    S1: rim/high-outline drop_allow cap + area abs guard. Early 0.542/51 (≥S0).
+    Late Δcov=+0.024 (≥S0 −0.023); peak→final 54.5→49.7 (was 45.0).
+    Mid-run still dips to 42%; hollow escape 0.82× bypasses S1 — S2 next.
+
+s2:
+  early:
+    area: 0.547
+    parts: 47
+    independent_ok: true
+    hold: 1
+    void_override: 0
+    vs_s1: area_gain_parts_noise
+  late:
+    delta_cov: 0.1201
+    delta_parts: 16
+    area: 0.5928
+    parts: 70
+    peak_cov: 0.593
+    final_cov: 0.593
+    regress: 0.0
+    hold_iters: 8
+    void_override_iters: 0
+    vs_s1: large_gain
+  conclusion: |
+    S2: extreme-hollow escape 0.95× + area reject only on hollow/motif escape.
+    Late hold=1/ovr=0 locks peak (Δcov=+0.12); early area 0.547≥S1, parts noisy.
+    Next P1: path_probe_budget shrink-run on large_void when ready=0.
+
+p1:
+  early:
+    area: 0.548
+    parts: 49
+    independent_ok: true
+    path_skip: 0
+    path_ms: 2388.5
+    vs_s2: gain
+  late:
+    delta_cov: 0.1208
+    delta_parts: 17
+    area: 0.5936
+    parts: 71
+    path_skip: 0
+    vs_s2: gain
+  conclusion: |
+    P1: free-hint shrink-run beam/4 (beam/2 missed early). Early 0.548/49;
+    late Δ=+0.121/+17. Next P2: void_fill Δ on path_accept_eligible.
+
+p2:
+  early:
+    area: 0.540
+    parts: 48
+    independent_ok: true
+    note: r2 after noise; r1 0.511/47
+  late:
+    delta_cov: 0.1201
+    delta_parts: 16
+    area: 0.5928
+    parts: 70
+    vs_p1: equal_noise
+  conclusion: |
+    P2: large_void path accept needs void_fill Δ≥0.02 + cov non-regress.
+    Late holds S2/P1 floor; early within noise of P1.
+
+p3:
+  status: skipped
+  reason: |
+    Conditional: wire path sibling preset_ids only if non-baseline online_ok
+    presets exist. artifacts/tune/densify_presets.yaml has only id=0 online_ok;
+    densify_preset_ids returns [0]. No ×K path expansion until OFAT proves more.
+  conclusion: |
+    Series complete. S1+S2 fixed void_override late crash (Δ −0.023 → +0.12).
+    P1 shrink-run beam/4; P2 void_fill accept gate; P3 deferred.

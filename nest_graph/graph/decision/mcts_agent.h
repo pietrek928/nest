@@ -93,11 +93,12 @@ struct ActionKey {
     int32_t region_i = 0;
     int32_t rule_id = 0;
     int32_t motif_id = -1;
+    int32_t preset_id = 0;
     CohortSigKey cohort{};
 
     bool operator==(const ActionKey &o) const {
         return region_i == o.region_i && rule_id == o.rule_id && motif_id == o.motif_id
-            && cohort == o.cohort;
+            && preset_id == o.preset_id && cohort == o.cohort;
     }
 };
 
@@ -106,6 +107,7 @@ struct ActionKeyHash {
         std::size_t h = static_cast<std::size_t>(k.region_i);
         h = h * 1315423911u + static_cast<std::size_t>(k.rule_id);
         h = h * 1315423911u + static_cast<std::size_t>(k.motif_id + 2);
+        h = h * 1315423911u + static_cast<std::size_t>(k.preset_id + 2);
         h = h * 1315423911u + static_cast<std::size_t>(k.cohort.key_kind + 2);
         h = h * 1315423911u + static_cast<std::size_t>(k.cohort.motif_id + 2);
         h = h * 1315423911u + static_cast<std::size_t>(k.cohort.leader_gid + 2);
@@ -218,6 +220,8 @@ public:
     // M2b: gate PLACE_COHORT expand; cohorts stay populated for AMAF/soft path.
     bool place_cohort_ready = false;
     int32_t prior_motif_graph_hit_n = 0;
+    /** Densify preset ids for generate_macros (0 = baseline). Empty → {0}. */
+    std::vector<int32_t> preset_ids{0};
 
     MctsAgent() = default;
 
@@ -265,6 +269,7 @@ public:
         key.region_i = static_cast<int32_t>(action.region);
         key.rule_id = action.rule_id;
         key.motif_id = action.motif_id;
+        key.preset_id = action.preset_id;
         key.cohort = cohort_sig_for_action(action);
         return key;
     }
@@ -302,7 +307,10 @@ public:
         }
         const MacroAction &action = arena->node(node_id).action;
         const int32_t region_i = static_cast<int32_t>(action.region);
-        if (arena->amaf_visits(region_i, action.rule_id, action.motif_id) > 0) {
+        if (arena->amaf_visits(
+                region_i, action.rule_id, action.motif_id, action.preset_id
+            )
+            > 0) {
             telem.amaf_hits += 1;
         }
         float score = arena->ucb_score(node_id, parent_visits, ucb_c);
@@ -373,7 +381,9 @@ public:
             idle_age_[cur] = 0;
             const MacroAction &action = arena->node(cur).action;
             const int32_t region_i = static_cast<int32_t>(action.region);
-            arena->amaf_record(region_i, action.rule_id, action.motif_id, reward, false);
+            arena->amaf_record(
+                region_i, action.rule_id, action.motif_id, reward, false, action.preset_id
+            );
             record_cohort_amaf(action_key(action), reward, false);
             cur = arena->node(cur).parent_id;
         }
@@ -384,7 +394,9 @@ public:
             return;
         }
         const int32_t region_i = static_cast<int32_t>(action->region);
-        arena->amaf_record(region_i, action->rule_id, action->motif_id, 0.f, true);
+        arena->amaf_record(
+            region_i, action->rule_id, action->motif_id, 0.f, true, action->preset_id
+        );
         record_cohort_amaf(action_key(*action), 0.f, true);
         telem.amaf_miss += 1;
     }
@@ -565,7 +577,8 @@ public:
         const int32_t region_i = key.region_i;
         const int32_t rule_id = key.rule_id;
         const int32_t motif_id = key.motif_id;
-        int32_t visits = arena->amaf_visits(region_i, rule_id, motif_id);
+        const int32_t preset_id = key.preset_id;
+        int32_t visits = arena->amaf_visits(region_i, rule_id, motif_id, preset_id);
         float mean = 0.f;
         int32_t misses = 0;
         if (key.cohort.active()) {
@@ -584,8 +597,8 @@ public:
         } else if (visits <= 0) {
             visits = 0;
         } else {
-            mean = arena->amaf_mean(region_i, rule_id, motif_id);
-            misses = arena->amaf_misses(region_i, rule_id, motif_id);
+            mean = arena->amaf_mean(region_i, rule_id, motif_id, preset_id);
+            misses = arena->amaf_misses(region_i, rule_id, motif_id, preset_id);
         }
         const float c = ucb_c;
         const float pb = c / std::sqrt(static_cast<float>(parent_visits) + 1.f);
@@ -615,11 +628,43 @@ public:
         const int32_t void_i = static_cast<int32_t>(MacroRegion::Void);
         const int32_t rim_i = static_cast<int32_t>(MacroRegion::Rim);
         const int32_t motif_i = static_cast<int32_t>(MacroRegion::Motif);
+        // D: niche-miss soft-scales Void; Motif +0.2 when cohort/MotifBase fuel (plan D).
+        const bool motif_fuel =
+            (motif_base != nullptr && motif_base->size() > 0)
+            || place_cohort_ready
+            || !motif_cohorts.empty();
         if (free_kind == "large_void" && region_i == void_i) {
-            score += 0.35f;
+            float void_bonus = 0.35f;
+            float miss_rate = 0.f;
+            if (visits > 0 && misses > 0) {
+                miss_rate = static_cast<float>(misses) / static_cast<float>(visits);
+            }
+            if (niche_archive != nullptr) {
+                NicheKey nkey{region_i, rule_id, motif_id};
+                auto bit = niche_archive->buckets().find(nkey);
+                if (bit == niche_archive->buckets().end()) {
+                    nkey = NicheKey{region_i, 0, motif_id};
+                    bit = niche_archive->buckets().find(nkey);
+                }
+                if (bit != niche_archive->buckets().end()) {
+                    miss_rate = std::max(miss_rate, bit->second.miss_rate());
+                }
+                if (niche_archive->place_fail_streak > 0) {
+                    miss_rate = std::max(
+                        miss_rate,
+                        std::min(1.f, 0.25f * static_cast<float>(niche_archive->place_fail_streak))
+                    );
+                }
+            }
+            miss_rate = std::max(0.f, std::min(1.f, miss_rate));
+            score += void_bonus * (1.f - miss_rate);
         }
         if (free_kind == "large_void" && region_i == rim_i) {
             score -= 0.15f;
+        }
+        if (free_kind == "large_void" && region_i == motif_i && motif_fuel) {
+            // Plan D Motif cohort/fuel bonus (Void keeps niche soft-scale only).
+            score += 0.2f;
         }
         const int32_t sel_n = std::max(realized.sel_n, 1);
         if (region_i >= 0 && region_i < 4) {
@@ -679,6 +724,10 @@ public:
                                          : static_cast<float>(parent_visits) + 1.f;
             score += prop_h / den;
         }
+        // DgPreset: prefer baseline preset on ties so ×K does not reshuffle cold picks.
+        if (preset_id == 0) {
+            score += 1e-3f;
+        }
         return score;
     }
 
@@ -713,7 +762,8 @@ public:
             true,
             warm,
             free_kind,
-            cohort_specs
+            cohort_specs,
+            preset_ids
         );
         int32_t cohort_n = 0;
         if (place_cohort_ready) {
@@ -761,7 +811,10 @@ public:
         }
         telem.amaf_pick += 1;
         const ActionKey best_key = action_key(*best);
-        if (arena->amaf_visits(best_key.region_i, best_key.rule_id, best_key.motif_id) > 0) {
+        if (arena->amaf_visits(
+                best_key.region_i, best_key.rule_id, best_key.motif_id, best_key.preset_id
+            )
+            > 0) {
             telem.amaf_hits += 1;
         }
         fallback = *best;

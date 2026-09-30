@@ -1,0 +1,16 @@
+metrics:
+  area:
+    weight: 1.0
+    higher_is_better: true
+  parts:
+    weight: 0.15
+    higher_is_better: true
+  time_s:
+    weight: 0.05
+    higher_is_better: false
+  delta_cov:
+    weight: 0.5
+    higher_is_better: true
+  delta_parts:
+    weight: 0.1
+    higher_is_better: true

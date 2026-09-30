@@ -562,14 +562,18 @@ def motif_patterns_for_inject(
     )
     if pats and telem is not None:
         record_archive_ref_telem(pats, telem)
+        telem["inject_n"] = int(len(pats))
     if not pats or not polish or part_bases is None:
         return pats
-    return polish_patterns_at_inject(
+    out = polish_patterns_at_inject(
         pats,
         part_bases,
         min_dist=float(min_dist),
         telem=telem,
     )
+    if telem is not None:
+        telem["inject_n"] = int(len(out))
+    return out
 
 
 def polish_patterns_at_inject(

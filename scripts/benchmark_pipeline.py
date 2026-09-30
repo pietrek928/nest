@@ -17,6 +17,11 @@ from nest_graph.config import (
 )
 from scripts.nesting_evaluator import NestingPipelineEvaluator, metrics_meet_floors
 from scripts.nesting_fixtures import get_all_cases, resolve_cases
+from scripts.tune.cfg_overrides import (
+    apply_cfg_overrides,
+    cfg_sig,
+    effective_propose_cfg_dict,
+)
 
 
 def _build_cfg(
@@ -260,46 +265,6 @@ def _build_cfg(
     return cfg
 
 
-def _parse_cfg_value(raw: str):
-    s = raw.strip()
-    low = s.lower()
-    if low in ("true", "yes", "1"):
-        return True
-    if low in ("false", "no", "0"):
-        return False
-    try:
-        if "." in s:
-            return float(s)
-        return int(s)
-    except ValueError:
-        return s
-
-
-def _apply_cfg_overrides(cfg: BuildGraphConfig, specs: list[str] | None) -> BuildGraphConfig:
-    """Mute/retune existing ProposeConfig (or SelectionConfig) fields. No new flags."""
-    if not specs:
-        return cfg
-    propose_upd: dict = {}
-    selection_upd: dict = {}
-    for spec in specs:
-        if "=" not in spec:
-            raise ValueError(f"cfg override must be key=value got {spec!r}")
-        key, raw = spec.split("=", 1)
-        key = key.strip()
-        val = _parse_cfg_value(raw)
-        if key.startswith("selection."):
-            selection_upd[key.split(".", 1)[1]] = val
-        elif key.startswith("propose."):
-            propose_upd[key.split(".", 1)[1]] = val
-        else:
-            propose_upd[key] = val
-    if propose_upd:
-        cfg.propose = cfg.propose.model_copy(update=propose_upd)
-    if selection_upd:
-        cfg.selection = cfg.selection.model_copy(update=selection_upd)
-    return cfg
-
-
 def _parse_matrix(specs: list[str]) -> dict[str, list[str]]:
     """Parse axis=v1,v2 into dict."""
     out: dict[str, list[str]] = {}
@@ -359,6 +324,17 @@ def main() -> None:
         type=Path,
         default=Path("docs/nesting_baselines.json"),
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow more than 40 runs in one invocation",
+    )
+    parser.add_argument(
+        "--jsonl",
+        type=Path,
+        default=None,
+        help="Append one JSONL row per seed (phase=early, effective cfg, void_leak subset)",
+    )
     args = parser.parse_args()
 
     if args.matrix:
@@ -389,12 +365,15 @@ def main() -> None:
     for case in cases_to_run:
         for propose in args.propose:
             for dfs_mode in args.dfs_modes:
-                cfg = _apply_cfg_overrides(_build_cfg(propose, dfs_mode), args.cfg)
+                cfg = apply_cfg_overrides(_build_cfg(propose, dfs_mode), args.cfg)
                 if args.cfg:
                     print(f"  cfg overrides: {args.cfg}", flush=True)
                 evaluator = NestingPipelineEvaluator(
                     case, cfg, always_heavy_polish=bool(args.always_heavy),
                 )
+                # Effective cfg is post-lean (evaluator applies with_runtime_lean).
+                eff_cfg = effective_propose_cfg_dict(evaluator.cfg)
+                eff_sig = cfg_sig(eff_cfg)
 
                 case_metrics = []
                 for seed in args.seeds:
@@ -404,6 +383,68 @@ def main() -> None:
                     )
                     metrics = evaluator.run_full_pipeline(seed)
                     case_metrics.append(metrics)
+                    if args.jsonl is not None:
+                        leak = (evaluator.last_result or {}).get("void_leak") or {}
+                        row_j = {
+                            "phase": "early",
+                            "case": case.name,
+                            "seed": int(seed),
+                            "propose": str(propose),
+                            "dfs_mode": str(dfs_mode),
+                            "cfg_sig": eff_sig,
+                            "cfg": dict(eff_cfg),
+                            "cfg_overrides": list(args.cfg or []),
+                            "parts": int(metrics.parts_final),
+                            "area": float(metrics.area_coverage),
+                            "time_s": float(metrics.time_s),
+                            "independent_ok": bool(metrics.independent_ok),
+                            "void_props": int(metrics.void_props),
+                            "void_graph": int(metrics.void_graph),
+                            "void_nest": int(metrics.void_selected_nest),
+                            "void_refine": int(metrics.void_selected_refine),
+                            "free_kind": str(metrics.free_kind or ""),
+                            "void_leak": {
+                                k: leak.get(k)
+                                for k in (
+                                    "niche_pos",
+                                    "densify_reason",
+                                    "mcts_rule_id",
+                                    "mcts_preset_id",
+                                    "preset_amaf_visits",
+                                    "amaf_hits",
+                                    "kiss_pairs",
+                                    "free_space_cloud_emitted",
+                                    "on_plateau",
+                                    "motif_compose_accepted_size",
+                                    "member_hits",
+                                    "join_n",
+                                    "materialized_motif",
+                                    "lattice_anchors_added",
+                                    "lattice_anchors_kept",
+                                    "cluster_copy_emitted",
+                                    "cluster_copy_nest_n",
+                                    "lock_n_compose",
+                                    "lock_n_refine",
+                                    "lock_n_materialize",
+                                    "motif_sequential_full",
+                                    "motif_sequential_clear",
+                                    "hollow_pattern_locks",
+                                    "incumbent_hold",
+                                    "void_override",
+                                    "cohorts_n",
+                                    "motif_union_n",
+                                    "hybrid_pick_wins",
+                                    "hybrid_pick_reject_indep",
+                                    "hybrid_pick_reject_area",
+                                    "hybrid_pick_adj_soft",
+                                    "motif_adj_hits",
+                                )
+                                if k in leak
+                            },
+                        }
+                        args.jsonl.parent.mkdir(parents=True, exist_ok=True)
+                        with args.jsonl.open("a", encoding="utf-8") as fh:
+                            fh.write(json.dumps(row_j, default=str) + "\n")
                     print(
                         f"  -> parts={metrics.parts_final} area={metrics.area_coverage:.3f} "
                         f"kiss_s={metrics.kiss_seed:.2f} kiss_o={metrics.kiss_outline:.2f} "
@@ -478,6 +519,18 @@ def main() -> None:
                             f"member_hits={leak.get('member_hits', 0)} "
                             f"mat_motif={leak.get('materialized_motif', 0)} "
                             f"mat_attach={leak.get('materialized_attach', 0)} "
+                            f"kiss_pairs={leak.get('kiss_pairs', 0)} "
+                            f"pair_contact_n={leak.get('pair_contact_n', 0)} "
+                            f"edge_parallel_n={leak.get('edge_parallel_n', 0)} "
+                            f"largest_slot_area={float(leak.get('largest_slot_area', 0.0) or 0.0):.3f} "
+                            f"motif_seed={leak.get('motif_base_seed_n', 0)} "
+                            f"gls={leak.get('gls_insert_moved', 0)}/"
+                            f"{leak.get('gls_separate_moved', 0)}/"
+                            f"{leak.get('gls_attempted', 0)} "
+                            f"inject_n={leak.get('inject_n', 0)} "
+                            f"motif_hit={leak.get('motif_hit', 0)} "
+                            f"path_tip={leak.get('path_tip_apply', 0)} "
+                            f"path_join={leak.get('path_join_signal', 0)} "
                             f"compose_sz={leak.get('motif_compose_accepted_size', 0)} "
                             f"place_coh={leak.get('place_cohort_ready', 0)}/"
                             f"{leak.get('place_cohort_specs_n', 0)}/"
@@ -504,6 +557,7 @@ def main() -> None:
                             f"{leak.get('grow_classify_unmapped_n', 0)} "
                             f"soft_inc={leak.get('soft_incumbent_n', 0)} "
                             f"grow_ord={leak.get('grow_order_tier_n', 0)} "
+                            f"grow_adj={leak.get('grow_adj_order', 0)} "
                             f"grow_touch={leak.get('grow_member_touch_n', 0)} "
                             f"full_clear={leak.get('full_motif_clear', 0)} "
                             f"fb_lead={leak.get('fallback_leader', 0)} "

@@ -19,6 +19,7 @@ from nest_graph.graph import (
 )
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import outline_coverage_ratio, should_use_border_focus
+from nest_graph.propose.transform_batch import allowed_for_gid, project_row_key
 from nest_graph.propose.void_selection import (
     apply_void_centroid_score_term,
     apply_void_selection_boosts,
@@ -255,20 +256,78 @@ def _map_incumbent_indices(
     packed_transform: Sequence | None,
     graph,
     key_map: dict | None = None,
+    group_allowed_angles: Sequence | None = None,
+    propose_stats: dict | None = None,
+    use_projected_keys: bool = False,
 ) -> list[int]:
-    """Map last packed (gid, key) into this graph; empty if not packing-independent."""
+    """Map last packed (gid, key) into this graph; empty if not packing-independent.
+
+    L0: when ``propose_stats`` is set, records ``incumbent_key_miss`` (raw key miss)
+    and ``incumbent_proj_snap`` (raw miss but projected N2 key hits).
+    L1: ``use_projected_keys=True`` falls back to ``project_row_key`` (same as mix).
+    When the full projected set is not packing-independent (angle snap collisions),
+    keep a greedy independent subset rather than emptying (telem
+    ``incumbent_proj_indep_n``).
+    """
     if not packed_group_id or packed_transform is None:
         return []
     if key_map is None:
         key_map = pose_key_to_index(group_id, transform)
+    angles = group_allowed_angles
+    if angles is None and propose_stats is not None:
+        raw_ang = propose_stats.get("group_allowed_angles")
+        if isinstance(raw_ang, (list, tuple)):
+            angles = raw_ang
     idxs: list[int] = []
+    seen: set[int] = set()
+    key_miss = 0
+    proj_snap = 0
     for gid, tr in zip(packed_group_id, packed_transform, strict=False):
-        ix = key_map.get((int(gid), transform_row_key(tr)))
-        if ix is not None:
-            idxs.append(int(ix))
-    if not idxs or not _packing_independent(idxs, graph):
+        gid_i = int(gid)
+        raw_key = transform_row_key(tr)
+        ix = key_map.get((gid_i, raw_key))
+        if ix is None:
+            key_miss += 1
+            allowed = allowed_for_gid(angles or (), gid_i) if angles else None
+            proj_key = project_row_key(tr, allowed) if allowed else raw_key
+            proj_ix = (
+                key_map.get((gid_i, proj_key))
+                if proj_key != raw_key
+                else None
+            )
+            if proj_ix is not None:
+                proj_snap += 1
+                if use_projected_keys and int(proj_ix) not in seen:
+                    idxs.append(int(proj_ix))
+                    seen.add(int(proj_ix))
+        else:
+            ii = int(ix)
+            if ii not in seen:
+                idxs.append(ii)
+                seen.add(ii)
+    if propose_stats is not None:
+        propose_stats["incumbent_key_miss"] = int(key_miss)
+        propose_stats["incumbent_proj_snap"] = int(proj_snap)
+    if not idxs:
         return []
-    return idxs
+    if _packing_independent(idxs, graph):
+        if propose_stats is not None:
+            propose_stats["incumbent_proj_indep_n"] = int(len(idxs))
+        return idxs
+    # L1: only when angle-snap projections were used — raw-only collisions
+    # keep legacy empty (no hold) so early cold behavior stays unchanged.
+    if use_projected_keys and proj_snap > 0:
+        kept: list[int] = []
+        for i in idxs:
+            trial = kept + [int(i)]
+            if _packing_independent(trial, graph):
+                kept.append(int(i))
+        if propose_stats is not None:
+            propose_stats["incumbent_proj_indep_n"] = int(len(kept))
+        return kept
+    if propose_stats is not None:
+        propose_stats["incumbent_proj_indep_n"] = 0
+    return []
 
 
 def _nest_with_locks(
@@ -1163,6 +1222,8 @@ def compose_and_nest_selection(
         packed_transform=packed_transform,
         graph=graph,
         key_map=key_to_ix,
+        propose_stats=propose_stats,
+        use_projected_keys=True,
     )
     incumbent_hold = 0
     void_override_flag = 0
@@ -1226,11 +1287,21 @@ def compose_and_nest_selection(
             ):
                 void_override = True
             if void_override:
+                high_void_gain = int(void_gain) >= 8
                 drop_allow = 0.10 if fat_free else (
                     0.08 if (void_inc <= 2 and void_gain >= 8) else (
                         0.06 if void_gain >= 3 else 0.02
                     )
                 )
+                # L1: high void_gain already passed area_ok at ~0.88 — allow that
+                # dip through S1 (accidental N2 rebuild was ~0.12 relative).
+                if high_void_gain:
+                    drop_allow = max(float(drop_allow), 0.12)
+                # S1: rim-saturated / high outline — cap drop so override cannot
+                # dump ≥~10pp absolute coverage (one gate, same outline check).
+                rim_hi = float(
+                    (propose_stats or {}).get("rim_progress", 0.0) or 0.0
+                ) >= 0.9
                 try:
                     nest_polys = [
                         polys[i] for i in selected_nest if 0 <= int(i) < len(polys)
@@ -1254,12 +1325,32 @@ def compose_and_nest_selection(
                     cov_inc = float(outline_coverage_ratio(
                         inc_polys, outline, float(min_dist), pack_geoms=inc_pack,
                     ))
+                    rim_or_outline = bool(rim_hi or cov_inc >= 0.25)
+                    if rim_or_outline and not high_void_gain:
+                        drop_allow = min(float(drop_allow), 0.03)
+                    elif rim_or_outline and high_void_gain:
+                        if propose_stats is not None:
+                            propose_stats["void_override_rim_relax"] = 1
                     if cov_cand + 1e-9 < cov_inc - drop_allow:
                         void_override = False
+                        if rim_or_outline and propose_stats is not None:
+                            propose_stats["void_override_area_cap"] = 1
+                    # Absolute area coverage (outline can rise while area crashes).
+                    if (
+                        void_override
+                        and rim_or_outline
+                        and cand_area + 1e-12 < (1.0 - drop_allow) * inc_area
+                    ):
+                        void_override = False
+                        if propose_stats is not None:
+                            propose_stats["void_override_area_cap"] = 1
                 except Exception:
                     pass
             if void_override:
                 void_override_flag = 1
+                if int((propose_stats or {}).get("void_override_rim_relax", 0) or 0) > 0:
+                    if propose_stats is not None:
+                        propose_stats["incumbent_release"] = 1
             else:
                 # Q342: hollow + plateau + large_void — area near-tie + void gain.
                 hollow_miss = bool((propose_stats or {}).get("hollow_miss", False))
@@ -1272,17 +1363,34 @@ def compose_and_nest_selection(
                 ):
                     void_override = True
                     void_override_flag = 1
+            hollow_escape_set = False
             if (
                 not void_override
                 and graph_to_nest_hollow
                 and void_gain >= 1
-                and cand_area + 1e-12 >= (
-                    0.82 if void_gain >= 5 else 0.86
-                ) * inc_area
-                and len(selected_nest) >= int(0.70 * len(incumbent))
             ):
-                void_override = True
-                void_override_flag = 1
+                # S2: extreme hollow (nest≪graph) — early mild escape at 0.95×
+                # instead of late 0.82 crash; rim-high also uses 0.95×.
+                n_void_g = int((propose_stats or {}).get("graph_void_n", 0) or 0)
+                extreme_hollow = (
+                    n_void_g > 0
+                    and float(nest_void_ratio) <= 0.10
+                )
+                if extreme_hollow:
+                    hollow_floor = 0.95
+                    hollow_count = 0.85
+                else:
+                    hollow_floor = 0.82 if void_gain >= 5 else 0.86
+                    hollow_count = 0.70
+                if (
+                    cand_area + 1e-12 >= hollow_floor * inc_area
+                    and len(selected_nest) >= int(hollow_count * len(incumbent))
+                ):
+                    void_override = True
+                    void_override_flag = 1
+                    hollow_escape_set = True
+                    if propose_stats is not None and extreme_hollow:
+                        propose_stats["hollow_escape_strict"] = 1
             # D2b/G5: Motif locks soft-escape sterile rim hold (sticky compose).
             # When prior compose_sz≥2, deepen escape (looser area floor).
             motif_lock_n = len(locked_motif) if locked_motif else 0
@@ -1300,10 +1408,26 @@ def compose_and_nest_selection(
             ):
                 void_override = True
                 void_override_flag = 1
+                hollow_escape_set = True
                 if propose_stats is not None:
                     propose_stats["motif_lock_void_escape"] = 1
                     if prior_compose_sz >= 2:
                         propose_stats["motif_lock_void_escape_deep"] = 1
+            # S2: area absolute cap only on hollow/motif escape (primary path
+            # already passed S1 drop_allow — do not double-reject).
+            if hollow_escape_set and void_override:
+                rim_hi_cap = float(
+                    (propose_stats or {}).get("rim_progress", 0.0) or 0.0
+                ) >= 0.9
+                if (
+                    rim_hi_cap
+                    and cand_area + 1e-12 < 0.97 * inc_area
+                ):
+                    void_override = False
+                    void_override_flag = 0
+                    if propose_stats is not None:
+                        propose_stats["void_override_area_cap"] = 1
+                        propose_stats["hollow_escape_area_reject"] = 1
             if not void_override:
                 # Q187/Q198: motif soft override — key-hit fraction (not MotifBase GCI).
                 # Q199: if incumbent has 0 key-hit (stringy rim), allow cand with dens>0.
@@ -1412,6 +1536,9 @@ def compose_and_nest_selection(
             pred_use = pred_zero
         if n_void_graph > void_base:
             colonize_stats: dict = {}
+            rim_hi = float(
+                (propose_stats or {}).get("rim_progress", 0.0) or 0.0
+            ) >= 0.95
             colonized = colonize_void_onto_base(
                 graph,
                 selected_nest,
@@ -1424,6 +1551,7 @@ def compose_and_nest_selection(
                 group_id=group_id,
                 part_areas=part_areas,
                 predicate=pred_use,
+                prefer_core=rim_hi,
             )
             if propose_stats is not None:
                 propose_stats.update(colonize_stats)

@@ -1,5 +1,7 @@
 """Pattern propagation: compactness, archive TTL, pole-first lattice, motif lock."""
 
+import math
+
 from shapely.geometry import Polygon, Point, box
 
 from nest_graph.config import ProposeConfig
@@ -151,6 +153,21 @@ def test_lattice_offsets_and_pole_sort_top_k():
         lattice_stats_out=stats,
     )
     assert int(stats.get("lattice_anchors_kept", 0)) <= 4
+
+
+def test_lattice_offsets_pi_kiss_scales_to_min_step():
+    """MotifBase kiss Δxy≈0.1 with Δθ≈π → period-2 then min_step floor."""
+    pat = ClusterPattern(
+        members=(
+            (0, (0.0, 0.0, 0.0)),
+            (0, (-0.1, 0.0, math.pi)),
+        ),
+        part_count=2,
+        ref_transform=(0.0, 0.0, 0.0),
+    )
+    offs = motif_lattice_offsets(pat, min_step=1.0)
+    assert any(abs(o[0] - 1.0) < 1e-6 and abs(o[1]) < 1e-6 for o in offs)
+    assert any(abs(o[0] + 1.0) < 1e-6 and abs(o[1]) < 1e-6 for o in offs)
 
 
 def test_nest_by_scores_keeps_locks():

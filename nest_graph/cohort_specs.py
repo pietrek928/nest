@@ -28,6 +28,7 @@ def generate_macros(
     warm_motif_ids=(),
     free_kind="",
     motif_cohorts=None,
+    preset_ids=(),
 ):
     from nest_graph.graph import generate_macros as _generate_macros_native
 
@@ -39,4 +40,5 @@ def generate_macros(
         [int(m) for m in warm_motif_ids],
         str(free_kind or ""),
         motif_cohort_specs(motif_cohorts),
+        [int(p) for p in (preset_ids or ())],
     )

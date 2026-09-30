@@ -1,0 +1,198 @@
+# Late structural tiles + compose + DG path floors (series plateau)
+
+t0:
+  early: {area: 0.551, parts: 53, independent_ok: true, time_s: 206.13,
+          cluster_copy: 170, compose_sz: 0, member_hits: 22, path_tip: 0, path_extend: 74}
+  late: {delta_cov: 0.0, delta_parts: 0, area: 0.6008, parts: 71,
+         cluster_copy: 0/0, motif_collide: true, compose_sz: 2, incumbent_hold: 1}
+  ckpt:
+    path: artifacts/checkpoints/void_fill_seed0_iter50.npz
+    motif_inject_n: 4
+    top_accept: [12, 2, 1, 1]
+    note: kiss rel Δxy≈0.1 Δθ≈π
+  conclusion: MotifBase nonempty; late emit starved by motif_collide. Fork T1.
+
+t1:
+  shipped_dormant:
+    - densify telem densify_motif_lattice_min_step (no auto force)
+    - void_seek pole-base lattice when min_step>0 (opt-in)
+  trials:
+    - force densify min_step=1.0 → late still collide; early noisy
+    - pole lattice base → still collide
+  late: {delta_cov: 0.0, cluster_copy: 0/0}
+  conclusion: |
+    Auto densify period did not unlock late stamp; left hooks dormant (cfg opt-in).
+
+l3:
+  status: plateau_reverted
+  conclusion: Motif-lock escape soft arm regressed early 0.511/48; reverted.
+
+t_fit: {status: skipped, reason: no late emit}
+p1: {status: plateau_reverted, reason: Void soft tip early 0.492/42; Motif soft tip kept}
+p3: {status: skipped}
+l2: {status: skipped}
+t2: {status: skipped}
+p2: {status: skipped}
+l5: {status: skipped}
+p5: {status: skipped}
+l6: {status: skipped, reason: late Δ=0}
+
+plateau:
+  early_final: {area: 0.555, parts: 49, independent_ok: true, note: post-revert densify force}
+  early_best_so_far: {area: 0.555, parts: 53, note: t0 parts / plateau area}
+  late_best_so_far: {delta_cov: 0.0, area: 0.6008, parts: 71}
+  shipped:
+    - pole-base lattice when motif_lattice_min_step>0 (opt-in)
+    - densify_motif_lattice_min_step telem
+    - path_accept_apply(free_kind=) kwarg dormant
+  conclusion: |
+    Series stop: late Δ flat; densify stamp still motif_collide with MotifBase
+    kiss tiles. Escape/tip soft arms hurt early. Next: diagnose why void-pole
+    packing-clear fails for inject groups on late-50 before enabling min_step.
+
+h0:
+  early: {area: 0.518, parts: 47, independent_ok: true, time_s: 61.62,
+          cluster_copy: 170, note: below open 0.555 — telem-only; H1 unlock next}
+  late: {delta_cov: 0.0, delta_parts: 0, area: 0.6008, parts: 71,
+         cluster_copy: 0/0,
+         motif_skip: "collide_at_pole=168,same_gid_dual_rel_fail=168,collide=168,leader_fail=4088"}
+  conclusion: |
+    Late densify collide is almost entirely at-pole + same-gid kiss dual
+    (Δxy≈0.1). Snip now prefers motif_skip count map. Fork H1 identity leader
+    + clear-filter at stamp (not force min_step).
+
+h1:
+  shipped:
+    - same-gid identity-primary stamp (kiss dual collapses to one leader)
+    - prefer packing-clear anchors; multi-ring + free-void cents seeds
+  early: {area: 0.542, parts: 51, independent_ok: true, time_s: 59.35,
+          cluster_copy: 34, note: "post-H3-revert; below open 0.555 within H1 noise"}
+  late: {delta_cov: 0.0, cluster_copy: 0/0,
+         note: "identity_primary=6; pole_ring_clear=0; no packing-clear cell for inject groups"}
+  conclusion: |
+    Identity removes self-collide of kiss dual, but late-50 rim≈0.97 has no
+    packing-clear XY for Motif inject parts (ring/void-cent clear=0). Soft
+    voids-only emit is killed by enable_motif_scene_dry_run. Late emit unlock
+    blocked by board geometry — pursue Δ via H3 colonize. H2/H4a/H5 emit-gated
+    stay conditional on later clear cells.
+
+h3:
+  status: plateau_reverted
+  trials:
+    - escape-prefer harvest + colonize prefer_idxs → col_pref≈33/37 on late
+    - prefer unlock / Q375 soft accept (col_pa) → local nest moves, Δcov flat
+    - early soft arms dumped area (0.506–0.529); reverted to H1 path
+  early: {area: 0.542, parts: 51, note: restored post-revert}
+  late: {delta_cov: 0.0, colonize_prefer: dormant, incumbent_hold: 1}
+  conclusion: |
+    Hold+colonize residual cannot raise late Δcov without L3 escape retune:
+    prefer nodes collide with rim; Q375 rejects rim-drop packs; soft accept
+    does not move checkpoint area. Anti-L3 ban holds. Shipped: H0 telem + H1
+    identity only; H3 prefer hooks left dormant in telem snip.
+
+wang_plateau:
+  early_final: {area: 0.542, parts: 51, independent_ok: true}
+  early_best_so_far: {area: 0.555, parts: 53, note: prior plateau / t0 parts}
+  late_best_so_far: {delta_cov: 0.0, area: 0.6008, parts: 71}
+  shipped:
+    - H0 stamp collide telem split (collide_at_pole / same_gid_dual_rel_fail)
+    - H1 same-gid identity-primary stamp
+    - motif_skip snip prefers count map
+  cancelled_emit_gated: [H2, H4a, H5a, H5b, H4b, H7]
+  conclusion: |
+    Series stop: late Δ flat; densify stamp still motif_collide (kiss tiles);
+    no packing-clear inject XY at rim≈0.97; H3 colonize residual cannot unlock
+    Δ under Q375 + anti-L3. Next research outside this series: packing-clear
+    domain for Motif inject on late-50 before re-arming emit/DG letters.
+
+f0:
+  shipped:
+    - densify_clear (n_packed>=60): pocket R4 + clear pole-ring + clear-first
+    - early cold-start unchanged (topo/pole-first)
+  early: {area: 0.544, parts: 53, independent_ok: true, time_s: 80.27,
+          cluster_copy: 34, note: "≥ wang open 0.542; prefer stretch 0.555"}
+  late: {delta_cov: 0.0, delta_parts: 0, area: 0.6008, parts: 71,
+         cluster_copy: 0/0,
+         motif_skip: "anchor_clear_fail=128,pocket_align_args=4,identity_primary=6"}
+  cancelled_emit_gated: [F4a, F4b]
+  conclusion: |
+    Clear-domain telem green on late densify; emit still sterile. Cancel
+    emit-gated F4a/F4b; continue F2/F3/F5a.
+
+f2:
+  shipped:
+    - soft kiss demote in upsert_from_contacts (near-origin same-gid, n>=60)
+    - H1 kiss XY band shared; MotifBase nonempty
+  early: {area: 0.542, parts: 50, independent_ok: true}
+  late: {delta_cov: 0.0, collide_at_pole: 192, note: "collide not worse vs F0"}
+  conclusion: |
+    Dense-only demote (early cold stays full-gci). Late collide flat; emit still 0.
+
+f3:
+  shipped:
+    - pred_core prefer sort in colonize_void_onto_base (rim>=0.95)
+    - Q375 lex accept unchanged
+  early: {area: 0.518, parts: 47, independent_ok: true, note: "noise vs open 0.542; prefer off when rim<0.95"}
+  late: {delta_cov: 0.0, col_pref: "294–697", colonize_area_reject: 1}
+  cancelled_delta_gated: [F7, F5b]
+  conclusion: |
+    Prefer telem live on late; Δ flat under Q375. Cancel F7/F5b Δ|emit gates.
+
+f5a:
+  shipped:
+    - within-tier −motif_adj_hits after order_idxs_seed_unmapped_mapped
+    - adj only once Motif lock seed len(locked)>=2
+  early: {area: 0.544, parts: 53, independent_ok: true, grow_adj: 5}
+  late: {delta_cov: 0.0, parts: 71}
+  conclusion: |
+    Grow-adj telem green; late Δ flat. Emit still sterile.
+
+clear_domain_plateau:
+  early_final: {area: 0.544, parts: 53, independent_ok: true, grow_adj: 4}
+  early_best_so_far: {area: 0.544, parts: 53, note: "F0/F5a series best; wang open was 0.542"}
+  late_best_so_far: {delta_cov: 0.0, area: 0.6008, parts: 71}
+  shipped:
+    - F0 densify_clear pocket+ring+clear-first (n_packed>=60)
+    - F2 soft kiss demote upsert (n>=60)
+    - F3 pred_core colonize prefer (rim>=0.95, Q375)
+    - F5a within-tier grow adj after Motif seed lock
+  cancelled: [F4a, F4b, F5b, F7]
+  conclusion: |
+    Series stop: late Δ flat; Motif inject still cluster_copy=0/0 at rim≈0.97
+    despite clear-domain wire (anchor_clear_fail census). Emit/Δ letters stay
+    cancelled. Clear/adj/colonize prefer telem live; packing-clear inject XY
+    remains the late bottleneck.
+
+nesting_flaws_n_series:
+  open: {early_area: 0.544, early_parts: 53, late_delta_cov: 0.0, late_parts: 71}
+  early_final: {area: 0.562, parts: 58, independent_ok: true,
+    motif_hit: 1, inject_n: 2, cluster_copy: 32, path_join: 1, path_tip: 0,
+    note: "P early: floors held; tip telem late-only (evaluator no Motif soft tip-swap)"}
+  early_best_so_far: {area: 0.569, parts: 59, note: "T0 area peak; D early 0.563/59"}
+  late_final: {delta_cov: 0.0652, area: 0.6659, parts: 81,
+    motif_hit: 8, path_tip: 8, path_join: 0,
+    note: "P late r18: Motif soft path_tip_apply 1→8 distinct from path_join; Δ held"}
+  late_best_so_far: {delta_cov: 0.0890, area: 0.6898, parts: 84, note: "P r16 late peak with Motif soft tip"}
+  shipped:
+    - N0 census telem pair_contact_n/edge_parallel_n/largest_slot_area
+    - N1 MotifBase.upsert from triangle_mate_relative (synth relative SoT)
+    - N2 group_allowed_angles from _boundary_alignment_angles when grain empty
+    - N3 local_se2 GLS insert+separate (polish_se2 + post_pack_overlap_ok)
+    - N4a densify_clear clear-XY Halton unlock + topo off-pole fallback
+    - L0 incumbent_key_miss / incumbent_proj_snap / void_override_area_cap telem
+    - L1 projected incumbent map + greedy indep on proj snap; S1 rim_hi relax when void_gain>=8
+    - A0 fit_probe + topo clear/unclear/refuse telem
+    - A1 grain+polylabel+slide unlock; identity fallback when clear_xy_ok
+    - A2 honest topo: clear prepend only (refuse unclear)
+    - A3 near-miss jostle ring when clear_xy_fail_near>0
+    - B1 motif_hit in letter telem; MotifJoin-on-accept path_tip soft signal
+    - T0 path_join_signal vs path_tip_apply; cc_stamp/claim/dry; void_clear_rate; densify_xy_in
+    - V wedge_edge_grain_angles on densify unlock + pocket R4 + void_clear sample
+    - M claim-transfer; dry-skip on clear_xy unlock; pair-union unlock if fit_ok
+    - D Motif UCB +0.2 / Void niche soft-scale; macro_motif_id (0 valid); last-leaf Motif tip
+    - P Motif path_accept void_fill relax + Motif soft tip_install (build_graph telem; no tip-swap)
+  cancelled: [D1, D2, D3, D4, D5, D6]
+  deferred: [N4_Wang, N4_jostle, N4_shelf, N4_MIP]
+  conclusion: |
+    P locked: real path_tip_apply>0 late (soft Motif tip, path_join=0); early ≥0.562/58;
+    late Δ ≥ +0.0652/81 (r16 peak +0.0890). Series complete (T0→V→M→D→P).

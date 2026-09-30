@@ -604,12 +604,14 @@ def _void_seek_densify(
     densify_rank = (
         RankingMode.CONTACT_HYBRID if propose_cfg.use_pocket_fit else RankingMode.CLEARANCE
     )
+    # T1: densify may opt into motif_lattice_min_step via densify_cfg; do not force
+    # a default period (forcing 1.0 left late collide and noisy early area).
     densify_cfg = densify_cfg.model_copy(update={
         "use_guidance_propositions": True,
         "guidance_use_tight_packing": True,
         "guidance_use_corner_alignment": True,
         "guidance_enable_grid": False,
-        "cast_squeeze_top_k": max(4, int(densify_cfg.cast_squeeze_top_k)),
+        "cast_squeeze_top_k": max(8, int(densify_cfg.cast_squeeze_top_k)),
         "use_neighbor_slide": False,
         "use_ribbon_seeds": True,
         "use_full_packed_obstacle": True,
@@ -628,6 +630,9 @@ def _void_seek_densify(
         # Q146: inner densify collect must not Halton again; reuse / last-resort below.
         "use_free_space_cloud": False,
     })
+    telem["densify_motif_lattice_min_step"] = float(
+        getattr(densify_cfg, "motif_lattice_min_step", 0.0) or 0.0
+    )
     # void_densify_pole_gravity stays False on densify: enabling regressed void_fill
     # (44/0.436 vs best 51/0.492). Flag + merged skip remain for tests / future gate.
     densify_cfg = apply_proposer_pool_scales(
@@ -803,8 +808,8 @@ def _void_seek_densify(
     else:
         reason = "count_drop"
 
-    # Cloud when densify empty, drop-tagged, or densify xy never hits free_poly
-    # (centroid iv can rise while props telem stays 0 — xy vs centroid mismatch).
+    # Cloud when densify empty, drop-tagged, or densify xy never hits free_poly.
+    # T0: count all densify rows in free (not just first-hit bool) for props diagnose.
     densify_xy_in = 0
     if (
         densify_arr.shape[0] > 0
@@ -814,7 +819,6 @@ def _void_seek_densify(
         for row in densify_arr:
             if xy_in_free(float(row[0]), float(row[1]), yield_poly):
                 densify_xy_in += 1
-                break
     telem["densify_xy_in"] = int(densify_xy_in)
     telem["props_empty"] = int(arr.shape[0] == 0)
     telem["densify_empty"] = int(densify_arr.shape[0] == 0)
@@ -870,6 +874,13 @@ def _void_seek_densify(
             # Keep void_yield_union when densify already pinned; cloud is separate telem.
             if not densify_pinned:
                 reason = "free_space_cloud"
+            # Dc1: kiss-polish Halton survivors (slide_toward_obstacle one-gate).
+            # Soft-fail: if polish empties the list, keep pre-slide cloud.
+            # Dc1: cast_squeeze↑ ships via VOID_SEEK profile. Cloud kiss polish
+            # (polish_cloud_slide_toward_obstacles) kept as helper; replace/merge
+            # both ablated below Dn0 on void_fill — emit Halton survivors as-is.
+            telem["cloud_slide_n"] = 0
+            telem["cloud_slide_kept"] = int(len(cloud))
             cloud_arr = propositions_to_ndarray(cloud)
             arr = (
                 _pin_prefix(arr, cloud_arr)
@@ -928,22 +939,38 @@ def _extend_counted(
     max_items: int | None = None,
     proposer_keys: dict[str, set[tuple[float, float, float]]] | None = None,
     claimed_keys: set[tuple[float, float, float]] | None = None,
+    claim_transfer: bool = False,
+    transfer_counts: dict[str, int] | None = None,
 ) -> None:
+    """Append unique proposals. Motif ``claim_transfer`` re-labels corridor dups once."""
     items = list(new_items)
     if max_items is not None and len(items) > max_items:
         items = items[:max_items]
     to_add: list[tuple[float, float, float]] = []
+    xfer_n = 0
     for item in items:
         key = _proposal_key(item)
+        if claimed_keys is not None and key in claimed_keys:
+            if claim_transfer and proposer_keys is not None:
+                # M: one claim — reassign label to Motif; no second candidate.
+                for other, keys in list(proposer_keys.items()):
+                    if other == name or key not in keys:
+                        continue
+                    keys.discard(key)
+                proposer_keys.setdefault(name, set()).add(key)
+                xfer_n += 1
+            continue
         if claimed_keys is not None:
-            if key in claimed_keys:
-                continue
             claimed_keys.add(key)
         if proposer_keys is not None:
             proposer_keys.setdefault(name, set()).add(key)
         to_add.append(item)
     if proposer_counts is not None:
         proposer_counts[name] = proposer_counts.get(name, 0) + len(to_add)
+    if transfer_counts is not None and xfer_n:
+        transfer_counts["cc_claim_xfer"] = (
+            int(transfer_counts.get("cc_claim_xfer", 0) or 0) + int(xfer_n)
+        )
     candidates.extend(to_add)
 
 
@@ -1046,6 +1073,8 @@ class _CollectState:
         new_items: Sequence[tuple[float, float, float]],
         *,
         max_items: int | None = None,
+        claim_transfer: bool = False,
+        transfer_counts: dict[str, int] | None = None,
     ) -> None:
         _extend_counted(
             self.candidates,
@@ -1055,6 +1084,8 @@ class _CollectState:
             max_items=max_items,
             proposer_keys=self.proposer_keys,
             claimed_keys=self.claimed_keys,
+            claim_transfer=claim_transfer,
+            transfer_counts=transfer_counts,
         )
 
     def mark_skip(self, stage: str, names: Sequence[str]) -> None:
@@ -1156,6 +1187,15 @@ def _collect_pocket_candidates(
     ):
         motif_skips: dict[str, int] = {}
         motif_cohorts: list = []
+        motif_allowed = None
+        if (
+            ctx.placement_angles_override is not None
+            and len(ctx.placement_angles_override) > 0
+        ):
+            motif_allowed = [
+                float(a)
+                for a in np.asarray(ctx.placement_angles_override).reshape(-1)
+            ]
         motif_coords = propose_placements_cluster_copy(
             extras.cluster_patterns,
             group_id,
@@ -1174,9 +1214,22 @@ def _collect_pocket_candidates(
             part_by_group=extras.part_by_group,
             foreign_out=extras.foreign_out,
             hard_packed_geoms=extras.hard_packed_geoms,
+            allowed_angles=motif_allowed,
         )
-        # Track D / Q25: Scene dry-run motif reserve only (after packing emit, before claim).
-        if motif_coords and bool(getattr(cfg, "enable_motif_scene_dry_run", False)):
+        # T0: stamp vs claim-dup vs dry-run drops (one handoff SoT).
+        motif_skips["cc_stamp_n"] = int(len(motif_coords))
+        # M: densify clear-XY unlock stamps are already packing-clear — Scene
+        # dry-run (is_pose_clear) must not sterilize Motif before claim (T0).
+        unlocked = (
+            int(motif_skips.get("clear_xy_ok", 0) or 0) > 0
+            or int(motif_skips.get("clear_xy_slide_ok", 0) or 0) > 0
+            or int(motif_skips.get("clear_xy_ok_grain", 0) or 0) > 0
+        )
+        if (
+            motif_coords
+            and bool(getattr(cfg, "enable_motif_scene_dry_run", False))
+            and not unlocked
+        ):
             voids = list(getattr(ctx.propose_geom.scene, "void_geoms", None) or [])
             packed = list(getattr(ctx.propose_geom, "full_packed_geoms", None) or [])
             dry_obs, dry_scene = clearance_scene(voids, packed, float(ctx.min_dist))
@@ -1196,8 +1249,27 @@ def _collect_pocket_candidates(
                 motif_skips["scene_dry_run"] = (
                     motif_skips.get("scene_dry_run", 0) + dropped
                 )
+                motif_skips["cc_dry_drop"] = int(
+                    motif_skips.get("cc_dry_drop", 0) or 0
+                ) + int(dropped)
             motif_coords = kept_motif
-        state.ext("cluster_copy", motif_coords)
+        elif motif_coords and unlocked:
+            motif_skips["cc_dry_skip_unlock"] = 1
+        claim_dup = 0
+        for coords in motif_coords:
+            if _proposal_key(coords) in state.claimed_keys:
+                claim_dup += 1
+        if claim_dup:
+            motif_skips["cc_claim_dup"] = int(claim_dup)
+        xfer: dict[str, int] = {}
+        state.ext(
+            "cluster_copy",
+            motif_coords,
+            claim_transfer=True,
+            transfer_counts=xfer,
+        )
+        if xfer.get("cc_claim_xfer"):
+            motif_skips["cc_claim_xfer"] = int(xfer["cc_claim_xfer"])
         if extras.pocket_stats is not None:
             for k, v in motif_skips.items():
                 extras.pocket_stats.skip_reasons[f"motif_{k}"] = (
@@ -3128,6 +3200,7 @@ def proposed_transforms_for_groups(
     densify_stats_union_old: int | None = None
     densify_stats_union_new: int | None = None
     densify_stats_yield_tag: str | None = None
+    densify_stats_xy_in: int = 0
     pocket_skips_all: list[str] = []
     cascade_agg: dict = {
         "cascade_stopped_after": "none",
@@ -3758,6 +3831,7 @@ def proposed_transforms_for_groups(
                 densify_stats_union_old = int(densify_telem["union_old_n"])
                 densify_stats_union_new = int(densify_telem.get("union_new_n") or 0)
                 densify_stats_yield_tag = densify_telem.get("void_yield_tag")
+            densify_stats_xy_in += int(densify_telem.get("densify_xy_in", 0) or 0)
         if (
             zones_used_out is not None
             and propose_cfg.place_profiles_enabled
@@ -3831,6 +3905,26 @@ def proposed_transforms_for_groups(
         densify_stats_out["motif_coemit_followers"] = int(
             motif_skip_agg.get("motif_coemit_followers", 0)
         )
+        # V: all densify Motif groups fit-sterile after wedge grain.
+        fit_fail = int(
+            motif_skip_agg.get("fit_probe_fail", 0)
+            or motif_skip_agg.get("motif_fit_probe_fail", 0)
+            or 0
+        )
+        fit_ok = int(
+            motif_skip_agg.get("fit_probe_ok", 0)
+            or motif_skip_agg.get("motif_fit_probe_ok", 0)
+            or 0
+        )
+        clear_ok = int(
+            motif_skip_agg.get("void_clear_ok", 0)
+            or motif_skip_agg.get("motif_void_clear_ok", 0)
+            or 0
+        )
+        if densify_fired > 0 and fit_fail > 0 and fit_ok == 0 and clear_ok == 0:
+            densify_stats_out["motif_skip"]["fit_stop_all_groups"] = 1
+            motif_skip_agg["fit_stop_all_groups"] = 1
+            densify_stats_out["motif_skip"] = dict(motif_skip_agg)
         for _fk in (
             "foreign_clear_fail_sheet",
             "foreign_clear_fail_obs",
@@ -3886,6 +3980,7 @@ def proposed_transforms_for_groups(
         densify_stats_out["union_old_n"] = densify_stats_union_old
         densify_stats_out["union_new_n"] = densify_stats_union_new
         densify_stats_out["void_yield_tag"] = densify_stats_yield_tag
+        densify_stats_out["densify_xy_in"] = int(densify_stats_xy_in)
 
     # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
     if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:

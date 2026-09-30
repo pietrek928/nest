@@ -627,6 +627,17 @@ def apply_void_selection_boosts(
         pole_w = float(pole_w) * scale
         if propose_stats is not None:
             propose_stats["void_island_soft_scale"] = float(scale)
+    # Dh1: when Motif joins exist but nest materialization is weak, nudge motif weight
+    # (island boost already applied below — scale motif only here).
+    if propose_stats is not None and free_info is not None and getattr(
+        free_info, "kind", None
+    ) == "large_void":
+        hollow_graph = int(propose_stats.get("graph_to_nest_hollow", 0) or 0) > 0
+        mat_motif = int(propose_stats.get("materialized_motif", 0) or 0)
+        join_n = int(propose_stats.get("motif_join_n", 0) or 0)
+        if hollow_graph or (join_n > 0 and mat_motif <= 0):
+            motif_w = float(motif_w) * 1.15
+            propose_stats["hollow_motif_boost_scale"] = 1.15
     if free_info.kind == "large_void" and pole_w > 0.0:
         hits["void_island"] = boost_void_island_scores(
             polys,
@@ -1022,6 +1033,7 @@ def colonize_void_onto_base(
     group_id: Sequence[int] | None = None,
     part_areas: Sequence[float] | None = None,
     predicate: FreeCentroidPredicate | None = None,
+    prefer_core: bool = False,
 ) -> list[int]:
     """Pin free-centroid graph nodes onto ``base`` if collision-clear.
 
@@ -1030,6 +1042,8 @@ def colonize_void_onto_base(
 
     V2: ``interior_margin`` prefers true free core. V3: iterative rim-blocker
     unlock — drop ≤``max_rim_drop`` plugs when area-aware retry is non-worse.
+    F3: ``prefer_core`` sorts ``pred_core`` hits before free-margin peers (Q375
+    accept unchanged).
     """
     t0 = time.perf_counter()
     out = list(base)
@@ -1048,6 +1062,7 @@ def colonize_void_onto_base(
             stats_out["colonize_pinned_idxs"] = []
             stats_out["colonize_blocked"] = 0
             stats_out["colonize_rim_drop"] = 0
+            stats_out["colonize_prefer"] = 0
             stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
         return out
     candidates = [
@@ -1071,7 +1086,25 @@ def colonize_void_onto_base(
     rim_drop = 0
     base_len = len(out)
     base_area = _sel_area(out, group_id, part_areas, empty_as_count=True)
-    if scores is not None and len(scores) >= len(collisions):
+    if stats_out is not None:
+        stats_out["colonize_prefer"] = 0
+    if prefer_core and candidates:
+        core_first = [
+            i for i in candidates
+            if pred_core.covers_part(polys[i], index=int(i))
+        ]
+        if core_first:
+            core_set = set(int(i) for i in core_first)
+            rest = [i for i in candidates if int(i) not in core_set]
+            if scores is not None and len(scores) >= len(collisions):
+                core_first.sort(key=lambda v: float(scores[v]), reverse=True)
+                rest.sort(key=lambda v: float(scores[v]), reverse=True)
+            candidates = core_first + rest
+            if stats_out is not None:
+                stats_out["colonize_prefer"] = int(len(core_first))
+        elif scores is not None and len(scores) >= len(collisions):
+            candidates.sort(key=lambda v: float(scores[v]), reverse=True)
+    elif scores is not None and len(scores) >= len(collisions):
         candidates.sort(key=lambda v: float(scores[v]), reverse=True)
 
     out, out_set, pinned, blocked = colonize_pin_clear(

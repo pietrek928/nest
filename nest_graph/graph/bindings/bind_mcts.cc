@@ -170,8 +170,19 @@ ActionKey action_key_from_py_tuple(nb::handle obj) {
     key.region_i = nb::cast<int32_t>(seq[0]);
     key.rule_id = nb::cast<int32_t>(seq[1]);
     key.motif_id = nb::cast<int32_t>(seq[2]);
-    if (nb::len(seq) >= 4) {
-        key.cohort = cohort_sig_from_py(seq[3]);
+    // Legacy 3-tuple / 4-tuple(with cohort): treat missing preset as 0.
+    // New layout: (region, rule, motif, preset[, cohort])
+    if (nb::len(seq) >= 5) {
+        key.preset_id = nb::cast<int32_t>(seq[3]);
+        key.cohort = cohort_sig_from_py(seq[4]);
+    } else if (nb::len(seq) == 4) {
+        // Ambiguous: either preset_id int or cohort tuple — prefer cohort if not int.
+        try {
+            key.preset_id = nb::cast<int32_t>(seq[3]);
+        } catch (...) {
+            key.preset_id = 0;
+            key.cohort = cohort_sig_from_py(seq[3]);
+        }
     }
     return key;
 }
@@ -188,7 +199,7 @@ nb::object action_key_to_py(const ActionKey &key) {
     } else {
         cohort = nb::make_tuple(key.cohort.motif_id, key.cohort.leader_gid, nb::none());
     }
-    return nb::make_tuple(key.region_i, key.rule_id, key.motif_id, cohort);
+    return nb::make_tuple(key.region_i, key.rule_id, key.motif_id, key.preset_id, cohort);
 }
 
 std::vector<MotifCohortEntry> motif_cohorts_from_py(nb::object obj) {
@@ -395,6 +406,14 @@ void bind_graph_mcts(nb::module_ &m) {
             "place_cohort_ready",
             [](MctsAgentHolder &h) { return h.agent.place_cohort_ready; },
             [](MctsAgentHolder &h, bool v) { h.agent.place_cohort_ready = v; })
+        .def_prop_rw(
+            "preset_ids",
+            [](MctsAgentHolder &h) {
+                return h.agent.preset_ids;
+            },
+            [](MctsAgentHolder &h, const std::vector<int32_t> &ids) {
+                h.agent.preset_ids = ids.empty() ? std::vector<int32_t>{0} : ids;
+            })
         .def_prop_rw(
             "prior_motif_graph_hit_n",
             [](MctsAgentHolder &h) { return h.agent.prior_motif_graph_hit_n; },

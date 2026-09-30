@@ -31,6 +31,7 @@ from nest_graph.propose.placement_common import (
     clear_of_geoms,
     dual_pose_from_base,
     placement_obstacles,
+    resolve_group_allowed_angles,
 )
 from nest_graph.utils import compose_transforms
 
@@ -505,6 +506,21 @@ def build_transform_batch(
     scale = sc.transform_scale
     propose_by_group: dict[int, np.ndarray] = {}
     border_pin_by_group: dict[int, np.ndarray] = {}
+    # N2: fill empty grain from sheet+part boundary angles (one gate).
+    group_allowed_angles = resolve_group_allowed_angles(
+        board if isinstance(board, Polygon) else None,
+        parts or (),
+        group_allowed_angles,
+    )
+    if propose_stats_out is not None:
+        propose_stats_out["group_allowed_angles_n"] = int(
+            sum(1 for a in group_allowed_angles if a is not None and len(a) > 0)
+        )
+        # L0/L1: incumbent map telem + projected key lookup (same N2 angles as mix).
+        propose_stats_out["group_allowed_angles"] = tuple(
+            (tuple(float(x) for x in a) if a is not None else None)
+            for a in group_allowed_angles
+        )
     empty_sheet = (
         nest_state is None
         or not nest_state.selected_indices

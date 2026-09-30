@@ -1,0 +1,40 @@
+# B0 / B3 dual floors (DgPreset letter)
+#
+# Research loop notes:
+# - large_void ×K on early void_fill degraded (0.492/41); gate = plateau + online_ok.
+# - Non-baseline presets stay online_ok=false until OFAT+late prove ≥ dual.
+# - Early cold start is noisy (~0.51–0.53); late resume is stable.
+
+b0:
+  early:
+    area: 0.5234848484848486
+    parts: 45
+    independent_ok: true
+    note: initial snapshot; recheck without enable hit 0.533/48
+  late:
+    delta_cov: 0.1049
+    delta_parts: 15
+    area: 0.5777
+    parts: 69
+    independent_ok: true
+
+b3:
+  early_best:
+    area: 0.5329545454545455
+    parts: 48
+    independent_ok: true
+    cfg: enable_mcts_densify_presets=true
+    telem: mcts_preset_id=0 preset_amaf_visits=0 (no online ×K until online_ok)
+  late:
+    delta_cov: 0.1049
+    delta_parts: 15
+    area: 0.5777
+    parts: 69
+    independent_ok: true
+    cfg: enable_mcts_densify_presets=true
+    vs_b0: equal
+
+conclusion: |
+  Phase A tooling + Phase B preset_id AMAF/cache/apply shipped.
+  Online ×K gated on plateau and online_ok; v1 YAML keeps only baseline online.
+  Early best with enable ≥ B0 early; late with enable = B0 late Δ.

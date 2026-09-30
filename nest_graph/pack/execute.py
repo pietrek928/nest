@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
 from nest_graph.graph import leaf_reward
+from nest_graph.pack.cache_key import macro_motif_id
 from nest_graph.pack.slave_pack import upsert_from_contacts
 from nest_graph.graph import BoardSnapshot
 from nest_graph.graph import MacroAction, MacroRegion
@@ -315,12 +316,18 @@ def record_mcts_expand(
     )
     act_rid = int(getattr(action, "rule_id", 0) or 0)
     region_i = int(getattr(action.region, "value", action.region))
-    motif_id = int(getattr(action, "motif_id", -1) or -1)
+    motif_id = macro_motif_id(action)
+    preset_id = int(getattr(action, "preset_id", 0) or 0)
     for rid in range(max(act_rid + 1, 2)):
-        visits = int(agent.arena.amaf_visits(region_i, rid, motif_id))
+        visits = int(agent.arena.amaf_visits(region_i, rid, motif_id, preset_id))
         if visits > 0:
             mcts_telem[f"rule_id_amaf_{rid}"] = visits
             propose_stats[f"rule_id_amaf_{rid}"] = visits
+    for pid in range(max(preset_id + 1, 2)):
+        visits = int(agent.arena.amaf_visits(region_i, act_rid, motif_id, pid))
+        if visits > 0:
+            mcts_telem[f"preset_amaf_{pid}"] = visits
+            propose_stats[f"preset_amaf_{pid}"] = visits
     return int(child_id)
 
 
@@ -482,6 +489,10 @@ def record_outer_iter_expand(
         propose_stats["void_leak"]["contact_grg_upserts"] = int(
             mcts_telem.get("contact_grg_upserts", 0) or 0
         )
+        if int(mcts_telem.get("kiss_demote", 0) or 0) > 0:
+            propose_stats["void_leak"]["kiss_demote"] = int(
+                mcts_telem.get("kiss_demote", 0) or 0
+            )
     propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
     propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
     return int(new_id), child_snap
@@ -496,6 +507,57 @@ def make_execute_fn(
         return pack_fn(parent, zone=zone, action=action, patterns=patterns or [])
 
     return execute_fn
+
+
+def ensure_motif_tip_for_fuel(
+    mcts_action: Any | None,
+    *,
+    motif_base: Any,
+    remaining_gids: Sequence[int] | None,
+    mcts_telem: dict,
+    seed_n: int = 0,
+    force: bool = False,
+) -> Any | None:
+    """D: credit Motif tip; optionally force Motif when MotifBase fuel (motif_id=0 valid).
+
+    Default ``force=False``: only count natural Motif tips (UCB / tip-prefer).
+    ``force=True`` is telem-only fallback when Motif never wins pick.
+    """
+    mb_n = 0
+    try:
+        if motif_base is not None:
+            mb_n = int(motif_base.size())
+    except Exception:
+        mb_n = 0
+    if mb_n <= 0:
+        mb_n = int(seed_n or mcts_telem.get("motif_base_seed_n", 0) or 0)
+    tip_is_motif = (
+        mcts_action is not None
+        and getattr(mcts_action, "region", None) == MacroRegion.Motif
+        and macro_motif_id(mcts_action) >= 0
+    )
+    if force and mb_n > 0 and not tip_is_motif:
+        forced = MacroAction()
+        forced.region = MacroRegion.Motif
+        forced.motif_id = 0
+        rem = tuple(int(g) for g in (remaining_gids or ()))
+        forced.part_gid = int(rem[0]) if rem else 0
+        forced.rule_id = 0
+        forced.preset_id = 0
+        try:
+            if motif_base is not None and int(motif_base.size()) > 0:
+                rec = motif_base.at(0)
+                forced.part_gid = int(
+                    getattr(rec, "gid_a", forced.part_gid) or forced.part_gid
+                )
+        except Exception:
+            pass
+        mcts_action = forced
+        mcts_telem["motif_tip_force"] = 1
+        tip_is_motif = True
+    if tip_is_motif:
+        mcts_telem["motif_hit"] = int(mcts_telem.get("motif_hit", 0) or 0) + 1
+    return mcts_action
 
 
 def run_mcts_multi_sim(
@@ -514,10 +576,13 @@ def run_mcts_multi_sim(
     agent = runner.agent
     tip_leaf = int(parent_id)
     tip_action = None
+    motif_tip = None
+    motif_tip_reward = -1.0e30
     rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
     if agent is None or int(n_sims) <= 0 or agent.expand_frozen:
         mcts_telem["multi_sim"] = 0
         return None, tip_leaf
+    free_kind = str(getattr(parent_snap, "free_kind", "") or "")
     for _ in range(max(int(n_sims), 1)):
         leaf = int(agent.select_leaf())
         tip_leaf = leaf
@@ -552,6 +617,23 @@ def run_mcts_multi_sim(
         mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1
         tip_leaf = int(child)
         tip_action = action
+        # D: track best Motif expand so tip is not always last Void sim.
+        # motif_id=0 is valid — never gate with ``x or -1``.
+        if (
+            getattr(action, "region", None) == MacroRegion.Motif
+            and macro_motif_id(action) >= 0
+            and float(result.reward) >= float(motif_tip_reward)
+        ):
+            motif_tip = action
+            motif_tip_reward = float(result.reward)
+    mb_size = 0
+    try:
+        mb_size = int(runner.motif_base.size())
+    except Exception:
+        mb_size = 0
+    if motif_tip is not None and mb_size > 0:
+        tip_action = motif_tip
+        mcts_telem["motif_tip_prefer"] = 1
     if tip_action is None:
         tip_leaf = int(agent.deepest_best_child())
         tip_snap = runner.snapshot_at(tip_leaf, parent_snap)
@@ -667,6 +749,7 @@ def run_pack_stages(
 
 __all__ = [
     "board_snapshot_from_selection",
+    "ensure_motif_tip_for_fuel",
     "execute_pack",
     "make_execute_fn",
     "prep_selection_free",

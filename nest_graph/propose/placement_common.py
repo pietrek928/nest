@@ -428,6 +428,103 @@ def _boundary_alignment_angles(poly: Polygon) -> list[float]:
     return out
 
 
+def _angle_delta(a: float, b: float) -> float:
+    """Smallest absolute angle difference on the circle."""
+    d = (float(a) - float(b) + math.pi) % (2.0 * math.pi) - math.pi
+    return abs(d)
+
+
+def angle_near_any(
+    theta: float,
+    allowed: Sequence[float],
+    *,
+    tol: float = 0.05,
+) -> bool:
+    """True when ``theta`` is within ``tol`` rad of any allowed angle."""
+    th = float(theta)
+    for a in allowed:
+        if _angle_delta(th, float(a)) <= float(tol):
+            return True
+    return False
+
+
+def count_edge_parallel_transforms(
+    transforms: Sequence,
+    selected: Sequence[int],
+    sheet: Polygon | None,
+    *,
+    tol: float = 0.05,
+) -> int:
+    """Count selected poses whose θ aligns with sheet edge angles (N0/N2 telem)."""
+    if sheet is None or not isinstance(sheet, Polygon) or sheet.is_empty:
+        return 0
+    if not selected or not transforms:
+        return 0
+    allowed = _boundary_alignment_angles(sheet)
+    if not allowed:
+        return 0
+    n = 0
+    n_tf = len(transforms)
+    for idx in selected:
+        i = int(idx)
+        if i < 0 or i >= n_tf:
+            continue
+        t = transforms[i]
+        if t is None:
+            continue
+        th = float(t[2]) if len(t) > 2 else 0.0
+        if angle_near_any(th, allowed, tol=tol):
+            n += 1
+    return int(n)
+
+
+def resolve_group_allowed_angles(
+    sheet: Polygon | None,
+    parts: Sequence,
+    existing: Sequence[tuple[float, ...] | None] | None = None,
+    *,
+    max_angles: int = 12,
+) -> tuple[tuple[float, ...] | None, ...]:
+    """Fill ``group_allowed_angles`` from boundary edges when grain is empty (N2).
+
+    Existing non-empty grain is kept. Empty / all-None grain gets sheet+part
+    ``_boundary_alignment_angles`` (one gate — does not re-extend angle_grid).
+    """
+    n = len(parts) if parts is not None else 0
+    if n <= 0:
+        return ()
+    prev = list(existing or ())
+    while len(prev) < n:
+        prev.append(None)
+    has_grain = any(a is not None and len(a) > 0 for a in prev[:n])
+    if has_grain:
+        return tuple(prev[i] if i < len(prev) else None for i in range(n))
+
+    sheet_angles: list[float] = []
+    if sheet is not None and isinstance(sheet, Polygon) and not sheet.is_empty:
+        sheet_angles = _boundary_alignment_angles(sheet)
+
+    out: list[tuple[float, ...] | None] = []
+    for i in range(n):
+        part = parts[i]
+        poly = part[0] if isinstance(part, tuple) else part
+        merged: list[float] = []
+        seen: set[float] = set()
+        extras: list[float] = list(sheet_angles)
+        if isinstance(poly, Polygon) and not poly.is_empty:
+            extras.extend(_boundary_alignment_angles(poly))
+        for ang in extras:
+            key = round(float(ang), 3)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(float(ang))
+            if len(merged) >= max(int(max_angles), 1):
+                break
+        out.append(tuple(merged) if merged else None)
+    return tuple(out)
+
+
 def placement_angle_grid(
     sheet: Polygon,
     base_shape: BaseGeometry | None,

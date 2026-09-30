@@ -19,6 +19,10 @@ test = [
     "pytest",
     "mypy",
 ]
+tune = [
+    "pyyaml",
+    "scikit-learn",
+]
 
 [build-system]
 requires = ["scikit-build-core>=0.9.0", "nanobind>=2.0"]

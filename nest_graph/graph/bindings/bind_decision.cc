@@ -77,7 +77,8 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("part_gid", &MacroAction::part_gid)
         .def_rw("region", &MacroAction::region)
         .def_rw("rule_id", &MacroAction::rule_id)
-        .def_rw("motif_id", &MacroAction::motif_id);
+        .def_rw("motif_id", &MacroAction::motif_id)
+        .def_rw("preset_id", &MacroAction::preset_id);
 
     nb::class_<BoardSnapshot>(m, "BoardSnapshot")
         .def(nb::init<>())
@@ -317,25 +318,29 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("rule_id"),
             nb::arg("motif_id"),
             nb::arg("reward"),
-            nb::arg("miss") = false)
+            nb::arg("miss") = false,
+            nb::arg("preset_id") = 0)
         .def(
             "amaf_mean",
             &DecisionArena::amaf_mean,
             nb::arg("region"),
             nb::arg("rule_id"),
-            nb::arg("motif_id"))
+            nb::arg("motif_id"),
+            nb::arg("preset_id") = 0)
         .def(
             "amaf_visits",
             &DecisionArena::amaf_visits,
             nb::arg("region"),
             nb::arg("rule_id"),
-            nb::arg("motif_id"))
+            nb::arg("motif_id"),
+            nb::arg("preset_id") = 0)
         .def(
             "amaf_misses",
             &DecisionArena::amaf_misses,
             nb::arg("region"),
             nb::arg("rule_id"),
-            nb::arg("motif_id"))
+            nb::arg("motif_id"),
+            nb::arg("preset_id") = 0)
         .def(
             "ucb_score",
             &DecisionArena::ucb_score,
@@ -671,7 +676,8 @@ void bind_graph_decision(nb::module_ &m) {
            bool prefer_motifs,
            const std::vector<int32_t> &warm_motif_ids,
            const std::string &free_kind,
-           const std::vector<MotifCohortSpec> &motif_cohorts) {
+           const std::vector<MotifCohortSpec> &motif_cohorts,
+           const std::vector<int32_t> &preset_ids) {
             return generate_macros(
                 remaining_gids,
                 rule_ids,
@@ -679,7 +685,8 @@ void bind_graph_decision(nb::module_ &m) {
                 prefer_motifs,
                 warm_motif_ids,
                 free_kind,
-                motif_cohorts);
+                motif_cohorts,
+                preset_ids);
         },
         nb::arg("remaining_gids"),
         nb::arg("rule_ids") = std::vector<int32_t>{0},
@@ -687,7 +694,8 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("prefer_motifs") = true,
         nb::arg("warm_motif_ids") = std::vector<int32_t>{},
         nb::arg("free_kind") = std::string{},
-        nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{});
+        nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
+        nb::arg("preset_ids") = std::vector<int32_t>{});
 
     m.def(
         "rank_motif_join_neighbors",

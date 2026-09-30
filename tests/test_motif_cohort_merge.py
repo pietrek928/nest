@@ -202,6 +202,29 @@ def test_hybrid_compose_pick_join_soft():
     )
 
 
+def test_hybrid_compose_pick_adj_soft():
+    from nest_graph.propose.motif_lock import hybrid_compose_pick
+
+    telem = {}
+    # Adj records telem on void-rise soft win but does not change the gate.
+    assert hybrid_compose_pick(
+        graph=None,
+        lock=[0, 1],
+        area_cand=0.85,
+        area_orig=1.0,
+        void_cand=6,
+        void_orig=5,
+        cc_n2=0,
+        lex_better=False,
+        telem=telem,
+        motif_complete=True,
+        survive_mid=1,
+        adj_hits=3,
+    )
+    assert int(telem.get("motif_adj_hits", 0) or 0) >= 3
+    assert int(telem.get("hybrid_pick_adj_soft", 0) or 0) >= 1
+
+
 def test_hybrid_compose_pick_unlocked_void():
     from nest_graph.propose.motif_lock import hybrid_compose_pick
 

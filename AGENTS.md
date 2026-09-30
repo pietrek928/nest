@@ -15,6 +15,23 @@ cmake --build build --target geometry graph
 # Python tests
 uv run pytest tests/ -q
 
+# Early dual (cold start)
+uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate
+
+# Late dual (continue from frozen iter-20 NestState ckpt — after Dckpt / densify letters)
+uv run python -m nest_graph.build_graph \
+  --resume-checkpoint artifacts/checkpoints/void_fill_seed0_iter20.npz \
+  --extra-iters 8
+# Freeze once (rebuild only if fixture/seed changes):
+# NEST_BUILD_GRAPH_ITERS=20 NEST_CHECKPOINT_ITER=20 NEST_SEED=0 \
+#   uv run python -m nest_graph.build_graph --checkpoint-iter 20 \
+#   --checkpoint-path artifacts/checkpoints/void_fill_seed0_iter20.npz
+
+# Densify decision matrix (Phase A; needs: uv sync --extra tune)
+# uv run python scripts/tune/tune_factor_sweep.py --jsonl artifacts/tune/decision_matrix.jsonl
+# uv run python scripts/tune/analyze_decision_matrix.py --jsonl artifacts/tune/decision_matrix.jsonl
+# Late-only row: uv run python scripts/benchmark_late_checkpoint.py --jsonl artifacts/tune/decision_matrix.jsonl
+
 # Type check (needs: uv sync --extra test)
 uv run mypy
 
@@ -62,12 +79,13 @@ Do this **before locking a plan and before each implementation stage**. Not a fi
 
 - **Dedup / one gate.** Grep for the predicate you are about to add (lex hold, round-4 keys, prepend/union, zone skip, gravity vector, mix niches, rim restore). The plan must cite the existing function. Do not add a second helper, skip site, or restore path. Permission (`ZONE_PROPOSERS`) stays distinct from staging (`packed_n` / void / `use_*` flags). One truncation/cut per pipeline.
 - **Validate vs code.** Check comments that already claim the behavior against the actual condition. Check plan claims against live helpers (`transform_row_key`, `lex_count_area_better`, `part_extents`, `placement_obstacles`, …). Prefer extending a named path over a parallel RCL/beam/hold.
-- **Stage + bench.** Split the plan into letters. After each: smallest relevant `pytest`; `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate`; if propose/mix/nest changed, `NEST_BUILD_GRAPH_ITERS=2 uv run python -m nest_graph.build_graph`. Snapshot a baseline before the first letter.
-- **Every letter: bench → conclude → improve.** After each letter’s implementation, run the dual gate before anything else. Read letter telem + area/parts/time and write one conclusion (what bottleneck moved / what did not). If degraded, indep fail, or letter telem absent: stay on the letter — research the named hot path → one unify patch → re-bench until quality ≥ snapshot (or the user redirects). If green but telem still shows the bottleneck this letter was meant to move: one evidence-driven improvement patch on the same helper before locking (prefer gain, not floor-only). Do not start the next letter while the current letter’s expected telem is absent or quality is below snapshot.
+- **Stage + bench.** Split the plan into letters. After each: smallest relevant `pytest`; **early dual** (`benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --gate`); **late dual** when a frozen NestState checkpoint exists (see Commands / checkpoint below); if propose/mix/nest changed, `NEST_BUILD_GRAPH_ITERS=2 uv run python -m nest_graph.build_graph`. Snapshot early (+ late Δ) baselines before the first letter that needs them.
+- **Early + late dual.** Early = cold `benchmark_pipeline` gate. Late = continue from a frozen iter-N NestState ckpt via `nest_graph.pack.checkpoint` / `build_graph --resume-checkpoint PATH --extra-iters K` (default K=8). Compare **Δarea/Δparts vs checkpoint baseline**, same miss/degrade loop as early. Path/Motif/hollow/densify letters must show required telem on **both** early and late when a ckpt is in play. Rebuild the frozen ckpt **only** if fixture/seed changes — not every letter.
+- **Every letter: bench → conclude → improve.** After each letter’s implementation, run the dual gate(s) before anything else (early always; late once the series has a frozen ckpt). Read letter telem + area/parts/time (and late Δ) and write one conclusion (what bottleneck moved / what did not). If degraded, indep fail, or letter telem absent: stay on the letter — research the named hot path → one unify patch → re-bench until quality ≥ **both open snapshots** (early and late when both apply) or the user redirects. If green but telem still shows the bottleneck this letter was meant to move: one evidence-driven improvement patch on the same helper before locking (prefer gain, not floor-only). Do not start the next letter while the current letter’s expected telem is absent or quality is below snapshot.
 - **Bench conclusions drive the patch.** The dual’s letter telem (and any branch table) names the next hypothesis; implement that one; re-bench. Opportunistic extras from a green dual are OK only when they extend the same named helper and keep indep + ≥ snapshot — never a parallel mechanism “while we’re here.”
-- **Bench the letter's component.** Gate tags/cases must actually run the helper you changed (letter telem present, e.g. `niche_pos` / `contact_grg_upserts` / `pin_added` / `dfs_passes` / `refine_ms` / `history_expand` / `cluster_copy` / `free_space_cloud`). Do not declare pass from a tag that never hit that path. To isolate vs other stages, mute unrelated existing `use_*` / `enable_*` flags — `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --cfg enable_lns_rebuild=false enable_cluster_repack=false enable_gravity_compaction=false` — and compare muted vs shipped on the **same** fixture. Prefix `selection.` for SelectionConfig (e.g. `--cfg selection.dfs_passes=1`). Do not add a second pack/credit/pin just to turn something off. Muted runs are compare-only; letter pass is still shipped vs snapshot.
-- **Miss → improvement loop (same letter).** Hard stop only if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. On miss: **loop** — research → patch → re-gate — until the letter passes or the user redirects. Do **not** start the next letter or pile a new parallel mechanism while looping.
-- **Degradation → research loop (same letter).** Any drop vs the letter’s snapshot / best-so-far (area, parts, or indep) is a **fail to improve**, not a soft OK. Even if still ≥0.9× the floor, **do not lock the letter or move on** while degraded: research (telem + named hot path) → one unify patch → re-bench until quality is **≥ snapshot** (or the user redirects). Reverting a harmful patch counts as a loop step; “within noise / gate still green” does **not** excuse stopping below baseline when the task is to improve.
+- **Bench the letter's component.** Gate tags/cases must actually run the helper you changed (letter telem present, e.g. `niche_pos` / `contact_grg_upserts` / `pin_added` / `dfs_passes` / `refine_ms` / `history_expand` / `cluster_copy` / `free_space_cloud`). Do not declare pass from a tag that never hit that path. To isolate vs other stages, mute unrelated existing `use_*` / `enable_*` flags — `uv run python scripts/benchmark_pipeline.py --tags <case> --seeds 0 --propose shipped --cfg enable_lns_rebuild=false enable_cluster_repack=false enable_gravity_compaction=false` — and compare muted vs shipped on the **same** fixture. Prefix `selection.` for SelectionConfig (e.g. `--cfg selection.dfs_passes=1`). Do not add a second pack/credit/pin just to turn something off. Muted runs are compare-only; letter pass is still shipped vs snapshot (early + late Δ when ckpt applies).
+- **Miss → improvement loop (same letter).** Hard stop only if `independent_ok=false`. Miss if quality < 0.9× best-so-far this run (and not below 0.9× last shipped bench for that tag), or time >1.5× with no quality gain, or the letter’s expected telem is absent. On miss: **loop** — research → patch → re-gate (early and late) — until the letter passes or the user redirects. Do **not** start the next letter or pile a new parallel mechanism while looping.
+- **Degradation → research loop (same letter).** Any drop vs the letter’s early **or** late snapshot / best-so-far (area, parts, or indep) is a **fail to improve**, not a soft OK. Even if still ≥0.9× the floor, **do not lock the letter or move on** while degraded: research (telem + named hot path) → one unify patch → re-bench until quality is **≥ both open snapshots** (or the user redirects). Reverting a harmful patch counts as a loop step; “within noise / gate still green” does **not** excuse stopping below baseline when the task is to improve.
 - Historical Qs stay in [docs/agent-domain-notes.md](docs/agent-domain-notes.md). Do not lock one-off Q-numbers in this file.
 
 ### Improvement loop (research + unify)
@@ -83,7 +101,7 @@ During each miss cycle, **degradation cycle**, and while a letter is still open:
 - **Unsure what hurts → telemetry first.** If the failure mode is opaque, add the smallest bench/telem that names the stage (void props/graph/nest/refine, cascade stop, pin add, rim drop, …), re-run, then patch from evidence — not from guess stacks.
 - **Unify as you iterate.** Every loop is also a cleanup pass: fold duplicates into one gate, flatten nested branches, delete dead flags.
 - **Keep logic clean and consistent.** Same predicate → same helper; same SoT → same call site family; comments must match code. Prefer one readable path over clever special cases.
-- **Improve is the bar.** Letter success is indep OK **and** quality ≥ snapshot (prefer gain). Telem-only / structural ships that leave area below the letter baseline stay in the degradation loop.
+- **Improve is the bar.** Letter success is indep OK **and** quality ≥ early snapshot (and late Δ ≥ late snapshot when a frozen ckpt applies; prefer gain). Telem-only / structural ships that leave area below the letter baseline stay in the degradation loop.
 - **Bench conclusions drive the next patch** (see Planning). While a letter is open, the dual’s letter telem names the hypothesis — not a guess stack or a parallel mechanism.
 
 ### Cross-track synergy

@@ -37,6 +37,7 @@ inline MacroRegion zone_to_region(const std::string &zone) {
     return MacroRegion::Sheet;
 }
 
+/** Niche AMAF stays (region, rule=0, motif) — deliberately ignores preset_id/rule_id. */
 inline std::tuple<int32_t, int32_t, int32_t> niche_amaf_key(const MacroAction *action) {
     if (action == nullptr) {
         return {static_cast<int32_t>(MacroRegion::Void), 0, -1};
@@ -61,12 +62,17 @@ inline std::vector<MacroAction> generate_macros(
     bool prefer_motifs,
     const std::vector<int32_t> &warm_motif_ids,
     const std::string &free_kind,
-    const std::vector<MotifCohortSpec> &motif_cohorts) {
+    const std::vector<MotifCohortSpec> &motif_cohorts,
+    const std::vector<int32_t> &preset_ids = {}) {
     std::vector<MacroAction> actions;
     if (remaining_gids.empty()) {
         return actions;
     }
     std::unordered_set<int32_t> rem(remaining_gids.begin(), remaining_gids.end());
+    std::vector<int32_t> presets = preset_ids;
+    if (presets.empty()) {
+        presets.push_back(0);
+    }
 
     std::vector<MacroAction> motif_actions;
     std::unordered_set<int32_t> seen_motifs;
@@ -82,14 +88,25 @@ inline std::vector<MacroAction> generate_macros(
             }
             seen_motifs.insert(mid_i);
             const MotifRecord &rec = motif_base->at(mid_i);
+            // Pair rem preferred; D: single-gid Motif tip when one mate already packed.
+            int32_t part = -1;
             if (rem.count(rec.gid_a) && rem.count(rec.gid_b)) {
-                MacroAction a;
-                a.region = MacroRegion::Motif;
-                a.motif_id = mid_i;
-                a.part_gid = rec.gid_a;
-                a.rule_id = rule0;
-                motif_actions.push_back(a);
+                part = rec.gid_a;
+            } else if (free_kind == "large_void" && rem.count(rec.gid_a)) {
+                part = rec.gid_a;
+            } else if (free_kind == "large_void" && rem.count(rec.gid_b)) {
+                part = rec.gid_b;
             }
+            if (part < 0) {
+                continue;
+            }
+            MacroAction a;
+            a.region = MacroRegion::Motif;
+            a.motif_id = mid_i;
+            a.part_gid = part;
+            a.rule_id = rule0;
+            a.preset_id = 0;  // Motif macros stay baseline preset
+            motif_actions.push_back(a);
         }
     }
 
@@ -113,6 +130,7 @@ inline std::vector<MacroAction> generate_macros(
             a.motif_id = c.motif_id;
             a.part_gid = c.leader_gid;
             a.rule_id = rid;
+            a.preset_id = 0;
             cohort_actions.push_back(a);
         }
     }
@@ -129,12 +147,15 @@ inline std::vector<MacroAction> generate_macros(
     const int32_t rem0 = remaining_gids.front();
     for (MacroRegion region : region_order) {
         for (int32_t rid : rule_ids) {
-            MacroAction a;
-            a.region = region;
-            a.rule_id = rid;
-            a.part_gid = rem0;
-            a.motif_id = -1;
-            actions.push_back(a);
+            for (int32_t pid : presets) {
+                MacroAction a;
+                a.region = region;
+                a.rule_id = rid;
+                a.part_gid = rem0;
+                a.motif_id = -1;
+                a.preset_id = pid;
+                actions.push_back(a);
+            }
         }
     }
     return actions;

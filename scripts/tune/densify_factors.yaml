@@ -1,0 +1,19 @@
+# Densify factor sweep (Phase A3). OFAT early; late only for top finalists.
+# Axes that lean clamps on seeded void_fill (e.g. selection.dfs_passes) are omitted.
+
+tag: void_fill
+seed: 0
+propose: shipped
+max_early_runs: 24
+late_top_m: 4
+checkpoint: artifacts/checkpoints/void_fill_seed0_iter20.npz
+extra_iters: 8
+
+# Stage-1 OFAT: one axis at a time vs shipped defaults.
+ofat:
+  void_island_score_boost: [32, 64, 96]
+  motif_score_boost: [40, 50, 75]
+  cascade_explorer_budget_scale: [0.25, 0.35, 0.5]
+
+# Optional Stage-2: set after analyze; empty = skip.
+finalist_cartesian: {}

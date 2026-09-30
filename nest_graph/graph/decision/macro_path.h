@@ -10,12 +10,19 @@
 #include "decision/action_gen.h"
 #include "decision_graph.h"
 
-inline std::tuple<int32_t, int32_t, int32_t> macro_action_key(const MacroAction &action) {
+inline std::tuple<int32_t, int32_t, int32_t, int32_t> macro_action_key(
+    const MacroAction &action
+) {
     int32_t motif_id = action.motif_id;
     if (motif_id < 0) {
         motif_id = -1;
     }
-    return {static_cast<int32_t>(action.region), action.rule_id, motif_id};
+    return {
+        static_cast<int32_t>(action.region),
+        action.rule_id,
+        motif_id,
+        action.preset_id,
+    };
 }
 
 inline std::vector<int32_t> decision_arena_ancestors(const DecisionArena &arena, int32_t node_id) {

@@ -1,0 +1,17 @@
+# Densify presets for DgPreset. online_ok gates MacroAction ×K (v1: baseline only).
+# Mark winners online_ok after OFAT+late prove ≥ B0 dual.
+presets:
+  - id: 0
+    name: baseline
+    overrides: {}
+    online_ok: true
+  - id: 1
+    name: void_island_high
+    overrides:
+      void_island_score_boost: 96
+    online_ok: false
+  - id: 2
+    name: motif_boost_high
+    overrides:
+      motif_score_boost: 75
+    online_ok: false

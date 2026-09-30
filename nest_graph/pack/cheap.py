@@ -7,6 +7,7 @@ from typing import Sequence
 from nest_graph.pack.cache_key import cheap_lock_fingerprint, cheap_pack_cache_key
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
+from nest_graph.pack.slave_pack import write_propose_kiss_ledger
 from nest_graph.graph import BoardSnapshot
 from nest_graph.graph import score_elems
 from nest_graph.propose.heavy_polish import (
@@ -15,6 +16,7 @@ from nest_graph.propose.heavy_polish import (
     polish_budget_for_iter,
 )
 from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
+from nest_graph.propose.placement_common import as_geometry
 from nest_graph.propose.selection_compose import (
     active_rule_set,
     compose_and_nest_selection,
@@ -139,6 +141,24 @@ def compose_cached_selection(
     )
     propose_stats_c["compose_ms"] = float(
         (time.perf_counter() - _compose_t0) * 1000.0
+    )
+    sel_kiss = list(composed.selected_nest or ())
+    kiss_geoms = []
+    for i in sel_kiss:
+        ii = int(i)
+        if candidate_geoms is not None and 0 <= ii < len(candidate_geoms):
+            g = candidate_geoms[ii]
+            if g is not None:
+                kiss_geoms.append(g)
+                continue
+        if 0 <= ii < len(polys):
+            gg = as_geometry(polys[ii])
+            if gg is not None:
+                kiss_geoms.append(gg)
+    write_propose_kiss_ledger(
+        propose_stats_c,
+        kiss_geoms,
+        gap=float(min_dist_c),
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
     pack_cache["motif_locked"] = list(propose_stats_c.get("motif_locked") or ())
@@ -430,10 +450,14 @@ def pack_execute_snapshot(
 
 
 def invalidate_cheap_cache(pack_cache: dict, *, reason: str) -> None:
-    """Clear cheap_by_key when proposer context shifts (D0)."""
-    cheap_map = pack_cache.get("cheap_by_key")
-    if isinstance(cheap_map, dict) and cheap_map:
-        cheap_map.clear()
+    """Clear cheap snap + compose side-maps when proposer context shifts (D0/Ds1)."""
+    cleared = False
+    for key in ("cheap_by_key", "cheap_compose_by_key", "cheap_telem_by_key"):
+        cheap_map = pack_cache.get(key)
+        if isinstance(cheap_map, dict) and cheap_map:
+            cheap_map.clear()
+            cleared = True
+    if cleared:
         pack_cache["cache_invalidate_reason"] = str(reason)
         pack_cache["cache_invalidate_n"] = int(
             pack_cache.get("cache_invalidate_n", 0) or 0

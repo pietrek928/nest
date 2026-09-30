@@ -31,20 +31,22 @@ def path_probe_budget(
     beam: int,
     max_depth: int,
 ) -> tuple[bool, int, int]:
-    """D1/G1: run/shrink macro_increase_path from place_cohort_ready + Motif tip.
+    """D1/G1/P1: run/shrink macro_increase_path from place_cohort_ready + Motif tip.
 
-    Returns ``(run, beam, max_depth)``. Skip when ready=0 and tip is not Motif
-    (even if large_void hint); shrink beam/depth when Motif tip but ready=0.
-    G1: when ready but macros idle (``mcts_cohort_macro_n==0``) and tip is not
-    Motif, shrink (or skip if beam would collapse) — same helper, no second gate.
+    Returns ``(run, beam, max_depth)``. P1: when ready=0 and tip is not Motif but
+    ``parent_free_hint`` (large_void), shrink-run with beam/4 (not skip). Motif tip
+    with ready=0 still shrinks beam/2. G1: ready but macros idle → mild shrink.
     """
-    if not (bool(on_plateau) or bool(parent_free_hint)):
-        return False, int(beam), int(max_depth)
-    ready = bool(getattr(agent, "place_cohort_ready", False)) if agent is not None else False
     tip_motif = (
         tip_action is not None
         and getattr(tip_action, "region", None) == MacroRegion.Motif
     )
+    if not (bool(on_plateau) or bool(parent_free_hint)):
+        # P: Motif tip alone still probes (was dead behind free_hint-only gate).
+        if tip_motif:
+            return True, max(1, int(beam) // 2), max(1, int(max_depth) - 1)
+        return False, int(beam), int(max_depth)
+    ready = bool(getattr(agent, "place_cohort_ready", False)) if agent is not None else False
     telem = getattr(agent, "telem", None) if agent is not None else None
     macros_n = 0
     if isinstance(telem, dict):
@@ -63,6 +65,14 @@ def path_probe_budget(
         return True, max(1, int(beam)), max(1, int(max_depth))
     if tip_motif:
         return True, max(1, int(beam) // 2), max(1, int(max_depth) - 1)
+    # P1: large_void free hint — shrink-run with tight budget (beam/4).
+    # Full beam/2 on every free-hint iter missed early dual; skip left late idle.
+    if bool(parent_free_hint):
+        return (
+            True,
+            max(1, int(beam) // 4),
+            max(1, int(max_depth) - 2),
+        )
     return False, int(beam), int(max_depth)
 
 
@@ -143,11 +153,14 @@ def macro_increase_path(
     beam: int = 4,
     telem: dict | None = None,
     overlap_ok_fn: Callable[..., bool] | None = None,
+    prefer_motif_return: bool = False,
 ) -> tuple[Any | None, float, BoardSnapshot | None]:
     """Plateau sibling swap + cheap replay from ancestor snapshot (Q297/Q305/Q384).
 
     Returns ``(best_action, best_reward, best_snap)``. MotifJoin/Pose steps are
     validate-only (Q386); only Macro siblings call ``execute_fn``.
+    P: ``prefer_motif_return`` (build_graph) surfaces Motif soft tip telem without
+    early evaluator Motif-prefer regress.
     """
     agent = getattr(runner, "agent", None)
     if agent is None or execute_fn is None:
@@ -160,6 +173,9 @@ def macro_increase_path(
     best_action: Any | None = None
     best_reward = float(baseline_reward)
     best_snap: BoardSnapshot | None = None
+    best_motif_action: Any | None = None
+    best_motif_reward = float(baseline_reward)
+    best_motif_snap: BoardSnapshot | None = None
     attempts = 0
     accept = 0
     swap_depth = 0
@@ -261,6 +277,8 @@ def macro_increase_path(
                 materialized_motif=int(realized.get("materialized_motif", 0) or 0),
             )
             reward += 0.01 * survive_rank(alt, realized)
+            # P: Motif tip telem is via build_graph Motif soft path_accept_apply;
+            # do not inflate Motif path reward (early parts regress under +0.02/+0.08).
             # M4b: Macro execute + MotifJoin validate chain bonus.
             chain_bonus = 0.0
             for join_step in join_nbrs:
@@ -290,6 +308,32 @@ def macro_increase_path(
                 best_snap = child_snap
                 swap_depth = int(depth)
                 accept += 1
+            # P: Motif on large_void — track for tip telem when cov non-regress OR
+            # path_reward_beats. Prefer-return gated by prefer_motif_return.
+            if getattr(alt, "region", None) == MacroRegion.Motif:
+                free_k = str(getattr(child_snap, "free_kind", "") or "")
+                if not free_k:
+                    free_k = str(getattr(anc_snap, "free_kind", "") or "")
+                child_cov = float(getattr(child_snap, "coverage", 0.0) or 0.0)
+                anc_cov = float(getattr(anc_snap, "coverage", 0.0) or 0.0)
+                motif_cov_ok = child_cov + 1e-9 >= anc_cov
+                motif_beats = path_reward_beats(
+                    anc_snap,
+                    child_snap,
+                    base_reward=anc_base,
+                    alt_reward=reward,
+                )
+                take_motif = False
+                if free_k == "large_void" and motif_cov_ok and motif_beats:
+                    take_motif = best_motif_action is None or reward > best_motif_reward
+                elif motif_beats and reward > best_motif_reward:
+                    take_motif = True
+                if take_motif:
+                    best_motif_reward = float(reward)
+                    best_motif_action = alt
+                    best_motif_snap = child_snap
+                    if accept == 0:
+                        accept = 1
     telem["macro_swap_attempts"] = int(
         telem.get("macro_swap_attempts", 0) or 0
     ) + int(attempts)
@@ -309,6 +353,13 @@ def macro_increase_path(
     telem["macro_chain_accept"] = int(telem.get("macro_chain_accept", 0) or 0) + int(
         macro_chain_accept
     )
+    # T0: MotifJoin-on-accept is a soft signal, not a real tip install.
+    # path_tip_apply stays reserved for path_accept_apply tip_install only.
+    if accept > 0 and path_step_join > 0:
+        telem["path_join_signal"] = int(telem.get("path_join_signal", 0) or 0) + 1
+        telem["macro_path_motif_soft"] = int(
+            telem.get("macro_path_motif_soft", 0) or 0
+        ) + 1
     prev_hist = list(telem.get("path_type_hist") or [0, 0, 0, 0])
     prev_hist = (prev_hist + [0, 0, 0, 0])[:4]
     telem["path_type_hist"] = [
@@ -316,7 +367,143 @@ def macro_increase_path(
     ]
     # G0: per-call overwrite (not +=) so dg_funnel path_ms is this probe only.
     telem["replay_from_ancestor_ms"] = (time.perf_counter() - t0) * 1000.0
+    # P: surface Motif path candidate for accept (tip_install telem); outer tip swap
+    # is gated in build_graph (Motif soft does not thrash late Δ). Early evaluator
+    # keeps Void path winners (prefer_motif_return=False) to hold floors.
+    if prefer_motif_return and best_motif_action is not None:
+        return best_motif_action, float(best_motif_reward), best_motif_snap
     return best_action, best_reward, best_snap
 
 
-__all__ = ["ancestors", "macro_increase_path", "path_probe_budget"]
+def path_accept_eligible(
+    *,
+    alt_action: Any,
+    path_accept_snap: Any,
+    parent_snap: Any,
+    base_reward: float,
+    alt_reward: float,
+    path_overlap_ok: bool,
+    min_cov_delta: float = 0.005,
+    min_void_fill_delta: float = 0.02,
+    relax_motif_void_fill: bool = False,
+) -> tuple[bool, bool, float, float]:
+    """Shared path-accept gate (Dp1/P2/P): reward + cov + overlap (+ void on large_void).
+
+    Returns ``(eligible, cov_ok, base_cov, alt_cov)``.
+    P2: on ``free_kind==large_void``, ``cov_ok`` if coverage non-regress **and**
+    ``void_fill`` Δ ≥ ``min_void_fill_delta`` (overlap still mandatory).
+    P: when ``relax_motif_void_fill`` and Motif on large_void, drop void_fill Δ —
+    overlap + coverage non-regress only (build_graph late tip path).
+    Non-void unchanged (cov + min_cov_delta).
+    """
+    if alt_action is None or path_accept_snap is None:
+        return False, False, 0.0, 0.0
+    is_motif = getattr(alt_action, "region", None) == MacroRegion.Motif
+    base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
+    alt_cov = float(getattr(path_accept_snap, "coverage", 0.0) or 0.0)
+    free_kind = str(getattr(path_accept_snap, "free_kind", "") or "")
+    if not free_kind:
+        free_kind = str(getattr(parent_snap, "free_kind", "") or "")
+    # P: Motif on large_void — drop void_fill Δ; require overlap + cov non-regress
+    # (do not re-gate vs outer parent reward; macro_increase_path already filtered).
+    if relax_motif_void_fill and is_motif and free_kind == "large_void":
+        cov_ok = bool(path_overlap_ok) and alt_cov + 1e-9 >= base_cov
+        return True, cov_ok, base_cov, alt_cov
+    if not path_reward_beats(
+        parent_snap,
+        path_accept_snap,
+        base_reward=float(base_reward),
+        alt_reward=float(alt_reward),
+    ):
+        return False, False, 0.0, 0.0
+    if free_kind == "large_void":
+        base_vf = float(getattr(parent_snap, "void_fill", 0.0) or 0.0)
+        alt_vf = float(getattr(path_accept_snap, "void_fill", 0.0) or 0.0)
+        cov_ok = (
+            bool(path_overlap_ok)
+            and alt_cov + 1e-9 >= base_cov
+            and (alt_vf - base_vf) + 1e-12 >= float(min_void_fill_delta)
+        )
+    else:
+        cov_ok = (
+            bool(path_overlap_ok)
+            and alt_cov + 1e-9 >= base_cov + float(min_cov_delta)
+        )
+    return True, cov_ok, base_cov, alt_cov
+
+
+def path_accept_apply(
+    *,
+    mode: str,
+    cov_ok: bool,
+    path_overlap_ok: bool,
+    alt_action: Any,
+    enable_macro_path_replay: bool,
+    mutate_motif_base_on_path: bool,
+    telem: dict,
+    free_kind: str = "",
+) -> dict[str, Any]:
+    """Dp1 apply decision: tip-install vs credit-only vs Motif-soft.
+
+    ``mode``:
+      - ``build_graph``: Motif soft tip-install without replay flag
+      - ``evaluator``: tip-install only when enable_macro_path_replay
+    ``free_kind`` reserved for late-gated Void tip (P1 trial regressed early).
+    Returns dict with tip_install / credit / motif_soft / upsert / skip flags.
+    """
+    _ = free_kind
+    out = {
+        "tip_install": False,
+        "credit": False,
+        "motif_soft": False,
+        "upsert": False,
+        "overlap_skip": False,
+        "cov_skip": False,
+    }
+    if not path_overlap_ok:
+        out["overlap_skip"] = True
+        return out
+    is_motif = getattr(alt_action, "region", None) == MacroRegion.Motif
+    apply_replay = bool(enable_macro_path_replay)
+    # P: never tip-install on cov_skip without coverage check (banned early 0.522).
+    if not cov_ok:
+        out["cov_skip"] = True
+        if mode == "build_graph" and (apply_replay or is_motif):
+            out["credit"] = True
+            out["motif_soft"] = bool(is_motif and not apply_replay)
+        return out
+    if mode == "evaluator":
+        # Evaluator: tip-install only with enable_macro_path_replay (early Motif soft
+        # tip-install regressed area). Late build_graph Motif soft proves path_tip.
+        if apply_replay:
+            out["tip_install"] = True
+            out["credit"] = True
+            out["upsert"] = bool(mutate_motif_base_on_path)
+        else:
+            out["credit"] = True
+            out["motif_soft"] = bool(is_motif)
+        telem["path_tip_apply"] = int(telem.get("path_tip_apply", 0) or 0) + int(
+            out["tip_install"]
+        )
+        return out
+    # build_graph: Motif soft OR replay → tip install; else credit-only (Q351).
+    if apply_replay or is_motif:
+        out["tip_install"] = True
+        out["credit"] = True
+        out["motif_soft"] = bool(is_motif and not apply_replay)
+        out["upsert"] = bool(mutate_motif_base_on_path)
+    else:
+        out["credit"] = True
+    telem["path_tip_apply"] = int(telem.get("path_tip_apply", 0) or 0) + int(
+        out["tip_install"]
+    )
+    return out
+
+
+__all__ = [
+    "ancestors",
+    "macro_increase_path",
+    "path_accept_apply",
+    "path_accept_eligible",
+    "path_probe_budget",
+]

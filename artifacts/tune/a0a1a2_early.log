@@ -1,0 +1,14 @@
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+  -> parts=58 area=0.562 kiss_s=0.23 kiss_o=0.83 auc=0.86 ok=True free=large_void/56.4 void=0/224/14/14 time=53.95s
+     letter telem niche_pos=1 niche_rescue=0 contact_grg_upserts=0 pin=0/0 dfs_passes=2 refine_ms=640.2 history_expand=96 cluster_copy=24 free_space_cloud=0 rim=0.889 rim_sat=0 side_pack=0/0 ray=0/0 voronoi=0/0 erosion=0/0 peak_ray=84 peak_ero=6 peak_sp=0 inward_ray_keys=0 inward_att=0 mix_floor=0 motif_ov=0 plat_boost=1 run_3b=1 3b_ok=0 3b_try=1 3b_hull=35 repair=1/2 repack=1/0/0/0 arch_n=2 motif_ref=2 restore=0 bottleneck=graph_to_nest zones=['void_seek', 'void_seek'] densify=void_yield_drop attach_n=0 kind_keys=309 member_hits=8 mat_motif=0 mat_attach=0 kiss_pairs=8 pair_contact_n=8 edge_parallel_n=50 largest_slot_area=0.373 motif_seed=2 gls=11/0/16 inject_n=2 motif_hit=0 path_tip=0 compose_sz=0 place_coh=0/1/0/0 coh_sig=0 cache_inv_coh=0 union_n=2 union_win=0/0 grow_rej=0/0/0/0/0 grow_1st=0/0/0 grow_tier=0/0/0 grow_cls=6/52/0 soft_inc=52 grow_ord=0 grow_adj=0 grow_touch=3 full_clear=0 fb_lead=0 coemit=0 foreign_fail=0/0/0 soft_fgn=0 pick=4/0/0/4/0/0/0 lead_fail=0 lat=0/0 coh_amaf=0 lock_fp=0 beam_won=0 hollow_retry=2 bonded=0 w1_sot=0/52 path_cred=0 soft=0 stitch=0 beam=1 seq_full=1 seq_miss=0 seq_clear=0 seq_pack=0 pair_restore=0 pack_boost=0 compose_hold=0 join_n=1 graph_hit=2 cohorts_n=1 kind_survive=8 motif_credit=0 amaf_hits=10 mcts_rid=0 rid_amaf=0 arch_mix=4 cc_mix=0 mix_skip= pin_surv=2 follower_miss=819 void_scale=4.0 mp_cand=1 arch_reject=0 arch_origin=0 ref_sc=0 mp_acc=4 mp_dep=1 path_x=14 p_mac=9 p_join=11 surv_m=0 path_up=0 cheap_d=0.000 prop_ms=6922.5 compose_ms=242.5 mpg=812.5/737 mpg_x=0.2/10.0/263.2 dfs=634.7/3.3 ray=2476.3 path_ms=384.8 path_skip=0
+     diag cov=0.562/0.562/seed=0.091 bn=graph_to_nest void=0/224/14/14 nest_r=0.06 nvr_min=0.14 hollow_iters=1 hold=1 ovr=0 beam=0/2 scene_sz=2 f_miss=53% hollow_rn=0 regress=0.000 best=0 brej=0 cc=0/0 hybrid=lock:0/0/0 esc=0 anc=39/0 pick=0/4 | selection_expand:e192/p0/n2/r1 history_expand:e96/p0/n0/r0 corridor_channel:e12/p0/n0/r0
+  GATE FAIL demo_triangle_corner_cluster_s6: ['area_coverage']
+
+| Case | Demand | Propose | DFS | Parts | Area | ΔParts | KissS | KissO | AUC | Time | Indep |
+|------|--------|---------|-----|-------|------|--------|-------|-------|-----|------|-------|
+| demo_triangle_corner_cluster_s6 | 1.21 | shipped | merged_loose_tight | 58.0 | 0.562 | 52.0 | 0.23 | 0.83 | 0.86 | 53.95s | True |
+[15:11:13] make_polygon_graph Avg: 0.9129s | Calls: 6
+[15:11:13] nest_by_graph Avg: 0.0000s | Calls: 0
+[15:11:13] nest_by_scores Avg: 0.0000s | Calls: 0
+[15:11:13] score_elems Avg: 0.0000s | Calls: 0
+[15:11:13] score_rules Avg: 0.0000s | Calls: 0

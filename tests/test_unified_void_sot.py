@@ -21,6 +21,7 @@ from nest_graph.propose.placements_free_space_cloud import (
 from nest_graph.propose.placements_pattern import (
     ClusterPattern,
     emit_packing_clear,
+    propose_placements_cluster_copy,
     stamp_motif_leader_follower,
     void_seek_motif_anchors,
 )
@@ -84,6 +85,142 @@ def test_stamp_motif_leader_follower_fallback(build_graph_config):
     )
     assert len(out) >= 1
     assert any(abs(r[0] - 10.0) < 0.1 and abs(r[1] - 10.0) < 0.1 for r in out)
+
+
+def test_stamp_collide_telem_split_same_gid_kiss(build_graph_config):
+    """H0: same-gid kiss dual at pole records collide subtypes."""
+    from nest_graph.propose.placements_pattern import (
+        _same_gid_rels_kiss,
+        stamp_motif_leader_follower,
+    )
+
+    assert _same_gid_rels_kiss([(0.0, 0.0, 0.0), (0.1, 0.0, 3.14)])
+    assert not _same_gid_rels_kiss([(0.0, 0.0, 0.0), (3.0, 0.0, 0.0)])
+
+    sheet = box(0, 0, 20, 20)
+    # Packed obstacle covers the pole so stamp collides.
+    obstacle = box(9.0, 9.0, 12.0, 12.0)
+    board = ProposeGeometry(
+        sheet,
+        box(0, 0, 0.1, 0.1),
+        box(0, 0, 1, 1),
+        0.05,
+        propose_cfg=ProposeConfig(),
+        full_packed_geoms=[obstacle],
+    )
+    pat = ClusterPattern(
+        members=(
+            (0, (0.0, 0.0, 0.0)),
+            (0, (0.1, 0.0, 3.14159)),
+        ),
+        part_count=2,
+        ref_transform=(10.0, 10.0, 0.0),
+    )
+    skips: dict[str, int] = {}
+    out = stamp_motif_leader_follower(
+        [pat],
+        0,
+        box(0, 0, 1, 1),
+        propose_geom=board,
+        anchors=[(10.0, 10.0, 0.0)],
+        top_n=8,
+        skip_reasons=skips,
+        void_pole=Point(10.0, 10.0),
+    )
+    # H0 collide split + H1 identity-primary (clear-first helper not wired —
+    # occupied pole records collide_at_pole / same_gid_dual_rel_fail).
+    assert int(skips.get("collide_at_pole", 0) or 0) >= 1
+    assert int(skips.get("same_gid_dual_rel_fail", 0) or 0) >= 1
+    assert int(skips.get("collide", 0) or 0) >= 1
+    assert int(skips.get("same_gid_identity_primary", 0) or 0) >= 1
+    assert int(skips.get("leader_fail", 0) or 0) >= 1
+
+
+def test_stamp_same_gid_identity_primary_emits(build_graph_config):
+    """H1: kiss dual no longer blocks emit when identity leader clears."""
+    sheet = box(0, 0, 30, 30)
+    board = ProposeGeometry(
+        sheet,
+        box(0, 0, 0.1, 0.1),
+        box(0, 0, 1, 1),
+        0.05,
+        propose_cfg=ProposeConfig(),
+        full_packed_geoms=[box(0, 0, 2, 2)],
+    )
+    pat = ClusterPattern(
+        members=(
+            (0, (0.0, 0.0, 0.0)),
+            (0, (0.1, 0.0, 3.14159)),
+        ),
+        part_count=2,
+        ref_transform=(15.0, 15.0, 0.0),
+    )
+    skips: dict[str, int] = {}
+    out = stamp_motif_leader_follower(
+        [pat],
+        0,
+        box(0, 0, 1, 1),
+        propose_geom=board,
+        anchors=[(15.0, 15.0, 0.0)],
+        top_n=8,
+        skip_reasons=skips,
+        void_pole=Point(15.0, 15.0),
+    )
+    assert len(out) >= 1
+    assert int(skips.get("same_gid_identity_primary", 0) or 0) >= 1
+
+
+def test_cluster_copy_f0_clear_first_telem(build_graph_config):
+    """F0: dense-pack densify path records clear / ring telem."""
+    sheet = box(0, 0, 40, 40)
+    # Obstacle covers the pole so ring + clear-first fire.
+    obstacle = box(19.0, 19.0, 22.0, 22.0)
+    part = box(0, 0, 1.5, 1.5)
+    cfg = ProposeConfig(cluster_copy_anchor_seeds=4, motif_use_topo_anchors=True)
+    # F0 densify_clear gates on n_packed >= 60 (late densify / post-ckpt).
+    packed = [obstacle] + [box(0.0, float(i) * 0.2, 0.15, float(i) * 0.2 + 0.15) for i in range(60)]
+    board = ProposeGeometry(
+        sheet,
+        box(0, 0, 0.1, 0.1),
+        part,
+        0.05,
+        propose_cfg=cfg,
+        full_packed_geoms=packed,
+    )
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)),),
+        part_count=1,
+        ref_transform=(20.0, 20.0, 0.0),
+    )
+
+    class _FS:
+        target_poly = box(5, 5, 35, 35)
+        analysis = None
+
+    skips: dict[str, int] = {}
+    out = propose_placements_cluster_copy(
+        [pat],
+        0,
+        part,
+        sheet,
+        obstacle,
+        min_dist=0.05,
+        propose_geom=board,
+        pt_push=Point(20.0, 20.0),
+        propose_cfg=cfg,
+        top_n=8,
+        void_pole=Point(20.0, 20.0),
+        free_space=_FS(),
+        skip_reasons=skips,
+    )
+    assert int(skips.get("pocket_align_args", 0) or 0) >= 1
+    assert (
+        int(skips.get("anchor_clear_fail", 0) or 0)
+        + int(skips.get("anchor_clear_kept", 0) or 0)
+        + int(skips.get("pole_ring_clear", 0) or 0)
+        + int(skips.get("pole_ring_fail", 0) or 0)
+    ) >= 1
+    assert isinstance(out, list)
 
 
 def test_pole_near_count():
@@ -308,4 +445,5 @@ def test_densify_inner_collect_disables_cloud_reemit():
     src = inspect.getsource(pl._void_seek_densify)
     assert '"use_free_space_cloud": False' in src
     assert "_free_space_cloud_coords" in src
+    assert "motif_lattice_min_step" in src
     assert "void_seek_free" in inspect.getsource(pl.proposed_transforms_for_groups)

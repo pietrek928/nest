@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from dataclasses import dataclass
 
+from nest_graph.propose.placement_common import count_edge_parallel_transforms
 from nest_graph.propose.void_selection import (
     centroid_in_free,
     count_graph_in_free,
@@ -16,6 +17,34 @@ from nest_graph.propose.void_selection import (
     void_pole_near_radius,
     zones_have_void_hijack,
 )
+
+
+def apply_pairing_edge_slot_census(
+    propose_stats: dict,
+    *,
+    free_info: Any,
+    transforms: Sequence | None = None,
+    selected: Sequence[int] | None = None,
+    sheet: Any = None,
+) -> dict[str, Any]:
+    """N0 census: pair_contact_n / edge_parallel_n / largest_slot_area into propose_stats."""
+    pair_n = int(propose_stats.get("kiss_pairs", 0) or 0)
+    slot = float(getattr(free_info, "largest_area", 0.0) or 0.0)
+    if slot <= 0.0:
+        slot = float(propose_stats.get("largest_slot_area", 0.0) or 0.0)
+    edge_n = int(propose_stats.get("edge_parallel_n", 0) or 0)
+    if transforms is not None and selected is not None and sheet is not None:
+        edge_n = int(
+            count_edge_parallel_transforms(transforms, selected, sheet)
+        )
+    propose_stats["pair_contact_n"] = int(pair_n)
+    propose_stats["edge_parallel_n"] = int(edge_n)
+    propose_stats["largest_slot_area"] = float(slot)
+    return {
+        "pair_contact_n": int(pair_n),
+        "edge_parallel_n": int(edge_n),
+        "largest_slot_area": float(slot),
+    }
 
 
 def format_void_leak_line(
@@ -111,9 +140,19 @@ def format_void_leak_line(
         f"sel_kept={int(propose_stats.get('sel_kept', 0))} "
         f"incumbent_hold={int(propose_stats.get('incumbent_hold', 0))} "
         f"incumbent_mapped={int(propose_stats.get('incumbent_mapped', 0))} "
+        f"incumbent_key_miss={int(propose_stats.get('incumbent_key_miss', 0))} "
+        f"incumbent_proj_snap={int(propose_stats.get('incumbent_proj_snap', 0))} "
+        f"incumbent_proj_indep_n={int(propose_stats.get('incumbent_proj_indep_n', 0))} "
         f"void_override={int(propose_stats.get('void_override', 0))} "
+        f"void_override_area_cap={int(propose_stats.get('void_override_area_cap', 0))} "
+        f"void_override_rim_relax={int(propose_stats.get('void_override_rim_relax', 0))} "
+        f"incumbent_release={int(propose_stats.get('incumbent_release', 0))} "
         f"colonize={int(propose_stats.get('colonize_pinned', 0))}/"
         f"{int(propose_stats.get('colonize_blocked', 0))} "
+        f"col_pref={int(propose_stats.get('colonize_prefer', 0))}/"
+        f"{int(propose_stats.get('escape_prefer_colonize', 0))} "
+        f"col_rej={int(propose_stats.get('colonize_area_reject', 0))} "
+        f"col_pa={int(propose_stats.get('colonize_prefer_accept', 0))} "
         f"nest_void_term_hits={int(propose_stats.get('nest_void_term_hits', 0))} "
         f"void_refine_hold={int(propose_stats.get('void_refine_hold', 0))} "
         f"dfs_passes={int(propose_stats.get('dfs_passes', 0))} "
@@ -121,7 +160,8 @@ def format_void_leak_line(
         f"refine_ms={float(propose_stats.get('refine_ms', 0.0) or 0.0):.1f} "
         f"densify={densify_a}/{densify_f}"
         f"{reason}{pocket}"
-        f"{_motif_skip_snip(propose_stats, n_patterns)}"
+        f" densify_xy_in={int(densify.get('densify_xy_in', 0) or 0)}"
+        f"{_motif_skip_snip(propose_stats, n_patterns, densify=densify)}"
         f" cascade={densify.get('cascade_stopped_after', 'none')}"
         f" nms={int(densify.get('nms_kept', 0))}/{int(densify.get('nms_dropped', 0))}"
         f" attract={attract_edges}/{attract_pairs_selected}"
@@ -133,30 +173,94 @@ def format_void_leak_line(
     )
 
 
-def _motif_skip_snip(propose_stats: Mapping[str, Any], n_patterns: int) -> str:
-    """Named motif skip keys when patterns>0 (T1/M0)."""
+def _motif_skip_snip(
+    propose_stats: Mapping[str, Any],
+    n_patterns: int,
+    *,
+    densify: Mapping[str, Any] | None = None,
+) -> str:
+    """Named motif skip keys when patterns>0 (T1/M0). Prefer count maps over key lists."""
     if int(n_patterns) <= 0:
         return ""
-    skip = propose_stats.get("pocket_skip") or propose_stats.get("motif_skip") or {}
-    if not isinstance(skip, Mapping):
-        densify = propose_stats.get("densify_stats") or {}
-        skip = densify.get("pocket_skip_map") or {}
+    dens = densify if isinstance(densify, Mapping) else {}
+    if not dens:
+        nested = propose_stats.get("densify_stats")
+        dens = nested if isinstance(nested, Mapping) else {}
+    skip: Any = propose_stats.get("motif_skip")
+    if not isinstance(skip, Mapping) or not skip:
+        skip = dens.get("motif_skip")
+    if not isinstance(skip, Mapping) or not skip:
+        skip = dens.get("pocket_skip_map")
     if not isinstance(skip, Mapping):
         return ""
     keys = (
+        "collide_at_pole",
+        "collide_topo",
+        "same_gid_dual_rel_fail",
+        "same_gid_identity_primary",
+        "anchor_clear_fail",
+        "anchor_clear_kept",
+        "clear_xy_ok",
+        "clear_xy_fail",
+        "clear_xy_none",
+        "clear_xy_topo_fallback",
+        "clear_xy_topo_fallback_clear",
+        "clear_xy_topo_fallback_unclear",
+        "clear_xy_topo_fallback_refuse",
+        "fallback_clear_xy_identity",
+        "topo_off_pole_n",
+        "topo_near_pole_n",
+        "fit_probe_ok",
+        "fit_probe_fail",
+        "fit_obs_inradius",
+        "void_clear_rate",
+        "void_clear_ok",
+        "void_clear_try",
+        "wedge_grain_n",
+        "fit_stop_all_groups",
+        "cc_stamp_n",
+        "cc_claim_dup",
+        "cc_claim_xfer",
+        "cc_dry_drop",
+        "cc_dry_skip_unlock",
+        "pair_union_fit_ok",
+        "pair_union_fit_fail",
+        "clear_xy_slide_ok",
+        "clear_xy_ok_grain",
+        "clear_xy_fail_near",
+        "clear_xy_jostle_ok",
+        "pole_ring_anchors",
+        "pole_ring_clear",
+        "pocket_align_args",
+        "free_void_cent_anchors",
+        "no_clear_anchors",
         "no_rels",
         "collide",
-        "motif_collide",
         "leader_fail",
         "no_anchors",
         "fallback_leader",
         "full_motif_clear",
     )
     parts = []
+    seen_labels: set[str] = set()
+    # T0: always surface clear-rate when sampled (0 is diagnostic).
+    try_n = int(skip.get("void_clear_try", 0) or skip.get("motif_void_clear_try", 0) or 0)
+    if try_n > 0:
+        rate = int(skip.get("void_clear_rate", 0) or skip.get("motif_void_clear_rate", 0) or 0)
+        ok_n = int(skip.get("void_clear_ok", 0) or skip.get("motif_void_clear_ok", 0) or 0)
+        parts.append(f"void_clear_rate={rate}")
+        parts.append(f"void_clear_ok={ok_n}")
+        parts.append(f"void_clear_try={try_n}")
+        seen_labels.update({"void_clear_rate", "void_clear_ok", "void_clear_try"})
     for k in keys:
         v = int(skip.get(k, 0) or skip.get(f"motif_{k}", 0) or 0)
-        if v > 0:
-            parts.append(f"{k}={v}")
+        if v <= 0:
+            continue
+        label = k[6:] if k.startswith("motif_") else k
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        parts.append(f"{label}={v}")
     if not parts:
         return ""
     return f" motif_skip=[{','.join(parts)}]"
@@ -237,7 +341,10 @@ def build_void_leak_dict(
         "sel_kept": int(propose_stats.get("sel_kept", 0)),
         "incumbent_hold": int(propose_stats.get("incumbent_hold", 0)),
         "incumbent_mapped": int(propose_stats.get("incumbent_mapped", 0)),
+        "incumbent_key_miss": int(propose_stats.get("incumbent_key_miss", 0)),
+        "incumbent_proj_snap": int(propose_stats.get("incumbent_proj_snap", 0)),
         "void_override": int(propose_stats.get("void_override", 0)),
+        "void_override_area_cap": int(propose_stats.get("void_override_area_cap", 0)),
         "colonize_pinned": int(propose_stats.get("colonize_pinned", 0)),
         "colonize_blocked": int(propose_stats.get("colonize_blocked", 0)),
         "colonize_rim_drop": int(propose_stats.get("colonize_rim_drop", 0)),
@@ -264,6 +371,7 @@ def build_void_leak_dict(
         "densify_fired": densify_f,
         "densify_accepted": densify_a,
         "densify_reason": densify_reason,
+        "densify_xy_in": int(densify.get("densify_xy_in", 0) or 0),
         "pocket_skip": list(pocket_skip),
         "emitted_by_proposer": emitted_bp,
         "pool_by_proposer": pool_bp,
@@ -389,6 +497,9 @@ def build_motif_telem(
         "fallback_leader": _skip("fallback_leader"),
         "leader_fail": _skip("leader_fail"),
         "collide": _skip("collide") or _skip("motif_collide"),
+        "collide_at_pole": _skip("collide_at_pole"),
+        "collide_topo": _skip("collide_topo"),
+        "same_gid_dual_rel_fail": _skip("same_gid_dual_rel_fail"),
         "lattice_anchors_added": _skip("lattice_anchors_added"),
         "lattice_anchors_kept": _skip("lattice_anchors_kept"),
         "foreign_clear_fail_sheet": _skip("foreign_clear_fail_sheet"),
@@ -732,6 +843,9 @@ def merge_phase_gate_telem(
     mt = mcts_telem or propose_stats.get("mcts") or {}
     if isinstance(mt, dict):
         leak["mcts_rule_id"] = int(mt.get("mcts_rule_id", leak.get("mcts_rule_id", 0)) or 0)
+        leak["mcts_preset_id"] = int(
+            mt.get("mcts_preset_id", leak.get("mcts_preset_id", 0)) or 0
+        )
         leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
         leak["cheap_outer_reward_delta"] = float(
             mt.get("cheap_outer_reward_delta", leak.get("cheap_outer_reward_delta", 0.0)) or 0.0
@@ -773,6 +887,54 @@ def merge_phase_gate_telem(
         leak["path_credit_n"] = int(
             mt.get("path_credit_n", leak.get("path_credit_n", 0)) or 0
         )
+        leak["path_tip_apply"] = int(
+            mt.get("path_tip_apply", leak.get("path_tip_apply", 0)) or 0
+        )
+        leak["path_join_signal"] = int(
+            mt.get("path_join_signal", leak.get("path_join_signal", 0)) or 0
+        )
+        leak["motif_hit"] = int(mt.get("motif_hit", leak.get("motif_hit", 0)) or 0)
+        leak["kiss_pairs"] = int(
+            propose_stats.get("kiss_pairs", leak.get("kiss_pairs", 0)) or 0
+        )
+        leak["mean_compactness"] = float(
+            propose_stats.get("mean_compactness", leak.get("mean_compactness", 0.0))
+            or 0.0
+        )
+        leak["inject_n"] = int(
+            propose_stats.get("inject_n", leak.get("inject_n", 0)) or 0
+        )
+        leak["pair_contact_n"] = int(
+            propose_stats.get("pair_contact_n", leak.get("pair_contact_n", 0)) or 0
+        )
+        leak["edge_parallel_n"] = int(
+            propose_stats.get("edge_parallel_n", leak.get("edge_parallel_n", 0)) or 0
+        )
+        leak["largest_slot_area"] = float(
+            propose_stats.get(
+                "largest_slot_area", leak.get("largest_slot_area", 0.0)
+            )
+            or 0.0
+        )
+        leak["motif_base_seed_n"] = int(
+            propose_stats.get("motif_base_seed_n", leak.get("motif_base_seed_n", 0))
+            or 0
+        )
+        leak["motif_library_n"] = int(
+            propose_stats.get("motif_library_n", leak.get("motif_library_n", 0))
+            or 0
+        )
+        leak["gls_attempted"] = int(
+            propose_stats.get("gls_attempted", leak.get("gls_attempted", 0)) or 0
+        )
+        leak["gls_insert_moved"] = int(
+            propose_stats.get("gls_insert_moved", leak.get("gls_insert_moved", 0))
+            or 0
+        )
+        leak["gls_separate_moved"] = int(
+            propose_stats.get("gls_separate_moved", leak.get("gls_separate_moved", 0))
+            or 0
+        )
         leak["macro_path_motif_soft"] = int(
             mt.get("macro_path_motif_soft", leak.get("macro_path_motif_soft", 0)) or 0
         )
@@ -805,6 +967,20 @@ def merge_phase_gate_telem(
                     except ValueError:
                         pass
         leak["rule_id_amaf_visits"] = int(len(set(visits)))
+        preset_visits = []
+        for pid in range(8):
+            v = int(
+                mt.get(f"preset_amaf_{pid}")
+                or propose_stats.get(f"preset_amaf_{pid}")
+                or 0
+            )
+            if v > 0:
+                preset_visits.append(pid)
+        leak["preset_amaf_visits"] = int(len(set(preset_visits)))
+        leak["cache_invalidate_preset"] = int(
+            mt.get("cache_invalidate_preset", leak.get("cache_invalidate_preset", 0))
+            or 0
+        )
     leak["archive_mix_floor_hits"] = max(
         int(leak.get("archive_mix_floor_hits", 0) or 0),
         int(propose_stats.get("archive_mix_floor_hits", 0) or 0),
@@ -857,6 +1033,8 @@ def merge_phase_gate_telem(
         "hybrid_pick_join_soft",
         "hybrid_pick_survive_soft",
         "hybrid_pick_sticky_soft",
+        "hybrid_pick_adj_soft",
+        "motif_adj_hits",
         "foreign_clear_fail_sheet",
         "foreign_clear_fail_obs",
         "foreign_clear_fail_empty",
@@ -924,6 +1102,7 @@ def merge_phase_gate_telem(
         "grow_classify_unmapped_n",
         "soft_incumbent_n",
         "grow_order_tier_n",
+        "grow_adj_order",
         "w1_packed_penetrating",
         "w1_obstacle_sot",
         "w1_packed_rebuilt_n",
@@ -934,6 +1113,9 @@ def merge_phase_gate_telem(
         "full_motif_clear",
         "fallback_leader",
         "leader_fail",
+        "collide_at_pole",
+        "collide_topo",
+        "same_gid_dual_rel_fail",
         "lattice_anchors_added",
         "lattice_anchors_kept",
         "motif_coemit_followers",
@@ -1100,6 +1282,7 @@ class VoidLeakGatherCtx:
     void_elite_count_fn: Any = None
     mcts_telem: dict | None = None
     mcts_runner: Any = None
+    sheet: Any = None
 
 
 def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
@@ -1244,6 +1427,13 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         )
     if ctx.mcts_runner is not None:
         propose_stats["niche_hits"] = int(ctx.mcts_runner.niche_archive.total_hits())
+    apply_pairing_edge_slot_census(
+        propose_stats,
+        free_info=ctx.free_info,
+        transforms=ctx.transform,
+        selected=ctx.selected_polys or ctx.selected_nest,
+        sheet=ctx.sheet,
+    )
     return assemble_void_leak(
         free_kind=ctx.free_info.kind,
         max_void_ratio=float(ctx.free_info.max_void_ratio),

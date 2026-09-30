@@ -58,6 +58,7 @@ def run_void_leak_and_niche_credit(
     proposed_list: Sequence | None,
     stratified_void_elite_quota: int = 15,
     print_funnel: bool = True,
+    sheet: Any = None,
 ) -> VoidLeakOrchResult:
     """Void-elite archive + gather_void_leak + niche credit (build_graph + evaluator)."""
     n_props_pole = count_props_near_pole(
@@ -115,6 +116,7 @@ def run_void_leak_and_niche_credit(
             void_elite_count_fn=void_elite_count,
             mcts_telem=mcts_telem,
             mcts_runner=mcts_runner,
+            sheet=sheet,
         )
     )
     had_void_override = bool(
@@ -155,6 +157,9 @@ def run_void_leak_and_niche_credit(
             f" place_coh={int(leak_dict.get('place_cohort_ready', 0) or 0)}/"
             f"{int(leak_dict.get('place_cohort_specs_n', 0) or 0)}/"
             f"{int(leak_dict.get('mcts_cohort_macro_n', 0) or 0)}"
+            f" motif_hit={int(leak_dict.get('motif_hit', 0) or 0)}"
+            f" path_tip={int(leak_dict.get('path_tip_apply', 0) or 0)}"
+            f" path_join={int(leak_dict.get('path_join_signal', 0) or 0)}"
             f" coh_sig={int(leak_dict.get('motif_cohort_sig', 0) or 0)}"
             f" cache_inv_coh={int(leak_dict.get('cache_invalidate_cohort', 0) or 0)}"
             f" union_n={int(leak_dict.get('motif_union_lock_n', 0) or 0)}"
