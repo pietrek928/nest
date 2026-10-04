@@ -121,6 +121,13 @@ def test_browse_k_cadence():
     assert should_browse_tip(iter_idx=2, n_iters=10, is_last_leaf=False)
     assert not should_browse_tip(iter_idx=0, n_iters=10, is_last_leaf=False)
     assert should_browse_tip(iter_idx=0, n_iters=10, is_last_leaf=True)
+    # E: hold + large_void every iter (not only BROWSE_K).
+    assert should_browse_tip(
+        iter_idx=0, n_iters=10, is_last_leaf=False, large_void=True, incumbent_hold=True,
+    )
+    assert not should_browse_tip(
+        iter_idx=0, n_iters=10, is_last_leaf=False, large_void=True, incumbent_hold=False,
+    )
 
 
 def test_note_macro_miss_and_tombstone():

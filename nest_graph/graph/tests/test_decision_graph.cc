@@ -114,3 +114,55 @@ TEST_CASE("neighbors MotifJoin Pose and survive_counts", "[decision_graph]") {
     REQUIRE(sc[0].first == 7);
     REQUIRE(sc[0].second == 1);
 }
+
+TEST_CASE("Macro neighbors union Attach touching tagged MotifJoin", "[decision_graph]") {
+    DecisionGraph dg;
+    MacroAction a{};
+    a.region = MacroRegion::Motif;
+    const int32_t macro_id = dg.macros().add_node(0, a);
+    PoseGraph g;
+    append_elem_at(g, 0, 0.0f, 0.0f);
+    append_elem_at(g, 0, 2.0f, 0.0f);
+    append_elem_at(g, 0, 4.0f, 0.0f);
+    dg.replace_poses(g);
+    dg.set_pose_kind(0, static_cast<uint8_t>(MacroRegion::Motif));
+    dg.set_pose_kind(1, static_cast<uint8_t>(MacroRegion::Motif));
+    dg.add_motif_join(3, 0, 1);
+    dg.add_attach(1, 2);
+    dg.add_attach(0, 2);
+    const auto nbrs = dg.neighbors(node_macro(macro_id));
+    int motif_n = 0;
+    int attach_n = 0;
+    for (const PathNode &n : nbrs) {
+        if (n.kind == PathKind::MotifJoin) {
+            motif_n += 1;
+        } else if (n.kind == PathKind::Attach) {
+            attach_n += 1;
+        }
+    }
+    REQUIRE(motif_n >= 1);
+    REQUIRE(attach_n >= 1);
+}
+
+TEST_CASE("Attach neighbors include MotifJoin sharing endpoint", "[decision_graph]") {
+    DecisionGraph dg;
+    PoseGraph g;
+    append_elem_at(g, 0, 0.0f, 0.0f);
+    append_elem_at(g, 0, 2.0f, 0.0f);
+    append_elem_at(g, 0, 4.0f, 0.0f);
+    dg.replace_poses(g);
+    dg.add_motif_join(5, 0, 1);
+    dg.add_attach(1, 2);
+    const auto nbrs = dg.neighbors(dg.path_node_attach(0));
+    int pose_n = 0;
+    int motif_n = 0;
+    for (const PathNode &n : nbrs) {
+        if (n.kind == PathKind::Pose) {
+            pose_n += 1;
+        } else if (n.kind == PathKind::MotifJoin) {
+            motif_n += 1;
+        }
+    }
+    REQUIRE(pose_n >= 2);
+    REQUIRE(motif_n >= 1);
+}

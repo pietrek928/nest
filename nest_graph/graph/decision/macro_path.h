@@ -67,7 +67,7 @@ inline std::vector<PathNode> rank_motif_join_neighbors(
     const PathNode step = node_macro(macro_node_id);
     std::vector<PathNode> join_steps;
     for (const PathNode &nbr : dg.neighbors(step)) {
-        if (nbr.kind == PathKind::MotifJoin) {
+        if (nbr.kind == PathKind::MotifJoin || nbr.kind == PathKind::Attach) {
             join_steps.push_back(nbr);
         }
     }

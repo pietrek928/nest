@@ -168,7 +168,8 @@ def format_void_leak_line(
         f" 3a={int(propose_stats.get('block_cohort_accepted', 0))}/"
         f"{int(propose_stats.get('block_cohort_related', 0))}"
         f" 3b={int(propose_stats.get('block_hole_accepted', 0))}/"
-        f"{int(propose_stats.get('block_hole_emit_in_hull', 0))}"
+        f"{int(propose_stats.get('block_hole_emit_in_hull', 0))}/"
+        f"mate={int(propose_stats.get('block_hole_mate_n', 0))}"
         f"{prop}"
     )
 
@@ -213,6 +214,8 @@ def _motif_skip_snip(
         "fit_probe_ok",
         "fit_probe_fail",
         "fit_obs_inradius",
+        "fit_void_inradius",
+        "fit_part_max_extent",
         "void_clear_rate",
         "void_clear_ok",
         "void_clear_try",
@@ -252,6 +255,11 @@ def _motif_skip_snip(
         parts.append(f"void_clear_ok={ok_n}")
         parts.append(f"void_clear_try={try_n}")
         seen_labels.update({"void_clear_rate", "void_clear_ok", "void_clear_try"})
+    # T: always surface fit radii trio when densify fit probe ran.
+    if int(skip.get("fit_probe_ok", 0) or 0) > 0 or int(skip.get("fit_probe_fail", 0) or 0) > 0:
+        for fk in ("fit_void_inradius", "fit_obs_inradius", "fit_part_max_extent"):
+            parts.append(f"{fk}={int(skip.get(fk, 0) or 0)}")
+            seen_labels.add(fk)
     for k in keys:
         v = int(skip.get(k, 0) or skip.get(f"motif_{k}", 0) or 0)
         if v <= 0:
@@ -372,6 +380,11 @@ def build_void_leak_dict(
         "densify_accepted": densify_a,
         "densify_reason": densify_reason,
         "densify_xy_in": int(densify.get("densify_xy_in", 0) or 0),
+        "void_yield_tag": str(
+            densify.get("void_yield_tag")
+            or propose_stats.get("void_yield_tag")
+            or ""
+        ),
         "pocket_skip": list(pocket_skip),
         "emitted_by_proposer": emitted_bp,
         "pool_by_proposer": pool_bp,
@@ -430,6 +443,7 @@ def build_void_leak_dict(
         "block_hole_accepted": int(propose_stats.get("block_hole_accepted", 0)),
         "block_hole_emit_in_hull": int(propose_stats.get("block_hole_emit_in_hull", 0)),
         "block_hole_tried": int(propose_stats.get("block_hole_tried", 0) or 0),
+        "block_hole_mate_n": int(propose_stats.get("block_hole_mate_n", 0) or 0),
         "keep_history_on_sterile": bool(
             propose_stats.get("keep_history_on_sterile", False)
         ),
@@ -893,6 +907,77 @@ def merge_phase_gate_telem(
         leak["path_join_signal"] = int(
             mt.get("path_join_signal", leak.get("path_join_signal", 0)) or 0
         )
+        leak["path_step_attach"] = int(
+            mt.get("path_step_attach", leak.get("path_step_attach", 0)) or 0
+        )
+        leak["path_wang_scale"] = float(
+            mt.get("path_wang_scale", leak.get("path_wang_scale", 0.0)) or 0.0
+        )
+        leak["path_nbr_macro"] = max(
+            int(mt.get("path_nbr_macro", leak.get("path_nbr_macro", 0)) or 0),
+            int(mt.get("path_step_macro", leak.get("path_step_macro", 0)) or 0),
+        )
+        leak["path_nbr_join"] = max(
+            int(mt.get("path_nbr_join", leak.get("path_nbr_join", 0)) or 0),
+            int(mt.get("path_step_join", leak.get("path_step_join", 0)) or 0),
+        )
+        leak["path_nbr_attach"] = max(
+            int(mt.get("path_nbr_attach", leak.get("path_nbr_attach", 0)) or 0),
+            int(mt.get("path_step_attach", leak.get("path_step_attach", 0)) or 0),
+        )
+        leak["path_nbr_pose"] = int(
+            mt.get("path_nbr_pose", leak.get("path_nbr_pose", 0)) or 0
+        )
+        leak["path_conflicts_cut"] = int(
+            mt.get("path_conflicts_cut", leak.get("path_conflicts_cut", 0)) or 0
+        )
+        leak["path_lock_join_overlap"] = int(
+            mt.get("path_lock_join_overlap", leak.get("path_lock_join_overlap", 0))
+            or 0
+        )
+        leak["motif_join_from_base"] = max(
+            int(mt.get("motif_join_from_base", leak.get("motif_join_from_base", 0)) or 0),
+            int(propose_stats.get("motif_join_from_base", 0) or 0),
+        )
+        # T: path idle interpretable — probe ran vs cache miss vs soft tip only.
+        leak["path_ran"] = int(mt.get("path_ran", leak.get("path_ran", 0)) or 0)
+        leak["path_cache_miss"] = int(
+            mt.get("path_cache_miss", leak.get("path_cache_miss", 0)) or 0
+        )
+        leak["path_carved"] = int(mt.get("path_carved", leak.get("path_carved", 0)) or 0)
+        leak["path_carved_streak"] = int(
+            mt.get("path_carved_streak", leak.get("path_carved_streak", 0)) or 0
+        )
+        leak["path_alt_none"] = int(
+            mt.get("path_alt_none", leak.get("path_alt_none", 0)) or 0
+        )
+        leak["path_motif_tracked"] = int(
+            mt.get("path_motif_tracked", leak.get("path_motif_tracked", 0)) or 0
+        )
+        leak["path_motif_discarded"] = int(
+            mt.get("path_motif_discarded", leak.get("path_motif_discarded", 0)) or 0
+        )
+        leak["macro_path_cov_skip"] = int(
+            mt.get("macro_path_cov_skip", leak.get("macro_path_cov_skip", 0)) or 0
+        )
+        leak["path_fits_lag"] = int(
+            mt.get("path_fits_lag", leak.get("path_fits_lag", 0)) or 0
+        )
+        leak["last_fits_part"] = int(
+            mt.get("last_fits_part", leak.get("last_fits_part", 0)) or 0
+        )
+        leak["motif_hold_tip"] = int(
+            mt.get("motif_hold_tip", leak.get("motif_hold_tip", 0)) or 0
+        )
+        leak["motif_hold_rim"] = int(
+            mt.get("motif_hold_rim", leak.get("motif_hold_rim", 0)) or 0
+        )
+        leak["motif_hold_fuel"] = int(
+            mt.get("motif_hold_fuel", leak.get("motif_hold_fuel", 0)) or 0
+        )
+        leak["path_motif_force_tip"] = int(
+            mt.get("path_motif_force_tip", leak.get("path_motif_force_tip", 0)) or 0
+        )
         leak["motif_hit"] = int(mt.get("motif_hit", leak.get("motif_hit", 0)) or 0)
         leak["kiss_pairs"] = int(
             propose_stats.get("kiss_pairs", leak.get("kiss_pairs", 0)) or 0
@@ -1233,6 +1318,36 @@ def merge_phase_gate_telem(
     leak["mpg_edge_ms"] = float(
         propose_stats.get("mpg_edge_ms", leak.get("mpg_edge_ms", 0.0)) or 0.0
     )
+    leak["mpg_poly_ms"] = float(
+        propose_stats.get("mpg_poly_ms", leak.get("mpg_poly_ms", 0.0)) or 0.0
+    )
+    leak["mpg_attract_ms"] = float(
+        propose_stats.get("mpg_attract_ms", leak.get("mpg_attract_ms", 0.0)) or 0.0
+    )
+    leak["mpg_apply_ms"] = float(
+        propose_stats.get("mpg_apply_ms", leak.get("mpg_apply_ms", 0.0)) or 0.0
+    )
+    leak["mpg_ctx_ms"] = float(
+        propose_stats.get("mpg_ctx_ms", leak.get("mpg_ctx_ms", 0.0)) or 0.0
+    )
+    leak["mpg_edges_count_ms"] = float(
+        propose_stats.get("mpg_edges_count_ms", leak.get("mpg_edges_count_ms", 0.0))
+        or 0.0
+    )
+    leak["void_core_fat_free"] = int(
+        propose_stats.get("void_core_fat_free", leak.get("void_core_fat_free", 0)) or 0
+    )
+    leak["fits_part"] = int(
+        propose_stats.get("fits_part", leak.get("fits_part", 1)) or 0
+    )
+    dens = propose_stats.get("densify_stats") or {}
+    if isinstance(dens, dict):
+        skip = dens.get("motif_skip") or propose_stats.get("motif_skip") or {}
+    else:
+        skip = propose_stats.get("motif_skip") or {}
+    if isinstance(skip, dict):
+        for fk in ("fit_void_inradius", "fit_obs_inradius", "fit_part_max_extent"):
+            leak[fk] = int(skip.get(fk, leak.get(fk, 0)) or 0)
     leak["graph_edges_n"] = int(
         propose_stats.get("graph_edges_n", leak.get("graph_edges_n", 0)) or 0
     )
@@ -1665,6 +1780,8 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
     return (
         f"dg_funnel "
         f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f} "
+        f"path_ran={int(leak.get('path_ran', 0) or 0)}/"
+        f"{int(leak.get('path_cache_miss', 0) or 0)} "
         f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "
         f"place_coh={int(leak.get('place_cohort_ready', 0) or 0)}/"
         f"{int(leak.get('place_cohort_specs_n', 0) or 0)}/"
@@ -1685,10 +1802,39 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"mpg_x={float(leak.get('mpg_xform_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('mpg_valid_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('mpg_edge_ms', 0.0) or 0.0):.1f} "
+        f"mpg_a={float(leak.get('mpg_attract_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_poly_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_apply_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_ctx_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('mpg_edges_count_ms', 0.0) or 0.0):.1f} "
+        f"fat={int(leak.get('void_core_fat_free', 0) or 0)} "
+        f"fits={int(leak.get('fits_part', 1) or 0)}/"
+        f"{int(leak.get('path_fits_lag', 0) or 0)} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
         f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"
         f"{int(leak.get('void_override', 0) or 0)} "
-        f"path_skip={int(leak.get('path_probe_skip', 0) or 0)}"
+        f"path_skip={int(leak.get('path_probe_skip', 0) or 0)} "
+        f"carved={int(leak.get('path_carved', 0) or 0)}/"
+        f"{int(leak.get('path_carved_streak', 0) or 0)} "
+        f"alt0={int(leak.get('path_alt_none', 0) or 0)} "
+        f"motif_disc={int(leak.get('path_motif_discarded', 0) or 0)}/"
+        f"{int(leak.get('path_motif_tracked', 0) or 0)} "
+        f"cov_skip={int(leak.get('macro_path_cov_skip', 0) or 0)} "
+        f"hold_tip={int(leak.get('motif_hold_tip', 0) or 0)}/"
+        f"{int(leak.get('motif_hold_rim', 0) or 0)}/"
+        f"{int(leak.get('motif_hold_fuel', 0) or 0)}/"
+        f"{int(leak.get('path_motif_force_tip', 0) or 0)} "
+        f"attach={int(leak.get('path_step_attach', 0) or 0)} "
+        f"wang={float(leak.get('path_wang_scale', 0.0) or 0.0):.2f} "
+        f"nbr={int(leak.get('path_nbr_macro', 0) or 0)}/"
+        f"{int(leak.get('path_nbr_join', 0) or 0)}/"
+        f"{int(leak.get('path_nbr_attach', 0) or 0)}/"
+        f"{int(leak.get('path_nbr_pose', 0) or 0)} "
+        f"cut={int(leak.get('path_conflicts_cut', 0) or 0)} "
+        f"lock_ov={int(leak.get('path_lock_join_overlap', 0) or 0)} "
+        f"base_j={int(leak.get('motif_join_from_base', 0) or 0)} "
+        f"densify_xy={int(leak.get('densify_xy_in', 0) or 0)}/"
+        f"{str(leak.get('void_yield_tag', '') or '-')}"
     )
 
 

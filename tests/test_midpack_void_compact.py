@@ -24,6 +24,17 @@ def test_analyze_free_space_large_void():
     assert info.max_void_ratio > 2.5
     assert info.target_pt is not None
     assert info.target_poly is not None
+    assert info.fits_part is True
+
+
+def test_void_fits_part_phantom_sliver():
+    from nest_graph.propose.context import void_fits_part
+
+    # Long thin corridor: large area ratio but tiny inradius vs equal-area disk.
+    sheet = box(0, 0, 20, 0.4)
+    assert not void_fits_part(sheet, part_area=4.0, min_dist=0.05)
+    fat = box(0, 0, 10, 10)
+    assert void_fits_part(fat, part_area=1.0, min_dist=0.05)
 
 
 def test_analyze_free_space_swiss_cheese():

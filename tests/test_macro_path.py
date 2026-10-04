@@ -440,3 +440,20 @@ def test_path_join_signal_distinct_from_tip_apply():
     assert int(telem["path_join_signal"]) == 1
     assert int(telem.get("path_tip_apply", 0) or 0) == 0
     assert "path_join_signal" in mp.__all__ or hasattr(mp, "path_accept_apply")
+
+
+def test_path_edge_census_defaults_without_dg():
+    """E0: census keys present when runner has no DecisionGraph."""
+    from nest_graph.pack.macro_path import record_path_edge_census
+    from nest_graph.pack.runner import MacroMctsRunner
+
+    runner = MacroMctsRunner()
+    telem: dict = {}
+    record_path_edge_census(runner, 0, telem)
+    assert int(telem.get("path_nbr_macro", -1)) == 0
+    assert int(telem.get("path_nbr_join", -1)) == 0
+    assert int(telem.get("path_nbr_attach", -1)) == 0
+    assert int(telem.get("path_nbr_pose", -1)) == 0
+    assert int(telem.get("path_conflicts_cut", -1)) == 0
+    assert int(telem.get("path_lock_join_overlap", -1)) == 0
+    assert int(telem.get("motif_join_from_base", -1)) == 0

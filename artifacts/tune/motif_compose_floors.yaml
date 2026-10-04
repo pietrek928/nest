@@ -196,3 +196,87 @@ nesting_flaws_n_series:
   conclusion: |
     P locked: real path_tip_apply>0 late (soft Motif tip, path_join=0); early ≥0.562/58;
     late Δ ≥ +0.0652/81 (r16 peak +0.0890). Series complete (T0→V→M→D→P).
+
+phantom_void_series:
+  open: {early_area: 0.562, early_parts: 58, late_delta_cov: 0.0652, late_parts: 81}
+  early_final: {area: 0.562, parts: 58, independent_ok: true,
+    note: "R early dense-pair gate; E hold-tip; F fits_part"}
+  early_best_so_far: {area: 0.563, parts: 59, note: "E early r3 peak"}
+  late_final: {delta_cov: 0.0739, area: 0.6746, parts: 83,
+    browse_mid: true, fits_part: "0/1 plateau", block_hole_mate_n: 5,
+    note: "R late r2; Δ≥floor; mate live; 3b accept still 0 (lex)"}
+  late_best_so_far: {delta_cov: 0.0890, area: 0.6898, parts: 84,
+    note: "J peak; R pair-stamp trial +0.0818/84"}
+  shipped:
+    - T telem path_ran/mpg_*/fit_r/fat
+    - O mpg edges_count from hits (out_edge_n)
+    - J mutate_motif_base_on_path default True
+    - C delete soft tip; path_carved on path_reward_beats
+    - E hold+rim≥0.9 unlocks multi-sim tip (not parent jump)
+    - F FreeSpaceAnalysis.fits_part AND void_override/densify-force/path void_fill
+    - R mate synth∪lattice in _emit_hole_candidates; pair dual-stamp n_kept≥60
+  cancelled: []
+  plateau_r: {block_hole_accepted: 0, reason: "lex peel recover; mate telem+floors held"}
+  conclusion: |
+    Series complete T→O→J→C→E→F→R. Early ≥0.562/58 (noise band ~0.54–0.56);
+    late Δ ≥ +0.0652/81 (R +0.0739/83; peak +0.0890). Browse mid-hold via
+    tip-install not parent jump. fits_part names phantom (fits=0 late).
+    3b mate_n>0; accept stays 0 under lex — Motif handoff via repair_mode.
+    Plateau stop: no skip-hold / fourth emitter.
+
+late_dg_wang_series:
+  open: {early_area: 0.562, early_parts: 58, late_delta_cov: 0.0739, late_parts: 83,
+         ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz}
+  early_final: {area: 0.562, parts: 58, independent_ok: true,
+    note: "lock early_omp1; best 0.570/59 final_early_r6; cluster_copy=32"}
+  early_best_so_far: {area: 0.570, parts: 59, note: "final_early_r6"}
+  late_final: {delta_cov: 0.0739, area: 0.6746, parts: 83,
+    path_carved: 1, cluster_copy: 0, path_step_attach: 0, wang_scale: 0,
+    note: "lock late_omp1b; M force tip telem carve; attach_n=0 without attract"}
+  late_best_so_far: {delta_cov: 0.0739, area: 0.6746, parts: 83,
+    note: "matches phantom late_final; prefer peak +0.0890 unreached"}
+  shipped:
+    - T path_alt_none/motif_discarded/cov_skip/fits_lag/pick/place_coh telem
+    - P path_probe_budget thrift on path_carved_streak≥2 hold/plateau
+    - M take_motif cov non-regress + prefer_return under hold/plateau/rim; force tip telem
+    - K path_carved via PackedProposeExtras (not skip_reasons); densify_xy cloud recount
+    - A Macro neighbors ∪ Attach + rank_motif_join MotifJoin∪Attach; path_step_attach telem
+    - W _validate_join_bonus accept_count×motif_adj_hits soft scale
+  cancelled:
+    - U PLACE_COHORT pick +0.5 (early regress); MotifJoin→Attach stamp (path_ms blowup)
+  conclusion: |
+    T→P→M→K→A→W locked. Early ≥0.562/58 (best 0.570/59); late Δ ≥ +0.0739/83 vs iter50
+    (OMP=1 lock late_omp1b). path_carved live late; cluster_copy early>0 late sterile
+    (clear_xy). Attach neighbors shipped but attach_n=0 without attract. Wang soft on
+    realized joins. Prefer peak +0.0890/84 not unlocked — U cancelled.
+
+dg_unify_path_series:
+  open: {early_area: 0.562, early_parts: 58, late_delta_cov: 0.0739, late_parts: 83,
+         ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz}
+  early_final: {area: 0.562, parts: 58, independent_ok: true,
+    note: "E6 early_r1; nbr telem present"}
+  late_final: {delta_cov: 0.0811, area: 0.6818, parts: 83,
+    note: "E6 late; path_nbr_pose live; prefer peak +0.0890"}
+  early_best_so_far: {area: 0.562, parts: 58, note: "E6 / E2 final"}
+  late_best_so_far: {delta_cov: 0.0890, area: 0.6898, parts: 84,
+    note: "wang_e2b_late_a prefer peak"}
+  shipped:
+    - E0 path_nbr_*/cut/lock_ov/base_j census via record_path_edge_census
+    - E1 Attach→MotifJoin neighbors (mirror Join→Attach); C++ test
+    - E2 pose hop-2 + conflicts_cut census (path-neutral); wang tip/carve retained
+    - E4 path_lock_join_overlap census (pose idx ∩ motif_locked)
+    - E6 removed path_prior_lock soft-rank wire; active E2/E3/E5 rails deleted
+  cancelled:
+    - E2 active pose soft-reward (early 0.554)
+    - E2 arena-child ∪ invent (late invent dilution)
+    - E2 active conflicts cut on join beam (regress vs census-only)
+    - E3 MotifBase→inject when cohorts empty (base_j=0 always; cohorts nonempty)
+    - E4 soft-rank Join×lock (lock_ov=0; inert)
+    - E5 hollow PLACE_COHORT invent scale (prefer +0.0890 already hit)
+  deleted_symbols:
+    - path_prior_lock telem seed (build_graph)
+    - _union_arena_macro_children / _validate_pose_bonus / active conflicts cut
+  conclusion: |
+    Unify series locked E0–E2+E4 census + E1 edges. Propose WIP stashed.
+    Early 0.562/58 · late Δ +0.0811/83 (prefer peak +0.0890). One path-walk
+    SoT via neighbors/rank_motif_join; invent stays generate_macros.

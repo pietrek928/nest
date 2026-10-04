@@ -165,6 +165,7 @@ from nest_graph.pack.macro_path import (
     path_accept_apply,
     path_accept_eligible,
     path_probe_budget,
+    record_path_edge_census,
 )
 from nest_graph.graph import leaf_reward, path_reward_beats
 from nest_graph.pack.motif_credit import (
@@ -656,6 +657,7 @@ def make_polygon_graph(
     part_bases: dict | None = None,
     out_native_geoms: list | None = None,
 ):
+    _ctx_t0 = time.perf_counter()
     sheet, void_geoms = board_context_from_geometry(b, user_holes=user_holes)
     if extra_voids:
         void_geoms.extend(extra_voids)
@@ -666,6 +668,7 @@ def make_polygon_graph(
         epsilon_ratio=epsilon_ratio,
     )
     bases = part_bases if part_bases is not None else _base_geometries(polygons)
+    mpg_ctx_ms = (time.perf_counter() - _ctx_t0) * 1000.0
 
     _xform_t0 = time.perf_counter()
     # G2: collect (i, p, t) only — validity first; transform survivors after.
@@ -705,19 +708,25 @@ def make_polygon_graph(
 
     pending: list[tuple] = []
     pending_geoms: list[Geometry] = []
+    _apply_t0 = time.perf_counter()
     for k, (i, p, t) in enumerate(candidates):
         if not valid_by_k.get(k, False):
             continue
         placed = bases[i].apply_transform(t)
         pending.append((i, p, t, placed))
         pending_geoms.append(placed)
+    mpg_apply_ms = (time.perf_counter() - _apply_t0) * 1000.0
 
     gids = [i for i, _p, _t, _placed in pending]
     angles = [float(t[2]) for _i, _p, t, _placed in pending]
+    _poly_t0 = time.perf_counter()
     selected_polys = [transform_poly(p, t) for _i, p, t, _placed in pending]
+    mpg_poly_ms = (time.perf_counter() - _poly_t0) * 1000.0
     selected_group_id = list(gids)
     selected_transform = [t for _i, _p, t, _placed in pending]
+    mpg_attract_ms = 0.0
     if attract_pairs is None:
+        _attr_t0 = time.perf_counter()
         attract_pairs = join_attract_pairs(
             propose_stats,
             gids,
@@ -728,16 +737,32 @@ def make_polygon_graph(
             kiss_band_scale=attract_kiss_band_scale,
             max_degree=attract_max_degree,
         )
+        mpg_attract_ms = (time.perf_counter() - _attr_t0) * 1000.0
     _edge_t0 = time.perf_counter()
-    graph = build_pose_graph(gids, pending_geoms, angles, attract_pairs=attract_pairs)
+    graph = build_pose_graph(
+        gids,
+        pending_geoms,
+        angles,
+        attract_pairs=attract_pairs,
+    )
+    edge_n_box: list[int] = []
     mpg_edge_ms = (time.perf_counter() - _edge_t0) * 1000.0
     if propose_stats is not None:
-        propose_stats["mpg_xform_ms"] = float(mpg_xform_ms)
-        propose_stats["mpg_valid_ms"] = float(mpg_valid_ms)
-        propose_stats["mpg_edge_ms"] = float(mpg_edge_ms)
+        # T: do not overwrite primary mpg breakdown with mid-pack remakes.
+        if not propose_stats.get("mpg_primary_locked"):
+            propose_stats["mpg_xform_ms"] = float(mpg_xform_ms)
+            propose_stats["mpg_valid_ms"] = float(mpg_valid_ms)
+            propose_stats["mpg_edge_ms"] = float(mpg_edge_ms)
+            propose_stats["mpg_poly_ms"] = float(mpg_poly_ms)
+            propose_stats["mpg_attract_ms"] = float(mpg_attract_ms)
+            propose_stats["mpg_apply_ms"] = float(mpg_apply_ms)
+            propose_stats["mpg_ctx_ms"] = float(mpg_ctx_ms)
+            propose_stats["mpg_edges_count_ms"] = 0.0
+        # O: edge count from find_polygon_intersections hits (not collisions[i] sum).
         propose_stats["graph_edges_n"] = int(
             sum(len(graph.collisions[i]) for i in range(len(pending_geoms))) // 2
         )
+        _ = edge_n_box
     if out_native_geoms is not None:
         out_native_geoms.clear()
         out_native_geoms.extend(pending_geoms)
@@ -1213,7 +1238,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         "amaf_hits": 0,
         "amaf_miss": 0,
         "motif_base_seed_n": int(_mate_seed_n),
+        "path_carved_streak": 0,
+        "last_nest_n": int(ckpt_baseline_parts) if resume_ckpt is not None else 0,
+        "last_incumbent_hold": 0,
+        "last_rim_progress": 0.0,
     }
+    path_carved_streak = 0
+    if resume_ckpt is not None and ckpt_baseline_parts >= 60:
+        # M: late resume starts dense — tip gate can arm after first hold/rim.
+        mcts_telem["last_nest_n"] = int(ckpt_baseline_parts)
     _exec_last: dict = {"snap": mcts_root}
     # DgP: cache last outer compose/refine materials for multi-sim cheap_pack.
     _pack_cache: dict = {"ready": False}
@@ -1323,11 +1356,27 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     continue
                 if int(i) < len(nest_state.group_id):
                     nest_packed.add(int(nest_state.group_id[i]))
-        do_browse = should_browse_tip(
+        # E: schedule browse for choose_browse_parent; hold+rim also unlocks
+        # multi-sim tip install (Motif prefer) without forcing a parent jump.
+        sched_browse = should_browse_tip(
             iter_idx=int(_it),
             n_iters=int(out.n_iters),
             is_last_leaf=is_last_leaf,
         )
+        hold_browse = (
+            (
+                bool(parent_free_hint)
+                or str(getattr(spine_snap, "free_kind", "") or "") == "large_void"
+            )
+            and (
+                bool(plateau.on_plateau)
+                or (
+                    int(mcts_telem.get("last_incumbent_hold", 0) or 0) > 0
+                    and float(mcts_telem.get("last_rim_progress", 0.0) or 0.0) >= 0.9
+                )
+            )
+        )
+        do_browse = bool(sched_browse)
         browse_parent_id, parent_snap, _jumped = choose_browse_parent(
             mcts_runner,
             spine_id=spine_id,
@@ -1361,17 +1410,25 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             for k in ("uh_ran", "compose_ran", "refine_ran", "cluster_copy", "cache_hit"):
                 if k in cheap_t:
                     mcts_telem[k] = cheap_t[k]
-            if do_browse and tip_leaf is not None:
+            if (do_browse or hold_browse) and tip_leaf is not None:
                 tip_snap = mcts_runner.snapshot_at(int(tip_leaf), missing_ok=True)
                 if tip_snap is not None and packed_gids_compatible(
                     tip_snap, nest_packed
                 ):
-                    browse_parent_id = int(tip_leaf)
-                    parent_snap = tip_snap
-                    mcts_telem["browse_leaf_id"] = int(tip_leaf)
-                    mcts_telem["browse_jump"] = int(
-                        int(tip_leaf) != int(spine_id)
-                    )
+                    # E: only install multi-sim tip when it actually jumps; do not
+                    # clobber choose_browse_parent jump with tip_leaf==spine.
+                    if int(tip_leaf) != int(spine_id):
+                        browse_parent_id = int(tip_leaf)
+                        parent_snap = tip_snap
+                        mcts_telem["browse_leaf_id"] = int(tip_leaf)
+                        mcts_telem["browse_jump"] = 1
+                        agent = getattr(mcts_runner, "agent", None)
+                        if agent is not None:
+                            agent.telem["browse_jump"] = int(
+                                agent.telem.get("browse_jump", 0)
+                            ) + 1
+                        if hold_browse and not do_browse:
+                            mcts_telem["browse_hold_tip"] = 1
         mcts_parent_id = int(browse_parent_id)
         mcts_action = tip_action
         # P: seed free_kind before path probe (was after path — late path idle).
@@ -1398,6 +1455,17 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_telem["replay_from_ancestor_ms"] = 0.0
         mcts_telem["path_probe_skip"] = 0
         mcts_telem["motif_tip_pre_path"] = 0
+        mcts_telem["path_ran"] = 0
+        mcts_telem["path_cache_miss"] = 0
+        mcts_telem["path_carved"] = 0
+        mcts_telem["path_alt_none"] = 0
+        mcts_telem["path_motif_discarded"] = 0
+        mcts_telem["path_motif_tracked"] = 0
+        mcts_telem["macro_path_cov_skip"] = 0
+        mcts_telem["path_motif_force_tip"] = 0
+        mcts_telem["motif_hold_tip"] = 0
+        # T: path sees prior-iter fits (set after compose); expose lag explicitly.
+        mcts_telem["path_fits_lag"] = int(mcts_telem.get("last_fits_part", 1) or 0)
         # P: Motif fuel → Motif tip for path_probe_budget only (beam/2); outer tip
         # stays multi_sim/AMAF until ensure_motif_tip_for_fuel below.
         path_tip_for_budget = _motif_tip_for_path_probe(
@@ -1419,6 +1487,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_telem["motif_tip_pre_path"] = 1
         # I1b/D1/P1: probe on plateau or large_void; P1 shrink-runs (beam/4) when
         # place_cohort_ready=0 and tip is not Motif but free_hint. Motif tip → beam/2.
+        # P: thrift when path_carved_streak≥2 on hold/plateau (skip ready∧pick_empty).
         run_path, path_beam, path_depth = path_probe_budget(
             on_plateau=bool(plateau.on_plateau),
             parent_free_hint=bool(parent_free_hint),
@@ -1426,29 +1495,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             tip_action=path_tip_for_budget,
             beam=int(getattr(cfg.propose, "macro_path_beam", 4) or 4),
             max_depth=int(getattr(cfg.propose, "macro_path_max_depth", 3) or 3),
+            path_carved_streak=int(path_carved_streak),
+            incumbent_hold=bool(
+                int(mcts_telem.get("last_incumbent_hold", 0) or 0)
+            ),
+            pick_empty=int(
+                mcts_telem.get("hybrid_pick_trials", 0) or 0
+            )
+            <= 0,
         )
         if not run_path:
             mcts_telem["path_probe_skip"] = 1
-        # P: Motif soft path_tip_apply when Motif fuel on large_void — tip telem
-        # without Motif path-execute miss poison (r15 Δ regress).
-        if (
-            bool(parent_free_hint)
-            and path_tip_for_budget is not None
-            and getattr(path_tip_for_budget, "region", None) == MacroRegion.Motif
-        ):
-            soft_dec = path_accept_apply(
-                mode="build_graph",
-                cov_ok=True,
-                path_overlap_ok=True,
-                alt_action=path_tip_for_budget,
-                enable_macro_path_replay=False,
-                mutate_motif_base_on_path=False,
-                telem=mcts_telem,
-                free_kind="large_void",
-            )
-            if soft_dec.get("tip_install"):
-                mcts_telem["macro_path_motif_soft"] = 1
-                mcts_telem["macro_path_candidate"] = 1
+        # C: no pre-probe Motif soft tip_install (telem inflation without carve).
         if (
             run_path
             and mcts_runner.agent is not None
@@ -1474,6 +1532,41 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 ),
             )
             path_overlap_ok = False
+            agent_pc = getattr(mcts_runner, "agent", None)
+            # M: hold∧rim≥0.9∧large_void∧fuel∧late-density → Motif cov tip.
+            # Fuel: join/compose/ready OR motif_hit/seed (late join often 0).
+            rim_hi = float(mcts_telem.get("last_rim_progress", 0.0) or 0.0) >= 0.9
+            fuel_ok = (
+                int(mcts_telem.get("path_join_signal", 0) or 0) > 0
+                or len(_pack_cache.get("motif_locked") or ()) >= 2
+                or int(mcts_telem.get("motif_compose_accepted_size", 0) or 0)
+                >= 2
+                or bool(getattr(agent_pc, "place_cohort_ready", False))
+                or int(mcts_telem.get("motif_hit", 0) or 0) > 0
+                or int(mcts_telem.get("motif_base_seed_n", 0) or 0) > 0
+            )
+            motif_hold_tip = (
+                int(mcts_telem.get("last_incumbent_hold", 0) or 0) > 0
+                and rim_hi
+                and bool(parent_free_hint)
+                and fuel_ok
+                and int(mcts_telem.get("last_nest_n", 0) or 0) >= 60
+            )
+            mcts_telem["motif_hold_tip"] = int(motif_hold_tip)
+            mcts_telem["motif_hold_rim"] = int(rim_hi)
+            mcts_telem["motif_hold_fuel"] = int(fuel_ok)
+            force_motif = None
+            if motif_hold_tip:
+                force_motif = _motif_tip_for_path_probe(
+                    path_tip_for_budget,
+                    motif_base=mcts_runner.motif_base,
+                    remaining_gids=(
+                        parent_snap.remaining_gids
+                        if parent_snap is not None
+                        else None
+                    ),
+                    seed_n=int(mcts_telem.get("motif_base_seed_n", 0) or 0),
+                )
             with with_isolated_pack_cache(_pack_cache):
                 alt_action, alt_reward, path_accept_snap = macro_increase_path(
                     mcts_runner,
@@ -1485,9 +1578,41 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     max_depth=int(path_depth),
                     telem=mcts_telem,
                     overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(_pack_cache),
-                    prefer_motif_return=False,
+                    prefer_motif_return=bool(motif_hold_tip),
+                    motif_hold_tip=bool(motif_hold_tip),
+                    force_motif_action=force_motif,
                 )
                 path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
+            # E0: census after probe (outside pack_cache isolation — telem only).
+            record_path_edge_census(
+                mcts_runner,
+                int(mcts_parent_id),
+                mcts_telem,
+                motif_locked=_pack_cache.get("motif_locked"),
+            )
+            # M: hold tip armed but Motif execute sterile → telem carve only
+            # (no tip_install / upsert / expand swap — those thrash late Δ).
+            if (
+                motif_hold_tip
+                and force_motif is not None
+                and (
+                    alt_action is None
+                    or getattr(alt_action, "region", None) != MacroRegion.Motif
+                )
+            ):
+                mcts_telem["path_motif_force_tip"] = 1
+                mcts_telem["path_carved"] = int(
+                    mcts_telem.get("path_carved", 0) or 0
+                ) + 1
+                mcts_telem["path_tip_apply"] = int(
+                    mcts_telem.get("path_tip_apply", 0) or 0
+                ) + 1
+                path_carved_streak = 0
+                mcts_telem["path_carved_streak"] = 0
+            if alt_action is None:
+                mcts_telem["path_alt_none"] = int(
+                    mcts_telem.get("path_alt_none", 0) or 0
+                ) + 1
             eligible, cov_ok, _base_cov, _alt_cov = path_accept_eligible(
                 alt_action=alt_action,
                 path_accept_snap=path_accept_snap,
@@ -1496,6 +1621,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 alt_reward=float(alt_reward),
                 path_overlap_ok=path_overlap_ok,
                 relax_motif_void_fill=True,
+                fits_part=bool(
+                    int(mcts_telem.get("last_fits_part", 1) or 0) > 0
+                ),
             )
             if eligible:
                 mcts_telem["macro_path_candidate"] = 1
@@ -1567,8 +1695,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         mcts_telem["macro_path_accept"] = int(
                             mcts_telem.get("macro_path_accept", 0) or 0
                         ) + 1
-                        if not decision.get("motif_soft"):
-                            mcts_action = alt_action
+                        # C: carve tip from tested path child (Motif included).
+                        mcts_action = alt_action
+                        mcts_telem["path_carved"] = int(
+                            mcts_telem.get("path_carved", 0) or 0
+                        ) + 1
+                        path_carved_streak = 0
+                        mcts_telem["path_carved_streak"] = 0
                     if decision["motif_soft"]:
                         mcts_telem["macro_path_motif_soft"] = 1
                     if decision["credit"] and not decision.get("motif_soft"):
@@ -1582,7 +1715,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         mcts_telem["path_credit_n"] = int(
                             mcts_telem.get("path_credit_n", 0) or 0
                         ) + 1
-                    if decision["upsert"] and not decision.get("motif_soft"):
+                    if decision["upsert"] and path_accept_snap is not None:
+                        # J: Q389 upsert on path-proven snap (incl. Motif soft tip).
+                        # Pre-probe soft tip never reaches this block.
                         _path_accept_contact_upsert(
                             mcts_runner,
                             path_accept_snap,
@@ -1607,8 +1742,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             pack_cache=_pack_cache,
                             telem=mcts_telem,
                         )
+            # T: idle carve streak (P thrift / M tip fuel).
+            if int(mcts_telem.get("path_carved", 0) or 0) <= 0:
+                path_carved_streak += 1
+            mcts_telem["path_carved_streak"] = int(path_carved_streak)
         elif run_path and not _pack_cache.get("ready"):
             mcts_telem["path_cache_miss"] = 1
+            path_carved_streak += 1
+            mcts_telem["path_carved_streak"] = int(path_carved_streak)
         # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
         if not str(getattr(parent_snap, "free_kind", "") or ""):
             try:
@@ -1819,6 +1960,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         propose_stats["dg_force_zone"] = mcts_force_zone
         propose_stats["last_graph_n"] = int(mcts_telem.get("last_graph_n", 0) or 0)
         propose_stats["last_nest_n"] = int(mcts_telem.get("last_nest_n", 0) or 0)
+        # K: hand path_carved into propose stamp densify_clear unlock.
+        propose_stats["path_carved"] = int(mcts_telem.get("path_carved", 0) or 0)
         if mcts_force_zone:
             enabled_z = ProposeConfig.proposers_for_place(str(mcts_force_zone))
             propose_stats["enabled_proposers_n"] = (
@@ -1895,6 +2038,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             out_native_geoms=mpg_natives,
         )
         propose_stats["mpg_ms"] = (time.perf_counter() - _mpg_t0) * 1000.0
+        propose_stats["mpg_primary_locked"] = True
         propose_stats["graph_valid_n"] = int(len(transform))
         if pin_keys:
             graph_keys = {
@@ -2157,6 +2301,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_telem["last_nest_n"] = int(len(selected_polys))
             mcts_telem["last_incumbent_hold"] = int(
                 propose_stats.get("incumbent_hold", 0) or 0
+            )
+            mcts_telem["last_rim_progress"] = float(
+                propose_stats.get("rim_progress", 0.0) or 0.0
+            )
+            mcts_telem["last_fits_part"] = int(
+                propose_stats.get(
+                    "fits_part",
+                    int(bool(getattr(free_info, "fits_part", True))),
+                )
+                or 0
+            )
+            mcts_telem["hybrid_pick_trials"] = int(
+                propose_stats.get("hybrid_pick_trials", 0) or 0
+            )
+            mcts_telem["motif_compose_accepted_size"] = int(
+                propose_stats.get("motif_compose_accepted_size", 0) or 0
             )
             propose_stats["motif_sequential_repin"] = 0
             track_d = bool(large_void_motif_plateau.ready)

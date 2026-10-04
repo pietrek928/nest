@@ -6,6 +6,7 @@ import numpy as np
 
 from nest_graph.graph import DecisionGraph, MacroRegion, zone_to_region
 from nest_graph.propose.motif_keys import cohort_member_indices
+from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
 from nest_graph.propose.transform_batch import graph_valid_carry_by_group
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 
@@ -277,12 +278,12 @@ def inject_cohorts_and_bind_graph(
     agent=None,
 ) -> tuple:
     """Q255: inject archive cohorts then bind epoch (one gate for both call sites)."""
-    if patterns:
-        from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
-
+    pats = list(patterns or ())
+    if pats:
         inject_cohorts_from_patterns(
-            patterns, group_id, transform, propose_stats,
+            pats, group_id, transform, propose_stats,
         )
         if agent is not None:
             agent.motif_cohorts = tuple(propose_stats.get("motif_cohorts") or ())
     return bind_graph_epoch(dg, graph, group_id, transform, propose_stats, cfg)
+

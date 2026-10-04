@@ -127,6 +127,9 @@ def test_format_dg_expand_funnel_keys():
     )
     assert line.startswith("dg_funnel ")
     assert "path_ms=12.5" in line
+    assert "path_ran=" in line
+    assert "mpg_a=" in line
+    assert "fat=" in line
     assert "cheap_d=0.010" in line
     assert "place_coh=1/3/2" in line
     assert "pick=4/1/0/3/1" in line
@@ -138,6 +141,9 @@ def test_format_dg_expand_funnel_keys():
     assert "compose=" in line
     assert "mpg_x=" in line
     assert "ray=" in line
+    assert "carved=" in line
+    assert "motif_disc=" in line
+    assert "densify_xy=" in line
 
 
 def test_count_props_near_pole_uses_radius():

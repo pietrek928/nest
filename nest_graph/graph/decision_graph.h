@@ -355,6 +355,57 @@ public:
                     out.push_back(path_node_motif(i));
                 }
             }
+            // A: Attach edges that touch tagged MotifJoin endpoints (local
+            // placement). Fallback: all Attach when MotifJoin empty (attract
+            // pairs already stamped as Attach by bind_epoch).
+            bool any_tagged_motif = false;
+            for (const MotifJoin &mj : motifs_) {
+                if (mj.a < 0 || mj.b < 0) {
+                    continue;
+                }
+                if ((static_cast<std::size_t>(mj.a) < pose_kind_.size()
+                     && pose_kind_[static_cast<std::size_t>(mj.a)]
+                         != kPoseKindUntagged)
+                    || (static_cast<std::size_t>(mj.b) < pose_kind_.size()
+                        && pose_kind_[static_cast<std::size_t>(mj.b)]
+                            != kPoseKindUntagged)) {
+                    any_tagged_motif = true;
+                    break;
+                }
+            }
+            for (std::size_t i = 0; i < attach_.size(); ++i) {
+                const AttachNode &e = attach_[i];
+                if (e.a < 0 || e.b < 0) {
+                    continue;
+                }
+                if (!any_tagged_motif) {
+                    out.push_back(path_node_attach(i));
+                    continue;
+                }
+                bool touch_tagged_motif = false;
+                for (const MotifJoin &mj : motifs_) {
+                    if (mj.a < 0 || mj.b < 0) {
+                        continue;
+                    }
+                    const bool mj_tagged =
+                        (static_cast<std::size_t>(mj.a) < pose_kind_.size()
+                         && pose_kind_[static_cast<std::size_t>(mj.a)]
+                             != kPoseKindUntagged)
+                        || (static_cast<std::size_t>(mj.b) < pose_kind_.size()
+                            && pose_kind_[static_cast<std::size_t>(mj.b)]
+                                != kPoseKindUntagged);
+                    if (!mj_tagged) {
+                        continue;
+                    }
+                    if (e.a == mj.a || e.a == mj.b || e.b == mj.a || e.b == mj.b) {
+                        touch_tagged_motif = true;
+                        break;
+                    }
+                }
+                if (touch_tagged_motif) {
+                    out.push_back(path_node_attach(i));
+                }
+            }
             return out;
         }
         if (step.kind == PathKind::MotifJoin) {
@@ -387,6 +438,13 @@ public:
             }
             if (step.b >= 0 && step.b != step.a) {
                 out.push_back(node_pose(step.b));
+            }
+            // E1: Attach→MotifJoin when they share an endpoint (mirror Join→Attach).
+            for (std::size_t i = 0; i < motifs_.size(); ++i) {
+                const MotifJoin &e = motifs_[i];
+                if (e.a == step.a || e.a == step.b || e.b == step.a || e.b == step.b) {
+                    out.push_back(path_node_motif(i));
+                }
             }
             return out;
         }
