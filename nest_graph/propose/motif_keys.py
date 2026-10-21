@@ -145,6 +145,94 @@ def merge_motif_cohorts(*sources: Sequence | None) -> list[dict]:
     return out
 
 
+def ensure_fringe_swap_cohort(
+    propose_stats: dict | None,
+    locked: Sequence[int],
+    selected: Sequence[int],
+    graph: Any,
+    group_id: Sequence[int],
+    transform: Sequence,
+) -> int:
+    """F3: register a size≥2 collision-fringe cohort as 3a swap candidate B.
+
+    Prefers fringe indices outside the current selection (3a skips B ⊆ sel).
+    """
+    if propose_stats is None or graph is None:
+        return 0
+    lock_set = {int(i) for i in locked if int(i) >= 0}
+    if len(lock_set) < 2:
+        return 0
+    sel_set = {int(i) for i in selected if int(i) >= 0}
+    collisions = getattr(graph, "collisions", None)
+    if collisions is None:
+        return 0
+    fringe: list[int] = []
+    seen: set[int] = set()
+    for i in sorted(lock_set):
+        if i < 0 or i >= len(collisions):
+            continue
+        for u in collisions[i]:
+            uu = int(u)
+            if uu in lock_set or uu in seen or uu < 0:
+                continue
+            seen.add(uu)
+            fringe.append(uu)
+    outside = [u for u in fringe if u not in sel_set]
+    pool = outside if len(outside) >= 2 else fringe
+    if len(pool) < 2:
+        return 0
+    return ensure_locked_motif_cohort(
+        propose_stats,
+        pool[:4],
+        group_id,
+        transform,
+        motif_id=-3,
+    )
+
+
+def ensure_locked_motif_cohort(
+    propose_stats: dict | None,
+    locked: Sequence[int],
+    group_id: Sequence[int],
+    transform: Sequence,
+    *,
+    motif_id: int | None = None,
+) -> int:
+    """F3 handoff: register lock idxs as a motif_cohort for 3a/PLACE_COHORT.
+
+    Returns number of member_keys written (0 if skipped).
+    """
+    if propose_stats is None:
+        return 0
+    idxs = [int(i) for i in locked if int(i) >= 0]
+    if len(idxs) < 2:
+        return 0
+    member_keys: list[tuple[int, tuple[float, float, float]]] = []
+    for i in idxs:
+        if i >= len(group_id) or i >= len(transform):
+            continue
+        key = transform_row_key(np.asarray(transform[i], dtype=np.float64))
+        member_keys.append((int(group_id[i]), key))
+    if len(member_keys) < 2:
+        return 0
+    mid = int(motif_id) if motif_id is not None else -2 - (hash(tuple(sorted(idxs))) % 1000)
+    cohort = {
+        "motif_id": mid,
+        "leader_gid": int(member_keys[0][0]),
+        "leader_key": member_keys[0][1],
+        "member_keys": member_keys,
+    }
+    propose_stats["motif_cohorts"] = merge_motif_cohorts(
+        propose_stats.get("motif_cohorts"),
+        [cohort],
+    )
+    propose_stats["sticky_lock_cohort_n"] = max(
+        int(propose_stats.get("sticky_lock_cohort_n", 0) or 0),
+        int(len(member_keys)),
+    )
+    return int(len(member_keys))
+
+
 def proposer_indices_on_graph(
     group_id: Sequence[int],
     transform: Sequence,

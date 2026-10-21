@@ -1034,6 +1034,7 @@ def colonize_void_onto_base(
     part_areas: Sequence[float] | None = None,
     predicate: FreeCentroidPredicate | None = None,
     prefer_core: bool = False,
+    prefer_idxs: Sequence[int] | None = None,
 ) -> list[int]:
     """Pin free-centroid graph nodes onto ``base`` if collision-clear.
 
@@ -1044,6 +1045,8 @@ def colonize_void_onto_base(
     unlock — drop ≤``max_rim_drop`` plugs when area-aware retry is non-worse.
     F3: ``prefer_core`` sorts ``pred_core`` hits before free-margin peers (Q375
     accept unchanged).
+    F1: ``prefer_idxs`` fronts Scene-cohort members still in the candidate pool
+    (before prefer_core / score sort) so post-hold pin can realize sticky locks.
     """
     t0 = time.perf_counter()
     out = list(base)
@@ -1063,6 +1066,7 @@ def colonize_void_onto_base(
             stats_out["colonize_blocked"] = 0
             stats_out["colonize_rim_drop"] = 0
             stats_out["colonize_prefer"] = 0
+            stats_out["colonize_cohort_prefer"] = 0
             stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
         return out
     candidates = [
@@ -1088,6 +1092,18 @@ def colonize_void_onto_base(
     base_area = _sel_area(out, group_id, part_areas, empty_as_count=True)
     if stats_out is not None:
         stats_out["colonize_prefer"] = 0
+        stats_out["colonize_cohort_prefer"] = 0
+    # F1: Scene-cohort members first (sticky-lock fuel), then prefer_core / scores.
+    cohort_front: list[int] = []
+    if prefer_idxs and candidates:
+        pref_set = {int(i) for i in prefer_idxs if int(i) >= 0}
+        if pref_set:
+            cohort_front = [i for i in candidates if int(i) in pref_set]
+            if cohort_front:
+                rest = [i for i in candidates if int(i) not in pref_set]
+                candidates = rest
+                if stats_out is not None:
+                    stats_out["colonize_cohort_prefer"] = int(len(cohort_front))
     if prefer_core and candidates:
         core_first = [
             i for i in candidates
@@ -1106,6 +1122,10 @@ def colonize_void_onto_base(
             candidates.sort(key=lambda v: float(scores[v]), reverse=True)
     elif scores is not None and len(scores) >= len(collisions):
         candidates.sort(key=lambda v: float(scores[v]), reverse=True)
+    if cohort_front:
+        if scores is not None and len(scores) >= len(collisions):
+            cohort_front.sort(key=lambda v: float(scores[v]), reverse=True)
+        candidates = cohort_front + candidates
 
     out, out_set, pinned, blocked = colonize_pin_clear(
         candidates, collisions, out, out_set,

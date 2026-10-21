@@ -162,6 +162,9 @@ def compose_cached_selection(
     )
     pack_cache["compose_sel"] = list(composed.selected_nest)
     pack_cache["motif_locked"] = list(propose_stats_c.get("motif_locked") or ())
+    pack_cache["refine_skip_motif_lock"] = int(
+        propose_stats_c.get("refine_skip_motif_lock", 0) or 0
+    )
     pack_cache["compose_scores"] = composed.refine_scores
     pack_cache["compose_rules"] = composed.refine_rules
     pack_cache["compose_polys"] = polys
@@ -216,7 +219,12 @@ def refine_cached_selection(
         sel_iter=sel,
         node_areas=node_areas,
         refine_seed=0,
-        locked_indices=list(pack_cache.get("motif_locked") or ()),
+        locked_indices=(
+            []
+            if int(telem.get("refine_skip_motif_lock", 0) or 0) > 0
+            or int(pack_cache.get("refine_skip_motif_lock", 0) or 0) > 0
+            else list(pack_cache.get("motif_locked") or ())
+        ),
         polys=polys,
         group_id=group_id,
         transform=transform,

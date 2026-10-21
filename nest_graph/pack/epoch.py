@@ -151,6 +151,7 @@ def bind_epoch(
     verts = pose_key_to_verts(group_id, transform)
     cohorts = stats.get("motif_cohorts") or densify.get("motif_cohorts") or ()
     motif_join_n = 0
+    motif_join_from_base = 0
     cohort_kind_touch = False
     for cohort in cohorts:
         if not isinstance(cohort, dict):
@@ -173,16 +174,23 @@ def bind_epoch(
                 continue
             dg.add_motif_join(mid, int(leader), int(ix))
             motif_join_n += 1
+            # F0: MotifBase-backed Join attribution (mid >= 0 from pattern/cohort).
+            if mid >= 0:
+                motif_join_from_base += 1
     if cohort_kind_touch:
         dg.set_pose_kinds(kinds)
     stats["motif_join_n"] = int(motif_join_n)
+    stats["motif_join_from_base"] = int(motif_join_from_base)
 
     stats["kind_keys"] = kind_keys
     stats["attach_n"] = int(dg.attach_n())
     stats["kind_n"] = int(dg.kind_tagged_n())
     stats["mutex_n"] = int(dg.mutex_n())
     if propose_stats is not None:
+        prior_base_j = int(propose_stats.get("motif_join_from_base", 0) or 0)
         propose_stats.update(stats)
+        # Accumulate MotifBase→Join edges across binds this iter.
+        propose_stats["motif_join_from_base"] = prior_base_j + int(motif_join_from_base)
 
 
 def realize_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:
@@ -285,5 +293,14 @@ def inject_cohorts_and_bind_graph(
         )
         if agent is not None:
             agent.motif_cohorts = tuple(propose_stats.get("motif_cohorts") or ())
-    return bind_graph_epoch(dg, graph, group_id, transform, propose_stats, cfg)
+    carry = bind_graph_epoch(dg, graph, group_id, transform, propose_stats, cfg)
+    # F0: mirror base_j onto agent telem for path census / dg_funnel.
+    if agent is not None:
+        at = getattr(agent, "telem", None)
+        if isinstance(at, dict):
+            at["motif_join_from_base"] = max(
+                int(at.get("motif_join_from_base", 0) or 0),
+                int(propose_stats.get("motif_join_from_base", 0) or 0),
+            )
+    return carry
 

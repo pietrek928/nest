@@ -453,10 +453,12 @@ def _motif_tip_for_path_probe(
     motif_base: Any,
     remaining_gids: Sequence[int] | None,
     seed_n: int,
+    prefer_motif_id: int | None = None,
 ) -> Any:
     """P: Motif tip for ``path_probe_budget`` when MotifBase has fuel (beam/2).
 
     Does not mutate the outer expand tip — path budget only.
+    F4: ``prefer_motif_id`` from lock-soft Join when set.
     """
     if (
         tip_action is not None
@@ -475,14 +477,19 @@ def _motif_tip_for_path_probe(
         return tip_action
     forced = MacroAction()
     forced.region = MacroRegion.Motif
-    forced.motif_id = 0
+    mid = 0
+    if prefer_motif_id is not None and int(prefer_motif_id) >= 0:
+        mid = int(prefer_motif_id)
+        if mb_n > 0 and mid >= mb_n:
+            mid = 0
+    forced.motif_id = int(mid)
     rem = tuple(int(g) for g in (remaining_gids or ()))
     forced.part_gid = int(rem[0]) if rem else 0
     forced.rule_id = 0
     forced.preset_id = 0
     try:
-        if motif_base is not None and int(motif_base.size()) > 0:
-            rec = motif_base.at(0)
+        if motif_base is not None and int(motif_base.size()) > mid:
+            rec = motif_base.at(mid)
             forced.part_gid = int(
                 getattr(rec, "gid_a", forced.part_gid) or forced.part_gid
             )
@@ -1557,6 +1564,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_telem["motif_hold_fuel"] = int(fuel_ok)
             force_motif = None
             if motif_hold_tip:
+                # F4: path_lock_join_motif_id telem retained; forcing Join mid
+                # tip dumped late med below F3 — Motif tip stays MotifBase.at(0).
                 force_motif = _motif_tip_for_path_probe(
                     path_tip_for_budget,
                     motif_base=mcts_runner.motif_base,
@@ -1567,6 +1576,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     ),
                     seed_n=int(mcts_telem.get("motif_base_seed_n", 0) or 0),
                 )
+            # F2: sticky lock visible to _validate_join_bonus during path probe.
+            mcts_telem["motif_locked"] = list(_pack_cache.get("motif_locked") or ())
             with with_isolated_pack_cache(_pack_cache):
                 alt_action, alt_reward, path_accept_snap = macro_increase_path(
                     mcts_runner,
@@ -1583,7 +1594,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     force_motif_action=force_motif,
                 )
                 path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
-            # E0: census after probe (outside pack_cache isolation — telem only).
+            # E0/F0: census after probe (outside pack_cache isolation — telem only).
+            mcts_telem["motif_join_from_base"] = max(
+                int(mcts_telem.get("motif_join_from_base", 0) or 0),
+                int(
+                    (_pack_cache.get("propose_stats") or {}).get(
+                        "motif_join_from_base", 0
+                    )
+                    or 0
+                ),
+            )
             record_path_edge_census(
                 mcts_runner,
                 int(mcts_parent_id),
@@ -1865,6 +1885,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         propose_stats["survive_by_motif"] = dict(_survive_prior)
         propose_stats["survive_motif_n"] = int(
             sum(int(v) for v in _survive_prior.values())
+        )
+        # F1: at most one sticky plug-realize per resume session (Δ protect).
+        propose_stats["f1_sticky_spent"] = int(
+            _pack_cache.get("f1_sticky_spent", 0) or 0
         )
         keep_hist_sterile = bool(
             (sat_info.sat_override or had_void_override)
@@ -2261,6 +2285,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             candidate_geoms = mid_result.candidate_geoms
             pin_stats = mid_result.pin_stats
             # DgP: warm multi-sim cache for next-iter cheap_pack expands.
+            # Preserve F1 once-per-session sticky budget across clear().
+            _f1_sticky_spent = int(_pack_cache.get("f1_sticky_spent", 0) or 0)
+            if int(propose_stats.get("hold_cohort_nest", 0) or 0) > 0:
+                _f1_sticky_spent = 1
             _pack_cache.clear()
             _pack_cache.update({
                 "ready": True,
@@ -2290,6 +2318,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "compose_group_id": list(group_id),
                 "compose_transform": list(transform),
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
+                "f1_sticky_spent": int(_f1_sticky_spent),
             })
             _sync_agent_motif_cohorts(mcts_runner, propose_stats)
             _pack_cache["motif_cohort_sig"] = int(

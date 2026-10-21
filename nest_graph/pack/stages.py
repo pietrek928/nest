@@ -243,7 +243,12 @@ def _refine_from_ctx(ctx: PackIterCtx, box: RefinePackBox) -> None:
         sel_iter=ctx.sel,
         node_areas=node_areas,
         refine_seed=int(ctx.refine_seed),
-        locked_indices=list(ctx.propose_stats.get("motif_locked") or ()),
+        # F1: hold_cohort sticky fuels 3a/PLACE_COHORT without refine 1.05× tax.
+        locked_indices=(
+            []
+            if int(ctx.propose_stats.get("refine_skip_motif_lock", 0) or 0) > 0
+            else list(ctx.propose_stats.get("motif_locked") or ())
+        ),
         polys=ctx.polys,
         group_id=ctx.group_id,
         transform=ctx.transform,

@@ -51,7 +51,12 @@ from nest_graph.propose.motif_lock import (
     _sort_lock_sets_bonded,
 )
 from nest_graph.propose.first_pass_border import border_kiss_indices
-from nest_graph.propose.motif_keys import merge_motif_cohorts, resolve_motif_keys
+from nest_graph.propose.motif_keys import (
+    ensure_fringe_swap_cohort,
+    ensure_locked_motif_cohort,
+    merge_motif_cohorts,
+    resolve_motif_keys,
+)
 from nest_graph.board import board_context_from_geometry
 from nest_graph.pack.epoch import bind_epoch
 from nest_graph.pack.cache_key import cheap_lock_fingerprint
@@ -418,6 +423,21 @@ def _lex_pick_better(
     )
 
 
+def _record_lock_incumbent_split(
+    propose_stats: dict,
+    locked_motif: Sequence[int],
+    *,
+    incumbent: Sequence[int],
+) -> None:
+    """F0: lock members already on incumbent vs new-to-incumbent (telem)."""
+    inc_set = {int(i) for i in incumbent if int(i) >= 0}
+    lock_idxs = [int(i) for i in locked_motif if int(i) >= 0]
+    lock_inc = sum(1 for i in lock_idxs if i in inc_set)
+    lock_new = len(lock_idxs) - lock_inc
+    propose_stats["lock_inc_n"] = int(lock_inc)
+    propose_stats["lock_new_n"] = int(lock_new)
+
+
 @dataclass
 class ComposedSelection:
     """Result of score compose + nest seed (before DFS / pin)."""
@@ -676,6 +696,19 @@ def compose_and_nest_selection(
         ):
             selected_nest = locked_cand
             locked_motif = list(seed_lock)
+    # F1: map incumbent before beam so pin-first can require lock_new >= 1
+    # (avoid consuming beam slots that finalize hygiene would drop).
+    incumbent = _map_incumbent_indices(
+        group_id=group_id,
+        transform=transform,
+        packed_group_id=packed_group_id,
+        packed_transform=packed_transform,
+        graph=graph,
+        key_map=key_to_ix,
+        propose_stats=propose_stats,
+        use_projected_keys=True,
+    )
+    inc_set = {int(i) for i in incumbent}
     motif_beam_trials = 0
     motif_beam_wins = 0
     beamed_tried: set[tuple[int, ...]] = set()
@@ -689,14 +722,43 @@ def compose_and_nest_selection(
             pk_merged.setdefault(name, set()).update(keys or ())
 
     def _beam_locks(locks: Sequence[Sequence[int]]) -> None:
-        """W3: in-pass dedup via beamed_tried; beamed_sigs = winners only."""
+        """F1: pin-first ⊆ nest when lock_new>=1; else nest+hybrid_compose_pick."""
         nonlocal selected_nest, locked_motif, motif_beam_trials, motif_beam_wins
+        seq_full = int((propose_stats or {}).get("motif_sequential_full", 0) or 0) > 0
+        a_orig = float(_sel_area(selected_nest, group_id, part_areas))
+        vf_orig = (
+            count_selected_in_free(polys, selected_nest, free_poly)
+            if free_poly is not None and not getattr(free_poly, "is_empty", True)
+            else 0
+        )
         for lock in locks:
             sig = tuple(sorted(int(i) for i in lock))
             if len(sig) < 2 or sig in beamed_tried:
                 continue
             beamed_tried.add(sig)
             motif_beam_trials += 1
+            pinned = pin_if_in_nest(
+                lock,
+                selected_nest,
+                graph,
+                propose_stats=propose_stats,
+                source="beam_pin",
+            )
+            if pinned is not None:
+                lock_new = sum(1 for i in pinned if int(i) not in inc_set)
+                # Cold start (no incumbent): pin is honest sticky. Else require
+                # at least one non-incumbent so finalize hygiene keeps the lock.
+                if lock_new >= 1 or not inc_set:
+                    locked_motif = list(pinned)
+                    motif_beam_wins += 1
+                    beamed_sigs.add(sig)
+                    if propose_stats is not None:
+                        propose_stats["motif_lock_source"] = "beam_pin"
+                        propose_stats["beamed_won_n"] = int(
+                            propose_stats.get("beamed_won_n", 0) or 0
+                        ) + 1
+                    continue
+                # Incumbent-only pin: fall through to nest+hybrid for new members.
             cand = _nest_with_locks(
                 graph,
                 scores,
@@ -705,21 +767,64 @@ def compose_and_nest_selection(
                 part_areas=part_areas,
                 dual=bool(dual_nest),
             )
-            if _lex_pick_better(
+            pick_telem: dict = {}
+            a_cand = float(_sel_area(cand, group_id, part_areas))
+            vf_cand = (
+                count_selected_in_free(polys, cand, free_poly)
+                if free_poly is not None and not getattr(free_poly, "is_empty", True)
+                else 0
+            )
+            _cg2, cc_n2 = count_proposer_on_selection(
+                group_id,
+                transform,
+                cand,
+                pk_merged,
+                "cluster_copy",
+                key_to_verts=key_to_verts,
+            )
+            lex_win = _lex_pick_better(
                 best=selected_nest,
                 cand=cand,
                 group_id=group_id,
                 part_areas=part_areas,
-            ):
+            )
+            # Count guard: sticky/soft floors must not drop parts vs current nest
+            # (do not re-loosen cancelled D1–D6 area floors via 0.90× sticky alone).
+            count_ok = len(cand) >= len(selected_nest)
+            hybrid_ok = hybrid_compose_pick(
+                graph=graph,
+                lock=lock,
+                area_cand=a_cand,
+                area_orig=a_orig,
+                void_cand=int(vf_cand),
+                void_orig=int(vf_orig),
+                cc_n2=int(cc_n2),
+                lex_better=lex_win,
+                telem=pick_telem,
+                join_prefer=seq_full,
+                count_cand=len(cand),
+                count_orig=len(selected_nest),
+                motif_complete=True,
+                survive_mid=survive_mid_n,
+            )
+            if hybrid_ok and (lex_win or (seq_full and count_ok)):
                 selected_nest = cand
                 locked_motif = list(lock)
                 motif_beam_wins += 1
                 beamed_sigs.add(sig)
+                a_orig = a_cand
+                vf_orig = int(vf_cand)
                 if propose_stats is not None:
-                    propose_stats["motif_lock_source"] = "beam"
+                    propose_stats.update(pick_telem)
+                    propose_stats["motif_lock_source"] = "beam_hybrid"
+                    propose_stats["compose_motif_hold"] = 1
                     propose_stats["beamed_won_n"] = int(
                         propose_stats.get("beamed_won_n", 0) or 0
                     ) + 1
+            elif propose_stats is not None and pick_telem:
+                for k, v in pick_telem.items():
+                    if k.startswith("hybrid_pick_"):
+                        propose_stats[k] = int(propose_stats.get(k, 0) or 0) + int(v)
 
     # W4: bonded-component tie-break before beam; one [:4] cut (Q239).
     lock_sets, bonded_max = _sort_lock_sets_bonded(
@@ -1215,16 +1320,7 @@ def compose_and_nest_selection(
                 free_basin_is_fat(free_poly, part_areas)
             )
 
-    incumbent = _map_incumbent_indices(
-        group_id=group_id,
-        transform=transform,
-        packed_group_id=packed_group_id,
-        packed_transform=packed_transform,
-        graph=graph,
-        key_map=key_to_ix,
-        propose_stats=propose_stats,
-        use_projected_keys=True,
-    )
+    # incumbent mapped before beam (F1 pin-new gate); reuse for hold.
     incumbent_hold = 0
     void_override_flag = 0
     if propose_stats is not None:
@@ -1501,6 +1597,151 @@ def compose_and_nest_selection(
                     incumbent_hold = 1
                     if propose_stats is not None:
                         propose_stats["motif_override"] = 0
+    # F1: prefer Scene cohort with ≥1 non-incumbent (sticky lock_new fuel).
+    prefer_cohort: list[int] = []
+    cohort_cands: list[list[int]] = []
+    if locked_motif and len(locked_motif) >= 2:
+        cohort_cands.append([int(i) for i in locked_motif])
+    if propose_stats is not None:
+        union_raw = propose_stats.get("motif_union_lock_idxs")
+        if isinstance(union_raw, (list, tuple)) and len(union_raw) >= 2:
+            cohort_cands.append([int(i) for i in union_raw])
+    for ls in lock_sets:
+        if ls and len(ls) >= 2:
+            cohort_cands.append([int(i) for i in ls])
+    for cand in cohort_cands:
+        n_new = sum(1 for i in cand if int(i) not in inc_set)
+        if n_new >= 1 or not inc_set:
+            prefer_cohort = cand
+            break
+    if not prefer_cohort and cohort_cands:
+        prefer_cohort = cohort_cands[0]
+    # F1 late: inject packing-clear cohort members onto held base (full re-nest
+    # was reject=1 — lock conflicts drop count). Q374: only full cohort pins.
+    if prefer_cohort and len(prefer_cohort) >= 2:
+        if propose_stats is not None:
+            propose_stats["hold_cohort_try"] = int(
+                propose_stats.get("hold_cohort_try", 0) or 0
+            ) + 1
+        pinned = pin_if_in_nest(
+            prefer_cohort,
+            selected_nest,
+            graph,
+            propose_stats=propose_stats,
+            source="hold_cohort_pin",
+        )
+        lock_new_pin = (
+            sum(1 for i in pinned if int(i) not in inc_set) if pinned else 0
+        )
+        if pinned is not None and (lock_new_pin >= 1 or not inc_set):
+            locked_motif = list(pinned)
+            if propose_stats is not None:
+                propose_stats["hold_cohort_pin"] = 1
+        else:
+            trial = list(selected_nest)
+            trial_set = {int(i) for i in trial}
+            collisions = getattr(graph, "collisions", None) if graph is not None else None
+            added = 0
+            for i in prefer_cohort:
+                ii = int(i)
+                if ii in trial_set or ii < 0:
+                    continue
+                if collisions is not None:
+                    if ii >= len(collisions):
+                        continue
+                    if any(int(u) in trial_set for u in collisions[ii]):
+                        continue
+                trial.append(ii)
+                trial_set.add(ii)
+                added += 1
+            cohort_ok = set(int(i) for i in prefer_cohort) <= trial_set
+            lock_new_inj = sum(1 for i in prefer_cohort if int(i) not in inc_set)
+            realized = False
+            if (
+                added >= 1
+                and cohort_ok
+                and (lock_new_inj >= 1 or not inc_set)
+                and _packing_independent(prefer_cohort, graph)
+            ):
+                selected_nest = trial
+                locked_motif = list(prefer_cohort)
+                realized = True
+                if propose_stats is not None:
+                    propose_stats["hold_cohort_nest"] = 1
+                    propose_stats["hold_cohort_inject"] = int(added)
+                    propose_stats["motif_lock_source"] = "hold_cohort_inject"
+                    propose_stats["compose_motif_hold"] = 1
+                    propose_stats["refine_skip_motif_lock"] = 1
+            elif (
+                (lock_new_inj >= 1 or not inc_set)
+                and collisions is not None
+                and int((propose_stats or {}).get("f1_sticky_spent", 0) or 0) <= 0
+                # Defer sticky to near-last leaf so early late-iters keep Δ path.
+                and (
+                    bool((propose_stats or {}).get("near_last", False))
+                    or bool((propose_stats or {}).get("is_last_leaf", False))
+                )
+            ):
+                # Clear colliding plugs (not in cohort) then inject — colonize-style.
+                # Once-per-session via f1_sticky_spent (build_graph pack_cache).
+                cohort_set = {int(i) for i in prefer_cohort}
+                plug_trial = list(selected_nest)
+                plug_set = {int(i) for i in plug_trial}
+                a_orig = float(_sel_area(selected_nest, group_id, part_areas))
+                plugs_dropped = 0
+                for i in prefer_cohort:
+                    ii = int(i)
+                    if ii in plug_set or ii < 0 or ii >= len(collisions):
+                        continue
+                    plugs = [
+                        int(u)
+                        for u in collisions[ii]
+                        if int(u) in plug_set and int(u) not in cohort_set
+                    ]
+                    if not plugs and any(int(u) in plug_set for u in collisions[ii]):
+                        continue
+                    drop_set = set(plugs)
+                    cand = [x for x in plug_trial if int(x) not in drop_set]
+                    cand_set = {int(x) for x in cand}
+                    if any(int(u) in cand_set for u in collisions[ii]):
+                        continue
+                    cand.append(ii)
+                    a_cand = float(_sel_area(cand, group_id, part_areas))
+                    # Allow drop ≤ plugs when adding lock member; area ≥0.90×.
+                    # refine_skip_motif_lock avoids refine 1.05× tax on sticky.
+                    if len(cand) < len(selected_nest) - max(len(plugs), 1) + 1:
+                        continue
+                    if a_cand + 1e-12 < 0.90 * a_orig:
+                        continue
+                    plug_trial = cand
+                    plug_set = {int(x) for x in plug_trial}
+                    plugs_dropped += len(plugs)
+                cohort_in = cohort_set <= plug_set
+                a_final = float(_sel_area(plug_trial, group_id, part_areas))
+                if (
+                    cohort_in
+                    and plugs_dropped + added >= 1
+                    and a_final + 1e-12 >= 0.90 * a_orig
+                    and _packing_independent(prefer_cohort, graph)
+                ):
+                    selected_nest = plug_trial
+                    locked_motif = list(prefer_cohort)
+                    realized = True
+                    if propose_stats is not None:
+                        propose_stats["hold_cohort_nest"] = 1
+                        propose_stats["hold_cohort_plug"] = int(plugs_dropped)
+                        propose_stats["motif_lock_source"] = "hold_cohort_plug"
+                        propose_stats["compose_motif_hold"] = 1
+                        # Sticky for consumers; skip refine lock tax (F1).
+                        propose_stats["refine_skip_motif_lock"] = 1
+                        propose_stats["f1_sticky_spent"] = 1
+            if not realized and propose_stats is not None:
+                propose_stats["hold_cohort_reject"] = int(
+                    propose_stats.get("hold_cohort_reject", 0) or 0
+                ) + 1
+                propose_stats["hold_cohort_add"] = int(added)
+                propose_stats["hold_cohort_in"] = int(bool(cohort_ok))
+                propose_stats["hold_cohort_new"] = int(lock_new_inj)
     # One colonize walk onto the held/MIS base (rim density + void pins).
     if (
         free_predicate is not None
@@ -1552,6 +1793,7 @@ def compose_and_nest_selection(
                 part_areas=part_areas,
                 predicate=pred_use,
                 prefer_core=rim_hi,
+                prefer_idxs=prefer_cohort or None,
             )
             if propose_stats is not None:
                 propose_stats.update(colonize_stats)
@@ -1565,10 +1807,34 @@ def compose_and_nest_selection(
                     new_area=float(_sel_area(colonized, group_id, part_areas)),
                 ):
                     selected_nest = colonized
-                    # Q374: do not union colonize pins into motif_locked — only
-                    # pick/beam/block_swap are MotifJoin-worthy (colonize is density).
+                    # Q374: do not union generic colonize pins into motif_locked.
                 elif propose_stats is not None:
                     propose_stats["colonize_area_reject"] = 1
+            # F1: after colonize, pin full Scene cohort if ⊆ nest (sticky lock).
+            pin_tries: list[Sequence[int]] = []
+            if prefer_cohort and len(prefer_cohort) >= 2:
+                pin_tries.append(prefer_cohort)
+            for ls in lock_sets:
+                if ls and len(ls) >= 2:
+                    pin_tries.append(ls)
+            for cand_lock in pin_tries:
+                pinned = pin_if_in_nest(
+                    cand_lock,
+                    selected_nest,
+                    graph,
+                    propose_stats=propose_stats,
+                    source="colonize_cohort",
+                )
+                if pinned is None:
+                    continue
+                lock_new_c = sum(1 for i in pinned if int(i) not in inc_set)
+                if lock_new_c < 1 and inc_set:
+                    continue
+                locked_motif = list(pinned)
+                if propose_stats is not None:
+                    propose_stats["colonize_cohort_pin"] = 1
+                    propose_stats["refine_skip_motif_lock"] = 1
+                break
         elif propose_stats is not None and on_plateau_void_col:
             propose_stats["colonize_skipped"] = int(
                 propose_stats.get("colonize_skipped", 0) or 0
@@ -1576,6 +1842,27 @@ def compose_and_nest_selection(
     if propose_stats is not None:
         propose_stats["incumbent_hold"] = int(incumbent_hold)
         propose_stats["void_override"] = int(void_override_flag)
+        # F1 hygiene: sticky lock only if ⊆ selected and lock_new_n >= 1.
+        sel_set = {int(i) for i in selected_nest}
+        if locked_motif:
+            lock_idxs = [int(i) for i in locked_motif if int(i) >= 0]
+            if len(lock_idxs) < 2 or not set(lock_idxs) <= sel_set:
+                locked_motif = []
+            else:
+                _record_lock_incumbent_split(
+                    propose_stats, locked_motif, incumbent=incumbent,
+                )
+                if int(propose_stats.get("lock_new_n", 0) or 0) < 1:
+                    locked_motif = []
+                    propose_stats["lock_new_n"] = 0
+                    propose_stats["lock_inc_n"] = 0
+        if not locked_motif:
+            propose_stats["lock_new_n"] = 0
+            propose_stats["lock_inc_n"] = 0
+        else:
+            _record_lock_incumbent_split(
+                propose_stats, locked_motif, incumbent=incumbent,
+            )
         propose_stats["motif_locked"] = list(locked_motif)
         compose_sz = len(locked_motif)
         propose_stats["motif_compose_accepted_size"] = int(compose_sz)
@@ -1593,13 +1880,43 @@ def compose_and_nest_selection(
         and bool(getattr(cfg.propose, "enable_block_replace", True))
         and locked_motif
     ):
+        # F3: sticky + beam lock_sets → motif_cohorts (PLACE_COHORT). Fringe B
+        # is 3a-local only (agent merge dumped early).
+        for li, ls in enumerate(lock_sets or ()):
+            if ls and len(ls) >= 2:
+                ensure_locked_motif_cohort(
+                    propose_stats,
+                    ls,
+                    group_id,
+                    transform,
+                    motif_id=-10 - int(li),
+                )
+        ensure_locked_motif_cohort(
+            propose_stats, locked_motif, group_id, transform, motif_id=-2
+        )
+        cohorts_3a = list((propose_stats or {}).get("motif_cohorts") or [])
+        fringe_ps: dict = {}
+        ensure_fringe_swap_cohort(
+            fringe_ps,
+            locked_motif,
+            selected_nest,
+            graph,
+            group_id,
+            transform,
+        )
+        if fringe_ps.get("motif_cohorts"):
+            cohorts_3a = list(cohorts_3a) + list(fringe_ps["motif_cohorts"])
+            if propose_stats is not None:
+                propose_stats["fringe_swap_cohort_n"] = int(
+                    fringe_ps.get("sticky_lock_cohort_n", 0) or 0
+                )
         void_geoms_swap = void_geoms_list
         selected_nest, locked_motif, swap_telem = try_block_cohort_swap(
             graph=graph,
             scores=scores,
             selected=selected_nest,
             locked_motif=locked_motif,
-            cohorts=(propose_stats or {}).get("motif_cohorts") or [],
+            cohorts=cohorts_3a,
             candidate_geoms=candidate_geoms,
             void_geoms=void_geoms_swap,
             group_id=group_id,
@@ -1617,6 +1934,9 @@ def compose_and_nest_selection(
             propose_stats["cache_key_lock_fp"] = cheap_lock_fingerprint(locked_motif)
             propose_stats["lock_n_compose"] = int(compose_sz)
             propose_stats["refine_lock_n"] = int(compose_sz)
+            _record_lock_incumbent_split(
+                propose_stats, locked_motif, incumbent=incumbent,
+            )
             if int(swap_telem.get("block_cohort_accepted", 0) or 0) > 0:
                 propose_stats["motif_lock_source"] = str(
                     propose_stats.get("motif_lock_source") or ""

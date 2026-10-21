@@ -237,6 +237,19 @@ def record_path_edge_census(
     telem["path_nbr_join"] = max(int(telem.get("path_nbr_join", 0) or 0), n_join)
     telem["path_nbr_attach"] = max(int(telem.get("path_nbr_attach", 0) or 0), n_attach)
     telem["path_nbr_pose"] = max(int(telem.get("path_nbr_pose", 0) or 0), pose_n)
+    # F0: pairwise Join/Attach conflicts census (no beam filter).
+    cut_n = 0
+    if hasattr(dg, "conflicts"):
+        for i in range(len(join_nbrs)):
+            for j in range(i + 1, len(join_nbrs)):
+                try:
+                    if bool(dg.conflicts(join_nbrs[i], join_nbrs[j])):
+                        cut_n += 1
+                except Exception:
+                    continue
+    telem["path_conflicts_cut"] = max(
+        int(telem.get("path_conflicts_cut", 0) or 0), int(cut_n)
+    )
     # E4: Join/Attach endpoints ∩ prior motif_locked pose indices (telem).
     lock_idxs = {
         int(i) for i in (motif_locked or ()) if isinstance(i, (int, float)) and int(i) >= 0
@@ -244,12 +257,35 @@ def record_path_edge_census(
     overlap = 0
     if lock_idxs:
         for nbr in join_nbrs:
-            a = int(getattr(nbr, "a", -1))
-            b = int(getattr(nbr, "b", -1))
+            a, b = _join_endpoints(nbr)
             if a in lock_idxs or b in lock_idxs:
                 overlap += 1
+                # F2: census-side soft telem (same ov as lock_ov; no reward mutate).
+                agent = getattr(runner, "agent", None)
+                if agent is not None and isinstance(telem, dict):
+                    telem["motif_locked"] = list(lock_idxs)
+                    _validate_join_bonus(agent, nbr, 0.0, telem=telem)
     telem["path_lock_join_overlap"] = max(
         int(telem.get("path_lock_join_overlap", 0) or 0), int(overlap)
+    )
+    # Mirror MotifBase→Join attribution from bind_epoch when present on agent telem.
+    base_j = 0
+    agent = getattr(runner, "agent", None)
+    src = getattr(agent, "telem", None) if agent is not None else None
+    if isinstance(src, dict):
+        base_j = int(src.get("motif_join_from_base", 0) or 0)
+    telem["motif_join_from_base"] = max(
+        int(telem.get("motif_join_from_base", 0) or 0), int(base_j)
+    )
+
+
+def _join_endpoints(step: Any) -> tuple[int, int]:
+    """Pose endpoints of a MotifJoin/Attach PathNode (0 is valid — no `or -1`)."""
+    ra = getattr(step, "a", -1)
+    rb = getattr(step, "b", -1)
+    return (
+        int(ra) if ra is not None else -1,
+        int(rb) if rb is not None else -1,
     )
 
 
@@ -278,7 +314,25 @@ def _validate_join_bonus(
     except Exception:
         adj_hits = 0.0
     wang_scale = accept_scale * (1.0 + 0.02 * min(adj_hits, 8.0))
-    bonus = (0.02 + 0.01 * survive) * wang_scale
+    # F2: soft-scale by Join/Attach endpoints ∩ sticky motif_locked.
+    lock_idxs: set[int] = set()
+    if isinstance(src, dict):
+        raw_lock = src.get("motif_locked") or ()
+        if isinstance(raw_lock, (list, tuple)):
+            lock_idxs = {
+                int(i) for i in raw_lock
+                if isinstance(i, (int, float)) and int(i) >= 0
+            }
+    a, b = _join_endpoints(join_step)
+    ov = (1 if a in lock_idxs else 0) + (1 if b in lock_idxs else 0)
+    lock_scale = 1.0 + 0.06 * float(ov)
+    # Partial-endpoint soft when Wang fuel is idle (accept/adj flat).
+    wang_idle = wang_scale <= 1.0 + 1e-9
+    if wang_idle and ov == 1:
+        lock_scale = max(lock_scale, 1.08)
+    elif wang_idle and ov >= 2:
+        lock_scale = max(lock_scale, 1.12)
+    bonus = (0.02 + 0.01 * survive) * wang_scale * lock_scale
     # A: Attach parity — slight soft bump (same validate-only path).
     if getattr(join_step, "kind", None) == PathKind.Attach:
         bonus *= 0.85
@@ -286,6 +340,19 @@ def _validate_join_bonus(
         telem["path_wang_scale"] = float(
             max(float(telem.get("path_wang_scale", 0.0) or 0.0), wang_scale)
         )
+        if ov > 0:
+            telem["path_lock_join_soft"] = int(
+                telem.get("path_lock_join_soft", 0) or 0
+            ) + 1
+            telem["path_lock_join_overlap"] = max(
+                int(telem.get("path_lock_join_overlap", 0) or 0), int(ov)
+            )
+            # F4: winning Join motif_id for Motif tip force.
+            if mid >= 0:
+                prev = int(telem.get("path_lock_join_motif_id", -1) or -1)
+                prev_ov = int(telem.get("path_lock_join_overlap", 0) or 0)
+                if prev < 0 or ov >= prev_ov:
+                    telem["path_lock_join_motif_id"] = int(mid)
     return float(baseline) + bonus
 
 
@@ -414,30 +481,36 @@ def macro_increase_path(
             siblings = (motifs[:1] + non)[:beam_n]
         else:
             siblings = siblings[:beam_n]
-        join_nbrs = _path_neighbors_ranked(runner, block_node, agent)[:beam]
         # Q386: MotifJoin/Attach neighbors validate-only (no pack).
-        # E2 pose hop-2 is census-only (record_path_edge_census); active walk cancelled.
-        path_step_attach = 0
+        join_nbrs = _path_neighbors_ranked(runner, block_node, agent)[
+            : max(int(beam), 1)
+        ]
+        path_step_attach_d = 0
+        dg = getattr(runner, "dg", None)
         for join_step in join_nbrs:
             path_extend_n += 1
             kind = getattr(join_step, "kind", None)
             if kind == PathKind.Attach:
-                path_step_attach += 1
+                path_step_attach_d += 1
                 path_type_hist[int(getattr(PathKind.Attach, "value", 2))] += 1
             else:
                 path_step_join += 1
                 path_type_hist[int(getattr(PathKind.MotifJoin, "value", 1))] += 1
-            dg = getattr(runner, "dg", None)
-            if dg is not None and hasattr(dg, "realized") and dg.realized(join_step):
-                scored = _validate_join_bonus(
-                    agent, join_step, baseline_reward, telem=telem
-                )
-                if scored > best_reward:
-                    best_reward = scored
-                    macro_chain_accept += 1
+            # F2: lock_scale inside _validate_join_bonus; accept when realized.
+            scored = _validate_join_bonus(
+                agent, join_step, baseline_reward, telem=telem
+            )
+            if (
+                dg is not None
+                and hasattr(dg, "realized")
+                and bool(dg.realized(join_step))
+                and scored > best_reward
+            ):
+                best_reward = scored
+                macro_chain_accept += 1
         telem["path_step_attach"] = int(
             telem.get("path_step_attach", 0) or 0
-        ) + int(path_step_attach)
+        ) + int(path_step_attach_d)
         for alt in siblings:
             attempts += 1
             path_extend_n += 1
@@ -479,10 +552,12 @@ def macro_increase_path(
             reward += 0.01 * survive_rank(alt, realized)
             # P: Motif tip telem is via build_graph Motif soft path_accept_apply;
             # do not inflate Motif path reward (early parts regress under +0.02/+0.08).
-            # M4b: Macro execute + MotifJoin validate chain bonus.
+            # M4b: Macro execute + MotifJoin validate chain bonus (block neighbors).
             chain_bonus = 0.0
-            for join_step in join_nbrs:
-                dg = getattr(runner, "dg", None)
+            dg = getattr(runner, "dg", None)
+            for join_step in _path_neighbors_ranked(runner, block_node, agent)[
+                : max(int(beam), 1)
+            ]:
                 if dg is not None and hasattr(dg, "realized") and dg.realized(join_step):
                     chain_bonus = max(
                         chain_bonus,
@@ -538,6 +613,7 @@ def macro_increase_path(
                     best_motif_snap = child_snap
                     if accept == 0:
                         accept = 1
+    # F2 leaf soft telem is via record_path_edge_census (lock_ov SoT).
     telem["macro_swap_attempts"] = int(
         telem.get("macro_swap_attempts", 0) or 0
     ) + int(attempts)

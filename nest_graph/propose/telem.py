@@ -150,9 +150,16 @@ def format_void_leak_line(
         f"colonize={int(propose_stats.get('colonize_pinned', 0))}/"
         f"{int(propose_stats.get('colonize_blocked', 0))} "
         f"col_pref={int(propose_stats.get('colonize_prefer', 0))}/"
+        f"{int(propose_stats.get('colonize_cohort_prefer', 0))}/"
         f"{int(propose_stats.get('escape_prefer_colonize', 0))} "
         f"col_rej={int(propose_stats.get('colonize_area_reject', 0))} "
         f"col_pa={int(propose_stats.get('colonize_prefer_accept', 0))} "
+        f"hold_coh={int(propose_stats.get('hold_cohort_try', 0))}/"
+        f"{int(propose_stats.get('hold_cohort_nest', 0))}/"
+        f"{int(propose_stats.get('hold_cohort_reject', 0))}/"
+        f"{int(propose_stats.get('hold_cohort_pin', 0))}/"
+        f"{int(propose_stats.get('hold_cohort_new', 0))}/"
+        f"{int(propose_stats.get('hold_cohort_add', 0))} "
         f"nest_void_term_hits={int(propose_stats.get('nest_void_term_hits', 0))} "
         f"void_refine_hold={int(propose_stats.get('void_refine_hold', 0))} "
         f"dfs_passes={int(propose_stats.get('dfs_passes', 0))} "
@@ -935,6 +942,9 @@ def merge_phase_gate_telem(
             mt.get("path_lock_join_overlap", leak.get("path_lock_join_overlap", 0))
             or 0
         )
+        leak["path_lock_join_soft"] = int(
+            mt.get("path_lock_join_soft", leak.get("path_lock_join_soft", 0)) or 0
+        )
         leak["motif_join_from_base"] = max(
             int(mt.get("motif_join_from_base", leak.get("motif_join_from_base", 0)) or 0),
             int(propose_stats.get("motif_join_from_base", 0) or 0),
@@ -1120,6 +1130,12 @@ def merge_phase_gate_telem(
         "hybrid_pick_sticky_soft",
         "hybrid_pick_adj_soft",
         "motif_adj_hits",
+        "lock_new_n",
+        "lock_inc_n",
+        "lock_n_realize",
+        "motif_beam_wins",
+        "motif_beam_trials",
+        "compose_motif_hold",
         "foreign_clear_fail_sheet",
         "foreign_clear_fail_obs",
         "foreign_clear_fail_empty",
@@ -1792,6 +1808,14 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{int(leak.get('hybrid_pick_reject_area', 0) or 0)}/"
         f"{int(leak.get('hybrid_pick_join_soft', 0) or 0)} "
         f"compose_sz={int(leak.get('motif_compose_accepted_size', 0) or 0)} "
+        f"lock_new={int(leak.get('lock_new_n', 0) or 0)}/"
+        f"{int(leak.get('lock_inc_n', 0) or 0)} "
+        f"lock_rz={int(leak.get('lock_n_realize', 0) or 0)} "
+        f"beam_won={int(leak.get('motif_beam_wins', 0) or 0)}/"
+        f"{int(leak.get('motif_beam_trials', 0) or 0)} "
+        f"compose_hold={int(leak.get('compose_motif_hold', 0) or 0)} "
+        f"rlh={int(leak.get('refine_lock_hold', 0) or 0)}/"
+        f"{int(bool(leak.get('refine_rejected', False)))} "
         f"refine_ms={float(leak.get('refine_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('dfs_loose_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('finalize_ms', 0.0) or 0.0):.1f} "
@@ -1832,6 +1856,7 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{int(leak.get('path_nbr_pose', 0) or 0)} "
         f"cut={int(leak.get('path_conflicts_cut', 0) or 0)} "
         f"lock_ov={int(leak.get('path_lock_join_overlap', 0) or 0)} "
+        f"lock_soft={int(leak.get('path_lock_join_soft', 0) or 0)} "
         f"base_j={int(leak.get('motif_join_from_base', 0) or 0)} "
         f"densify_xy={int(leak.get('densify_xy_in', 0) or 0)}/"
         f"{str(leak.get('void_yield_tag', '') or '-')}"
