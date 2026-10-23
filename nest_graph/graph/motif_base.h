@@ -21,6 +21,9 @@ struct MotifRecord {
     float area_a = 0.f;
     float area_b = 0.f;
     int32_t ttl_remaining = 0;  // Q92: 0 = not on archive TTL; >0 alive
+    bool flush = false;  // W2 Wang edge-flush
+    int32_t edge_a = -1;
+    int32_t edge_b = -1;
 };
 
 inline void motif_order_invariant(
@@ -73,6 +76,12 @@ public:
                     dst.gci = rec.gci;
                     dst.compactness = rec.compactness;
                     dst.relative = rec.relative;
+                    dst.flush = rec.flush;
+                    dst.edge_a = rec.edge_a;
+                    dst.edge_b = rec.edge_b;
+                }
+                if (rec.flush) {
+                    dst.flush = true;
                 }
                 if (ttl > 0) {
                     dst.ttl_remaining = ttl;

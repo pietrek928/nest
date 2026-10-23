@@ -96,6 +96,7 @@ void bind_graph_decision(nb::module_ &m) {
                float rim_fill,
                float void_fill,
                std::string free_kind,
+               float void_fit_r,
                std::vector<int32_t> motif_ids_used,
                nb::object /*telem*/) {
                 new (self) BoardSnapshot();
@@ -120,6 +121,7 @@ void bind_graph_decision(nb::module_ &m) {
                 self->rim_fill = rim_fill;
                 self->void_fill = void_fill;
                 self->free_kind = std::move(free_kind);
+                self->void_fit_r = void_fit_r;
                 self->motif_ids_used = std::move(motif_ids_used);
             },
             nb::kw_only(),
@@ -134,6 +136,7 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("rim_fill") = 0.f,
             nb::arg("void_fill") = 0.f,
             nb::arg("free_kind") = std::string{},
+            nb::arg("void_fit_r") = 0.f,
             nb::arg("motif_ids_used") = std::vector<int32_t>{},
             nb::arg("telem") = nb::none())
         .def_rw("packed_gids", &BoardSnapshot::packed_gids)
@@ -166,6 +169,7 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("rim_fill", &BoardSnapshot::rim_fill)
         .def_rw("void_fill", &BoardSnapshot::void_fill)
         .def_rw("free_kind", &BoardSnapshot::free_kind)
+        .def_rw("void_fit_r", &BoardSnapshot::void_fit_r)
         .def_rw("motif_ids_used", &BoardSnapshot::motif_ids_used)
         .def_prop_ro("n_packed", &BoardSnapshot::n_packed)
         .def_prop_ro("has_remaining", &BoardSnapshot::has_remaining);
@@ -533,7 +537,10 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("accept_count", &MotifRecord::accept_count)
         .def_rw("area_a", &MotifRecord::area_a)
         .def_rw("area_b", &MotifRecord::area_b)
-        .def_rw("ttl_remaining", &MotifRecord::ttl_remaining);
+        .def_rw("ttl_remaining", &MotifRecord::ttl_remaining)
+        .def_rw("flush", &MotifRecord::flush)
+        .def_rw("edge_a", &MotifRecord::edge_a)
+        .def_rw("edge_b", &MotifRecord::edge_b);
 
     nb::class_<MotifBase>(m, "MotifBase")
         .def(nb::init<>())
@@ -561,6 +568,9 @@ void bind_graph_decision(nb::module_ &m) {
                 rec.compactness = edge.compactness;
                 rec.area_a = 1.f;
                 rec.area_b = 1.f;
+                rec.flush = edge.flush;
+                rec.edge_a = edge.edge_a;
+                rec.edge_b = edge.edge_b;
                 return b.upsert(rec, min_c, ttl);
             },
             nb::arg("edge"),
@@ -631,7 +641,10 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("relative_pose", &ContactEdge::relative_pose)
         .def_rw("contact_score", &ContactEdge::contact_score)
         .def_rw("compactness", &ContactEdge::compactness)
-        .def_rw("gci", &ContactEdge::gci);
+        .def_rw("gci", &ContactEdge::gci)
+        .def_rw("flush", &ContactEdge::flush)
+        .def_rw("edge_a", &ContactEdge::edge_a)
+        .def_rw("edge_b", &ContactEdge::edge_b);
 
     m.def(
         "gci_surrogate",
@@ -639,7 +652,8 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("compactness"),
         nb::arg("contact_score"),
         nb::arg("alpha") = 0.5f,
-        nb::arg("beta") = 0.5f);
+        nb::arg("beta") = 0.5f,
+        nb::arg("flush") = false);
     m.def("clamp01", &clamp01, nb::arg("v"));
 
     nb::class_<NodeSignature>(m, "NodeSignature")

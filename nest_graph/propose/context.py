@@ -73,6 +73,74 @@ class FreeSpaceAnalysis:
     largest_area: float = 0.0
     target_poly: Polygon | None = None
     target_pt: Point | None = None
+    # Placeable vs catalog part (inradius vs need); True when unknown / full.
+    fits_part: bool = True
+
+
+def void_fits_part(
+    void_poly: BaseGeometry | None,
+    part_area: float | None = None,
+    *,
+    shape: Polygon | None = None,
+    min_dist: float = 0.0,
+    at_pt: Point | None = None,
+) -> bool:
+    """True when void inradius can host the part (densify A0 / FreeSpace SoT).
+
+    Prefer ``shape`` → ``part_extents`` max (same as densify ``_fit_probe_ok``).
+    When only ``part_area`` is known, use equal-area disk radius.
+    Caller should pass ``at_pt`` (polylabel) when available; else representative.
+    """
+    if void_poly is None or getattr(void_poly, "is_empty", True):
+        return False
+    need_r: float | None = None
+    if shape is not None and not getattr(shape, "is_empty", True):
+        _min_e, max_e = part_extents(shape)
+        need_r = float(max_e)
+    elif part_area is not None and float(part_area) > 0.0:
+        need_r = (float(part_area) / pi) ** 0.5
+    else:
+        return True
+    try:
+        pt = at_pt
+        if pt is None or getattr(pt, "is_empty", True):
+            pt = void_poly.representative_point()
+        # Prefer exterior distance on Polygon; MultiPolygon uses boundary.
+        if hasattr(void_poly, "exterior") and void_poly.exterior is not None:
+            in_r = float(void_poly.exterior.distance(pt))
+        else:
+            in_r = float(void_poly.boundary.distance(pt))
+        return float(in_r) + 1e-9 >= float(need_r)
+    except Exception:
+        return True
+
+
+def _make_free_space_analysis(
+    *,
+    kind: str,
+    max_void_ratio: float,
+    part_area: float,
+    min_dist: float,
+    largest_area: float = 0.0,
+    target_poly: Polygon | None = None,
+    target_pt: Point | None = None,
+) -> FreeSpaceAnalysis:
+    fits = True
+    if kind != "full" and target_poly is not None and float(part_area) > 0.0:
+        fits = void_fits_part(
+            target_poly,
+            float(part_area),
+            min_dist=float(min_dist),
+            at_pt=target_pt,
+        )
+    return FreeSpaceAnalysis(
+        kind=kind,
+        max_void_ratio=float(max_void_ratio),
+        largest_area=float(largest_area),
+        target_poly=target_poly,
+        target_pt=target_pt,
+        fits_part=bool(fits),
+    )
 
 
 @dataclass(frozen=True)
@@ -171,7 +239,9 @@ def analyze_free_space(
 
     placed = [p for p in packed if p is not None and not p.is_empty]
     if sheet is None or sheet.is_empty:
-        return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
+        return _make_free_space_analysis(
+            kind="full", max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
+        )
     if not placed and not pack_geoms:
         area = float(sheet.area)
         ratio = area / max(float(part_area), 1e-12)
@@ -179,9 +249,11 @@ def analyze_free_space(
             pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
         except Exception:
             pt = sheet.representative_point()
-        return FreeSpaceAnalysis(
+        return _make_free_space_analysis(
             kind="large_void" if ratio > void_ratio_threshold else "swiss_cheese",
             max_void_ratio=ratio,
+            part_area=part_area,
+            min_dist=min_dist,
             largest_area=area,
             target_poly=sheet if isinstance(sheet, Polygon) else None,
             target_pt=pt,
@@ -197,16 +269,20 @@ def analyze_free_space(
             pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
         except Exception:
             pt = sheet.representative_point()
-        return FreeSpaceAnalysis(
+        return _make_free_space_analysis(
             kind="large_void" if ratio > void_ratio_threshold else "swiss_cheese",
             max_void_ratio=ratio,
+            part_area=part_area,
+            min_dist=min_dist,
             largest_area=area,
             target_poly=sheet if isinstance(sheet, Polygon) else None,
             target_pt=pt,
         )
     components = _polygon_components(free)
     if not components:
-        return FreeSpaceAnalysis(kind="full", max_void_ratio=0.0)
+        return _make_free_space_analysis(
+            kind="full", max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
+        )
     largest = max(components, key=lambda p: float(p.area))
     ratio = float(largest.area) / max(float(part_area), 1e-12)
     if ratio > void_ratio_threshold:
@@ -214,16 +290,20 @@ def analyze_free_space(
             pt = Point(void_polylabel(largest, tolerance=max(float(min_dist), 1e-3)))
         except Exception:
             pt = largest.representative_point()
-        return FreeSpaceAnalysis(
+        return _make_free_space_analysis(
             kind="large_void",
             max_void_ratio=ratio,
+            part_area=part_area,
+            min_dist=min_dist,
             largest_area=float(largest.area),
             target_poly=largest,
             target_pt=pt,
         )
-    return FreeSpaceAnalysis(
+    return _make_free_space_analysis(
         kind="swiss_cheese",
         max_void_ratio=ratio,
+        part_area=part_area,
+        min_dist=min_dist,
         largest_area=float(largest.area),
         target_poly=largest,
         target_pt=largest.representative_point(),

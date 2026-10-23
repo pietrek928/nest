@@ -29,6 +29,24 @@ def test_add_collision_pair_symmetric():
     assert 1 in graph.collisions[2]
 
 
+def test_pose_graph_row_accessors():
+    graph = PoseGraph()
+    for i in range(3):
+        graph.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 1.0))
+    graph.add_collision(0, 1)
+    graph.add_collision(1, 2)
+    graph.add_attract(0, 2, 1.5)
+    assert int(graph.size()) == 3
+    assert int(graph.edge_count()) == 2
+    assert int(graph.degree(1)) == 2
+    assert list(graph.collision_row(0)) == [1]
+    assert int(graph.attract_edge_count()) == 1
+    row = list(graph.attract_row(0))
+    assert len(row) == 1
+    assert int(row[0].target) == 2
+    assert float(row[0].w) == pytest.approx(1.5)
+
+
 def test_reserve_elems_then_append():
     graph = PoseGraph()
     graph.reserve_elems(4)

@@ -201,6 +201,9 @@ def _compose_from_ctx(
         composed.free_info is not None
         and composed.free_info.kind == "large_void"
     )
+    fits_part = bool(int(ctx.propose_stats.get("fits_part", 1) or 0))
+    if composed.free_info is not None:
+        fits_part = bool(getattr(composed.free_info, "fits_part", fits_part))
     box.budget = polish_budget_for_iter(
         is_last_leaf=ctx.is_last_leaf,
         sel=ctx.sel,
@@ -209,6 +212,10 @@ def _compose_from_ctx(
         near_last=ctx.near_last,
         on_plateau=bool(ctx.propose_stats.get("on_plateau", False)),
         free_remaining=large_void,
+        fits_part=fits_part,
+        mid_hole_open=bool(
+            getattr(getattr(ctx.cfg, "propose", None), "mid_hole_open", False)
+        ),
     )
 
 
@@ -351,7 +358,7 @@ def run_mid_pack_stages(
         and composed.free_poly is not None
         and not composed.free_poly.is_empty
     ):
-        n_graph = len(graph.collisions)
+        n_graph = int(graph.size()) if hasattr(graph, "size") else len(graph.elems)
         extra_3b = [i for i in selected_polys if int(i) >= n_graph]
         selected_polys = pin_nest_void_independent(
             graph,

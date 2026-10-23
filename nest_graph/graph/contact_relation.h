@@ -79,7 +79,6 @@ inline std::vector<ContactEdge> build_contact_relations(
         }
 
         const float compactness = pair_compactness(geoms[static_cast<std::size_t>(i)], geoms[static_cast<std::size_t>(j)]);
-        const float gci = gci_surrogate(compactness, contact_score);
 
         // Order-invariant: larger area (then smaller gid) as A.
         int ia = i;
@@ -100,7 +99,12 @@ inline std::vector<ContactEdge> build_contact_relations(
         e.relative_pose = se2_relative(poses[static_cast<std::size_t>(ia)], poses[static_cast<std::size_t>(ib)]);
         e.contact_score = contact_score;
         e.compactness = compactness;
-        e.gci = gci;
+        // W2: flush when near-kiss + edge-aligned relative θ.
+        const bool near_kiss = r.intersect || dist <= gap * static_cast<Scalar>(1.05);
+        e.flush = near_kiss && wang_flush_theta(e.relative_pose.a);
+        e.edge_a = wang_edge_id(e.relative_pose.x, e.relative_pose.y);
+        e.edge_b = (e.edge_a + 4) % 8;
+        e.gci = gci_surrogate(compactness, contact_score, 0.5f, 0.5f, e.flush);
         out.push_back(e);
     }
     return out;

@@ -91,7 +91,7 @@ def test_leaf_reward_terms():
     # cov + 0.5*void + 0.1*rim + kiss/comp > coverage alone
     assert r > 0.5 + 0.5 * 0.4 + 0.1 * 0.2 - 1e-9
     assert abs(r - leaf_reward(snap, lam_void=0.0, lam_rim=0.0) - 0.22) < 1e-6
-    # Q108: large_void raises void weight vs same fills without the kind.
+    # Q108: placeable large_void (void_fit_r≥1) raises void weight vs same fills.
     snap_base = BoardSnapshot(
         coverage=0.5,
         void_fill=0.4,
@@ -103,9 +103,20 @@ def test_leaf_reward_terms():
         void_fill=0.4,
         rim_fill=0.2,
         free_kind="large_void",
+        void_fit_r=1.0,
         packed_gids=(1,),
     )
     assert leaf_reward(snap_void) > leaf_reward(snap_base)
+    # D1: phantom/unknown large_void does not inflate void_fill / void_w.
+    snap_phantom = BoardSnapshot(
+        coverage=0.5,
+        void_fill=0.4,
+        rim_fill=0.2,
+        free_kind="large_void",
+        void_fit_r=0.0,
+        packed_gids=(1,),
+    )
+    assert leaf_reward(snap_phantom) < leaf_reward(snap_void)
 
 
 def test_cheap_expand_slave_motif_reward_parity():

@@ -12,10 +12,12 @@ from nest_graph.utils import transform_poly
 
 def assert_selected_graph_independent(graph: PoseGraph, selected: Sequence[int]) -> None:
     sel = set(selected)
-    n = len(graph.group_id)
+    n = int(graph.size()) if hasattr(graph, "size") else len(graph.group_id)
+    row_fn = getattr(graph, "collision_row", None)
     for v in sel:
         assert 0 <= v < n
-        for u in graph.collisions[v]:
+        row = row_fn(v) if row_fn is not None else graph.collisions[v]
+        for u in row:
             assert u not in sel or u == v
 
 

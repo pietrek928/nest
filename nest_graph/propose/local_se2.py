@@ -45,6 +45,23 @@ def _slide_dirs(ux: float, uy: float) -> list[tuple[float, float]]:
     return out
 
 
+def _clearance_at_pole(
+    pole: Point,
+    polys: Sequence[BaseGeometry | None],
+    sel: Sequence[int],
+) -> float:
+    """Min distance from pole to selected packed polys (hole inradius proxy)."""
+    best = float("inf")
+    for i in sel:
+        p = polys[int(i)]
+        if p is None or getattr(p, "is_empty", False):
+            continue
+        d = float(pole.distance(p))
+        if d < best:
+            best = d
+    return 0.0 if best == float("inf") else best
+
+
 def _try_polish_accept(
     *,
     idx: int,
@@ -152,7 +169,8 @@ def gls_insert_separate_pass(
     stats.setdefault("gls_insert_moved", 0)
     stats.setdefault("gls_separate_moved", 0)
     gap = max(float(min_dist), 0.0)
-    contact = 2.0 * gap + 1e-9
+    # A: open GLS dead band (was 2·min_dist); insert when above packing gap.
+    contact = gap + 1e-9
     for idx in list(sel):
         if int(idx) in board_set:
             continue
@@ -248,7 +266,6 @@ def exterior_tangent_dirs(
     if sheet is None or sheet.is_empty or poly is None or poly.is_empty:
         return None
     try:
-        from shapely.ops import nearest_points
         contact, _ = nearest_points(sheet.exterior, poly)
     except Exception:
         return None
@@ -257,6 +274,91 @@ def exterior_tangent_dirs(
         return None
     _, (nx, ny) = info
     return [(-ny, nx), (ny, -nx)]
+
+
+def sheet_edge_thetas(
+    sheet: Polygon,
+    poly: BaseGeometry,
+) -> list[float]:
+    """Sheet-edge angles at nearest exterior contact (rim θ snap SoT)."""
+    dirs = exterior_tangent_dirs(sheet, poly)
+    if not dirs:
+        return []
+    tx, ty = dirs[0]
+    edge = math.atan2(ty, tx)
+    return [edge, edge + math.pi]
+
+
+def try_rim_kiss_snap(
+    *,
+    part_g: Geometry,
+    part: BaseGeometry,
+    ring,
+    snap_contact,
+    inward: tuple[float, float],
+    thetas: Sequence[float],
+    min_dist: float,
+    voids: Sequence,
+    locked: Sequence,
+    out_polys: list,
+    out_tr: list,
+    out_geoms: list,
+    sel: Sequence[int],
+    idx: int,
+    stats: dict,
+) -> bool:
+    """Try snap_pose_to_ring at each θ; accept first Scene-clear independent pose."""
+    others0 = [
+        out_polys[j]
+        for j in sel
+        if int(j) != int(idx)
+        and out_polys[j] is not None
+        and not out_polys[j].is_empty
+    ]
+    packed0 = [
+        g for g in (as_geometry(p) for p in (list(locked) + others0)) if g is not None
+    ]
+    for th in thetas:
+        snapped = snap_pose_to_ring(
+            part_g,
+            ring,
+            (float(snap_contact.x), float(snap_contact.y)),
+            (float(inward[0]), float(inward[1])),
+            float(th),
+            float(min_dist),
+            board=None,
+        )
+        if snapped is None:
+            continue
+        sx, sy, sth = snapped
+        snap_g, snap_poly = dual_pose_from_base(part_g, part, (sx, sy, sth))
+        if not (
+            is_pose_clear(snap_g, voids, packed0, float(min_dist))
+            and is_pose_clear_vs_fixed(snap_g, locked)
+        ):
+            continue
+        prev_p, prev_t = out_polys[idx], out_tr[idx]
+        prev_g = out_geoms[idx]
+        out_polys[idx] = snap_poly
+        out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
+        out_geoms[idx] = snap_g
+        if post_pack_overlap_ok(
+            out_polys,
+            sel,
+            fixed_obstacles=locked,
+            geoms=out_geoms,
+            telem=stats,
+        ):
+            stats["accepted"] = int(stats.get("accepted", 0) or 0) + 1
+            stats["moved"] = int(stats.get("moved", 0) or 0) + 1
+            stats["tangent_moves"] = int(stats.get("tangent_moves", 0) or 0) + 1
+            if abs(((sth - float(prev_t[2]) + math.pi) % (2 * math.pi)) - math.pi) > 1e-9:
+                stats["se2_edge_snap_n"] = int(stats.get("se2_edge_snap_n", 0) or 0) + 1
+            return True
+        out_polys[idx] = prev_p
+        out_tr[idx] = prev_t
+        out_geoms[idx] = prev_g
+    return False
 
 
 def local_se2_selection(
@@ -283,6 +385,7 @@ def local_se2_selection(
     """
     void_geoms = None
     part_bases = None
+    ctx: SelectionEditCtx | None = None
     if isinstance(sheet, SelectionEditCtx):
         ctx = sheet
         sheet = ctx.sheet
@@ -306,6 +409,7 @@ def local_se2_selection(
     assert polys is not None and transforms is not None
     assert group_ids is not None and selected_indices is not None
     assert part_by_group is not None and min_dist is not None and propose_cfg is not None
+    fits_part = True if ctx is None else bool(getattr(ctx, "fits_part", True))
     stats = {
         "attempted": 0,
         "accepted": 0,
@@ -318,6 +422,11 @@ def local_se2_selection(
         "gls_attempted": 0,
         "gls_insert_moved": 0,
         "gls_separate_moved": 0,
+        "se2_edge_snap_n": 0,
+        "hole_open_attempted": 0,
+        "hole_open_r0": 0.0,
+        "hole_open_r1": 0.0,
+        "hole_open_fit": 0,
     }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
@@ -337,6 +446,26 @@ def local_se2_selection(
     if pole is None or pole.is_empty:
         # Still allow board_adj tangent-only passes.
         pass
+
+    force_hole = bool(getattr(ctx, "force_hole_open", False)) if ctx is not None else False
+    # C: phantom → away-from-pole dirs in main pass; last-leaf force → post-GLS probe.
+    phantom_hole = (
+        not fits_part
+        and bool(propose_cfg.enable_gravity_compaction)
+        and pole is not None
+        and not getattr(pole, "is_empty", False)
+    )
+    phantom_snap_p: list | None = None
+    phantom_snap_t: list | None = None
+    phantom_snap_g: list | None = None
+    phantom_r0 = 0.0
+    if phantom_hole and pole is not None:
+        stats["hole_open_attempted"] = 1
+        phantom_snap_p = list(out_polys)
+        phantom_snap_t = [np.asarray(t, dtype=np.float64).reshape(3) for t in out_tr]
+        phantom_snap_g = list(out_geoms)
+        phantom_r0 = _clearance_at_pole(pole, out_polys, sel)
+        stats["hole_open_r0"] = float(phantom_r0)
 
     if void_geoms is None:
         _, void_geoms = board_context_from_geometry(sheet)
@@ -415,60 +544,30 @@ def local_se2_selection(
                     contact, _ = nearest_points(sheet.exterior, poly)
                 except Exception:
                     contact = None
-                if contact is not None:
+                if contact is not None and gid in part_geoms:
                     snap_contact, inward = inward_at_contact(sheet, contact)
-                    if gid not in part_geoms:
-                        continue
-                    snapped = snap_pose_to_ring(
-                        part_geoms[gid],
-                        ring,
-                        (float(snap_contact.x), float(snap_contact.y)),
-                        (float(inward[0]), float(inward[1])),
-                        float(tr[2]),
-                        float(min_dist),
-                        board=None,
-                    )
-                    if snapped is not None:
-                        sx, sy, sth = snapped
-                        snap_g, snap_poly = dual_pose_from_base(
-                            part_geoms[gid], part, (sx, sy, sth),
-                        )
-                        others0 = [
-                            out_polys[j]
-                            for j in sel
-                            if int(j) != int(idx)
-                            and out_polys[j] is not None
-                            and not out_polys[j].is_empty
-                        ]
-                        packed0 = [
-                            g for g in (
-                                as_geometry(p) for p in (list(locked) + others0)
-                            ) if g is not None
-                        ]
-                        if is_pose_clear(snap_g, voids, packed0, float(min_dist)) and is_pose_clear_vs_fixed(
-                            snap_g, locked,
-                        ):
-                            prev_p, prev_t = out_polys[idx], out_tr[idx]
-                            prev_g = out_geoms[idx]
-                            out_polys[idx] = snap_poly
-                            out_tr[idx] = np.array([sx, sy, sth], dtype=np.float64)
-                            out_geoms[idx] = snap_g
-                            if post_pack_overlap_ok(
-                                out_polys,
-                                sel,
-                                fixed_obstacles=locked,
-                                geoms=out_geoms,
-                                telem=stats,
-                            ):
-                                poly = snap_poly
-                                tr = out_tr[idx]
-                                stats["accepted"] += 1
-                                stats["moved"] += 1
-                                stats["tangent_moves"] += 1
-                            else:
-                                out_polys[idx] = prev_p
-                                out_tr[idx] = prev_t
-                                out_geoms[idx] = prev_g
+                    # A: try current θ then sheet-edge θ (hypotenuse alignment).
+                    grain = sheet_edge_thetas(sheet, poly)
+                    kiss_thetas = [float(tr[2]), *grain]
+                    if try_rim_kiss_snap(
+                        part_g=part_geoms[gid],
+                        part=part,
+                        ring=ring,
+                        snap_contact=snap_contact,
+                        inward=(float(inward[0]), float(inward[1])),
+                        thetas=kiss_thetas,
+                        min_dist=float(min_dist),
+                        voids=voids,
+                        locked=locked,
+                        out_polys=out_polys,
+                        out_tr=out_tr,
+                        out_geoms=out_geoms,
+                        sel=sel,
+                        idx=int(idx),
+                        stats=stats,
+                    ):
+                        poly = out_polys[idx]
+                        tr = out_tr[idx]
         else:
             assert pull_pole is not None
             cx, cy = float(poly.centroid.x), float(poly.centroid.y)
@@ -477,8 +576,13 @@ def local_se2_selection(
             if dist0 < 1e-9:
                 continue
             ux, uy = dx / dist0, dy / dist0
-            dirs = _slide_dirs(ux, uy)
-            use_pole_metric = True
+            if phantom_hole:
+                # Away from pole (±45/90) via existing slide path — no mode=repel.
+                dirs = _slide_dirs(-ux, -uy)
+                use_pole_metric = False
+            else:
+                dirs = _slide_dirs(ux, uy)
+                use_pole_metric = True
 
         others = [
             out_polys[j]
@@ -578,4 +682,78 @@ def local_se2_selection(
         coarse_step=float(coarse_step),
         stats=stats,
     )
+    if phantom_hole and pole is not None and phantom_snap_p is not None:
+        hole_r1 = _clearance_at_pole(pole, out_polys, sel)
+        stats["hole_open_r1"] = float(hole_r1)
+        if hole_r1 > phantom_r0 + max(float(min_dist), 1e-3):
+            stats["hole_open_fit"] = 1
+        else:
+            out_polys[:] = phantom_snap_p
+            out_tr[:] = phantom_snap_t  # type: ignore[index]
+            out_geoms[:] = phantom_snap_g  # type: ignore[index]
+            stats["hole_open_fit"] = 0
+    elif (
+        force_hole
+        and not phantom_hole
+        and bool(propose_cfg.enable_gravity_compaction)
+        and pole is not None
+        and not getattr(pole, "is_empty", False)
+    ):
+        # Last-leaf telem probe: away slides after normal polish; restore if no grow.
+        stats["hole_open_attempted"] = 1
+        hole_r0 = _clearance_at_pole(pole, out_polys, sel)
+        stats["hole_open_r0"] = float(hole_r0)
+        snap_p = list(out_polys)
+        snap_t = [np.asarray(t, dtype=np.float64).reshape(3) for t in out_tr]
+        snap_g = list(out_geoms)
+        for idx in order:
+            if idx in board_set:
+                continue
+            poly = out_polys[idx]
+            tr = out_tr[idx]
+            gid = int(group_ids[idx])
+            part = part_by_group.get(gid)
+            if part is None or poly is None or poly.is_empty or gid not in part_geoms:
+                continue
+            pull_pole = _floater_pole(poly)
+            if pull_pole is None:
+                continue
+            cx, cy = float(poly.centroid.x), float(poly.centroid.y)
+            dx, dy = float(pull_pole.x) - cx, float(pull_pole.y) - cy
+            dist0 = math.hypot(dx, dy)
+            if dist0 < 1e-9:
+                continue
+            ux, uy = dx / dist0, dy / dist0
+            _try_polish_accept(
+                idx=int(idx),
+                part_g=part_geoms[gid],
+                part=part,
+                tr=tr,
+                dirs=_slide_dirs(-ux, -uy),
+                voids=voids,
+                locked=locked,
+                out_polys=out_polys,
+                out_tr=out_tr,
+                out_geoms=out_geoms,
+                sel=sel,
+                group_ids=group_ids,
+                min_dist=float(min_dist),
+                max_t=float(sheet_diag),
+                n_angles=n_angles,
+                stats=stats,
+                mode="slide",
+                telem_key="gls_separate_moved",
+            )
+        hole_r1 = _clearance_at_pole(pole, out_polys, sel)
+        stats["hole_open_r1"] = float(hole_r1)
+        # L: carve mid_hole_open accepts any positive clearance grow; C keeps ≥min_dist.
+        carve_soft = bool(getattr(propose_cfg, "mid_hole_open", False))
+        grow_need = 1e-6 if carve_soft else max(float(min_dist), 1e-3)
+        if hole_r1 > hole_r0 + grow_need:
+            stats["hole_open_fit"] = 1
+        else:
+            out_polys[:] = snap_p
+            out_tr[:] = snap_t
+            out_geoms[:] = snap_g
+            stats["hole_open_fit"] = 0
     return out_polys, out_tr, stats

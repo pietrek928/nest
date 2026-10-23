@@ -46,6 +46,8 @@ struct BoardSnapshot {
     float rim_fill = 0.f;
     float void_fill = 0.f;
     std::string free_kind;
+    // D1: ≥1 → placeable large_void; 0 unknown/phantom → no void_w boost.
+    float void_fit_r = 0.f;
     std::vector<int32_t> motif_ids_used;
 
     int32_t n_packed() const {

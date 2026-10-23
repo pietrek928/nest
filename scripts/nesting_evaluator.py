@@ -193,8 +193,10 @@ def _selection_validity(
     selected_set = set(selected_polys)
     overlap_ok = True
     if graph is not None:
+        row_fn = getattr(graph, "collision_row", None)
         for i in selected_polys:
-            for j in graph.collisions[i]:
+            row = row_fn(i) if row_fn is not None else graph.collisions[i]
+            for j in row:
                 if j in selected_set:
                     overlap_ok = False
                     break

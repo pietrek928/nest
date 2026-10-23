@@ -41,8 +41,8 @@ def path_probe_budget(
     Returns ``(run, beam, max_depth)``. P1: when ready=0 and tip is not Motif but
     ``parent_free_hint`` (large_void), shrink-run with beam/4 (not skip). Motif tip
     with ready=0 still shrinks beam/2. G1: ready but macros idle → mild shrink.
-    P: when ``path_carved_streak≥2`` and hold/plateau, further thrift — skip when
-    ready∧pick_empty∧non-Motif tip; else shrink beyond P1. Motif tip fuel kept.
+    P/T: when ``path_carved_streak≥2`` and hold/plateau, further thrift — skip when
+    ready∧pick_empty; else shrink beyond P1 (Motif tips thrifted too once streak honest).
     """
     tip_motif = (
         tip_action is not None
@@ -83,11 +83,10 @@ def path_probe_budget(
         )
     else:
         return False, int(beam), int(max_depth)
-    # P: idle carve streak thrift (one gate; Motif tip budget preserved).
+    # P/T: idle carve streak thrift (one gate; Motif included once streak is honest).
     idle_thrift = (
         int(path_carved_streak) >= 2
         and (bool(incumbent_hold) or bool(on_plateau))
-        and not tip_motif
     )
     if idle_thrift:
         if ready and bool(pick_empty):
@@ -552,12 +551,9 @@ def macro_increase_path(
             reward += 0.01 * survive_rank(alt, realized)
             # P: Motif tip telem is via build_graph Motif soft path_accept_apply;
             # do not inflate Motif path reward (early parts regress under +0.02/+0.08).
-            # M4b: Macro execute + MotifJoin validate chain bonus (block neighbors).
+            # M4b: Macro execute + MotifJoin validate chain bonus (reuse join_nbrs).
             chain_bonus = 0.0
-            dg = getattr(runner, "dg", None)
-            for join_step in _path_neighbors_ranked(runner, block_node, agent)[
-                : max(int(beam), 1)
-            ]:
+            for join_step in join_nbrs:
                 if dg is not None and hasattr(dg, "realized") and dg.realized(join_step):
                     chain_bonus = max(
                         chain_bonus,
@@ -683,8 +679,9 @@ def path_accept_eligible(
     ``void_fill`` Δ ≥ ``min_void_fill_delta`` (overlap still mandatory).
     P: when ``relax_motif_void_fill`` and Motif on large_void, drop void_fill Δ —
     overlap + coverage non-regress only (build_graph late tip path).
-    F: void_fill Δ branch only when ``fits_part`` (phantom large_void → cov+delta).
-    Non-void unchanged (cov + min_cov_delta).
+    D1: on phantom (``not fits_part``) drop void_fill Δ — cov + overlap only
+    (area-ratio void_fill cannot honestly grow on swiss-cheese). Placeable
+    large_void still requires void_fill Δ. Non-void unchanged (cov + min_cov_delta).
     """
     if alt_action is None or path_accept_snap is None:
         return False, False, 0.0, 0.0
@@ -699,6 +696,10 @@ def path_accept_eligible(
     if relax_motif_void_fill and is_motif and free_kind == "large_void":
         cov_ok = bool(path_overlap_ok) and alt_cov + 1e-9 >= base_cov
         return True, cov_ok, base_cov, alt_cov
+    # D1: phantom large_void — void_fill Δ is dishonest; cov + overlap only.
+    if free_kind == "large_void" and not bool(fits_part):
+        cov_ok = bool(path_overlap_ok) and alt_cov + 1e-9 >= base_cov
+        return True, cov_ok, base_cov, alt_cov
     if not path_reward_beats(
         parent_snap,
         path_accept_snap,
@@ -706,7 +707,7 @@ def path_accept_eligible(
         alt_reward=float(alt_reward),
     ):
         return False, False, 0.0, 0.0
-    if free_kind == "large_void" and bool(fits_part):
+    if free_kind == "large_void":
         base_vf = float(getattr(parent_snap, "void_fill", 0.0) or 0.0)
         alt_vf = float(getattr(path_accept_snap, "void_fill", 0.0) or 0.0)
         cov_ok = (

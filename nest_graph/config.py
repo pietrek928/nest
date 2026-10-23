@@ -510,7 +510,6 @@ class ProposeConfig(BaseModel):
     """Post-DFS: local SE(2) polish toward void pole via native polish_se2_part."""
     local_se2_n_angles: int = 4
     local_se2_max_coarse_steps: int = 12
-    local_se2_max_fine_steps: int = 24
     use_board_edge_seeds: bool = True
     board_edge_samples_per_edge: int = 24
     use_side_pack: bool = True
@@ -705,10 +704,12 @@ class ProposeConfig(BaseModel):
     """If >0 and pool full with mean kiss score above threshold, skip explorers."""
     cascade_explorer_budget_scale: float = 0.35
     """Shrink explorer max_items by this factor when cascade soft-scales (rich snipers / non-void)."""
-    enable_mcts_densify_presets: bool = False
+    enable_mcts_densify_presets: bool = True
     """Gate MacroAction.preset_id × densify_presets (plateau staging only)."""
     densify_presets_path: str = "artifacts/tune/densify_presets.yaml"
     """YAML emitted by analyze_decision_matrix (preset 0 = baseline)."""
+    mid_hole_open: bool = False
+    """L: mid-iter post_pack+hole-open when fits_part (densify carve preset only)."""
     use_pose_nms: bool = False
     """SE(2) spatial-hash NMS on ranked pool (reserve-safe merge after)."""
     pose_nms_eps: float = 1.0

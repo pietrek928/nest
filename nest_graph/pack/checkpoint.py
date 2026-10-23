@@ -417,6 +417,7 @@ def tip_board_snapshot(ckpt: NestCheckpoint, *, arena_node_id: int = 0) -> Board
         rim_fill=float(tip.get("rim_fill", 0.0) or 0.0),
         void_fill=float(tip.get("void_fill", 0.0) or 0.0),
         free_kind=str(tip.get("free_kind", ckpt.free_kind) or ""),
+        void_fit_r=float(tip.get("void_fit_r", 0.0) or 0.0),
         motif_ids_used=tuple(int(x) for x in (tip.get("motif_ids_used") or ())),
     )
 

@@ -765,10 +765,8 @@ def make_polygon_graph(
             propose_stats["mpg_apply_ms"] = float(mpg_apply_ms)
             propose_stats["mpg_ctx_ms"] = float(mpg_ctx_ms)
             propose_stats["mpg_edges_count_ms"] = 0.0
-        # O: edge count from find_polygon_intersections hits (not collisions[i] sum).
-        propose_stats["graph_edges_n"] = int(
-            sum(len(graph.collisions[i]) for i in range(len(pending_geoms))) // 2
-        )
+        # Edge count via PoseGraph.edge_count (no Python full-adjacency copy).
+        propose_stats["graph_edges_n"] = int(graph.edge_count())
         _ = edge_n_box
     if out_native_geoms is not None:
         out_native_geoms.clear()
@@ -1321,6 +1319,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             getattr(mcts_runner.snapshot_at(int(mcts_parent_id), mcts_root), "free_kind", "")
             or ""
         ) == "large_void"
+        # mid_hole_open applied after densify pack_cfg in stages (PackIterCtx.cfg).
         polish_budget = polish_budget_for_iter(
             is_last_leaf=is_last_leaf,
             sel=sel,
@@ -1329,6 +1328,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             near_last=near_last,
             on_plateau=bool(plateau.on_plateau),
             free_remaining=parent_free_hint,
+            fits_part=bool(int(mcts_telem.get("last_fits_part", 1) or 0)),
         )
         t_expand0 = time.perf_counter()
         # R1: RSS bands — taper graphs_window / transforms / n_sims; freeze expand.
@@ -1457,6 +1457,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     near_last=near_last,
                     on_plateau=bool(plateau.on_plateau),
                     free_remaining=True,
+                    fits_part=bool(int(mcts_telem.get("last_fits_part", 1) or 0)),
                 )
         # G0: per-iter path telem (skip never clears cumulative lie).
         mcts_telem["replay_from_ancestor_ms"] = 0.0
@@ -1610,8 +1611,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 mcts_telem,
                 motif_locked=_pack_cache.get("motif_locked"),
             )
-            # M: hold tip armed but Motif execute sterile → telem carve only
-            # (no tip_install / upsert / expand swap — those thrash late Δ).
+            # M/T: hold tip armed but Motif execute sterile → telem only.
+            # Do not bump path_carved / tip_apply / clear streak (defeats idle_thrift).
             if (
                 motif_hold_tip
                 and force_motif is not None
@@ -1621,14 +1622,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
             ):
                 mcts_telem["path_motif_force_tip"] = 1
-                mcts_telem["path_carved"] = int(
-                    mcts_telem.get("path_carved", 0) or 0
-                ) + 1
-                mcts_telem["path_tip_apply"] = int(
-                    mcts_telem.get("path_tip_apply", 0) or 0
-                ) + 1
-                path_carved_streak = 0
-                mcts_telem["path_carved_streak"] = 0
             if alt_action is None:
                 mcts_telem["path_alt_none"] = int(
                     mcts_telem.get("path_alt_none", 0) or 0
@@ -1795,15 +1788,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
             except Exception:
                 pass
-        if mcts_action is None and mcts_runner.agent is not None:
-            preset_ids = [0]
-            # Staging: plateau + online_ok presets only (len>1 alone is not enough —
-            # offline candidates stay in YAML until marked online_ok).
-            if bool(getattr(cfg.propose, "enable_mcts_densify_presets", False)):
-                online_ids = densify_preset_ids(_densify_presets)
-                if len(online_ids) > 1 and bool(plateau.on_plateau):
-                    preset_ids = online_ids
+        preset_ids = [0]
+        densify_hold = bool(
+            int(mcts_telem.get("last_incumbent_hold", 0) or 0)
+        ) and bool(parent_free_hint)
+        # Staging: online_ok ×K on plateau OR densify hold (late +K often never
+        # flats while incumbent_hold∧large_void — L carve telem otherwise absent).
+        if bool(getattr(cfg.propose, "enable_mcts_densify_presets", False)):
+            online_ids = densify_preset_ids(_densify_presets)
+            if len(online_ids) > 1 and (
+                bool(plateau.on_plateau) or densify_hold
+            ):
+                preset_ids = online_ids
+        if mcts_runner.agent is not None:
             mcts_runner.agent.preset_ids = preset_ids
+        if mcts_action is None and mcts_runner.agent is not None:
             mcts_action = mcts_runner.agent.pick_expand_action(
                 parent_snap.remaining_gids
                 or tuple(range(int(cfg.rules.ngroups))),
@@ -1830,6 +1829,25 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         if mcts_action is not None:
             mcts_telem["mcts_rule_id"] = int(getattr(mcts_action, "rule_id", 0) or 0)
             mcts_preset_id = int(getattr(mcts_action, "preset_id", 0) or 0)
+        # L: path/Motif tip usually preset 0 — apply first online carve preset to
+        # pack_cfg when densify-hold + near_last/plateau (post_pack temporal shield).
+        if (
+            len(preset_ids) > 1
+            and densify_hold
+            and (bool(near_last) or bool(plateau.on_plateau))
+            and int(mcts_preset_id) == 0
+        ):
+            for _pid in preset_ids:
+                if int(_pid) != 0:
+                    mcts_preset_id = int(_pid)
+                    mcts_telem["carve_preset_force"] = 1
+                    if (
+                        mcts_action is not None
+                        and getattr(mcts_action, "region", None)
+                        != MacroRegion.Motif
+                    ):
+                        mcts_action.preset_id = int(_pid)
+                    break
         mcts_telem["mcts_preset_id"] = int(mcts_preset_id)
         pack_cfg = apply_densify_preset(cfg, mcts_preset_id, _densify_presets)
         if int(mcts_preset_id) != int(_last_mcts_preset_id):
@@ -2224,7 +2242,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 transform=transform,
                 part_areas=part_areas,
                 part_bases=part_bases,
-                cfg=cfg,
+                cfg=pack_cfg,
                 sel=sel,
                 propose_stats=propose_stats,
                 dg=mcts_runner.dg,
@@ -2302,6 +2320,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "p_sheet": p_sheet,
                 "min_dist": min_dist,
                 "cfg": pack_cfg,
+                "densify_presets": list(_densify_presets),
                 "free_info": free_info,
                 "propose_stats": dict(propose_stats),
                 "packed_geoms": list(packed_geoms),
@@ -2327,7 +2346,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             _pack_cache["motif_base"] = mcts_runner.motif_base
             _pack_cache["survive_by_motif"] = dict(_survive_prior)
             mcts_telem["last_graph_n"] = int(len(transform))
+            # T: reset idle carve streak on realized part gain (outer nest grew).
+            _prev_nest_for_streak = int(mcts_telem.get("last_nest_n", 0) or 0)
             mcts_telem["last_nest_n"] = int(len(selected_polys))
+            if int(len(selected_polys)) > _prev_nest_for_streak:
+                path_carved_streak = 0
+                mcts_telem["path_carved_streak"] = 0
             mcts_telem["last_incumbent_hold"] = int(
                 propose_stats.get("incumbent_hold", 0) or 0
             )
@@ -2341,6 +2365,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
                 or 0
             )
+            # D1: leaf_fit_r / phantom leaf count (void_fit_r on BoardSnapshot).
+            _fit_r = 1.0 if int(mcts_telem["last_fits_part"]) else 0.0
+            mcts_telem["leaf_fit_r"] = float(_fit_r)
+            if (
+                str(getattr(free_info, "kind", "") or "") == "large_void"
+                and float(_fit_r) < 1.0
+            ):
+                mcts_telem["mcts_phantom_n"] = int(
+                    mcts_telem.get("mcts_phantom_n", 0) or 0
+                ) + 1
             mcts_telem["hybrid_pick_trials"] = int(
                 propose_stats.get("hybrid_pick_trials", 0) or 0
             )
@@ -2454,7 +2488,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         ),
                     }),
                 })
-        n_graph = len(graph.collisions)
+        n_graph = int(graph.size()) if hasattr(graph, "size") else len(graph.elems)
         assert selection_is_independent(
             graph, [i for i in selected_polys if 0 <= int(i) < n_graph],
         )
@@ -2483,6 +2517,29 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats=propose_stats,
             archived_patterns=archived_for_propose,
         )
+        # L: refresh budget with densify pack_cfg (mid_hole_open) after tip settle.
+        _free_post = getattr(post_prep, "free_post", None)
+        polish_budget = polish_budget_for_iter(
+            is_last_leaf=is_last_leaf,
+            sel=sel,
+            large_void=bool(
+                _free_post is not None
+                and getattr(_free_post, "kind", "") == "large_void"
+            ),
+            cheap_expand=False,
+            near_last=near_last,
+            on_plateau=bool(plateau.on_plateau),
+            free_remaining=bool(
+                _free_post is not None
+                and getattr(_free_post, "kind", "") == "large_void"
+            ),
+            fits_part=bool(
+                getattr(_free_post, "fits_part", True) if _free_post is not None else True
+            ),
+            mid_hole_open=bool(
+                getattr(getattr(pack_cfg, "propose", None), "mid_hole_open", False)
+            ),
+        )
         post_pack_ctx = PackIterCtx(
             graph=graph,
             polys=list(polys),
@@ -2490,7 +2547,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             transform=list(transform),
             part_areas=part_areas,
             part_bases=part_bases,
-            cfg=cfg,
+            cfg=pack_cfg,
             sel=sel,
             propose_stats=propose_stats,
             sheet=p_sheet,
@@ -2563,6 +2620,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats["gls_separate_moved"] = int(
                 se2_stats.get("gls_separate_moved", 0) or 0
             )
+            propose_stats["se2_edge_snap_n"] = int(
+                se2_stats.get("se2_edge_snap_n", 0) or 0
+            )
+            propose_stats["hole_open_attempted"] = int(
+                se2_stats.get("hole_open_attempted", 0) or 0
+            )
+            propose_stats["hole_open_fit"] = int(
+                se2_stats.get("hole_open_fit", 0) or 0
+            )
+            propose_stats["hole_open_r0"] = float(
+                se2_stats.get("hole_open_r0", 0.0) or 0.0
+            )
+            propose_stats["hole_open_r1"] = float(
+                se2_stats.get("hole_open_r1", 0.0) or 0.0
+            )
             print(
                 f"repack={repack_stats.get('accepted', 0)}/"
                 f"{repack_stats.get('attempted', 0)} "
@@ -2574,7 +2646,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"tan={se2_stats.get('tangent_moves', 0)} "
                 f"gls={se2_stats.get('gls_insert_moved', 0)}/"
                 f"{se2_stats.get('gls_separate_moved', 0)}/"
-                f"{se2_stats.get('gls_attempted', 0)}"
+                f"{se2_stats.get('gls_attempted', 0)} "
+                f"edge_snap={se2_stats.get('se2_edge_snap_n', 0)} "
+                f"hole_open={se2_stats.get('hole_open_attempted', 0)}/"
+                f"{se2_stats.get('hole_open_fit', 0)} "
+                f"r={float(se2_stats.get('hole_open_r0', 0) or 0):.1f}→"
+                f"{float(se2_stats.get('hole_open_r1', 0) or 0):.1f} "
+                f"preset={int(mcts_telem.get('mcts_preset_id', 0) or 0)} "
+                f"post={int(getattr(polish_budget, 'run_post_pack', False))}"
             )
         # MotifBase TTL + Q116 nest Motif credit + global age (Q142).
         pattern_accept = False

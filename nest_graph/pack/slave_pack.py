@@ -1,6 +1,6 @@
 """Cheap expand slave: wrap propose knobs → nest (no DFS/3b/se2)."""
 
-
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
@@ -275,7 +275,6 @@ def upsert_from_contacts(
             contact_score = float(clamp01(1.0 - dist / contact))
         ga, gb = geoms[i], geoms[j]
         compactness = _pair_compactness(ga, gb)
-        gci = float(gci_surrogate(float(compactness), float(contact_score)))
         area_i = abs(float(ga.area()))
         area_j = abs(float(gb.area()))
         gid_i, gid_j = int(gids[i]), int(gids[j])
@@ -290,6 +289,16 @@ def upsert_from_contacts(
         rel = relative_transform(
             (float(t_a[0]), float(t_a[1]), float(t_a[2])),
             (float(t_b[0]), float(t_b[1]), float(t_b[2])),
+        )
+        # W2: flush when near-kiss + edge-aligned relative θ.
+        near_kiss = bool(r.intersect) or dist <= float(gap) * 1.05
+        dth = abs((float(rel[2]) + math.pi) % (2.0 * math.pi) - math.pi)
+        flush = near_kiss and (
+            min(dth, abs(math.pi - dth)) <= 0.35
+            or abs(dth - 0.5 * math.pi) <= 0.35
+        )
+        gci = float(
+            gci_surrogate(float(compactness), float(contact_score), 0.5, 0.5, bool(flush))
         )
         # F2: soft-demote near-origin same-gid kiss tiles on dense packs only
         # (late densify / post-ckpt). Early cold MotifBase stays full-gci.
@@ -309,6 +318,11 @@ def upsert_from_contacts(
         edge.relative_pose = Se2(float(rel[0]), float(rel[1]), float(rel[2]))
         edge.contact_score = float(contact_score)
         edge.compactness = float(compactness)
+        edge.flush = bool(flush)
+        ang = math.atan2(float(rel[1]), float(rel[0]))
+        ea = int(math.floor((ang + math.pi) / (math.pi * 0.25))) % 8
+        edge.edge_a = int(ea)
+        edge.edge_b = int((ea + 4) % 8)
         edge.gci = float(gci)
         mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
         if mid >= 0:
@@ -414,6 +428,7 @@ def cheap_expand_slave(
             rim_fill=parent.rim_fill,
             void_fill=parent.void_fill,
             free_kind=parent.free_kind,
+            void_fit_r=float(getattr(parent, "void_fit_r", 0.0) or 0.0),
             motif_ids_used=parent.motif_ids_used,
         )
     timed_expand_ms(telem, t0)

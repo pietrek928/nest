@@ -16,6 +16,7 @@ from nest_graph.propose.context import (
     cluster_packed_indices,
     part_extents,
     placement_free_region,
+    void_fits_part,
     void_pole_seed_coords,
 )
 from nest_graph.propose.geometry import ProposeGeometry
@@ -667,12 +668,15 @@ def _fit_probe_ok(
     *,
     min_dist: float,
 ) -> bool:
-    """Same A0 probe: polylabel inradius vs part max extent."""
+    """A0 probe: polylabel inradius vs part max extent (void_fits_part SoT)."""
     try:
         poi = polylabel(void_poly, tolerance=max(float(min_dist), 0.5))
-        in_r = float(void_poly.exterior.distance(Point(float(poi.x), float(poi.y))))
-        _min_e, max_e = part_extents(shape)
-        return float(max_e) <= in_r + 1e-9
+        return void_fits_part(
+            void_poly,
+            shape=shape,
+            min_dist=float(min_dist),
+            at_pt=Point(float(poi.x), float(poi.y)),
+        )
     except Exception:
         return False
 
@@ -1030,19 +1034,85 @@ def merge_cluster_patterns(
     return out
 
 
+def rotate_lattice_delta(dx: float, dy: float, theta: float) -> tuple[float, float]:
+    """Rotate lattice Δxy by base pose θ (W1: unify with mate dual-stamp rotation)."""
+    ca, sa = math.cos(float(theta)), math.sin(float(theta))
+    return (float(dx) * ca - float(dy) * sa, float(dx) * sa + float(dy) * ca)
+
+
+def _mrr_side_vectors(poly: Polygon) -> list[tuple[float, float]]:
+    """MRR edge vectors (axis-aligned in MRR frame) for lattice period."""
+    mrr = poly.minimum_rotated_rectangle
+    if mrr is None or getattr(mrr, "is_empty", True):
+        return []
+    coords = list(mrr.exterior.coords)
+    if len(coords) < 3:
+        return []
+    dx1 = float(coords[1][0] - coords[0][0])
+    dy1 = float(coords[1][1] - coords[0][1])
+    dx2 = float(coords[2][0] - coords[1][0])
+    dy2 = float(coords[2][1] - coords[1][1])
+    out: list[tuple[float, float]] = []
+    if math.hypot(dx1, dy1) > 1e-9:
+        out.append((dx1, dy1))
+    if math.hypot(dx2, dy2) > 1e-9:
+        out.append((dx2, dy2))
+    return out
+
+
 def motif_lattice_offsets(
     pattern: ClusterPattern,
     *,
     min_step: float = 0.0,
+    union_poly: Polygon | None = None,
+    part_extent: float = 0.0,
 ) -> list[tuple[float, float]]:
     """Δxy lattice steps from member relatives (ignore identity).
 
     ``min_step`` > 0 scales short kiss |Δxy| up to that length (M3 large_void).
     Opposite-orientation mates (|Δθ|≈π) use 2·Δxy before the min_step floor.
+    W1 priority: dense union (fill≳0.95) → MRR sides + gap; else member-Δxy;
+    identity-only → orthogonal (extent+gap) / min_step basis.
     """
     offsets: list[tuple[float, float]] = []
     seen: set[tuple[float, float]] = set()
     min_l = max(float(min_step), 0.0)
+    gap = min_l
+
+    def _push(dx: float, dy: float) -> None:
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            return
+        key = (round(dx, 3), round(dy, 3))
+        if key in seen:
+            return
+        seen.add(key)
+        offsets.append((dx, dy))
+        nkey = (round(-dx, 3), round(-dy, 3))
+        if nkey not in seen:
+            seen.add(nkey)
+            offsets.append((-dx, -dy))
+
+    # W1: dense tile union → period = MRR side + gap (edge-to-edge).
+    if union_poly is not None and not getattr(union_poly, "is_empty", True):
+        try:
+            mrr = union_poly.minimum_rotated_rectangle
+            mrr_area = float(mrr.area) if mrr is not None and not mrr.is_empty else 0.0
+            u_area = float(union_poly.area)
+            fill = u_area / max(mrr_area, 1e-12)
+        except Exception:
+            fill = 0.0
+            mrr_area = 0.0
+        if fill >= 0.95 and mrr_area > 1e-12:
+            for sx, sy in _mrr_side_vectors(union_poly):
+                ln = math.hypot(sx, sy)
+                if ln < 1e-9:
+                    continue
+                ux, uy = sx / ln, sy / ln
+                step = ln + gap
+                _push(ux * step, uy * step)
+            if offsets:
+                return offsets
+
     for _gid, t_rel in pattern.members:
         dx, dy = float(t_rel[0]), float(t_rel[1])
         dang = float(t_rel[2]) if len(t_rel) > 2 else 0.0
@@ -1061,15 +1131,19 @@ def motif_lattice_offsets(
                 scale = min_l / length
                 dx *= scale
                 dy *= scale
-        key = (round(dx, 3), round(dy, 3))
-        if key in seen:
-            continue
-        seen.add(key)
-        offsets.append((dx, dy))
-        nkey = (round(-dx, 3), round(-dy, 3))
-        if nkey not in seen:
-            seen.add(nkey)
-            offsets.append((-dx, -dy))
+        _push(dx, dy)
+    # W1 single-part tile: (extent+gap) orthogonal basis when no member Δxy.
+    if not offsets:
+        step = max(float(part_extent), 0.0) + gap
+        if step <= 1e-12:
+            step = min_l
+        if step > 1e-12:
+            offsets = [
+                (step, 0.0),
+                (-step, 0.0),
+                (0.0, step),
+                (0.0, -step),
+            ]
     return offsets
 
 
@@ -1264,23 +1338,30 @@ def void_seek_motif_anchors(
                         v1 = (-ly / ln * min_step, lx / ln * min_step)
                 if v1 is not None:
                     for ax, ay, aa in base_for_lattice:
+                        r0x, r0y = rotate_lattice_delta(v0[0], v0[1], aa)
+                        r1x, r1y = rotate_lattice_delta(v1[0], v1[1], aa)
                         for i in range(-depth, depth + 1):
                             for j in range(-depth, depth + 1):
                                 if i == 0 and j == 0:
                                     continue
                                 lattice.append(
                                     (
-                                        float(ax) + i * v0[0] + j * v1[0],
-                                        float(ay) + i * v0[1] + j * v1[1],
+                                        float(ax) + i * r0x + j * r1x,
+                                        float(ay) + i * r0y + j * r1y,
                                         float(aa),
                                     )
                                 )
                     continue
             for ax, ay, aa in base_for_lattice:
                 for dx, dy in offsets:
+                    rdx, rdy = rotate_lattice_delta(dx, dy, aa)
                     for k in range(1, depth + 1):
                         lattice.append(
-                            (float(ax) + k * dx, float(ay) + k * dy, float(aa))
+                            (
+                                float(ax) + k * rdx,
+                                float(ay) + k * rdy,
+                                float(aa),
+                            )
                         )
         lattice_added = len(lattice)
         if use_2d and depth > 0:

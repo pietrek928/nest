@@ -170,6 +170,37 @@ def test_lattice_offsets_pi_kiss_scales_to_min_step():
     assert any(abs(o[0] + 1.0) < 1e-6 and abs(o[1]) < 1e-6 for o in offs)
 
 
+def test_lattice_offsets_single_part_extent_gap():
+    """W1: identity-only pattern uses (extent+gap) orthogonal basis."""
+    from nest_graph.propose.placements_pattern import rotate_lattice_delta
+
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)),),
+        part_count=1,
+        ref_transform=(0.0, 0.0, 0.0),
+    )
+    offs = motif_lattice_offsets(pat, min_step=0.01, part_extent=0.1)
+    assert any(abs(o[0] - 0.11) < 1e-9 and abs(o[1]) < 1e-9 for o in offs)
+    assert any(abs(o[1] - 0.11) < 1e-9 and abs(o[0]) < 1e-9 for o in offs)
+    rx, ry = rotate_lattice_delta(0.11, 0.0, math.pi / 2.0)
+    assert abs(rx) < 1e-9 and abs(ry - 0.11) < 1e-9
+
+
+def test_lattice_offsets_dense_union_mrr_period():
+    """W1: fill≳0.95 union → MRR side + gap period (not raw member Δ)."""
+    pat = ClusterPattern(
+        members=((0, (0.0, 0.0, 0.0)), (0, (0.1, 0.0, 0.0))),
+        part_count=2,
+        ref_transform=(0.0, 0.0, 0.0),
+    )
+    # Two abutting 0.1 squares → fill≈1.0 vs MRR.
+    union = box(0.0, 0.0, 0.2, 0.1)
+    offs = motif_lattice_offsets(pat, min_step=0.01, union_poly=union)
+    # MRR sides 0.2 and 0.1 → periods 0.21 / 0.11 along axes.
+    assert any(abs(abs(o[0]) - 0.21) < 1e-6 and abs(o[1]) < 1e-6 for o in offs)
+    assert any(abs(abs(o[1]) - 0.11) < 1e-6 and abs(o[0]) < 1e-6 for o in offs)
+
+
 def test_nest_by_scores_keeps_locks():
     from nest_graph.graph import (
         Circle,

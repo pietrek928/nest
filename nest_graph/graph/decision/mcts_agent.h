@@ -170,11 +170,18 @@ inline float leaf_reward(
     const int32_t packed = std::max(snapshot.n_packed(), 1);
     float void_w = lam_void;
     float rim_w = lam_rim;
-    if (snapshot.free_kind == "large_void") {
+    // D1: phantom/unknown (void_fit_r < 1) — no large_void void_w inflate;
+    // scale void_fill by fit so area-ratio alone cannot inflate reward.
+    const float fit_r = snapshot.void_fit_r;
+    if (snapshot.free_kind == "large_void" && fit_r >= 1.f) {
         void_w = std::max(void_w, 0.75f);
         rim_w = std::min(rim_w, 0.05f);
     }
-    float base = snapshot.coverage + void_w * snapshot.void_fill + rim_w * snapshot.rim_fill
+    float void_fill_term = snapshot.void_fill;
+    if (snapshot.free_kind == "large_void") {
+        void_fill_term *= std::min(std::max(fit_r, 0.f), 1.f);
+    }
+    float base = snapshot.coverage + void_w * void_fill_term + rim_w * snapshot.rim_fill
         + lam_kiss * (static_cast<float>(snapshot.kiss_pairs) / static_cast<float>(packed))
         + lam_comp * snapshot.mean_compactness;
     if (rule_id > 0) {
@@ -568,7 +575,8 @@ public:
     float amaf_pick_score(
         const ActionKey &key,
         int32_t parent_id,
-        const std::string &free_kind = ""
+        const std::string &free_kind = "",
+        float void_fit_r = 0.f
     ) {
         if (arena == nullptr) {
             return MCTS_NEG_INF;
@@ -633,7 +641,12 @@ public:
             (motif_base != nullptr && motif_base->size() > 0)
             || place_cohort_ready
             || !motif_cohorts.empty();
-        if (free_kind == "large_void" && region_i == void_i) {
+        // D1: phantom soft-down Void AMAF; placeable large_void keeps void_bonus.
+        const bool void_placeable =
+            free_kind == "large_void" && void_fit_r >= 1.f;
+        const bool void_phantom =
+            free_kind == "large_void" && void_fit_r < 1.f;
+        if (void_placeable && region_i == void_i) {
             float void_bonus = 0.35f;
             float miss_rate = 0.f;
             if (visits > 0 && misses > 0) {
@@ -659,7 +672,10 @@ public:
             miss_rate = std::max(0.f, std::min(1.f, miss_rate));
             score += void_bonus * (1.f - miss_rate);
         }
-        if (free_kind == "large_void" && region_i == rim_i) {
+        if (void_phantom && region_i == void_i) {
+            score -= 0.2f;
+        }
+        if (void_placeable && region_i == rim_i) {
             score -= 0.15f;
         }
         if (free_kind == "large_void" && region_i == motif_i && motif_fuel) {
@@ -740,9 +756,11 @@ public:
         static MacroAction fallback{};
         std::vector<int32_t> warm;
         std::string free_kind;
+        float void_fit_r = 0.f;
         if (snapshot != nullptr) {
             warm = warm_motif_ids(snapshot);
             free_kind = snapshot->free_kind;
+            void_fit_r = snapshot->void_fit_r;
         }
         std::vector<MotifCohortSpec> cohort_specs;
         if (place_cohort_ready) {
@@ -803,7 +821,7 @@ public:
         float best_score = MCTS_NEG_INF;
         for (const MacroAction *a : untried) {
             const ActionKey key = action_key(*a);
-            const float score = amaf_pick_score(key, parent_id, free_kind);
+            const float score = amaf_pick_score(key, parent_id, free_kind, void_fit_r);
             if (score > best_score) {
                 best_score = score;
                 best = a;

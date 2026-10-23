@@ -49,6 +49,8 @@ def run_post_pack_passes(
     native_pack_geoms_fn=None,
     force_bfs_peel: bool = False,
     archived_patterns: Sequence | None = None,
+    fits_part: bool = True,
+    force_hole_open: bool = False,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity).
 
@@ -82,6 +84,8 @@ def run_post_pack_passes(
         board_adj_indices=board_adj_indices,
         part_bases=part_bases,
         board_geom=board_geom,
+        fits_part=bool(fits_part),
+        force_hole_open=bool(force_hole_open),
     )
     if allow_repack and propose_cfg.enable_cluster_repack:
         out_polys, out_tr, sel, repack_stats = cluster_repack_selection(
@@ -372,8 +376,12 @@ def apply_post_pack_and_telem(
         poles=prep.reloc_poles,
         fixed_obstacles=fixed_obstacles,
         void_geoms=prep.void_geoms_post,
-        allow_repack=prep.allow_repack,
-        allow_relocate=True,
+        # C: phantom hole-open — se2 only (skip repack/relocate noise on mid phantom).
+        allow_repack=(
+            prep.allow_repack
+            and bool(getattr(prep.free_post, "fits_part", True))
+        ),
+        allow_relocate=bool(getattr(prep.free_post, "fits_part", True)),
         allow_local_se2=True,
         void_poly=prep.free_post.target_poly,
         pt_push=prep.push_pt,
@@ -386,6 +394,9 @@ def apply_post_pack_and_telem(
         native_pack_geoms_fn=native_pack_geoms_fn,
         force_bfs_peel=prep.force_bfs_peel,
         archived_patterns=list(prep.archived_patterns or ()) or None,
+        fits_part=bool(getattr(prep.free_post, "fits_part", True)),
+        # C: last-leaf post_pack always probes hole-open (strict restore if no grow).
+        force_hole_open=True,
     )
     if isinstance(void_leak_stats, dict):
         void_leak_stats["repack"] = pack_stats.get("repack") or {

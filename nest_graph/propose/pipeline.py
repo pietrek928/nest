@@ -555,6 +555,7 @@ def _void_seek_densify(
         and zone in sterile_zones
     )
     # V5: in-void emit when props still sterile under void_seek.
+    # P densify_skip_no_fit cancelled (dumped late Δ); fits_part telem only until D1.
     if (
         not need_densify
         and zone == "void_seek"

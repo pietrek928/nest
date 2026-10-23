@@ -25,6 +25,37 @@ typedef struct PoseGraph {
     std::vector<std::vector<AttractEdge>> attract;
 
     auto size() const { return group_id.size(); }
+
+    /** Undirected collision edge count (Σ degree / 2). O(N) over rows, no Python copy. */
+    std::size_t edge_count() const {
+        std::size_t sum = 0;
+        for (const auto &row : collisions) {
+            sum += row.size();
+        }
+        return sum / 2;
+    }
+
+    std::size_t attract_edge_count() const {
+        std::size_t sum = 0;
+        for (const auto &row : attract) {
+            sum += row.size();
+        }
+        return sum / 2;
+    }
+
+    std::size_t degree(std::size_t i) const {
+        if (i >= collisions.size()) {
+            return 0;
+        }
+        return collisions[i].size();
+    }
+
+    std::size_t attract_degree(std::size_t i) const {
+        if (i >= attract.size()) {
+            return 0;
+        }
+        return attract[i].size();
+    }
 } PoseGraph;
 
 /** Shared skip for Attract / Attach: identity, OOB, or Collision (Q153). */

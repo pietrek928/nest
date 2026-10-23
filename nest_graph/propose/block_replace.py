@@ -9,7 +9,7 @@ from shapely.ops import unary_union
 
 from nest_graph.graph import SelectMode, SelectOptions, nest_by_scores
 from nest_graph.geometry import Geometry
-from nest_graph.propose.context import cluster_packed_indices
+from nest_graph.propose.context import cluster_packed_indices, part_extents
 from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.propose.placement_common import (
     as_geometry,
@@ -17,9 +17,17 @@ from nest_graph.propose.placement_common import (
     is_board_adj,
     is_pose_clear,
     part_void_adj,
+    placement_obstacles,
     selection_pairwise_independent,
 )
 from nest_graph.propose.placement_outline import outline_ring_geom
+from nest_graph.propose.placements_pattern import (
+    merge_cluster_patterns,
+    motif_lattice_offsets,
+    rotate_lattice_delta,
+    synthesize_mate_patterns,
+    wedge_edge_grain_angles,
+)
 from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
@@ -59,14 +67,16 @@ def _cohorts_collide(a: Sequence[int], b: Sequence[int], graph) -> bool:
 
 
 def _packing_independent(idxs: Sequence[int], graph) -> bool:
-    collisions = getattr(graph, "collisions", None)
-    if collisions is None:
+    row_fn = getattr(graph, "collision_row", None)
+    if row_fn is None and getattr(graph, "collisions", None) is None:
         return True
+    n = int(graph.size()) if hasattr(graph, "size") else len(getattr(graph, "collisions", []))
     s = set(int(i) for i in idxs)
     for i in s:
-        if i < 0 or i >= len(collisions):
+        if i < 0 or i >= n:
             continue
-        if any(int(u) in s and int(u) != i for u in collisions[i]):
+        row = row_fn(i) if row_fn is not None else graph.collisions[i]
+        if any(int(u) in s and int(u) != i for u in row):
             return False
     return True
 
@@ -175,6 +185,21 @@ def try_block_cohort_swap(
     return sel, locked, telem
 
 
+def _victim_blob_aspect(blob: BaseGeometry) -> float:
+    """MRR aspect (≥1); W3 strip retile prefers elongated CCs."""
+    try:
+        mrr = blob.minimum_rotated_rectangle
+        coords = list(mrr.exterior.coords)
+        if len(coords) < 3:
+            return 1.0
+        len1 = float(np.hypot(coords[1][0] - coords[0][0], coords[1][1] - coords[0][1]))
+        len2 = float(np.hypot(coords[2][0] - coords[1][0], coords[2][1] - coords[1][1]))
+        a, b = max(len1, len2), min(len1, len2)
+        return float(a / max(b, 1e-12))
+    except Exception:
+        return 1.0
+
+
 def pick_block_hole_victim(
     selected: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -186,8 +211,13 @@ def pick_block_hole_victim(
     min_size: int = 3,
     max_size: int = 6,
     allow_board_adj_fallback: bool = True,
+    prefer_strip: bool = True,
 ) -> list[int] | None:
-    """Contact CC of size [3,6]; prefer non-board_adj; Q215 void-facing board_adj only."""
+    """Contact CC of size [3,6]; prefer non-board_adj; Q215 void-facing board_adj only.
+
+    W3: when ``prefer_strip``, interior CCs with MRR aspect≥2 beat nearer round
+    blobs (strip re-tile for lattice emit + lex).
+    """
     sel = [int(i) for i in selected if 0 <= int(i) < len(polys)]
     placed = [polys[i] for i in sel]
     if len(sel) < min_size:
@@ -196,6 +226,7 @@ def pick_block_hole_victim(
     ring = outline_ring_geom(sheet)
     best_interior: list[int] | None = None
     best_interior_d = float("inf")
+    best_interior_aspect = 0.0
     best_rim: list[int] | None = None
     best_rim_d = float("inf")
     void_geom = as_geometry(void_poly) if void_poly is not None else None
@@ -221,9 +252,24 @@ def pick_block_hole_victim(
             dist = 0.0
         else:
             dist = float(blob.centroid.distance(pole))
+        aspect = _victim_blob_aspect(blob)
         if not board_hit:
-            if dist < best_interior_d:
+            # W3: strip (aspect≥2) lex over nearer round; else nearest-to-pole.
+            strip = prefer_strip and aspect >= 2.0
+            best_strip = prefer_strip and best_interior_aspect >= 2.0
+            better = False
+            if best_interior is None:
+                better = True
+            elif strip and not best_strip:
+                better = True
+            elif strip == best_strip and (
+                (strip and aspect > best_interior_aspect + 1e-9)
+                or (not strip and dist < best_interior_d)
+            ):
+                better = True
+            if better:
                 best_interior_d = dist
+                best_interior_aspect = aspect
                 best_interior = list(global_idxs)
         elif allow_board_adj_fallback and dist < best_rim_d:
             # Q215: board_adj only if void-facing (pure rim peel is waste on void_fill).
@@ -256,7 +302,8 @@ def _emit_hole_candidates(
     void_geoms: Sequence,
     free_space,
     cluster_patterns,
-) -> tuple[list[tuple[int, np.ndarray, BaseGeometry, Geometry]], int]:
+) -> tuple[list[tuple[int, np.ndarray, BaseGeometry, Geometry]], int, int]:
+    # cycle: pipeline → block_replace (3b); placements_pattern hoisted at module top
     from nest_graph.config import ProposeConfig
     from nest_graph.propose.pipeline import propose_coords_with_strategy
 
@@ -270,7 +317,30 @@ def _emit_hole_candidates(
     voids = [g for g in (void_geoms or ()) if g is not None]
     out: list[tuple[int, np.ndarray, BaseGeometry, Geometry]] = []
     in_hull = 0
+    mate_n = 0
     hull = void_poly if void_poly is not None and not getattr(void_poly, "is_empty", True) else None
+    # R: mate synth ∪ cluster patterns (same merge as pipeline densify).
+    patterns = list(cluster_patterns or ())
+    mate_parts = [
+        (part, int(gid))
+        for gid, part in part_by_group.items()
+        if part is not None and not getattr(part, "is_empty", True)
+    ]
+    if mate_parts and bool(getattr(propose_cfg, "enable_mate_synth", True)):
+        mates = synthesize_mate_patterns(
+            mate_parts,
+            min_dist=float(min_dist),
+            max_patterns=int(getattr(propose_cfg, "cluster_copy_max_patterns", 8) or 8),
+        )
+        if mates:
+            patterns = merge_cluster_patterns(
+                patterns,
+                mates,
+                max_patterns=int(getattr(propose_cfg, "cluster_copy_max_patterns", 8) or 8),
+                archived=(),
+                reserve_archived=0,
+            )
+    packing_obs = placement_obstacles(voids, packed_g)
     for gid, part in part_by_group.items():
         if len(out) >= _HOLE_EMIT_CAP:
             break
@@ -286,7 +356,7 @@ def _emit_hole_candidates(
                 pt_push=push,
                 group_id=int(gid),
                 enabled_proposers=enabled,
-                cluster_patterns=cluster_patterns,
+                cluster_patterns=patterns,
                 packed_polys=kept_list,
                 packed_group_ids=[0] * len(kept_list),
                 packed_transforms=[(0.0, 0.0, 0.0)] * len(kept_list),
@@ -299,11 +369,19 @@ def _emit_hole_candidates(
             coords = []
         part_g = Geometry.from_shapely(part)
         hole_obs, hole_scene = clearance_scene(voids, packed_g, float(min_dist))
+        seen_keys: set[tuple[float, float, float]] = set()
         for c in coords:
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             tr = np.asarray(c, dtype=np.float64).reshape(3)
+            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             cand_g = part_g.apply_transform(float(tr[0]), float(tr[1]), float(tr[2]))
+            # emit_packing_clear SoT: Penetrating vs voids+packed (margin 0).
+            if packing_obs and cand_g.intersects_any(list(packing_obs)):
+                continue
             if not is_pose_clear(
                 cand_g, voids, packed_g, float(min_dist),
                 obs=hole_obs, scene=hole_scene,
@@ -319,7 +397,157 @@ def _emit_hole_candidates(
             else:
                 in_hull += 1
             out.append((int(gid), tr, poly, cand_g))
-    return out, in_hull
+        # R: densify mate lattice across victim hull at wedge grain.
+        if not patterns or hull is None or len(out) >= _HOLE_EMIT_CAP:
+            continue
+        grain = list(wedge_edge_grain_angles(hull)) or [0.0]
+        bases: list[tuple[float, float, float]] = []
+        if pole is not None and not getattr(pole, "is_empty", True):
+            for ang in grain[:4]:
+                bases.append((float(pole.x), float(pole.y), float(ang)))
+        try:
+            hc = hull.centroid
+            bases.append((float(hc.x), float(hc.y), float(grain[0])))
+        except Exception:
+            pass
+        depth = max(int(getattr(propose_cfg, "motif_lattice_depth", 3) or 0), 1)
+        top_k = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 0), 4)
+        lattice_coords: list[tuple[float, float, float]] = []
+        pair_mates: list[tuple[int, tuple[float, float, float]]] = []
+        for pat in patterns:
+            members = list(pat.members or ())
+            gids_in = [int(m[0]) for m in members]
+            if int(gid) not in gids_in:
+                continue
+            # W1: tile period from dense union MRR or (extent+gap) single-part.
+            _min_e, max_e = part_extents(part)
+            union_proxy = None
+            try:
+                placed = []
+                for mg, mt in members:
+                    src = part_by_group.get(int(mg))
+                    if src is None or getattr(src, "is_empty", True):
+                        continue
+                    placed.append(
+                        transform_poly(
+                            src,
+                            np.asarray(
+                                (float(mt[0]), float(mt[1]), float(mt[2]) if len(mt) > 2 else 0.0),
+                                dtype=np.float64,
+                            ),
+                        )
+                    )
+                if placed:
+                    union_proxy = unary_union(placed)
+            except Exception:
+                union_proxy = None
+            offs = motif_lattice_offsets(
+                pat,
+                min_step=float(min_dist),
+                union_poly=union_proxy if isinstance(union_proxy, Polygon) else None,
+                part_extent=float(max_e),
+            )
+            # Mate / all non-identity members for multi-stamp at lattice nodes (W1).
+            member_rels: list[tuple[int, tuple[float, float, float]]] = []
+            for mg, mt in members:
+                tr = (float(mt[0]), float(mt[1]), float(mt[2]) if len(mt) > 2 else 0.0)
+                if abs(tr[0]) + abs(tr[1]) + abs(tr[2]) > 1e-9:
+                    member_rels.append((int(mg), tr))
+            if not offs and not member_rels:
+                continue
+            for ax, ay, aa in bases:
+                # W1: stamp all pattern members at base (dense packs; early lattice-only).
+                if member_rels and len(kept_list) >= 60:
+                    pair_mates.append((int(gid), (float(ax), float(ay), float(aa))))
+                    for mgid, (mx, my, ma) in member_rels:
+                        rx, ry = rotate_lattice_delta(mx, my, aa)
+                        pair_mates.append(
+                            (
+                                int(mgid),
+                                (
+                                    float(ax) + rx,
+                                    float(ay) + ry,
+                                    float(aa) + float(ma),
+                                ),
+                            )
+                        )
+                for dx, dy in offs or ():
+                    rdx, rdy = rotate_lattice_delta(dx, dy, aa)
+                    for k in range(1, depth + 1):
+                        lx = float(ax) + k * rdx
+                        ly = float(ay) + k * rdy
+                        lattice_coords.append((lx, ly, float(aa)))
+                        # W1: stamp every pattern member at each lattice node.
+                        for mgid, (mx, my, ma) in member_rels:
+                            mrx, mry = rotate_lattice_delta(mx, my, aa)
+                            pair_mates.append(
+                                (
+                                    int(mgid),
+                                    (
+                                        lx + mrx,
+                                        ly + mry,
+                                        float(aa) + float(ma),
+                                    ),
+                                )
+                            )
+            if len(lattice_coords) + len(pair_mates) >= top_k * 4:
+                break
+        for lc in lattice_coords[: max(top_k * 2, 8)]:
+            if len(out) >= _HOLE_EMIT_CAP:
+                break
+            tr = np.asarray(lc, dtype=np.float64).reshape(3)
+            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            cand_g = part_g.apply_transform(float(tr[0]), float(tr[1]), float(tr[2]))
+            if packing_obs and cand_g.intersects_any(list(packing_obs)):
+                continue
+            if not is_pose_clear(
+                cand_g, voids, packed_g, float(min_dist),
+                obs=hole_obs, scene=hole_scene,
+            ):
+                continue
+            poly = transform_poly(part, tr)
+            if hull is not None:
+                try:
+                    if hull.contains(poly.centroid) or float(poly.distance(hull)) <= float(min_dist) * 2.0:
+                        in_hull += 1
+                except Exception:
+                    pass
+            mate_n += 1
+            out.append((int(gid), tr, poly, cand_g))
+        # Dual-stamp mate pairs (leader + mate) — count recovery for lex.
+        for mgid, mtr in pair_mates[: max(top_k * 2, 8)]:
+            if len(out) >= _HOLE_EMIT_CAP:
+                break
+            mpart = part_by_group.get(int(mgid))
+            if mpart is None or getattr(mpart, "is_empty", True):
+                continue
+            tr = np.asarray(mtr, dtype=np.float64).reshape(3)
+            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            mpg = Geometry.from_shapely(mpart)
+            cand_g = mpg.apply_transform(float(tr[0]), float(tr[1]), float(tr[2]))
+            if packing_obs and cand_g.intersects_any(list(packing_obs)):
+                continue
+            if not is_pose_clear(
+                cand_g, voids, packed_g, float(min_dist),
+                obs=hole_obs, scene=hole_scene,
+            ):
+                continue
+            poly = transform_poly(mpart, tr)
+            if hull is not None:
+                try:
+                    if hull.contains(poly.centroid) or float(poly.distance(hull)) <= float(min_dist) * 2.0:
+                        in_hull += 1
+                except Exception:
+                    pass
+            mate_n += 1
+            out.append((int(mgid), tr, poly, cand_g))
+    return out, in_hull, mate_n
 
 
 def _as_geom(p) -> Geometry | None:
@@ -356,9 +584,11 @@ def try_block_hole_renest(
         "block_hole_tried": 0,
         "block_hole_accepted": 0,
         "block_hole_emit_in_hull": 0,
+        "block_hole_mate_n": 0,
         "block_hole_victim": None,
         "block_hole_dcount": 0,
         "block_hole_darea": 0.0,
+        "block_hole_reject_reason": "",
     }
     sel = [int(i) for i in selected]
     if victim_override:
@@ -369,6 +599,7 @@ def try_block_hole_renest(
         )
         victim = picked if picked is not None else []
     if not victim:
+        telem["block_hole_reject_reason"] = "no_victim"
         return sel, polys, transforms, group_id, candidate_geoms, telem
     telem["block_hole_victim"] = list(victim)
     telem["block_hole_tried"] = 1
@@ -383,7 +614,7 @@ def try_block_hole_renest(
         if 0 <= i < len(polys) and polys[i] is not None and not polys[i].is_empty
     ])
     emit_hull = hole_hull if (hole_hull is not None and not hole_hull.is_empty) else void_poly
-    cands, in_hull = _emit_hole_candidates(
+    cands, in_hull, mate_n = _emit_hole_candidates(
         sheet=sheet,
         kept_geoms=kept_geoms,
         part_by_group=part_by_group,
@@ -396,7 +627,11 @@ def try_block_hole_renest(
         cluster_patterns=cluster_patterns,
     )
     telem["block_hole_emit_in_hull"] = int(in_hull)
+    telem["block_hole_mate_n"] = int(mate_n)
     if in_hull <= 0 or not cands:
+        telem["block_hole_reject_reason"] = "no_emit"
+        telem["block_hole_dcount"] = 0
+        telem["block_hole_darea"] = 0.0
         return sel, polys, transforms, group_id, candidate_geoms, telem
 
     kept_native: list[Geometry] = []
@@ -425,6 +660,7 @@ def try_block_hole_renest(
     mini_geoms = kept_native + hole_geoms
     mini_angles = kept_angles + hole_angles
     if len(mini_geoms) < 2:
+        telem["block_hole_reject_reason"] = "nest_short"
         return sel, polys, transforms, group_id, candidate_geoms, telem
     graph = build_pose_graph(mini_gids, mini_geoms, mini_angles, attract_pairs=[])
     n_kept = len(kept_native)
@@ -479,21 +715,24 @@ def try_block_hole_renest(
             new_cgeoms.append(geom)
     old_area = _sel_area(sel, group_id, part_areas)
     new_area = _sel_area(new_sel, new_gid, part_areas)
+    telem["block_hole_dcount"] = len(new_sel) - len(sel)
+    telem["block_hole_darea"] = float(new_area - old_area)
     if not lex_count_area_better(
         old_count=len(sel),
         old_area=old_area,
         new_count=len(new_sel),
         new_area=new_area,
     ):
+        telem["block_hole_reject_reason"] = "lex"
         return sel, polys, transforms, group_id, candidate_geoms, telem
     if not selection_pairwise_independent(new_polys, new_sel):
+        telem["block_hole_reject_reason"] = "indep"
         return sel, polys, transforms, group_id, candidate_geoms, telem
     # Q215/Q216: board_adj soft-gate lives in pick_block_hole_victim (void-facing
     # fallback only; interior CC preferred). Do not reject after lex+indep — that
     # killed dense interior 3b and still lost void vs F3 OFF (which keeps 3b_ok).
     telem["block_hole_accepted"] = 1
-    telem["block_hole_dcount"] = len(new_sel) - len(sel)
-    telem["block_hole_darea"] = float(new_area - old_area)
+    telem["block_hole_reject_reason"] = ""
     return new_sel, new_polys, new_tr, new_gid, new_cgeoms, telem
 
 

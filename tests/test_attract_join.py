@@ -158,6 +158,27 @@ def test_zero_weight_skips_join():
     assert pairs == []
 
 
+def test_flush_attract_when_other_sources_empty():
+    """W2: empty densify/sniper/cohort on dense pack → geometric flush kiss."""
+    # n>=60 gate (dense/late); build a kissing chain of axis-aligned squares.
+    gids = [0] * 60
+    transforms = [(float(i) * 1.1 + 0.5, 0.5, 0.0) for i in range(60)]
+    geoms = [_square(float(i) * 1.1, 0.0) for i in range(60)]
+    stats: dict = {}
+    pairs = join_attract_pairs(
+        stats,
+        gids,
+        transforms,
+        geoms,
+        min_dist=0.1,
+        contact_weight=8.0,
+        kiss_band_scale=20.0,
+        max_degree=8,
+    )
+    assert len(pairs) >= 1
+    assert int(stats.get("attract_flush_n", 0) or 0) >= 1
+
+
 def test_make_polygon_graph_joins_sniper_from_propose_stats():
     from shapely.geometry import Polygon
 

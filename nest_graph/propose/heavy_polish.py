@@ -127,14 +127,27 @@ def polish_budget_for_iter(
     near_last: bool = False,
     on_plateau: bool = False,
     free_remaining: bool = False,
+    fits_part: bool = True,
+    mid_hole_open: bool = False,
 ) -> PolishBudget:
     """Hybrid schedule: last → full; cheap → mid no-3b; mid+large_void → mid+3b near last.
 
     Q190: plateau + residual free → force 3b (dual lex first elsewhere; 3b when stuck).
+    C: phantom (large_void and not fits_part) enables mid-iter post_pack so hole-open
+    can fire before last-leaf (where fits often recovers to 1).
+    L: mid_hole_open (carve densify preset) OR phantom — same near_last/plateau shield.
     """
     if is_last_leaf and not cheap_expand:
         return polish_budget_last(sel)
     mid = polish_budget_mid(sel)
+    # C/L: mid post_pack at most near_last/plateau (every mid-iter dumped late Δ).
+    # L carve: mid_hole_open OR phantom (¬fits_part) under the same temporal shield.
+    phantom_post = (
+        bool(large_void)
+        and not cheap_expand
+        and (bool(near_last) or bool(on_plateau))
+        and (not bool(fits_part) or bool(mid_hole_open))
+    )
     if cheap_expand or not large_void:
         if on_plateau and free_remaining and large_void:
             return PolishBudget(
@@ -142,7 +155,7 @@ def polish_budget_for_iter(
                 dfs_mode=mid.dfs_mode,
                 dfs_max_tries=mid.dfs_max_tries,
                 run_3b=True,
-                run_post_pack=False,
+                run_post_pack=bool(phantom_post),
                 freeze_improve_rules=mid.freeze_improve_rules,
             )
         return mid
@@ -155,7 +168,7 @@ def polish_budget_for_iter(
         dfs_mode=mid.dfs_mode,
         dfs_max_tries=tries,
         run_3b=run_3b,
-        run_post_pack=False,
+        run_post_pack=bool(phantom_post),
         freeze_improve_rules=mid.freeze_improve_rules,
     )
 

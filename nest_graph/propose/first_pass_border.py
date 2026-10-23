@@ -6,6 +6,7 @@ proposer stack), and pack tightness uses ``ranking.pack_tightness_cost``.
 """
 
 import math
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Mapping, Sequence
 
@@ -746,7 +747,75 @@ def join_attract_pairs(
                     ),
                 )
 
+    # W2: when other attract sources left weights empty, geometric flush kiss.
+    # Cap verts (avoid O(N²) on late pools); skip hist/board_edge keys.
+    _FLUSH_VERT_CAP = 96
+    flush_n = 0
+    flush_t0 = time.perf_counter()
+    flush_keys: set[tuple[int, int]] = set()
+    # Dense packs only (late/ckpt); early cold n≪60 keeps attract sources as-is.
+    if not weights and n >= 60 and float(min_dist) > 0.0:
+        prop_keys = propose_stats.get("proposer_keys") or densify.get("proposer_keys") or {}
+        skip_keys: set = set()
+        for name in ("board_edge", "history_expand"):
+            raw = prop_keys.get(name) or set()
+            if isinstance(raw, (set, frozenset, list, tuple)):
+                skip_keys.update(raw)
+        # Prefer recent verts (densify tail) when capping.
+        if n > _FLUSH_VERT_CAP:
+            flush_idxs = list(range(n - _FLUSH_VERT_CAP, n))
+        else:
+            flush_idxs = list(range(n))
+        slice_geoms = [geoms[i] for i in flush_idxs]
+        band = float(kiss_band_scale) * float(min_dist)
+        try:
+            flush_results = find_polygon_distances(
+                slice_geoms, aura=0.0, distance_margin=band,
+            )
+        except Exception:
+            flush_results = ()
+        for r in flush_results:
+            if bool(getattr(r, "intersect", False)):
+                continue
+            sa = int(r.polyA_idx)
+            sb = int(r.polyB_idx)
+            if sa < 0 or sb < 0 or sa >= len(flush_idxs) or sb >= len(flush_idxs):
+                continue
+            ia = int(flush_idxs[sa])
+            ib = int(flush_idxs[sb])
+            if ia == ib:
+                continue
+            ka = transform_row_key(transforms[ia])
+            kb = transform_row_key(transforms[ib])
+            if ka in skip_keys or kb in skip_keys:
+                continue
+            ta = transforms[ia]
+            tb = transforms[ib]
+            tha = float(ta[2]) if len(ta) > 2 else 0.0
+            thb = float(tb[2]) if len(tb) > 2 else 0.0
+            dth = abs((tha - thb + math.pi) % (2.0 * math.pi) - math.pi)
+            # Edge-aligned: parallel or anti-parallel θ (flush Wang).
+            if min(dth, abs(math.pi - dth)) > 0.35:
+                continue
+            d = math.sqrt(max(float(r.distance_sq), 0.0))
+            w = kiss_attract_weight(
+                d, min_dist, contact_weight, kiss_band_scale,
+            )
+            if w <= 0.0:
+                continue
+            key = (ia, ib) if ia < ib else (ib, ia)
+            prev = weights.get(key, 0.0)
+            _add(ia, ib, w)
+            if weights.get(key, 0.0) > prev:
+                flush_keys.add(key)
     pairs = _cap_attract_degree(weights, n, int(max_degree))
+    if flush_keys:
+        kept = {(int(a), int(b)) for a, b, _w in pairs}
+        flush_n = sum(1 for k in flush_keys if k in kept)
+    propose_stats["attract_flush_n"] = int(flush_n)
+    propose_stats["attract_flush_ms"] = float(
+        (time.perf_counter() - flush_t0) * 1000.0
+    )
     propose_stats["attract_edges"] = len(pairs)
     # Partner-key persist is skipped: sniper_keys already unions group_fit /
     # neighbor_slide, and geometric fill edges those survivors (Q29/Q35).

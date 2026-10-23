@@ -517,6 +517,9 @@ def motif_adj_hits(
                 hits += max(int(getattr(rec, "accept_count", 0) or 0), 1)
             else:
                 hits += 1
+            # W2: flush MotifRecords count as Wang adj matches.
+            if bool(getattr(rec, "flush", False)):
+                hits += 1
     return int(hits)
 
 

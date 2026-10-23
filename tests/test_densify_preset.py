@@ -28,8 +28,8 @@ def test_load_presets_always_has_baseline():
     presets = load_densify_presets("artifacts/tune/densify_presets.yaml")
     assert densify_preset_ids(presets)[0] == 0
     assert any(int(p["id"]) == 0 for p in presets)
-    # v1: non-baseline lack online_ok → only id 0 for macros
-    assert densify_preset_ids(presets) == [0]
+    # Baseline + online carve (id 3); offline 1/2 stay out of macros.
+    assert densify_preset_ids(presets) == [0, 3]
     assert densify_preset_ids(
         [{"id": 0}, {"id": 1, "online_ok": True}]
     ) == [0, 1]

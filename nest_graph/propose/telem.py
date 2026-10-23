@@ -172,11 +172,16 @@ def format_void_leak_line(
         f" cascade={densify.get('cascade_stopped_after', 'none')}"
         f" nms={int(densify.get('nms_kept', 0))}/{int(densify.get('nms_dropped', 0))}"
         f" attract={attract_edges}/{attract_pairs_selected}"
+        f" flush={int(propose_stats.get('attract_flush_n', 0) or 0)}"
+        f"/{float(propose_stats.get('attract_flush_ms', 0.0) or 0.0):.1f}"
         f" 3a={int(propose_stats.get('block_cohort_accepted', 0))}/"
         f"{int(propose_stats.get('block_cohort_related', 0))}"
         f" 3b={int(propose_stats.get('block_hole_accepted', 0))}/"
         f"{int(propose_stats.get('block_hole_emit_in_hull', 0))}/"
         f"mate={int(propose_stats.get('block_hole_mate_n', 0))}"
+        f" d={int(propose_stats.get('block_hole_dcount', 0) or 0)}"
+        f"/{float(propose_stats.get('block_hole_darea', 0.0) or 0.0):.4f}"
+        f" rej={propose_stats.get('block_hole_reject_reason', '') or '-'}"
         f"{prop}"
     )
 
@@ -425,6 +430,8 @@ def build_void_leak_dict(
         "graph_valid_n": int(propose_stats.get("graph_valid_n", 0)),
         "attract_edges": attract_edges,
         "attract_pairs_selected": attract_pairs_selected,
+        "attract_flush_n": int(propose_stats.get("attract_flush_n", 0) or 0),
+        "attract_flush_ms": float(propose_stats.get("attract_flush_ms", 0.0) or 0.0),
         "attract_bonus": attract_bonus,
         "attach_n": int(propose_stats.get("attach_n", 0)),
         "kind_n": int(propose_stats.get("kind_n", 0)),
@@ -451,6 +458,11 @@ def build_void_leak_dict(
         "block_hole_emit_in_hull": int(propose_stats.get("block_hole_emit_in_hull", 0)),
         "block_hole_tried": int(propose_stats.get("block_hole_tried", 0) or 0),
         "block_hole_mate_n": int(propose_stats.get("block_hole_mate_n", 0) or 0),
+        "block_hole_dcount": int(propose_stats.get("block_hole_dcount", 0) or 0),
+        "block_hole_darea": float(propose_stats.get("block_hole_darea", 0.0) or 0.0),
+        "block_hole_reject_reason": str(
+            propose_stats.get("block_hole_reject_reason", "") or ""
+        ),
         "keep_history_on_sterile": bool(
             propose_stats.get("keep_history_on_sterile", False)
         ),
@@ -975,6 +987,12 @@ def merge_phase_gate_telem(
         )
         leak["last_fits_part"] = int(
             mt.get("last_fits_part", leak.get("last_fits_part", 0)) or 0
+        )
+        leak["leaf_fit_r"] = float(
+            mt.get("leaf_fit_r", leak.get("leaf_fit_r", 0.0)) or 0.0
+        )
+        leak["mcts_phantom_n"] = int(
+            mt.get("mcts_phantom_n", leak.get("mcts_phantom_n", 0)) or 0
         )
         leak["motif_hold_tip"] = int(
             mt.get("motif_hold_tip", leak.get("motif_hold_tip", 0)) or 0
@@ -1525,14 +1543,23 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
     n_patterns = int(densify.get("cluster_patterns", 0))
     attract_edges = int(propose_stats.get("attract_edges", 0) or 0)
     if attract_edges <= 0:
-        attract_edges = sum(len(row) for row in ctx.graph.attract) // 2
+        if hasattr(ctx.graph, "attract_edge_count"):
+            attract_edges = int(ctx.graph.attract_edge_count())
+        else:
+            attract_edges = sum(len(row) for row in ctx.graph.attract) // 2
     sel_set = set(int(i) for i in ctx.selected_polys)
     attract_pairs_selected = 0
     attract_bonus = 0.0
+    n_attract = int(ctx.graph.size()) if hasattr(ctx.graph, "size") else 0
     for i in sel_set:
-        if i < 0 or i >= len(ctx.graph.attract):
+        if i < 0 or i >= n_attract:
             continue
-        for e in ctx.graph.attract[i]:
+        row = (
+            ctx.graph.attract_row(i)
+            if hasattr(ctx.graph, "attract_row")
+            else ctx.graph.attract[i]
+        )
+        for e in row:
             j = int(e.target)
             if j > i and j in sel_set:
                 attract_pairs_selected += 1
@@ -1834,6 +1861,8 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"fat={int(leak.get('void_core_fat_free', 0) or 0)} "
         f"fits={int(leak.get('fits_part', 1) or 0)}/"
         f"{int(leak.get('path_fits_lag', 0) or 0)} "
+        f"fit_r={float(leak.get('leaf_fit_r', 0.0) or 0.0):.0f}/"
+        f"{int(leak.get('mcts_phantom_n', 0) or 0)} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
         f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"
         f"{int(leak.get('void_override', 0) or 0)} "

@@ -605,7 +605,12 @@ def compose_and_nest_selection(
         propose_stats["nest_void_term_hits"] = int(nest_void_hits)
         propose_stats["void_scale_applied"] = float(void_scale)
 
-    n_graph = len(graph.elems) if hasattr(graph, "elems") else len(getattr(graph, "collisions", []))
+    if hasattr(graph, "size"):
+        n_graph = int(graph.size())
+    elif hasattr(graph, "elems"):
+        n_graph = len(graph.elems)
+    else:
+        n_graph = len(getattr(graph, "collisions", []))
     if len(scores) != n_graph:
         raise AssertionError(
             f"selection scores length {len(scores)} != graph size {n_graph}"
@@ -1314,10 +1319,16 @@ def compose_and_nest_selection(
                 propose_stats["void_core_fat_free"] = int(
                     free_basin_is_fat(free_poly, part_areas)
                 )
+                propose_stats["fits_part"] = int(
+                    bool(getattr(free_info, "fits_part", True))
+                )
         elif propose_stats is not None:
             propose_stats["void_core_accepted"] = 0
             propose_stats["void_core_fat_free"] = int(
                 free_basin_is_fat(free_poly, part_areas)
+            )
+            propose_stats["fits_part"] = int(
+                bool(getattr(free_info, "fits_part", True))
             )
 
     # incumbent mapped before beam (F1 pin-new gate); reuse for hold.
@@ -1325,6 +1336,10 @@ def compose_and_nest_selection(
     void_override_flag = 0
     if propose_stats is not None:
         propose_stats["incumbent_mapped"] = int(len(incumbent))
+        if free_info is not None:
+            propose_stats["fits_part"] = int(
+                bool(getattr(free_info, "fits_part", True))
+            )
     if incumbent and not _lex_pick_better(
         best=incumbent,
         cand=selected_nest,
@@ -1351,6 +1366,7 @@ def compose_and_nest_selection(
             cand_area = float(_sel_area(selected_nest, group_id, part_areas))
             inc_area = float(_sel_area(incumbent, group_id, part_areas))
             fat_free = free_basin_is_fat(free_poly, part_areas)
+            fits_part = bool(getattr(free_info, "fits_part", True))
             if void_inc <= 2 and void_gain >= 8:
                 area_ok = cand_area + 1e-12 >= (0.88 if fat_free else 0.93) * inc_area
                 count_ok = len(selected_nest) >= int(0.75 * len(incumbent))
@@ -1365,6 +1381,8 @@ def compose_and_nest_selection(
                     and len(selected_nest) >= int(0.85 * len(incumbent))
                 ):
                     count_ok = True
+            # P: fits_part telem only for override until D1 (fat/core fits gate dumped Δ).
+            _ = fits_part
             void_override = bool(void_gain > 0 and area_ok and count_ok)
             # Fat basin / void-core beam: skip hold so rim incumbent does not
             # restore a hollow pack after void-first MIS.

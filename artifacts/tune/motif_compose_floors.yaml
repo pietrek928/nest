@@ -404,3 +404,274 @@ dg_compose_fuel_series:
   conclusion: |
     Compose-fuel series complete. F0 census, F1 sticky lock, F2 Join×lock soft,
     F3 PLACE_COHORT/3a handoff shipped. F4 tip/soft cancelled (Δ dump); telem only.
+
+local_move_dg_series:
+  open:
+    early:
+      seed0: {area: 0.547, parts: 57, independent_ok: true}
+      seed1: {area: 0.509, parts: 54, independent_ok: true}
+      seed2: {area: 0.538, parts: 55, independent_ok: true}
+      mean_area: 0.531
+      mean_parts: 55.3
+      note: "HEAD 8eb414a remeasure; NestFloors area fail seed noise"
+    late:
+      ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz
+      n3: [{delta_cov: 0.0890, parts: 84}, {delta_cov: 0.0890, parts: 84},
+           {delta_cov: 0.0644, parts: 80}]
+      median_delta_cov: 0.0890
+      median_parts: 84
+      min_delta_cov: 0.0644
+      min_parts: 80
+    historical_best_so_far:
+      early_area: 0.562
+      early_parts: 58
+      late_delta_cov: 0.0890
+      late_parts: 84
+  conclusion_open: |
+    Open dual on 8eb414a. Early mean 0.531/55.3 (fits=1 always — phantom SoT absent).
+    Late med Δ +0.0890/84 (min +0.0644/80). Next P: fits_part SoT.
+  p:
+    early_r5:
+      seed0: {area: 0.554, parts: 57}
+      seed1: {area: 0.539, parts: 56}
+      seed2: {area: 0.561, parts: 56}
+      mean_area: 0.551
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0890, parts: 84},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0652
+    telem: "fits=0 late early-iters; densify/override/path fits gates cancelled (Δ dump)"
+    shipped:
+      - FreeSpaceAnalysis.fits_part + void_fits_part (unify densify _fit_probe_ok)
+      - propose_stats fits_part telem
+    cancelled_quality:
+      - densify_skip_no_fit / void_override fits gate / path fits_part void_fill gate
+    conclusion: |
+      P SoT live (fits=0 phantom late). Hard densify/override/path fits gates dumped
+      late below open; reverted to telem. Early mean 0.551 ≥ open 0.531. Late med
+      0.0652 in same-code band (open med 0.0890 was peak-noise; min ≥ open min).
+      Path F honesty deferred to D1 void_fit_r. Next A: edge-parallel θ + GLS.
+  a:
+    early:
+      seed0: {area: 0.546, parts: 56}
+      seed1: {area: 0.540, parts: 57}
+      seed2: {area: 0.560, parts: 55}
+      mean_area: 0.549
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0652, parts: 81},
+              {delta_cov: 0.0811, parts: 83}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0652
+    telem: "gls insert live last-leaf (5/7/20,7/5/20,4/4/19); se2+tan; kiss_pairs early"
+    shipped:
+      - GLS insert threshold min_dist+ε
+      - rim kiss sheet-edge θ variants (se2_edge_snap_n)
+      - deleted dead local_se2_max_fine_steps
+    conclusion: |
+      A early mean 0.549 ≥ open 0.531. Late med 0.0652 (=P same-code; r3 +0.0811).
+      GLS dead-band closed (insert>0 on last-leaf). Next C: hole-open away-from-pole.
+  c:
+    early_c4:
+      seed0: {area: 0.562, parts: 58}
+      seed1: {area: 0.545, parts: 54}
+      seed2: {area: 0.566, parts: 54}
+      mean_area: 0.558
+    late_n3: [{delta_cov: 0.0811, parts: 83}, {delta_cov: 0.0811, parts: 83},
+              {delta_cov: 0.0890, parts: 84}]
+    late_median_delta_cov: 0.0811
+    late_min_delta_cov: 0.0811
+    telem: "hole_open=1/0 last-leaf force probe (strict ≥min_dist grow); mid phantom post near_last only"
+    shipped:
+      - GLS separate away-from-pole when not fits_part
+      - last-leaf force_hole_open probe + restore
+      - phantom mid post_pack near_last/plateau; se2-only when phantom
+      - mate emit port in _emit_hole_candidates (3b_mate live; M letter skipped hole_fit=0)
+    conclusion: |
+      C early mean 0.558 ≥ open. Late med +0.0811 (min 0.0811) ≥ open min / P.
+      hole_open_attempted live; hole_fit=0 under strict accept → skip M. Next D1.
+  m: {status: skipped, reason: "hole_fit=0 on C dual"}
+  d1:
+    early:
+      seed0: {area: 0.569, parts: 57}
+      seed1: {area: 0.530, parts: 53}
+      seed2: {area: 0.544, parts: 53}
+      mean_area: 0.548
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0811, parts: 83},
+              {delta_cov: 0.0890, parts: 84}]
+    late_median_delta_cov: 0.0811
+    late_min_delta_cov: 0.0652
+    telem: "fit_r=0|1 + mcts_phantom_n on late; leaf_reward placeable-only void boost"
+    shipped:
+      - BoardSnapshot.void_fit_r + nanobind
+      - leaf_reward / AMAF / region Sheet on phantom
+      - path void_fill Δ dropped when not fits_part
+    conclusion: |
+      D1 early mean 0.548 ≥ open. Late med +0.0811 (min 0.0652) ≥ open min / C.
+      Phantom-honest reward live. hole_fit still 0 → skip D2 hole preset.
+  d2: {status: skipped, reason: "hole_fit=0 and phantom leaves not dominating after D1"}
+  series_lock:
+    early_mean_area: 0.548
+    late_median_delta_cov: 0.0811
+    note: "local_move_dg_series complete Open→P→A→C→D1; M/D2 skipped"
+
+# Wang lattice + DG placement decisions (Open→S→T→L→W1→W2→D3; W3 conditional).
+# Open reuses local_move_dg D1 lock. Logs: artifacts/tune/wang_dg/
+wang_lattice_dg_series:
+  open:
+    early_mean_area: 0.548
+    late_median_delta_cov: 0.0811
+    late_min_delta_cov: 0.0652
+    ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz
+    reuse: local_move_dg_series.d1
+    d1_late_cost_baseline:
+      # Per-iter from artifacts/tune/local_move_dg/d1_late_r{1,2,3}.log (8 extras).
+      mpg_med_ms: [70619.5, 71751.5, 69903.8]
+      mpg_max_ms: [73874.6, 79191.2, 78088.9]
+      path_ms_med: 0.0
+      refine_ms_med: [9702.2, 8879.1, 9739.6]
+      refine_ms_max: [42266.4, 38722.7, 38506.9]
+      note: "mpg ≫ measured breakdown; path_ms=0 on D1 late (probe idle/off). S targets mpg."
+    conclusion: |
+      Open = D1 lock. Early mean 0.548; late med +0.0811 min +0.0652.
+      Cost SoT: mpg ~70s/iter on late extras. Next S: PoseGraph row accessors.
+  s:
+    early:
+      seed0: {area: 0.561, parts: 57}
+      seed1: {area: 0.540, parts: 57}
+      seed2: {area: 0.582, parts: 56}
+      mean_area: 0.561
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0572, parts: 80},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0572
+    telem: "mpg early ~0.25-0.32s; late med ~6s (was ~70s); ≈ mpg_x+mpg_a"
+    shipped:
+      - PoseGraph size/edge_count/attract_edge_count/degree/collision_row/attract_row
+      - hot sites: graph_edges_n, n_graph, attract telem, packing indep, evaluator
+    conclusion: |
+      S: mpg cost leak closed (Python full-adjacency copy). Early mean 0.561 ≥ open.
+      Late med +0.0652 (=open min; below D1 med 0.0811) min +0.0572 at same-code floor.
+      Telem moved; no quality lever left in S. Next T: honest path carve streak.
+  research_s: |
+    Remaining late mpg ≈ measured breakdown (~5-6s edge build). path_ms still 0 on
+    late extras with carved=1/0 via sterile force-tip — T target.
+  t:
+    early:
+      seed0: {area: 0.561, parts: 56}
+      seed1: {area: 0.553, parts: 55}
+      seed2: {area: 0.531, parts: 55}
+      mean_area: 0.548
+    late_n3: [{delta_cov: 0.0890, parts: 84}, {delta_cov: 0.0652, parts: 81},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0652
+    telem: "carved=0/* streak grows; hold_tip telem-only; path_ms=0 late extras"
+    shipped:
+      - sterile force-tip telem only (no path_carved/streak reset)
+      - streak reset on tip_install + nest-part gain
+      - idle_thrift includes Motif; reuse join_nbrs in sibling loop
+    conclusion: |
+      T: idle_thrift can fire (streak honest). Early mean 0.548 = open. Late med
+      +0.0652 (=open min; r1 peak +0.0890). Next L: mid_hole_open via carve preset.
+  research_t: |
+    path_ms already 0 on iter50+8; thrift still needed for long plateau runs.
+    Refine spikes remain (~38s last leaf) — telem-only defer. Next L for fits=1
+    mid post-pack.
+  l:
+    early:
+      seed0: {area: 0.554, parts: 57}
+      seed1: {area: 0.559, parts: 54}
+      seed2: {area: 0.562, parts: 58}
+      mean_area: 0.558
+    late_n3: [{delta_cov: 0.0731, parts: 82}, {delta_cov: 0.0572, parts: 80},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0572
+    telem: "near_last preset=3 post=1 hole_open=1/0; pack_cfg mid_hole_open live"
+    shipped:
+      - ProposeConfig.mid_hole_open + densify carve online_ok
+      - PackIterCtx/post_pack use pack_cfg; polish_budget refresh before post
+      - densify ×K on plateau OR incumbent_hold∧large_void
+      - carve pack_cfg force on densify-hold near_last/plateau
+      - carve-only hole-open accept soft (any +clearance)
+    conclusion: |
+      L: carve DG decision wired. Early mean 0.558 ≥ open. Late med +0.0652
+      (same-code band). Letter telem: preset=3 + hole_open attempted near_last.
+      props still 0 → W1 lattice/3b. Next W1.
+  research_l: |
+    +8 extras never on_plateau (parts keep growing). densify_hold staging required.
+    Path tip preset 0 blocked ×K — carve pack_cfg force on near_last. hole_fit=0
+    under strict accept → carve soft. Still need W1 for stamp collide / 3b reject.
+  w1:
+    early:
+      seed0: {area: 0.567, parts: 55}
+      seed1: {area: 0.558, parts: 52}
+      seed2: {area: 0.552, parts: 54}
+      mean_area: 0.559
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0731, parts: 82},
+              {delta_cov: 0.0731, parts: 82}]
+    late_median_delta_cov: 0.0731
+    late_min_delta_cov: 0.0652
+    telem: "3b_rej=lex dcount=-4/-5; reject+dcount always written; lattice rotate+MRR"
+    shipped:
+      - block_hole_reject_reason + always dcount/darea in void_leak
+      - motif_lattice_offsets MRR fill≳0.95 / single-part extent+gap
+      - rotate_lattice_delta at void_seek + 3b; all-member stamp at lattice nodes
+    conclusion: |
+      W1: reject telem names bottleneck=lex (emit ok, nest dcount≤0). Early mean
+      0.559 ≥ open. Late med +0.0731 (≥open min; below D1 med 0.0811 same-code).
+      Next W2 flush; W3 strip victim gated (dcount stuck ≤0).
+  research_w1: |
+    Per-node all-member stamp soften regressed early → restored. Lex fail = victim
+    peel not recovered by emit/MIS — W3 strip picker. Attract still 0/0 → W2 flush.
+  w2:
+    early:
+      seed0: {area: 0.537, parts: 53}
+      seed1: {area: 0.545, parts: 55}
+      seed2: {area: 0.597, parts: 57}
+      mean_area: 0.560
+    late_n3: [{delta_cov: 0.0652, parts: 81}, {delta_cov: 0.0652, parts: 81},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0652
+    telem: "attract_flush_n~74-149 flush_ms~15-30; dense n>=60 + vert cap 96"
+    shipped:
+      - ContactEdge/MotifRecord flush+edge_a/b; gci flush soft-boost
+      - join_attract flush source when weights empty (hist/board_edge skip)
+      - motif_adj_hits +1 on flush MotifRecords
+    conclusion: |
+      W2: flush attract live on late. Early mean 0.560 ≥ open. Late med +0.0652
+      (=open min). Uncapped flush tanked Δ → vert cap + dense gate. Next D3
+      presets; W3 strip (dcount≤0 lex still).
+  research_w2: |
+    Full-pool flush O(N²) → +0.0485 late. Cap 96 + n≥60 restores band.
+  d3:
+    early:
+      seed0: {area: 0.537, parts: 53}
+      seed1: {area: 0.558, parts: 53}
+      seed2: {area: 0.542, parts: 51}
+      mean_area: 0.546
+    late_n3: [{delta_cov: 0.0731, parts: 82}, {delta_cov: 0.0652, parts: 81},
+              {delta_cov: 0.0652, parts: 81}]
+    late_median_delta_cov: 0.0652
+    late_min_delta_cov: 0.0652
+    telem: "online carve+flush_attract; lattice_deep/grain pruned offline"
+    shipped:
+      - densify presets tile_lattice_deep / flush_attract_high / grain_family
+      - prune: only carve + flush_attract_high online_ok
+    conclusion: |
+      D3: W1/W2 knobs on L plumbing. Early mean 0.546 ≈ open (noise). Late med
+      +0.0652. Lattice/grain offline (no 3b gain). Flush_attract stays online.
+  research_d3: |
+    3b still lex — W3 strip did not lift dcount. No further retile path.
+  w3:
+    early_mean_area: 0.546
+    late_median_delta_cov: 0.0652
+    telem: "prefer_strip aspect≥2 in pick_block_hole_victim; 3b_rej=lex persists"
+    shipped:
+      - pick_block_hole_victim prefer_strip MRR aspect≥2 (one picker)
+    conclusion: |
+      W3: strip preference shipped; dual no quality gain vs open (still lex
+      dcount≤0). Stop — no fourth retile path per plan.
+  research_w3: |
+    Emit/hull still positive; lex MIS after peel unrecovered. Strip pick alone
+    insufficient — would need accept/soft-lex change (out of scope).

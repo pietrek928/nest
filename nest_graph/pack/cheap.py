@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Sequence
 
 from nest_graph.pack.cache_key import cheap_lock_fingerprint, cheap_pack_cache_key
+from nest_graph.pack.densify_preset import apply_densify_preset
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
 from nest_graph.pack.slave_pack import write_propose_kiss_ledger
@@ -67,6 +68,13 @@ def compose_cached_selection(
     p_sheet_c = pack_cache["p_sheet"]
     min_dist_c = float(pack_cache["min_dist"])
     cfg_c = pack_cache["cfg"]
+    presets = pack_cache.get("densify_presets")
+    if action is not None and presets is not None:
+        cfg_c = apply_densify_preset(
+            cfg_c,
+            int(getattr(action, "preset_id", 0) or 0),
+            presets,
+        )
     free_info_c = pack_cache.get("free_info")
     propose_stats_c = dict(pack_cache.get("propose_stats") or {})
     propose_stats_c["mcts_zone"] = zone
@@ -438,6 +446,7 @@ def pack_execute_snapshot(
         rim_fill=float(getattr(snap, "rim_fill", 0.0) or 0.0),
         void_fill=float(getattr(snap, "void_fill", 0.0) or 0.0),
         free_kind=free_kind,
+        void_fit_r=float(getattr(snap, "void_fit_r", 0.0) or 0.0),
         motif_ids_used=motif_used or tuple(getattr(snap, "motif_ids_used", ()) or ()),
     )
     pack_cache["last_execute_telem"] = telem

@@ -262,6 +262,29 @@ void bind_graph_types(nb::module_ &m) {
         .def_rw("coords", &PoseGraph::coords)
         .def_rw("collisions", &PoseGraph::collisions)
         .def_rw("attract", &PoseGraph::attract)
+        .def("size", &PoseGraph::size)
+        .def("edge_count", &PoseGraph::edge_count)
+        .def("attract_edge_count", &PoseGraph::attract_edge_count)
+        .def("degree", &PoseGraph::degree, nb::arg("i"))
+        .def("attract_degree", &PoseGraph::attract_degree, nb::arg("i"))
+        .def(
+            "collision_row",
+            [](const PoseGraph &g, std::size_t i) {
+                if (i >= g.collisions.size()) {
+                    return std::vector<Tvertex>{};
+                }
+                return g.collisions[i];
+            },
+            nb::arg("i"))
+        .def(
+            "attract_row",
+            [](const PoseGraph &g, std::size_t i) {
+                if (i >= g.attract.size()) {
+                    return std::vector<AttractEdge>{};
+                }
+                return g.attract[i];
+            },
+            nb::arg("i"))
         .def(
             "push_elem",
             [](PoseGraph &g, int group_id, const PosePlace &ep, const Circle2f &circle) {

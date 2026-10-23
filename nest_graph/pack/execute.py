@@ -18,6 +18,27 @@ from nest_graph.propose.heavy_polish import (
 )
 
 
+def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -> float:
+    """D1: 1.0 if fits_part else 0.0; missing → default (unknown = no void boost)."""
+    if not isinstance(propose_stats, dict):
+        return float(default)
+    fp = propose_stats.get("fits_part")
+    if fp is None:
+        leak = propose_stats.get("void_leak")
+        if isinstance(leak, dict):
+            fp = leak.get("fits_part", leak.get("last_fits_part"))
+    if fp is None:
+        return float(default)
+    return 1.0 if int(fp) else 0.0
+
+
+def region_for_free_kind(free_kind: str, *, void_fit_r: float = 0.0) -> MacroRegion:
+    """D1: Sheet on phantom large_void; Void only when placeable (void_fit_r ≥ 1)."""
+    if free_kind == "large_void" and float(void_fit_r) >= 1.0:
+        return MacroRegion.Void
+    return MacroRegion.Sheet
+
+
 def prep_selection_freeze(
     sel_iter,
     *,
@@ -209,6 +230,7 @@ def board_snapshot_from_selection(
         void_fill = 0.0
     elif free_kind and free_kind != "large_void" and max_void_ratio <= 0.0:
         void_fill = float(propose_stats.get("outline_cov", 0.0) or 0.0)
+    fit_r = void_fit_r_from_stats(propose_stats)
     return BoardSnapshot(
         packed_gids=packed_gids,
         packed_transforms=packed_tf,
@@ -220,6 +242,7 @@ def board_snapshot_from_selection(
         rim_fill=rim_fill,
         void_fill=void_fill,
         free_kind=free_kind,
+        void_fit_r=float(fit_r),
         motif_ids_used=(
             (int(mcts_action.motif_id),)
             if mcts_action is not None and int(mcts_action.motif_id) >= 0
@@ -372,8 +395,9 @@ def stamp_arena_amaf(
         free_kind = str(
             getattr(child_snap, "free_kind", "") or propose_stats.get("free_kind") or ""
         )
-        action.region = (
-            MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+        action.region = region_for_free_kind(
+            free_kind,
+            void_fit_r=float(getattr(child_snap, "void_fit_r", 0.0) or 0.0),
         )
         action.rule_id = 0
         action.motif_id = -1
@@ -457,8 +481,9 @@ def record_outer_iter_expand(
                 or propose_stats.get("free_kind")
                 or ""
             )
-            act.region = (
-                MacroRegion.Void if free_kind == "large_void" else MacroRegion.Sheet
+            act.region = region_for_free_kind(
+                free_kind,
+                void_fit_r=float(getattr(child_snap, "void_fit_r", 0.0) or 0.0),
             )
             act.rule_id = 0
             act.motif_id = -1
