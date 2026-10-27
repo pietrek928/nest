@@ -192,7 +192,11 @@ from nest_graph.pack.densify_preset import (
     densify_preset_ids,
     load_densify_presets,
 )
-from nest_graph.pack.slave_pack import upsert_from_contacts, upsert_from_repack_accept
+from nest_graph.pack.slave_pack import (
+    upsert_from_contacts,
+    upsert_from_repack_accept,
+    write_propose_kiss_ledger,
+)
 from .graph import (
     PoseGraph, Circle, Vec2,
     PointPlaceRule, PointAngleRule, PlacementRuleSet,
@@ -746,11 +750,14 @@ def make_polygon_graph(
         )
         mpg_attract_ms = (time.perf_counter() - _attr_t0) * 1000.0
     _edge_t0 = time.perf_counter()
+    edge_telem: dict | None = propose_stats if propose_stats is not None else None
     graph = build_pose_graph(
         gids,
         pending_geoms,
         angles,
         attract_pairs=attract_pairs,
+        telem=edge_telem,
+        transforms=selected_transform,
     )
     edge_n_box: list[int] = []
     mpg_edge_ms = (time.perf_counter() - _edge_t0) * 1000.0
@@ -1466,12 +1473,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_telem["path_ran"] = 0
         mcts_telem["path_cache_miss"] = 0
         mcts_telem["path_carved"] = 0
+        mcts_telem["path_hard_carve"] = 0
         mcts_telem["path_alt_none"] = 0
         mcts_telem["path_motif_discarded"] = 0
         mcts_telem["path_motif_tracked"] = 0
         mcts_telem["macro_path_cov_skip"] = 0
         mcts_telem["path_motif_force_tip"] = 0
         mcts_telem["motif_hold_tip"] = 0
+        # P: per-iter census reset (was cumulative max → false nbr/cut growth).
+        mcts_telem["path_nbr_macro"] = 0
+        mcts_telem["path_nbr_join"] = 0
+        mcts_telem["path_nbr_attach"] = 0
+        mcts_telem["path_nbr_pose"] = 0
+        mcts_telem["path_conflicts_cut"] = 0
+        mcts_telem["path_lock_join_overlap"] = 0
+        mcts_telem["path_lock_join_soft"] = 0
         # T: path sees prior-iter fits (set after compose); expose lag explicitly.
         mcts_telem["path_fits_lag"] = int(mcts_telem.get("last_fits_part", 1) or 0)
         # P: Motif fuel → Motif tip for path_probe_budget only (beam/2); outer tip
@@ -1610,6 +1626,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 int(mcts_parent_id),
                 mcts_telem,
                 motif_locked=_pack_cache.get("motif_locked"),
+                beam_cap=max(4, int(path_beam) * 2),
             )
             # M/T: hold tip armed but Motif execute sterile → telem only.
             # Do not bump path_carved / tip_apply / clear streak (defeats idle_thrift).
@@ -1704,6 +1721,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             mcts_telem.get("path_credit_n", 0) or 0
                         ) + 1
                 else:
+                    # R1: hard carve = tip_install ∧ ¬motif_soft (streak clear + idle).
+                    hard_carve = bool(decision["tip_install"]) and not bool(
+                        decision.get("motif_soft")
+                    )
                     if decision["tip_install"]:
                         mcts_telem["macro_path_accept"] = int(
                             mcts_telem.get("macro_path_accept", 0) or 0
@@ -1713,8 +1734,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         mcts_telem["path_carved"] = int(
                             mcts_telem.get("path_carved", 0) or 0
                         ) + 1
-                        path_carved_streak = 0
-                        mcts_telem["path_carved_streak"] = 0
+                        if hard_carve:
+                            path_carved_streak = 0
+                            mcts_telem["path_carved_streak"] = 0
+                            mcts_telem["path_hard_carve"] = int(
+                                mcts_telem.get("path_hard_carve", 0) or 0
+                            ) + 1
                     if decision["motif_soft"]:
                         mcts_telem["macro_path_motif_soft"] = 1
                     if decision["credit"] and not decision.get("motif_soft"):
@@ -1755,8 +1780,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             pack_cache=_pack_cache,
                             telem=mcts_telem,
                         )
-            # T: idle carve streak (P thrift / M tip fuel).
-            if int(mcts_telem.get("path_carved", 0) or 0) <= 0:
+            # T/R1: idle streak uses hard carve (soft tip must not freeze thrift).
+            if int(mcts_telem.get("path_hard_carve", 0) or 0) <= 0:
                 path_carved_streak += 1
             mcts_telem["path_carved_streak"] = int(path_carved_streak)
         elif run_path and not _pack_cache.get("ready"):
@@ -1841,18 +1866,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 if int(_pid) != 0:
                     mcts_preset_id = int(_pid)
                     mcts_telem["carve_preset_force"] = 1
-                    if (
-                        mcts_action is not None
-                        and getattr(mcts_action, "region", None)
-                        != MacroRegion.Motif
-                    ):
+                    # D: AMAF credits applied preset (Motif tips included).
+                    if mcts_action is not None:
                         mcts_action.preset_id = int(_pid)
                     break
         mcts_telem["mcts_preset_id"] = int(mcts_preset_id)
         pack_cfg = apply_densify_preset(cfg, mcts_preset_id, _densify_presets)
+        # P: cheap_pack_cache_key already includes preset_id — do not wipe cache.
         if int(mcts_preset_id) != int(_last_mcts_preset_id):
-            invalidate_cheap_cache(_pack_cache, reason="densify_preset")
-            mcts_telem["cache_invalidate_preset"] = 1
+            mcts_telem["cache_invalidate_preset"] = 0
+            mcts_telem["cache_preset_key_only"] = 1
         _last_mcts_preset_id = int(mcts_preset_id)
         if mcts_action is not None:
             mcts_force_zone = region_to_zone(mcts_action.region)
@@ -2623,17 +2646,52 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats["se2_edge_snap_n"] = int(
                 se2_stats.get("se2_edge_snap_n", 0) or 0
             )
+            propose_stats["kiss_try"] = int(se2_stats.get("kiss_try", 0) or 0)
+            propose_stats["kiss_ok"] = int(se2_stats.get("kiss_ok", 0) or 0)
+            propose_stats["kiss_worse_rej"] = int(
+                se2_stats.get("kiss_worse_rej", 0) or 0
+            )
+            propose_stats["kiss_stand0"] = float(
+                se2_stats.get("kiss_stand0", 0.0) or 0.0
+            )
+            propose_stats["kiss_stand1"] = float(
+                se2_stats.get("kiss_stand1", 0.0) or 0.0
+            )
             propose_stats["hole_open_attempted"] = int(
                 se2_stats.get("hole_open_attempted", 0) or 0
             )
             propose_stats["hole_open_fit"] = int(
                 se2_stats.get("hole_open_fit", 0) or 0
             )
+            propose_stats["hole_open_r_entry"] = float(
+                se2_stats.get("hole_open_r_entry", 0.0) or 0.0
+            )
             propose_stats["hole_open_r0"] = float(
                 se2_stats.get("hole_open_r0", 0.0) or 0.0
             )
             propose_stats["hole_open_r1"] = float(
                 se2_stats.get("hole_open_r1", 0.0) or 0.0
+            )
+            propose_stats["post_ms"] = float(pack_stats.get("post_ms", 0.0) or 0.0)
+            propose_stats["se2_ms"] = float(
+                se2_stats.get("se2_ms", pack_stats.get("se2_ms", 0.0)) or 0.0
+            )
+            propose_stats["qp_ms"] = float(
+                se2_stats.get("qp_ms", pack_stats.get("qp_ms", 0.0)) or 0.0
+            )
+            free_post = getattr(post_prep, "free_post", None)
+            if free_post is not None:
+                propose_stats["fit_in_r"] = float(
+                    getattr(free_post, "fit_in_r", 0.0) or 0.0
+                )
+                propose_stats["fit_need_r"] = float(
+                    getattr(free_post, "fit_need_r", 0.0) or 0.0
+                )
+            propose_stats["cheap_cache_hit"] = int(
+                _pack_cache.get("cache_hit_n", 0) or 0
+            )
+            propose_stats["cheap_cache_lookup"] = int(
+                _pack_cache.get("cache_lookup_n", 0) or 0
             )
             print(
                 f"repack={repack_stats.get('accepted', 0)}/"
@@ -2648,10 +2706,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"{se2_stats.get('gls_separate_moved', 0)}/"
                 f"{se2_stats.get('gls_attempted', 0)} "
                 f"edge_snap={se2_stats.get('se2_edge_snap_n', 0)} "
+                f"kiss={se2_stats.get('kiss_try', 0)}/"
+                f"{se2_stats.get('kiss_ok', 0)}/"
+                f"{se2_stats.get('kiss_worse_rej', 0)} "
+                f"stand={float(se2_stats.get('kiss_stand0', 0) or 0):.4f}→"
+                f"{float(se2_stats.get('kiss_stand1', 0) or 0):.4f} "
                 f"hole_open={se2_stats.get('hole_open_attempted', 0)}/"
                 f"{se2_stats.get('hole_open_fit', 0)} "
-                f"r={float(se2_stats.get('hole_open_r0', 0) or 0):.1f}→"
-                f"{float(se2_stats.get('hole_open_r1', 0) or 0):.1f} "
+                f"r_entry={float(se2_stats.get('hole_open_r_entry', 0) or 0):.3f} "
+                f"r={float(se2_stats.get('hole_open_r0', 0) or 0):.3f}→"
+                f"{float(se2_stats.get('hole_open_r1', 0) or 0):.3f} "
+                f"fit_ir={float(propose_stats.get('fit_in_r', 0) or 0):.3f}/"
+                f"{float(propose_stats.get('fit_need_r', 0) or 0):.3f} "
+                f"post_ms={float(propose_stats.get('post_ms', 0) or 0):.1f}/"
+                f"{float(propose_stats.get('se2_ms', 0) or 0):.1f}/"
+                f"{float(propose_stats.get('qp_ms', 0) or 0):.1f} "
                 f"preset={int(mcts_telem.get('mcts_preset_id', 0) or 0)} "
                 f"post={int(getattr(polish_budget, 'run_post_pack', False))}"
             )
@@ -2779,6 +2848,34 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             best_pack_seed_n = int(
                 nest_state.seed_count if nest_state is not None else 0
             )
+        # D0: refresh kiss/fits after post-pack so leaf_reward sees final layout.
+        if selected_polys and part_bases is not None:
+            try:
+                post_geoms = _native_geoms_from_transforms(
+                    [group_id[i] for i in selected_polys if int(i) < len(group_id)],
+                    [transform[i] for i in selected_polys if int(i) < len(transform)],
+                    part_bases,
+                )
+                write_propose_kiss_ledger(
+                    propose_stats,
+                    post_geoms,
+                    gap=float(min_dist),
+                    feed_snapshot=True,
+                )
+            except Exception:
+                pass
+            free_post = getattr(post_prep, "free_post", None) if post_prep else None
+            if free_post is not None:
+                propose_stats["fits_part"] = int(
+                    bool(getattr(free_post, "fits_part", True))
+                )
+                propose_stats["fit_in_r"] = float(
+                    getattr(free_post, "fit_in_r", 0.0) or 0.0
+                )
+                propose_stats["fit_need_r"] = float(
+                    getattr(free_post, "fit_need_r", 0.0) or 0.0
+                )
+                mcts_telem["last_fits_part"] = int(propose_stats["fits_part"])
         # Macro-MCTS: record expand reward (Q68/Q69); upsert contact motifs when improved.
         if mcts_action is not None and mcts_runner.agent is not None:
             mcts_parent_id, child_snap = record_outer_iter_expand(

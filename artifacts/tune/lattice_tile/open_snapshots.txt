@@ -1,0 +1,17 @@
+S0 open snapshots (R1-fixed tree)
+early (r1_early.log): areas 0.552 / 0.582 / 0.604  med=0.582  parts 54/56/56  indep=True
+late iter50 (r1_late_r*): Δcov +0.0572 / +0.0652 / +0.0652  med=0.0652  Δparts +9/+10/+10
+plateau r1: Δcov=+0.0000 Δparts=+0 final=0.6947/81
+  telem cheap_d sample=['0.857', '0.845', '0.857', '0.857', '0.869'] path_ms max=0.0 carved last=[('0', '6'), ('0', '7'), ('0', '8')]
+plateau r2: Δcov=+0.0000 Δparts=+0 final=0.6947/81
+  telem cheap_d sample=['0.857', '0.845', '0.857', '0.857', '0.869'] path_ms max=0.0 carved last=[('0', '6'), ('0', '7'), ('0', '8')]
+plateau r3: Δcov=+0.0000 Δparts=+0 final=0.6947/81
+  telem cheap_d sample=['0.857', '0.890', '0.857', '0.903', '0.857'] path_ms max=0.0 carved last=[('0', '6'), ('0', '7'), ('0', '8')]
+plateau med Δcov=0.0 min=0.0
+
+R4 lock (victim-anchored 3b lattice; honest density limit)
+early r6: 0.536 / 0.582 / 0.545  med=0.545  parts 52/56/54  indep=True
+  3b_mate up (12/28/39) but rej=lex negative d — emit grain fixed, nest still no gain
+late N=3: Δcov +0.0652 / +0.0652 / +0.0652  med=0.0652 (=S0/R1/R2 same-code)
+plateau N=3: Δcov=0  3b_mate 7–11 (was 0–1) still rej=no_gain / 3b_ok=0
+  peel soft-extend 12 reverted (early hurt); via_u deepen dropped; refine@60 kept

@@ -1322,6 +1322,12 @@ def compose_and_nest_selection(
                 propose_stats["fits_part"] = int(
                     bool(getattr(free_info, "fits_part", True))
                 )
+                propose_stats["fit_in_r"] = float(
+                    getattr(free_info, "fit_in_r", 0.0) or 0.0
+                )
+                propose_stats["fit_need_r"] = float(
+                    getattr(free_info, "fit_need_r", 0.0) or 0.0
+                )
         elif propose_stats is not None:
             propose_stats["void_core_accepted"] = 0
             propose_stats["void_core_fat_free"] = int(
@@ -1329,6 +1335,12 @@ def compose_and_nest_selection(
             )
             propose_stats["fits_part"] = int(
                 bool(getattr(free_info, "fits_part", True))
+            )
+            propose_stats["fit_in_r"] = float(
+                getattr(free_info, "fit_in_r", 0.0) or 0.0
+            )
+            propose_stats["fit_need_r"] = float(
+                getattr(free_info, "fit_need_r", 0.0) or 0.0
             )
 
     # incumbent mapped before beam (F1 pin-new gate); reuse for hold.
@@ -1339,6 +1351,12 @@ def compose_and_nest_selection(
         if free_info is not None:
             propose_stats["fits_part"] = int(
                 bool(getattr(free_info, "fits_part", True))
+            )
+            propose_stats["fit_in_r"] = float(
+                getattr(free_info, "fit_in_r", 0.0) or 0.0
+            )
+            propose_stats["fit_need_r"] = float(
+                getattr(free_info, "fit_need_r", 0.0) or 0.0
             )
     if incumbent and not _lex_pick_better(
         best=incumbent,

@@ -141,3 +141,36 @@ def test_jammed_part_unchanged_or_none():
     assert np.allclose(out_t[0], tr0)
     assert out_p[0].equals(placed)
     assert selection_pairwise_independent(out_p, [0])
+
+
+def test_oblique_slide_reaches_near_min_dist():
+    """B: 45° approach to a wall ends near min_dist (not ~half travel)."""
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 1, 1)
+    wall = box(8.0, 0.0, 12.0, 20.0)
+    min_dist = 0.25
+    # Start left of wall; slide toward (+1,+1) hits the wall obliquely.
+    tr0 = (2.0, 8.0, 0.0)
+    part_g = Geometry.from_shapely(part)
+    board_g = Geometry.from_shapely(sheet)
+    wall_g = Geometry.from_shapely(wall)
+    n = (2.0 ** 0.5)
+    polished = polish_se2_part(
+        part_g,
+        tr0,
+        [wall_g],
+        board_g,
+        [(1.0 / n, 1.0 / n)],
+        n_angles=1,
+        max_t=20.0,
+        min_dist=min_dist,
+        mode="slide",
+        pole=None,
+    )
+    assert polished is not None
+    bx, by, bth = polished
+    moved = part_g.rotate(bth).translate(bx, by)
+    gap = moved.standoff_distance(wall_g)
+    assert gap + 1e-4 >= min_dist
+    # Halving left ~0.5–0.8 residual; bisect should land within 2× min_dist.
+    assert gap <= min_dist * 2.0 + 1e-3

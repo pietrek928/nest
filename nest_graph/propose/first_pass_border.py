@@ -31,7 +31,13 @@ from nest_graph.graph import (
     score_elems,
     selection_is_independent,
 )
-from nest_graph.geometry import Geometry, GuidanceConfig, find_polygon_intersections, find_polygon_distances
+from nest_graph.geometry import (
+    Geometry,
+    GuidanceConfig,
+    find_polygon_distances,
+    find_polygon_intersections,
+    find_polygon_intersections_telem,
+)
 from nest_graph.placement_scene import (
     PlacementScene,
     guidance_config_for_board_edge_anchor,
@@ -582,16 +588,27 @@ def build_pose_graph(
     geoms: Sequence[Geometry],
     angles: Sequence[float],
     attract_pairs: Sequence[tuple[int, int, float]] | None = None,
+    telem: dict | None = None,
+    transforms: Sequence | None = None,
 ) -> PoseGraph:
     """Single SoA writer: vertices at real θ, packing collisions, optional attract."""
     graph = PoseGraph()
     n = len(geoms)
     graph.reserve_elems(n)
+    _ = transforms
     for gid, geom, ang in zip(gids, geoms, angles, strict=True):
         cx, cy = geom.center()
         r = float(geom.radius())
         graph.append_elem_at(int(gid), cx, cy, float(ang), cx, cy, r * r)
-    hits = find_polygon_intersections(list(geoms))
+    geom_list = list(geoms)
+    if telem is not None:
+        hits_t, sweep_n, gjk_n, prune_n = find_polygon_intersections_telem(geom_list)
+        telem["mpg_sweep_pairs"] = int(sweep_n)
+        telem["mpg_gjk_evals"] = int(gjk_n)
+        telem["mpg_circle_pruned"] = int(prune_n)
+        hits = list(hits_t)
+    else:
+        hits = list(find_polygon_intersections(geom_list))
     for i, j in hits:
         graph.add_collision(i, j)
     for item in attract_pairs or ():

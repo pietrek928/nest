@@ -8,7 +8,7 @@ from nest_graph.pack.cache_key import cheap_lock_fingerprint, cheap_pack_cache_k
 from nest_graph.pack.densify_preset import apply_densify_preset
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
-from nest_graph.pack.slave_pack import write_propose_kiss_ledger
+from nest_graph.pack.slave_pack import contact_kiss_ledger, write_propose_kiss_ledger
 from nest_graph.graph import BoardSnapshot
 from nest_graph.graph import score_elems
 from nest_graph.propose.heavy_polish import (
@@ -435,14 +435,35 @@ def pack_execute_snapshot(
     motif_used: tuple[int, ...] = ()
     if cache_key[1] >= 0:
         motif_used = (int(cache_key[1]),)
+    # D0/R1: kiss from selected poses only (compose_geoms is the full candidate pool).
+    kiss_n = int(getattr(snap, "kiss_pairs", 0) or 0)
+    mean_c = float(getattr(snap, "mean_compactness", 0.0) or 0.0)
+    pool_geoms = list(pack_cache.get("compose_geoms") or ())
+    polys_r = list(pack_cache.get("compose_polys") or ())
+    replay_geoms: list = []
+    for i in selected_out:
+        ii = int(i)
+        if 0 <= ii < len(pool_geoms) and pool_geoms[ii] is not None:
+            replay_geoms.append(pool_geoms[ii])
+            continue
+        if 0 <= ii < len(polys_r):
+            gg = as_geometry(polys_r[ii])
+            if gg is not None:
+                replay_geoms.append(gg)
+    if len(replay_geoms) >= 2:
+        gap = float(pack_cache.get("min_dist") or 0.0)
+        try:
+            kiss_n, mean_c = contact_kiss_ledger(replay_geoms, gap=max(gap, 1e-6))
+        except Exception:
+            pass
     out = BoardSnapshot(
         packed_gids=packed_gids,
         packed_transforms=packed_tf,
         remaining_gids=rem,
         coverage=float(coverage_out),
         arena_node_id=int(getattr(snap, "arena_node_id", 0) or 0),
-        kiss_pairs=int(getattr(snap, "kiss_pairs", 0) or 0),
-        mean_compactness=float(getattr(snap, "mean_compactness", 0.0) or 0.0),
+        kiss_pairs=int(kiss_n),
+        mean_compactness=float(mean_c),
         rim_fill=float(getattr(snap, "rim_fill", 0.0) or 0.0),
         void_fill=float(getattr(snap, "void_fill", 0.0) or 0.0),
         free_kind=free_kind,

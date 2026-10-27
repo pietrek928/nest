@@ -1040,6 +1040,66 @@ def rotate_lattice_delta(dx: float, dy: float, theta: float) -> tuple[float, flo
     return (float(dx) * ca - float(dy) * sa, float(dx) * sa + float(dy) * ca)
 
 
+def motif_lattice_coords_2d(
+    offsets: Sequence[tuple[float, float]],
+    bases: Sequence[tuple[float, float, float]],
+    *,
+    depth: int,
+    min_step: float = 0.0,
+) -> list[tuple[float, float, float]]:
+    """±depth 2-D lattice from period offsets × bases (shared void_seek / 3b).
+
+    Picks the longest offset as v0 and a non-collinear second (or ortho of
+    length ``min_step`` / |v0|). Skips the (0,0) cell. Empty if no second axis.
+    """
+    if not offsets or depth <= 0 or not bases:
+        return []
+    pos = [
+        (float(dx), float(dy))
+        for dx, dy in offsets
+        if float(dx) > 1e-9 or (abs(float(dx)) <= 1e-9 and float(dy) > 0)
+    ]
+    if not pos:
+        pos = [(float(dx), float(dy)) for dx, dy in offsets]
+    pos.sort(key=lambda o: -(o[0] * o[0] + o[1] * o[1]))
+    v0 = pos[0]
+    v1: tuple[float, float] | None = None
+    if len(pos) >= 2:
+        ax0, ay0 = v0
+        for cand in pos[1:]:
+            bx, by = cand
+            cross = abs(ax0 * by - ay0 * bx)
+            if cross > 1e-6 * (
+                math.hypot(ax0, ay0) * math.hypot(bx, by) + 1e-9
+            ):
+                v1 = cand
+                break
+    step_for_ortho = float(min_step) if float(min_step) > 1e-9 else math.hypot(*v0)
+    if v1 is None:
+        lx, ly = v0
+        ln = math.hypot(lx, ly)
+        if ln > 1e-9 and step_for_ortho > 1e-9:
+            v1 = (-ly / ln * step_for_ortho, lx / ln * step_for_ortho)
+    if v1 is None:
+        return []
+    out: list[tuple[float, float, float]] = []
+    for ax, ay, aa in bases:
+        r0x, r0y = rotate_lattice_delta(v0[0], v0[1], aa)
+        r1x, r1y = rotate_lattice_delta(v1[0], v1[1], aa)
+        for i in range(-depth, depth + 1):
+            for j in range(-depth, depth + 1):
+                if i == 0 and j == 0:
+                    continue
+                out.append(
+                    (
+                        float(ax) + i * r0x + j * r1x,
+                        float(ay) + i * r0y + j * r1y,
+                        float(aa),
+                    )
+                )
+    return out
+
+
 def _mrr_side_vectors(poly: Polygon) -> list[tuple[float, float]]:
     """MRR edge vectors (axis-aligned in MRR frame) for lattice period."""
     mrr = poly.minimum_rotated_rectangle
@@ -1058,6 +1118,78 @@ def _mrr_side_vectors(poly: Polygon) -> list[tuple[float, float]]:
     if math.hypot(dx2, dy2) > 1e-9:
         out.append((dx2, dy2))
     return out
+
+
+def pattern_tile_basis(
+    pat: ClusterPattern,
+    part_by_group: dict[int, Polygon],
+    min_dist: float,
+    *,
+    min_step: float | None = None,
+) -> tuple[
+    list[tuple[float, float]],
+    list[tuple[int, tuple[float, float, float]]],
+    float,
+    bool,
+]:
+    """W1 SoT: union-MRR (or extent+gap) lattice period + non-identity member relatives.
+
+    Shared by ``void_seek_motif_anchors`` and 3b ``_emit_hole_candidates``.
+    Returns ``(offsets, member_rels, period_step, via_union_mrr)``. Deepen
+    budgets only when ``via_union_mrr`` — mate Δxy period collides leader/mate.
+    ``min_step`` defaults to ``min_dist`` (3b); void_seek passes cfg (often 0)
+    so non-union mate Δxy is not kiss-scaled.
+    """
+    members = list(pat.members or ())
+    part_extent = 0.0
+    union_proxy: Polygon | None = None
+    placed: list[BaseGeometry] = []
+    for mg, mt in members:
+        src = part_by_group.get(int(mg))
+        if src is None or getattr(src, "is_empty", True):
+            continue
+        part_extent = max(part_extent, float(part_extents(src)[1]))
+        placed.append(
+            transform_poly(
+                src,
+                (
+                    float(mt[0]),
+                    float(mt[1]),
+                    float(mt[2]) if len(mt) > 2 else 0.0,
+                ),
+            )
+        )
+    via_union = False
+    if placed:
+        try:
+            u = unary_union(placed)
+            if isinstance(u, Polygon) and not u.is_empty:
+                union_proxy = u
+                mrr = u.minimum_rotated_rectangle
+                mrr_area = float(mrr.area) if mrr is not None and not mrr.is_empty else 0.0
+                fill = float(u.area) / max(mrr_area, 1e-12)
+                via_union = fill >= 0.95 and mrr_area > 1e-12
+        except Exception:
+            union_proxy = None
+            via_union = False
+    step = float(min_dist) if min_step is None else float(min_step)
+    if via_union:
+        step = max(step, float(min_dist))
+    offs = motif_lattice_offsets(
+        pat,
+        min_step=step,
+        union_poly=union_proxy,
+        part_extent=float(part_extent),
+    )
+    member_rels: list[tuple[int, tuple[float, float, float]]] = []
+    for mg, mt in members:
+        tr = (float(mt[0]), float(mt[1]), float(mt[2]) if len(mt) > 2 else 0.0)
+        if abs(tr[0]) + abs(tr[1]) + abs(tr[2]) > 1e-9:
+            member_rels.append((int(mg), tr))
+    period = 0.0
+    for dx, dy in offs:
+        period = max(period, math.hypot(float(dx), float(dy)))
+    return offs, member_rels, float(period), bool(via_union)
 
 
 def motif_lattice_offsets(
@@ -1240,6 +1372,7 @@ def void_seek_motif_anchors(
     part_for_pocket: Polygon | None = None,
     anchor_cache: dict | None = None,
     allowed_angles: Sequence[float] | None = None,
+    part_by_group: dict[int, Polygon] | None = None,
 ) -> list[tuple[float, float, float]]:
     """Unified anchor priority for void_seek motif stamps (§4).
 
@@ -1283,74 +1416,104 @@ def void_seek_motif_anchors(
     if bool(getattr(propose_cfg, "enable_motif_lattice", True)) and patterns:
         depth = max(int(getattr(propose_cfg, "motif_lattice_depth", 3) or 0), 0)
         top_k = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 0), 0)
-        # M3: min_step>0 + void pole + motif_lattice_2d → Stoyan v0⊕v1; else 1D ±k·ΔT.
-        min_step = float(
+        cfg_min_step = float(
             getattr(propose_cfg, "motif_lattice_min_step", 0.0) or 0.0
         )
         pole_xy: tuple[float, float] | None = None
         if void_pole is not None and not getattr(void_pole, "is_empty", True):
             pole_xy = (float(void_pole.x), float(void_pole.y))
-        use_2d = (
-            pole_xy is not None
-            and min_step > 0.0
-            and bool(getattr(propose_cfg, "motif_lattice_2d", True))
+        large_voidish = (
+            len(packed_for_topo) == 0
+            or (
+                void_poly is not None
+                and not getattr(void_poly, "is_empty", True)
+                and float(void_poly.area) > 0.2 * max(float(sheet.area), 1e-9)
+            )
+            or str(getattr(free_space, "kind", "") or "") == "large_void"
         )
         lattice: list[tuple[float, float, float]] = []
         base_for_lattice = list(anchors)
-        # T1 miss-loop: period floor alone still stamps from packed-neighborhood
-        # topo bases → collide. Grow lattice from void pole when min_step>0.
-        if min_step > 0.0 and pole_xy is not None:
-            base_for_lattice = list(
-                void_pole_seed_coords(void_pole, num_angles=4)
-            )
-        if not base_for_lattice:
+        tile_period = 0.0
+        via_union_any = False
+        # Pre-scan W1 union so grain bases / deepen only arm when period is safe.
+        if part_by_group:
             for pat in patterns:
-                base_for_lattice.append(pat.ref_transform)
+                _o, _r, period, via_u = pattern_tile_basis(
+                    pat,
+                    part_by_group,
+                    float(min_dist),
+                    min_step=cfg_min_step,
+                )
+                if via_u:
+                    via_union_any = True
+                    tile_period = max(tile_period, float(period))
+        grain_bases: list[tuple[float, float, float]] = []
+        if via_union_any:
+            grain_angles: list[float] = []
+            grain_angles.extend(
+                float(a) for a in _boundary_alignment_angles(sheet)[:4]
+            )
+            if void_poly is not None and not getattr(void_poly, "is_empty", True):
+                grain_angles.extend(
+                    float(a) for a in wedge_edge_grain_angles(void_poly)[:4]
+                )
+            if not grain_angles:
+                grain_angles = [0.0]
+            if pole_xy is not None:
+                for ang in grain_angles[:4]:
+                    grain_bases.append((pole_xy[0], pole_xy[1], float(ang)))
+            try:
+                for cx, cy in list(sheet.exterior.coords)[:-1][:4]:
+                    for ang in grain_angles[:2]:
+                        grain_bases.append((float(cx), float(cy), float(ang)))
+            except Exception:
+                pass
+            base_for_lattice = list(anchors) + list(grain_bases)
         for pat in patterns:
-            offsets = motif_lattice_offsets(pat, min_step=min_step)
+            if part_by_group:
+                offsets, _rels, period, via_u = pattern_tile_basis(
+                    pat,
+                    part_by_group,
+                    float(min_dist),
+                    min_step=cfg_min_step,
+                )
+                if via_u:
+                    tile_period = max(tile_period, float(period))
+            else:
+                offsets = motif_lattice_offsets(pat, min_step=cfg_min_step)
+            min_step = cfg_min_step
+            # R3: deepen 2d only on true W1 union-MRR period (not mate Δxy).
+            if via_union_any and (large_voidish or cfg_min_step > 0.0):
+                depth = max(depth, 5)
+                top_k = max(top_k, 16)
+                min_step = max(
+                    min_step, float(tile_period) * 0.5, float(min_dist)
+                )
+            use_2d = (
+                bool(getattr(propose_cfg, "motif_lattice_2d", True))
+                and (
+                    (pole_xy is not None and min_step > 0.0)
+                    or via_union_any
+                )
+            )
+            if use_2d and pole_xy is not None and min_step > 0.0:
+                # T1: grow from void pole (+ grain) when period floor is live.
+                base_for_lattice = list(
+                    void_pole_seed_coords(void_pole, num_angles=4)
+                ) + list(grain_bases)
+            if not base_for_lattice:
+                base_for_lattice.append(pat.ref_transform)
             if not offsets or depth <= 0:
                 continue
             if use_2d:
-                pos = [
-                    (dx, dy)
-                    for dx, dy in offsets
-                    if dx > 1e-9 or (abs(dx) <= 1e-9 and dy > 0)
-                ]
-                if not pos:
-                    pos = list(offsets)
-                pos.sort(key=lambda o: -(o[0] * o[0] + o[1] * o[1]))
-                v0 = pos[0]
-                v1: tuple[float, float] | None = None
-                if len(pos) >= 2:
-                    ax0, ay0 = v0
-                    for cand in pos[1:]:
-                        bx, by = cand
-                        cross = abs(ax0 * by - ay0 * bx)
-                        if cross > 1e-6 * (
-                            math.hypot(ax0, ay0) * math.hypot(bx, by) + 1e-9
-                        ):
-                            v1 = cand
-                            break
-                if v1 is None:
-                    lx, ly = v0
-                    ln = math.hypot(lx, ly)
-                    if ln > 1e-9:
-                        v1 = (-ly / ln * min_step, lx / ln * min_step)
-                if v1 is not None:
-                    for ax, ay, aa in base_for_lattice:
-                        r0x, r0y = rotate_lattice_delta(v0[0], v0[1], aa)
-                        r1x, r1y = rotate_lattice_delta(v1[0], v1[1], aa)
-                        for i in range(-depth, depth + 1):
-                            for j in range(-depth, depth + 1):
-                                if i == 0 and j == 0:
-                                    continue
-                                lattice.append(
-                                    (
-                                        float(ax) + i * r0x + j * r1x,
-                                        float(ay) + i * r0y + j * r1y,
-                                        float(aa),
-                                    )
-                                )
+                walked = motif_lattice_coords_2d(
+                    offsets,
+                    base_for_lattice,
+                    depth=depth,
+                    min_step=float(min_step),
+                )
+                if walked:
+                    lattice.extend(walked)
                     continue
             for ax, ay, aa in base_for_lattice:
                 for dx, dy in offsets:
@@ -1364,8 +1527,10 @@ def void_seek_motif_anchors(
                             )
                         )
         lattice_added = len(lattice)
-        if use_2d and depth > 0:
-            # Co-scale top_k so deeper 2D lattices are not pruned to 10 (M3).
+        # Co-scale top_k only when W1 union deepen or cfg min_step 2d.
+        if via_union_any and depth > 0:
+            top_k = max(top_k, min(96, depth * 12))
+        elif cfg_min_step > 0.0 and depth > 0:
             top_k = max(top_k, min(64, depth * 8))
         if lattice and top_k > 0:
             if pole_xy is not None:
@@ -1858,6 +2023,7 @@ def propose_placements_cluster_copy(
         void_poly=None,
         part_for_pocket=None,
         allowed_angles=allowed_angles,
+        part_by_group=part_by_group,
     )
     anchors = void_seek_motif_anchors(
         sheet,
@@ -1871,6 +2037,7 @@ def propose_placements_cluster_copy(
         void_poly=void_poly if densify_clear else None,
         part_for_pocket=part_for_pocket,
         allowed_angles=allowed_angles,
+        part_by_group=part_by_group,
     )
     if skip_reasons is not None:
         skip_reasons["lattice_anchors_added"] = int(

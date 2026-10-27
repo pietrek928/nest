@@ -189,8 +189,13 @@ def record_path_edge_census(
     telem: dict,
     *,
     motif_locked: Sequence | None = None,
+    beam_cap: int = 0,
 ) -> None:
-    """E0/E2: PathKind neighbor census + pose hop-2 (telem only; no path mutate)."""
+    """E0/E2: PathKind neighbor census + pose hop-2 (telem only; no path mutate).
+
+    P: ``beam_cap`` limits Join/Attach conflict pairs (same order of magnitude as
+    path probe beam); full neighbor counts still recorded for telem.
+    """
     dg = getattr(runner, "dg", None)
     telem.setdefault("path_nbr_macro", 0)
     telem.setdefault("path_nbr_join", 0)
@@ -229,20 +234,39 @@ def record_path_edge_census(
                 join_nbrs.append(nbr)
     except Exception:
         pass
+    # P: cap conflict scan to probe beam (reuse ranked Join slice when available).
+    cap = int(beam_cap) if int(beam_cap) > 0 else 0
+    if cap > 0 and len(join_nbrs) > cap:
+        ranked = _path_neighbors_ranked(runner, int(macro_node_id), getattr(runner, "agent", None))
+        if ranked:
+            ranked_ids = {int(getattr(n, "id", -1)) for n in ranked[:cap]}
+            capped = [
+                n for n in join_nbrs if int(getattr(n, "id", -1)) in ranked_ids
+            ]
+            if capped:
+                join_nbrs_cut = capped[:cap]
+            else:
+                join_nbrs_cut = join_nbrs[:cap]
+        else:
+            join_nbrs_cut = join_nbrs[:cap]
+    else:
+        join_nbrs_cut = join_nbrs
     pose_n = len(
-        _pose_validate_hops(dg, join_nbrs, cap=max(2 * max(len(join_nbrs), 1), 1))
+        _pose_validate_hops(
+            dg, join_nbrs_cut, cap=max(2 * max(len(join_nbrs_cut), 1), 1)
+        )
     )
     telem["path_nbr_macro"] = max(int(telem.get("path_nbr_macro", 0) or 0), n_macro)
     telem["path_nbr_join"] = max(int(telem.get("path_nbr_join", 0) or 0), n_join)
     telem["path_nbr_attach"] = max(int(telem.get("path_nbr_attach", 0) or 0), n_attach)
     telem["path_nbr_pose"] = max(int(telem.get("path_nbr_pose", 0) or 0), pose_n)
-    # F0: pairwise Join/Attach conflicts census (no beam filter).
+    # F0/P: pairwise Join/Attach conflicts on beam-capped list.
     cut_n = 0
     if hasattr(dg, "conflicts"):
-        for i in range(len(join_nbrs)):
-            for j in range(i + 1, len(join_nbrs)):
+        for i in range(len(join_nbrs_cut)):
+            for j in range(i + 1, len(join_nbrs_cut)):
                 try:
-                    if bool(dg.conflicts(join_nbrs[i], join_nbrs[j])):
+                    if bool(dg.conflicts(join_nbrs_cut[i], join_nbrs_cut[j])):
                         cut_n += 1
                 except Exception:
                     continue

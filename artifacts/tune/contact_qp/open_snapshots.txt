@@ -1,0 +1,13 @@
+# Contact-QP series open snapshots (T0)
+# Early (void_fill seeds 0 1 2, shipped): areas 0.566 / 0.566 / 0.582
+#   median=0.566 mean≈0.571 parts=54/54/56 indep=True
+# Late N=3 resume void_fill_seed0_iter50 +8 iters:
+#   r1 Δcov=+0.0652 Δparts=+10 (0.6659/81)
+#   r2 Δcov=+0.0492 Δparts=+8  (0.6500/79)
+#   r3 Δcov=+0.0652 Δparts=+10 (0.6659/81)
+# Pass bar: early median≥0.566; late median Δ≥0.0652 (min≥0.0492).
+#
+# Series lock (contact-QP plan):
+# A fits boundary; D0 kiss/fits honesty; P path thrift; Q1 contact_qp native;
+# Q2 QP replaces GLS (enable_contact_qp=true); Q3 3b victim map-back+QP new;
+# G bipartite mpg; D Motif AMAF + densify preset 7; Q4 pull/ω skipped (hurt early).

@@ -147,13 +147,28 @@ polish_se2_part(
         };
 
         if (travel > kEps) {
-            // Shrink travel until board/Scene accepts (Scene is authority).
-            Scalar t = travel;
-            for (int iter = 0; iter < 12 && t > kEps; ++iter) {
-                if (place_at(t, slide_dir)) {
-                    return;
+            // B: bisect largest Scene-clear t in [0, travel] (halving left
+            // oblique mates at ~half travel after Scene reject).
+            Scalar lo = static_cast<Scalar>(0);
+            Scalar hi = travel;
+            Scalar best_t = static_cast<Scalar>(0);
+            bool any_ok = false;
+            for (int iter = 0; iter < 12; ++iter) {
+                const Scalar mid = (lo + hi) * static_cast<Scalar>(0.5);
+                const Scalar x = pose_x + slide_dir[0] * mid;
+                const Scalar y = pose_y + slide_dir[1] * mid;
+                SolidGeometry<VecType> placed =
+                    part.rotate(theta).translate(VecType({x, y}));
+                if (pose_ok(placed)) {
+                    lo = mid;
+                    best_t = mid;
+                    any_ok = true;
+                } else {
+                    hi = mid;
                 }
-                t *= static_cast<Scalar>(0.5);
+            }
+            if (any_ok && best_t > kEps) {
+                place_at(best_t, slide_dir);
             }
             return;
         }

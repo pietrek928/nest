@@ -28,8 +28,9 @@ TEST_CASE("snap_pose_to_ring docks rect to board edge", "[snap]") {
     const double min_dist = 0.05;
     const Vec2 contact{{5.0, 0.0}};
     const Vec2 inward{{0.0, 1.0}};
+    // A: pad=0 + outer extreme docks to min_dist (default AABB pad overshoots).
     auto snapped = snap_pose_to_ring(
-        part, ring, contact, inward, 0.0, min_dist, &board, std::nullopt);
+        part, ring, contact, inward, 0.0, min_dist, &board, 0.0, true);
     REQUIRE(snapped.has_value());
     const auto [dx, dy, ang] = *snapped;
     REQUIRE(ang == Catch::Approx(0.0));
@@ -41,7 +42,36 @@ TEST_CASE("snap_pose_to_ring docks rect to board edge", "[snap]") {
         ? 0.0
         : std::sqrt(static_cast<double>(gap_pair.core.distance_sq));
     REQUIRE(gap + 1e-5 >= min_dist);
+    REQUIRE(std::abs(gap - min_dist) <= 0.05 * min_dist + 1e-5);
     REQUIRE(solid_footprint_inside(placed, board));
+}
+
+TEST_CASE("snap_pose_to_ring pad0 docks left and top edges", "[snap]") {
+    auto board = polygon_from_quad({{0, 0}, {10, 0}, {10, 10}, {0, 10}});
+    auto part = polygon_from_quad({{0, 0}, {1, 0}, {1, 0.5}, {0, 0.5}});
+    auto ring = board;
+    const double min_dist = 0.05;
+    struct Case {
+        Vec2 contact;
+        Vec2 inward;
+    };
+    const Case cases[] = {
+        {Vec2{{0.0, 5.0}}, Vec2{{1.0, 0.0}}},
+        {Vec2{{5.0, 10.0}}, Vec2{{0.0, -1.0}}},
+    };
+    for (const auto &c : cases) {
+        auto snapped = snap_pose_to_ring(
+            part, ring, c.contact, c.inward, 0.0, min_dist, &board, 0.0, true);
+        REQUIRE(snapped.has_value());
+        const auto [dx, dy, ang] = *snapped;
+        auto placed = part.rotate(ang).translate(Vec2{{dx, dy}});
+        auto gap_pair = standoff_distance_pair(placed, ring);
+        double gap = gap_pair.core.intersect
+            ? 0.0
+            : std::sqrt(static_cast<double>(gap_pair.core.distance_sq));
+        REQUIRE(std::abs(gap - min_dist) <= 0.05 * min_dist + 1e-5);
+        REQUIRE(solid_footprint_inside(placed, board));
+    }
 }
 
 TEST_CASE("snap_pose_to_ring rejects zero inward", "[snap]") {

@@ -398,6 +398,7 @@ def _motif_stamp_attempt(
         void_poly=void_poly,
         part_for_pocket=part_for_pocket,
         anchor_cache=anchor_cache,
+        part_by_group=part_by_group,
     )
     unique_anchors = dedupe_anchors(anchors)
     max_tries = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 10) * 2, 8)

@@ -1,0 +1,26 @@
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+Traceback (most recent call last):
+  File "/home/pietrek/Documents/nest/scripts/benchmark_pipeline.py", line 791, in <module>
+    main()
+    ~~~~^^
+  File "/home/pietrek/Documents/nest/scripts/benchmark_pipeline.py", line 384, in main
+    metrics = evaluator.run_full_pipeline(seed)
+  File "/home/pietrek/Documents/nest/scripts/nesting_evaluator.py", line 868, in run_full_pipeline
+    alt_action, alt_reward, path_accept_snap = macro_increase_path(
+                                               ~~~~~~~~~~~~~~~~~~~^
+        mcts_runner,
+        ^^^^^^^^^^^^
+    ...<9 lines>...
+        ),
+        ^^
+    )
+    ^
+  File "/home/pietrek/Documents/nest/nest_graph/pack/macro_path.py", line 518, in macro_increase_path
+    for join_step in join_nbrs:
+                     ^^^^^^^^^
+UnboundLocalError: cannot access local variable 'join_nbrs' where it is not associated with a value
+[00:49:16] make_polygon_graph Avg: 2.6574s | Calls: 2
+[00:49:16] nest_by_graph Avg: 0.0000s | Calls: 0
+[00:49:16] nest_by_scores Avg: 0.0000s | Calls: 0
+[00:49:16] score_elems Avg: 0.0000s | Calls: 0
+[00:49:16] score_rules Avg: 0.0000s | Calls: 0

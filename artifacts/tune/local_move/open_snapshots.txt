@@ -1,0 +1,12 @@
+S0 open snapshots (dirty tree: muted GLS + lattice R4 + kiss ledger telem)
+note: independent_ok=True on all early seeds; GATE FAIL area_coverage vs historical floor only
+
+early (s0_early.log): areas 0.543 / 0.561 / 0.545  med=0.545  parts 52/56/54  indep=True
+late iter50 (s0_late_r*): Δcov +0.0652 / +0.0652 / +0.0652  med=0.0652  Δparts +10/+10/+10
+  last-leaf telem sample: kiss_try~50–52 kiss_ok 0–2 edge_snap=0 hole_open=1/0 se2~44–75/81 post=1
+plateau (s0_plateau_r*): Δcov +0.0000 ×3  final=0.6947/81
+  last-leaf telem: kiss_try~52–57 kiss_ok 0–1 edge_snap=0 hole_open=1/0 r flat se2~25–38/81 post=1
+  kiss ledger live in build_graph print (kiss=try/ok/worse stand=s0→s1)
+
+D: skipped — outline_kiss board_set cut late med (0.0652 < C 0.0731); reverted to is_board_adj. A+C green; second-row r_entry pinch left for later.
+C lock (v4): early 0.568/0.570/0.548 med=0.568; late Δ 0.0731×3; plateau 0; hole_open_fit seen; pole tol=1e-3; push_pt=target_pt; away+guard; rim-pinch away.

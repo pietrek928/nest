@@ -1,0 +1,31 @@
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+Traceback (most recent call last):
+  File "/home/pietrek/Documents/nest/scripts/benchmark_pipeline.py", line 785, in <module>
+    main()
+    ~~~~^^
+  File "/home/pietrek/Documents/nest/scripts/benchmark_pipeline.py", line 384, in main
+    metrics = evaluator.run_full_pipeline(seed)
+  File "/home/pietrek/Documents/nest/scripts/nesting_evaluator.py", line 1142, in run_full_pipeline
+    graph, polys, group_id, transform = make_polygon_graph(
+                                        ~~~~~~~~~~~~~~~~~~^
+        self.case.board,
+        ^^^^^^^^^^^^^^^^
+    ...<10 lines>...
+        out_native_geoms=mpg_natives,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/pietrek/Documents/nest/nest_graph/track_perf.py", line 18, in __call__
+    result = self.func(*args, **kwargs)
+  File "/home/pietrek/Documents/nest/nest_graph/build_graph.py", line 743, in make_polygon_graph
+    graph = build_pose_graph(
+        gids,
+    ...<3 lines>...
+        out_edge_n=edge_n_box,
+    )
+TypeError: build_pose_graph() got an unexpected keyword argument 'out_edge_n'
+[01:42:14] make_polygon_graph Avg: 0.0000s | Calls: 0
+[01:42:14] nest_by_graph Avg: 0.0000s | Calls: 0
+[01:42:14] nest_by_scores Avg: 0.0000s | Calls: 0
+[01:42:14] score_elems Avg: 0.0000s | Calls: 0
+[01:42:14] score_rules Avg: 0.0000s | Calls: 0

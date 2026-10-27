@@ -142,7 +142,8 @@ void bind_snap_api(nb::module_ &m) {
            double angle,
            double min_dist,
            nb::object board,
-           nb::object standoff_pad) -> std::optional<std::tuple<double, double, double>> {
+           nb::object standoff_pad,
+           bool dock_outer_extreme) -> std::optional<std::tuple<double, double, double>> {
             nb::sequence cseq = nb::cast<nb::sequence>(contact);
             nb::sequence iseq = nb::cast<nb::sequence>(inward);
             if (nb::len(cseq) < 2 || nb::len(iseq) < 2) {
@@ -175,7 +176,8 @@ void bind_snap_api(nb::module_ &m) {
                 static_cast<Vec2d::Scalar>(angle),
                 static_cast<Vec2d::Scalar>(min_dist),
                 board_ptr,
-                pad);
+                pad,
+                dock_outer_extreme);
         },
         nb::arg("part"),
         nb::arg("boundary_ring"),
@@ -184,7 +186,8 @@ void bind_snap_api(nb::module_ &m) {
         nb::arg("angle"),
         nb::arg("min_dist"),
         nb::arg("board") = nb::none(),
-        nb::arg("standoff_pad") = nb::none());
+        nb::arg("standoff_pad") = nb::none(),
+        nb::arg("dock_outer_extreme") = false);
 
     m.def(
         "nfp_lite_relative",

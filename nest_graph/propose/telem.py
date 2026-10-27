@@ -1368,6 +1368,33 @@ def merge_phase_gate_telem(
         propose_stats.get("mpg_edges_count_ms", leak.get("mpg_edges_count_ms", 0.0))
         or 0.0
     )
+    leak["mpg_sweep_pairs"] = int(
+        propose_stats.get("mpg_sweep_pairs", leak.get("mpg_sweep_pairs", 0)) or 0
+    )
+    leak["mpg_gjk_evals"] = int(
+        propose_stats.get("mpg_gjk_evals", leak.get("mpg_gjk_evals", 0)) or 0
+    )
+    leak["post_ms"] = float(
+        propose_stats.get("post_ms", leak.get("post_ms", 0.0)) or 0.0
+    )
+    leak["se2_ms"] = float(
+        propose_stats.get("se2_ms", leak.get("se2_ms", 0.0)) or 0.0
+    )
+    leak["qp_ms"] = float(
+        propose_stats.get("qp_ms", leak.get("qp_ms", 0.0)) or 0.0
+    )
+    leak["cheap_cache_hit"] = int(
+        propose_stats.get("cheap_cache_hit", leak.get("cheap_cache_hit", 0)) or 0
+    )
+    leak["cheap_cache_lookup"] = int(
+        propose_stats.get("cheap_cache_lookup", leak.get("cheap_cache_lookup", 0)) or 0
+    )
+    leak["fit_in_r"] = float(
+        propose_stats.get("fit_in_r", leak.get("fit_in_r", 0.0)) or 0.0
+    )
+    leak["fit_need_r"] = float(
+        propose_stats.get("fit_need_r", leak.get("fit_need_r", 0.0)) or 0.0
+    )
     leak["void_core_fat_free"] = int(
         propose_stats.get("void_core_fat_free", leak.get("void_core_fat_free", 0)) or 0
     )
@@ -1858,11 +1885,20 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{float(leak.get('mpg_apply_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('mpg_ctx_ms', 0.0) or 0.0):.1f}/"
         f"{float(leak.get('mpg_edges_count_ms', 0.0) or 0.0):.1f} "
+        f"mpg_n={int(leak.get('mpg_sweep_pairs', 0) or 0)}/"
+        f"{int(leak.get('mpg_gjk_evals', 0) or 0)} "
+        f"post_ms={float(leak.get('post_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('se2_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('qp_ms', 0.0) or 0.0):.1f} "
+        f"cch={int(leak.get('cheap_cache_hit', 0) or 0)}/"
+        f"{int(leak.get('cheap_cache_lookup', 0) or 0)} "
         f"fat={int(leak.get('void_core_fat_free', 0) or 0)} "
         f"fits={int(leak.get('fits_part', 1) or 0)}/"
         f"{int(leak.get('path_fits_lag', 0) or 0)} "
         f"fit_r={float(leak.get('leaf_fit_r', 0.0) or 0.0):.0f}/"
         f"{int(leak.get('mcts_phantom_n', 0) or 0)} "
+        f"fit_ir={float(leak.get('fit_in_r', 0.0) or 0.0):.3f}/"
+        f"{float(leak.get('fit_need_r', 0.0) or 0.0):.3f} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
         f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"
         f"{int(leak.get('void_override', 0) or 0)} "

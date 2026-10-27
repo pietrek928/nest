@@ -64,7 +64,9 @@ def iterative_multi_poles(
     if base_area <= 0.0:
         return []
     min_area = max(base_area * float(min_area_ratio), float(min_dist) ** 2)
-    tol = max(float(min_dist), 0.5)
+    # Same tol as free_space / analyze target_pt (not 0.5 — that snaps to coarse
+    # grid cells and makes post-pack push_pt sit in packed bulk, r_entry≈0.008).
+    tol = max(float(min_dist), 1e-3)
     poly = void_poly
     poles: list[tuple[float, float]] = []
     for _ in range(int(max_poles)):

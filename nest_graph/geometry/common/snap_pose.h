@@ -24,7 +24,8 @@ snap_pose_to_ring(
     typename VecType::Scalar angle,
     typename VecType::Scalar min_dist,
     const SolidGeometry<VecType> *board = nullptr,
-    std::optional<typename VecType::Scalar> standoff_pad = std::nullopt
+    std::optional<typename VecType::Scalar> standoff_pad = std::nullopt,
+    bool dock_outer_extreme = false
 ) {
     using Scalar = typename VecType::Scalar;
     constexpr int kAxisPushSteps = 24;
@@ -65,6 +66,14 @@ snap_pose_to_ring(
     const Scalar rcx = rcx_vec[0];
     const Scalar rcy = rcx_vec[1];
 
+    const Scalar ilen = static_cast<Scalar>(
+        std::sqrt(static_cast<double>(inward[0] * inward[0] + inward[1] * inward[1])));
+    if (ilen < kInLenTol) {
+        return std::nullopt;
+    }
+    const Scalar in_x = inward[0] / ilen;
+    const Scalar in_y = inward[1] / ilen;
+
     Scalar pad;
     if (standoff_pad.has_value()) {
         pad = *standoff_pad;
@@ -76,21 +85,35 @@ snap_pose_to_ring(
         pad = std::max(maxx - minx, maxy - miny) / static_cast<Scalar>(2);
     }
 
-    const auto md = standoff_distance_pair(rotated, boundary_ring);
-    const Scalar p_part_x = md.closest_a[0];
-    const Scalar p_part_y = md.closest_a[1];
-    const Scalar target_x = contact[0] + inward[0] * (min_dist + pad);
-    const Scalar target_y = contact[1] + inward[1] * (min_dist + pad);
+    // A: rim-kiss only (dock_outer_extreme) → extreme in −inward; else nearest.
+    // Do not key off pad=0 — slide_toward_obstacle also uses pad=0.
+    Scalar p_part_x{};
+    Scalar p_part_y{};
+    if (dock_outer_extreme) {
+        const auto &pts = rotated.line_points;
+        if (pts.empty()) {
+            return std::nullopt;
+        }
+        Scalar best = -std::numeric_limits<Scalar>::infinity();
+        p_part_x = pts[0][0];
+        p_part_y = pts[0][1];
+        for (const auto &pt : pts) {
+            const Scalar proj = -(pt[0] * in_x + pt[1] * in_y);
+            if (proj > best) {
+                best = proj;
+                p_part_x = pt[0];
+                p_part_y = pt[1];
+            }
+        }
+    } else {
+        const auto md = standoff_distance_pair(rotated, boundary_ring);
+        p_part_x = md.closest_a[0];
+        p_part_y = md.closest_a[1];
+    }
+    const Scalar target_x = contact[0] + in_x * (min_dist + pad);
+    const Scalar target_y = contact[1] + in_y * (min_dist + pad);
     SolidGeometry<VecType> placed =
         rotated.translate(VecType({target_x - p_part_x, target_y - p_part_y}));
-
-    const Scalar ilen = static_cast<Scalar>(
-        std::sqrt(static_cast<double>(inward[0] * inward[0] + inward[1] * inward[1])));
-    if (ilen < kInLenTol) {
-        return std::nullopt;
-    }
-    const Scalar in_x = inward[0] / ilen;
-    const Scalar in_y = inward[1] / ilen;
 
     Scalar minx{}, miny{}, maxx{}, maxy{};
     if (!aabb_extent(rotated, minx, miny, maxx, maxy)) {
@@ -141,6 +164,20 @@ snap_pose_to_ring(
         }
         if (gap < min_dist - kGapTol) {
             return std::nullopt;
+        }
+        // A: pull toward the ring when too far (push loop only fixed "too close").
+        const Scalar excess = gap - min_dist;
+        if (excess > kGapTol) {
+            placed = placed.translate(VecType({-in_x * excess, -in_y * excess}));
+            const auto gap2 = standoff_distance_pair(placed, boundary_ring);
+            Scalar g2 = static_cast<Scalar>(0);
+            if (!gap2.core.intersect) {
+                g2 = static_cast<Scalar>(
+                    std::sqrt(static_cast<double>(gap2.core.distance_sq)));
+            }
+            if (g2 < min_dist - kGapTol) {
+                return std::nullopt;
+            }
         }
     }
     if (board != nullptr && !solid_footprint_inside(placed, *board)) {

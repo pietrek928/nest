@@ -215,7 +215,8 @@ def test_snap_pose_to_ring_docks_rect_to_board_edge():
     ring = board
     min_dist = 0.05
     snapped = snap_pose_to_ring(
-        part, ring, (5.0, 0.0), (0.0, 1.0), 0.0, min_dist, board=board,
+        part, ring, (5.0, 0.0), (0.0, 1.0), 0.0, min_dist,
+        board=board, standoff_pad=0.0, dock_outer_extreme=True,
     )
     assert snapped is not None
     dx, dy, ang = snapped
@@ -224,7 +225,26 @@ def test_snap_pose_to_ring_docks_rect_to_board_edge():
     placed = part.rotate(ang).translate(dx, dy)
     gap = placed.standoff_distance(ring)
     assert gap + 1e-5 >= min_dist
+    assert abs(gap - min_dist) <= 0.05 * min_dist + 1e-5
     assert placed.footprint_inside(board)
+
+
+def test_snap_pose_to_ring_pad0_left_and_top():
+    board = Geometry.from_shapely(_quad(0, 0, 10, 10))
+    part = Geometry.from_shapely(_quad(0, 0, 1, 0.5))
+    ring = board
+    min_dist = 0.05
+    for contact, inward in (((0.0, 5.0), (1.0, 0.0)), ((5.0, 10.0), (0.0, -1.0))):
+        snapped = snap_pose_to_ring(
+            part, ring, contact, inward, 0.0, min_dist,
+            board=board, standoff_pad=0.0, dock_outer_extreme=True,
+        )
+        assert snapped is not None
+        dx, dy, ang = snapped
+        placed = part.rotate(ang).translate(dx, dy)
+        gap = placed.standoff_distance(ring)
+        assert abs(gap - min_dist) <= 0.05 * min_dist + 1e-5
+        assert placed.footprint_inside(board)
 
 
 def test_snap_pose_to_ring_rejects_zero_inward():

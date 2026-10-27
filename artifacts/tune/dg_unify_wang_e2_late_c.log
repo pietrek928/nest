@@ -1,0 +1,27 @@
+[checkpoint] resume artifacts/checkpoints/void_fill_seed0_iter50.npz iter=50 cov=0.6008 parts=71 +8 iters
+Nesting:   0%|          | 0/8 [00:00<?, ?iter/s]Nesting:   0%|          | 0/8 [00:00<?, ?iter/s]
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/pietrek/Documents/nest/nest_graph/build_graph.py", line 2994, in <module>
+    main()
+    ~~~~^^
+  File "/home/pietrek/Documents/nest/nest_graph/build_graph.py", line 2990, in main
+    run_build_graph(cfg)
+    ~~~~~~~~~~~~~~~^^^^^
+  File "/home/pietrek/Documents/nest/nest_graph/build_graph.py", line 1489, in run_build_graph
+    run_path, path_beam, path_depth = path_probe_budget(
+                                      ~~~~~~~~~~~~~~~~~^
+        on_plateau=bool(plateau.on_plateau),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<12 lines>...
+        <= 0,
+        ^^^^^
+    )
+    ^
+TypeError: path_probe_budget() got an unexpected keyword argument 'path_carved_streak'
+[01:42:11] nest_by_graph Avg: 0.0000s | Calls: 0
+[01:42:11] nest_by_scores Avg: 0.0000s | Calls: 0
+[01:42:11] score_elems Avg: 0.0000s | Calls: 0
+[01:42:11] score_rules Avg: 0.0000s | Calls: 0
+[01:42:11] make_polygon_graph Avg: 0.0000s | Calls: 0

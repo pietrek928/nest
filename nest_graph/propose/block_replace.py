@@ -7,9 +7,15 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from nest_graph.graph import SelectMode, SelectOptions, nest_by_scores
+from nest_graph.graph import (
+    RefineSelectionOptions,
+    SelectMode,
+    SelectOptions,
+    nest_by_scores,
+    refine_selection,
+)
 from nest_graph.geometry import Geometry
-from nest_graph.propose.context import cluster_packed_indices, part_extents
+from nest_graph.propose.context import cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.propose.placement_common import (
     as_geometry,
@@ -23,7 +29,8 @@ from nest_graph.propose.placement_common import (
 from nest_graph.propose.placement_outline import outline_ring_geom
 from nest_graph.propose.placements_pattern import (
     merge_cluster_patterns,
-    motif_lattice_offsets,
+    motif_lattice_coords_2d,
+    pattern_tile_basis,
     rotate_lattice_delta,
     synthesize_mate_patterns,
     wedge_edge_grain_angles,
@@ -36,6 +43,29 @@ from nest_graph.utils import transform_poly
 _HOLE_PROPOSERS = frozenset({ProposerName.CLUSTER_COPY, ProposerName.POCKET_FIT})
 _HOLE_EMIT_CAP = 128
 _COHORT_RELATED_CAP = 8
+
+
+def _hole_lattice_member_stamps(
+    nodes: Sequence[tuple[float, float, float]],
+    member_rels: Sequence[tuple[int, tuple[float, float, float]]],
+    lattice_coords: list[tuple[float, float, float]],
+    pair_mates: list[tuple[int, tuple[float, float, float]]],
+) -> None:
+    """Append lattice nodes + dual-stamp mates (shared 3b emit path)."""
+    for lx, ly, aa in nodes:
+        lattice_coords.append((float(lx), float(ly), float(aa)))
+        for mgid, (mx, my, ma) in member_rels:
+            mrx, mry = rotate_lattice_delta(mx, my, aa)
+            pair_mates.append(
+                (
+                    int(mgid),
+                    (
+                        float(lx) + mrx,
+                        float(ly) + mry,
+                        float(aa) + float(ma),
+                    ),
+                )
+            )
 
 
 def lex_count_area_better(
@@ -200,6 +230,21 @@ def _victim_blob_aspect(blob: BaseGeometry) -> float:
         return 1.0
 
 
+def block_hole_peel_max_size(
+    propose_cfg,
+    *,
+    prefer_strip: bool = True,
+    n_packed: int = 0,
+) -> int:
+    """Peel cap from ``cluster_repack_max_size`` (strip soft-extend gated off —
+
+    R4 attempts at cfg∪12 hurt early / still lex-failed on plateau).
+    """
+    _ = prefer_strip
+    _ = n_packed
+    return max(int(getattr(propose_cfg, "cluster_repack_max_size", 6) or 6), 1)
+
+
 def pick_block_hole_victim(
     selected: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -213,7 +258,7 @@ def pick_block_hole_victim(
     allow_board_adj_fallback: bool = True,
     prefer_strip: bool = True,
 ) -> list[int] | None:
-    """Contact CC of size [3,6]; prefer non-board_adj; Q215 void-facing board_adj only.
+    """Contact CC of size [min,max]; prefer non-board_adj; Q215 void-facing board_adj only.
 
     W3: when ``prefer_strip``, interior CCs with MRR aspect≥2 beat nearer round
     blobs (strip re-tile for lattice emit + lex).
@@ -302,6 +347,7 @@ def _emit_hole_candidates(
     void_geoms: Sequence,
     free_space,
     cluster_patterns,
+    victim_poses: Sequence[tuple[float, float, float]] | None = None,
 ) -> tuple[list[tuple[int, np.ndarray, BaseGeometry, Geometry]], int, int]:
     # cycle: pipeline → block_replace (3b); placements_pattern hoisted at module top
     from nest_graph.config import ProposeConfig
@@ -397,7 +443,8 @@ def _emit_hole_candidates(
             else:
                 in_hull += 1
             out.append((int(gid), tr, poly, cand_g))
-        # R: densify mate lattice across victim hull at wedge grain.
+        # R: densify mate lattice across victim hull. Victim poses carry the
+        # local grain (MultiPolygon hull breaks wedge_edge → world 0°).
         if not patterns or hull is None or len(out) >= _HOLE_EMIT_CAP:
             continue
         grain = list(wedge_edge_grain_angles(hull)) or [0.0]
@@ -405,56 +452,50 @@ def _emit_hole_candidates(
         if pole is not None and not getattr(pole, "is_empty", True):
             for ang in grain[:4]:
                 bases.append((float(pole.x), float(pole.y), float(ang)))
+        hull_cx = hull_cy = 0.0
+        have_hc = False
         try:
             hc = hull.centroid
-            bases.append((float(hc.x), float(hc.y), float(grain[0])))
+            hull_cx, hull_cy = float(hc.x), float(hc.y)
+            have_hc = True
+            bases.append((hull_cx, hull_cy, float(grain[0])))
         except Exception:
             pass
         depth = max(int(getattr(propose_cfg, "motif_lattice_depth", 3) or 0), 1)
         top_k = max(int(getattr(propose_cfg, "motif_lattice_top_k", 10) or 0), 4)
         lattice_coords: list[tuple[float, float, float]] = []
         pair_mates: list[tuple[int, tuple[float, float, float]]] = []
+        victim_bases = [
+            (float(p[0]), float(p[1]), float(p[2])) for p in (victim_poses or ())
+        ]
+        emit_cap = max(top_k * 2, 8)
         for pat in patterns:
             members = list(pat.members or ())
             gids_in = [int(m[0]) for m in members]
             if int(gid) not in gids_in:
                 continue
-            # W1: tile period from dense union MRR or (extent+gap) single-part.
-            _min_e, max_e = part_extents(part)
-            union_proxy = None
-            try:
-                placed = []
-                for mg, mt in members:
-                    src = part_by_group.get(int(mg))
-                    if src is None or getattr(src, "is_empty", True):
-                        continue
-                    placed.append(
-                        transform_poly(
-                            src,
-                            np.asarray(
-                                (float(mt[0]), float(mt[1]), float(mt[2]) if len(mt) > 2 else 0.0),
-                                dtype=np.float64,
-                            ),
-                        )
-                    )
-                if placed:
-                    union_proxy = unary_union(placed)
-            except Exception:
-                union_proxy = None
-            offs = motif_lattice_offsets(
-                pat,
-                min_step=float(min_dist),
-                union_poly=union_proxy if isinstance(union_proxy, Polygon) else None,
-                part_extent=float(max_e),
+            # W1 SoT: shared pattern_tile_basis (union MRR / extent+gap).
+            offs, member_rels, _period, _via_u = pattern_tile_basis(
+                pat, part_by_group, float(min_dist)
             )
-            # Mate / all non-identity members for multi-stamp at lattice nodes (W1).
-            member_rels: list[tuple[int, tuple[float, float, float]]] = []
-            for mg, mt in members:
-                tr = (float(mt[0]), float(mt[1]), float(mt[2]) if len(mt) > 2 else 0.0)
-                if abs(tr[0]) + abs(tr[1]) + abs(tr[2]) > 1e-9:
-                    member_rels.append((int(mg), tr))
             if not offs and not member_rels:
                 continue
+            # R4: victim-anchored ±depth 2d walk (shared motif_lattice_coords_2d).
+            if victim_bases and offs:
+                walked = motif_lattice_coords_2d(
+                    offs,
+                    victim_bases,
+                    depth=depth,
+                    min_step=float(min_dist),
+                )
+                if have_hc and walked:
+                    walked.sort(
+                        key=lambda a: (float(a[0]) - hull_cx) ** 2
+                        + (float(a[1]) - hull_cy) ** 2
+                    )
+                _hole_lattice_member_stamps(
+                    walked[:emit_cap], member_rels, lattice_coords, pair_mates
+                )
             for ax, ay, aa in bases:
                 # W1: stamp all pattern members at base (dense packs; early lattice-only).
                 if member_rels and len(kept_list) >= 60:
@@ -477,7 +518,6 @@ def _emit_hole_candidates(
                         lx = float(ax) + k * rdx
                         ly = float(ay) + k * rdy
                         lattice_coords.append((lx, ly, float(aa)))
-                        # W1: stamp every pattern member at each lattice node.
                         for mgid, (mx, my, ma) in member_rels:
                             mrx, mry = rotate_lattice_delta(mx, my, aa)
                             pair_mates.append(
@@ -492,7 +532,12 @@ def _emit_hole_candidates(
                             )
             if len(lattice_coords) + len(pair_mates) >= top_k * 4:
                 break
-        for lc in lattice_coords[: max(top_k * 2, 8)]:
+        if have_hc and lattice_coords:
+            lattice_coords.sort(
+                key=lambda a: (float(a[0]) - hull_cx) ** 2
+                + (float(a[1]) - hull_cy) ** 2
+            )
+        for lc in lattice_coords[:emit_cap]:
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             tr = np.asarray(lc, dtype=np.float64).reshape(3)
@@ -518,7 +563,7 @@ def _emit_hole_candidates(
             mate_n += 1
             out.append((int(gid), tr, poly, cand_g))
         # Dual-stamp mate pairs (leader + mate) — count recovery for lex.
-        for mgid, mtr in pair_mates[: max(top_k * 2, 8)]:
+        for mgid, mtr in pair_mates[:emit_cap]:
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             mpart = part_by_group.get(int(mgid))
@@ -574,7 +619,7 @@ def try_block_hole_renest(
     cluster_patterns=None,
     victim_override: Sequence[int] | None = None,
 ) -> tuple[list[int], list, list, list, list | None, dict]:
-    """3b: peel contact CC, re-emit into the hole, nest_by_scores locked=kept.
+    """3b: peel contact CC, re-emit into the hole, refine warm-start locked=kept.
 
     Returns (selection, polys, transforms, group_id, candidate_geoms, telem).
     On reject, inputs are unchanged. ``block_hole_victim`` is set whenever a
@@ -594,8 +639,18 @@ def try_block_hole_renest(
     if victim_override:
         victim = [int(i) for i in victim_override]
     else:
+        peel_max = block_hole_peel_max_size(
+            propose_cfg, prefer_strip=True, n_packed=len(sel)
+        )
         picked = pick_block_hole_victim(
-            sel, polys, min_dist=min_dist, sheet=sheet, pole=pole, void_poly=void_poly,
+            sel,
+            polys,
+            min_dist=min_dist,
+            sheet=sheet,
+            pole=pole,
+            void_poly=void_poly,
+            max_size=peel_max,
+            prefer_strip=True,
         )
         victim = picked if picked is not None else []
     if not victim:
@@ -614,6 +669,32 @@ def try_block_hole_renest(
         if 0 <= i < len(polys) and polys[i] is not None and not polys[i].is_empty
     ])
     emit_hull = hole_hull if (hole_hull is not None and not hole_hull.is_empty) else void_poly
+    # Q3: victim poses before emit — lattice anchors to hole grain (not world 0°).
+    victim_cands: list[tuple[int, np.ndarray, BaseGeometry, Geometry, int]] = []
+    for vi in victim:
+        if not (0 <= vi < len(polys)):
+            continue
+        poly_v = polys[vi]
+        if poly_v is None or getattr(poly_v, "is_empty", False):
+            continue
+        gid_v = int(group_id[vi]) if vi < len(group_id) else 0
+        tr_v = (
+            np.asarray(transforms[vi], dtype=np.float64).reshape(3)
+            if vi < len(transforms)
+            else np.zeros(3, dtype=np.float64)
+        )
+        g_v = None
+        if candidate_geoms is not None and vi < len(candidate_geoms):
+            g_v = as_geometry(candidate_geoms[vi])
+        if g_v is None:
+            g_v = as_geometry(poly_v)
+        if g_v is None:
+            continue
+        victim_cands.append((gid_v, tr_v, poly_v, g_v, int(vi)))
+    victim_poses = [
+        (float(tr[0]), float(tr[1]), float(tr[2]))
+        for _gid, tr, _p, _g, _vi in victim_cands
+    ]
     cands, in_hull, mate_n = _emit_hole_candidates(
         sheet=sheet,
         kept_geoms=kept_geoms,
@@ -625,6 +706,7 @@ def try_block_hole_renest(
         void_geoms=void_geoms or (),
         free_space=free_space,
         cluster_patterns=cluster_patterns,
+        victim_poses=victim_poses,
     )
     telem["block_hole_emit_in_hull"] = int(in_hull)
     telem["block_hole_mate_n"] = int(mate_n)
@@ -653,12 +735,19 @@ def try_block_hole_renest(
             kept_angles.append(float(np.asarray(transforms[i]).reshape(3)[2]))
         else:
             kept_angles.append(0.0)
-    hole_gids = [gid for gid, _tr, _p, _g in cands]
-    hole_geoms = [g for _gid, _tr, _p, g in cands]
-    hole_angles = [float(tr[2]) for _gid, tr, _p, _g in cands]
-    mini_gids = kept_gids + hole_gids
-    mini_geoms = kept_native + hole_geoms
-    mini_angles = kept_angles + hole_angles
+    n_lattice = len(cands)
+    unlocked_geoms = [g for _gid, _tr, _p, g in cands] + [
+        g for _gid, _tr, _p, g, _vi in victim_cands
+    ]
+    unlocked_gids = [gid for gid, _tr, _p, _g in cands] + [
+        gid for gid, _tr, _p, _g, _vi in victim_cands
+    ]
+    unlocked_angles = [float(tr[2]) for _gid, tr, _p, _g in cands] + [
+        float(tr[2]) for _gid, tr, _p, _g, _vi in victim_cands
+    ]
+    mini_gids = kept_gids + unlocked_gids
+    mini_geoms = kept_native + unlocked_geoms
+    mini_angles = kept_angles + unlocked_angles
     if len(mini_geoms) < 2:
         telem["block_hole_reject_reason"] = "nest_short"
         return sel, polys, transforms, group_id, candidate_geoms, telem
@@ -678,11 +767,32 @@ def try_block_hole_renest(
             mini_scores.append(float(part_areas[gid]))
         else:
             mini_scores.append(0.0)
-    opts = SelectOptions()
-    opts.local_swap = False
-    opts.mode = SelectMode.greedy_score
-    opts.locked_indices = list(range(n_kept))
-    new_mini = list(nest_by_scores(graph, mini_scores, opts))
+    # Q3: victim map-back + lattice; keep local_swap off under locks (dual-swap
+    # lifted early but dropped late Δ below open — leave dual to _nest_with_locks).
+    # R4: dense packs warm-start refine from kept+victims (greedy can drop
+    # below peel). Cold early keeps greedy — refine accept mid-iter shifted
+    # attractors below R3 early open.
+    n_vict = len(victim_cands)
+    if len(sel) >= 60:
+        incumbent = list(range(n_kept)) + list(
+            range(n_kept + n_lattice, n_kept + n_lattice + n_vict)
+        )
+        ropts = RefineSelectionOptions()
+        ropts.lexicographic_area = True
+        ropts.node_areas = [
+            float(part_areas[g]) if 0 <= g < len(part_areas) else 0.0
+            for g in mini_gids
+        ]
+        ropts.locked_indices = list(range(n_kept))
+        ropts.min_collisions = 2
+        ropts.max_root_collisions = 2
+        new_mini = list(refine_selection(graph, incumbent, mini_scores, ropts))
+    else:
+        opts = SelectOptions()
+        opts.local_swap = False
+        opts.mode = SelectMode.greedy_score
+        opts.locked_indices = list(range(n_kept))
+        new_mini = list(nest_by_scores(graph, mini_scores, opts))
     new_sel: list[int] = []
     append_gids: list[int] = []
     append_tr: list[np.ndarray] = []
@@ -691,14 +801,19 @@ def try_block_hole_renest(
     for mi in new_mini:
         if mi < n_kept:
             new_sel.append(kept_used[mi])
+            continue
+        h = mi - n_kept
+        if h < n_lattice:
+            gid, tr, poly, geom = cands[h]
+            append_gids.append(gid)
+            append_tr.append(tr)
+            append_poly.append(poly)
+            append_geom.append(geom)
         else:
-            h = mi - n_kept
-            if 0 <= h < len(cands):
-                gid, tr, poly, geom = cands[h]
-                append_gids.append(gid)
-                append_tr.append(tr)
-                append_poly.append(poly)
-                append_geom.append(geom)
+            vh = h - n_lattice
+            if 0 <= vh < len(victim_cands):
+                _gid, _tr, _poly, _geom, orig_vi = victim_cands[vh]
+                new_sel.append(int(orig_vi))
     base = len(polys)
     new_polys = list(polys)
     new_tr = list(transforms)
@@ -707,7 +822,8 @@ def try_block_hole_renest(
     for k, (gid, tr, poly, geom) in enumerate(zip(
         append_gids, append_tr, append_poly, append_geom, strict=True,
     )):
-        new_sel.append(base + k)
+        idx = base + k
+        new_sel.append(idx)
         new_polys.append(poly)
         new_tr.append(tr)
         new_gid.append(gid)
@@ -723,7 +839,9 @@ def try_block_hole_renest(
         new_count=len(new_sel),
         new_area=new_area,
     ):
-        telem["block_hole_reject_reason"] = "lex"
+        telem["block_hole_reject_reason"] = (
+            "no_gain" if not append_gids else "lex"
+        )
         return sel, polys, transforms, group_id, candidate_geoms, telem
     if not selection_pairwise_independent(new_polys, new_sel):
         telem["block_hole_reject_reason"] = "indep"
@@ -790,7 +908,9 @@ def maybe_block_hole_renest(
         archived=list(cluster_patterns or ()),
         max_patterns=int(getattr(propose_cfg, "cluster_copy_max_patterns", 8) or 8),
         min_size=3,
-        max_size=6,
+        max_size=block_hole_peel_max_size(
+            propose_cfg, prefer_strip=True, n_packed=len(selected)
+        ),
     )
     patterns_for_emit = cohort.patterns if cohort.patterns else cluster_patterns
     (

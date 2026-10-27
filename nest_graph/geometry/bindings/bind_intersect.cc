@@ -1,9 +1,11 @@
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
 #include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
+#include "common/tracer.h"
 #include "intersect/polygon_intersect.h"
 #include "types.h"
 
@@ -15,6 +17,21 @@ void bind_intersect_api(nb::module_ &m) {
         "find_polygon_intersections",
         [](std::vector<GeometryHolder> polygons) {
             return find_polygon_intersections<Vec2d>(solid_ptrs_from_holders(polygons));
+        },
+        nb::arg("polygons"));
+
+    // T0: same as find_polygon_intersections plus DebugTracer sweep/GJK counts.
+    m.def(
+        "find_polygon_intersections_telem",
+        [](std::vector<GeometryHolder> polygons) {
+            DebugTracer tracer;
+            auto hits = find_polygon_intersections<Vec2d>(
+                solid_ptrs_from_holders(polygons), &tracer);
+            return nb::make_tuple(
+                std::move(hits),
+                tracer.stat_sweep_pairs,
+                tracer.stat_gjk_evals,
+                tracer.stat_circle_pruned);
         },
         nb::arg("polygons"));
 

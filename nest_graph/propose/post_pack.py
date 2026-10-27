@@ -1,5 +1,6 @@
 """Thin post-pack pass runner for demo / benches / evaluator."""
 
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -57,10 +58,14 @@ def run_post_pack_passes(
     When ``refresh_after_repack`` and motif repack accepts with multi-pole,
     refresh free poles and re-run relocate+se2 (one post-pack gate).
     """
+    _post_t0 = time.perf_counter()
     stats: dict = {
         "repack": None,
         "relocate": None,
         "local_se2": None,
+        "post_ms": 0.0,
+        "se2_ms": 0.0,
+        "qp_ms": 0.0,
     }
     sel = list(selected_indices)
     out_polys = list(polys)
@@ -108,10 +113,14 @@ def run_post_pack_passes(
         ctx.transforms = out_tr
         stats["relocate"] = reloc_stats
     if allow_local_se2:
+        _se2_t0 = time.perf_counter()
         out_polys, out_tr, se2_stats = local_se2_selection(ctx)
         ctx.polys = out_polys
         ctx.transforms = out_tr
+        se2_stats = dict(se2_stats or {})
+        se2_stats["se2_ms"] = (time.perf_counter() - _se2_t0) * 1000.0
         stats["local_se2"] = se2_stats
+        stats["se2_ms"] = float(se2_stats["se2_ms"])
 
     repack_stats = stats.get("repack") or {}
     poles_list = list(poles or ())
@@ -156,8 +165,14 @@ def run_post_pack_passes(
                 max_poles=int(propose_cfg.multi_pole_max_poles),
             )
             if xy_poles:
-                refresh_poles = [Point(x, y) for x, y in xy_poles]
-                if reloc_pole is None:
+                spine = [Point(x, y) for x, y in xy_poles]
+                # C: primary = free target_pt; spine = preferred_spine secondaries.
+                if reloc_pole is not None:
+                    refresh_poles = [reloc_pole] + [
+                        p for p in spine if float(p.distance(reloc_pole)) > 1e-6
+                    ]
+                else:
+                    refresh_poles = spine
                     reloc_pole = refresh_poles[0]
         if not refresh_poles and reloc_pole is not None:
             refresh_poles = [reloc_pole]
@@ -182,6 +197,7 @@ def run_post_pack_passes(
         telem=stats,
     ):
         stats["overlap_revert"] = 1
+        stats["post_ms"] = (time.perf_counter() - _post_t0) * 1000.0
         return entry_polys, entry_tr, list(entry_sel), stats
     entry_area = sum(
         float(part_by_group[int(group_ids[i])].area)
@@ -199,7 +215,9 @@ def run_post_pack_passes(
         and len(sel) <= len(entry_sel)
     ):
         stats["area_revert"] = 1
+        stats["post_ms"] = (time.perf_counter() - _post_t0) * 1000.0
         return entry_polys, entry_tr, list(entry_sel), stats
+    stats["post_ms"] = (time.perf_counter() - _post_t0) * 1000.0
     return out_polys, out_tr, list(sel), stats
 
 
@@ -310,8 +328,16 @@ def prepare_post_pack(
                 max_poles=int(cfg_propose.multi_pole_max_poles),
             )
             if xy_poles:
-                reloc_poles = [Point(x, y) for x, y in xy_poles]
-                push_pt = reloc_poles[0]
+                spine = [Point(x, y) for x, y in xy_poles]
+                # C: keep free-space target_pt as primary push (fit_ir SoT);
+                # multi-pole spine only feeds preferred_spine_pole secondaries.
+                if push_pt is not None:
+                    reloc_poles = [push_pt] + [
+                        p for p in spine if float(p.distance(push_pt)) > 1e-6
+                    ]
+                else:
+                    reloc_poles = spine
+                    push_pt = reloc_poles[0]
     # Q224: sterile cohort stamp first; hull reject → BFS peel (victim=None).
     stamp_victim = None
     if not hole_ok and tried > 0 and emit_hull <= 0:

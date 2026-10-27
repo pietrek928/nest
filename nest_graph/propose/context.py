@@ -75,6 +75,51 @@ class FreeSpaceAnalysis:
     target_pt: Point | None = None
     # Placeable vs catalog part (inradius vs need); True when unknown / full.
     fits_part: bool = True
+    # T0 telem: measured inradius vs part need (same SoT as fits_part).
+    fit_in_r: float = 0.0
+    fit_need_r: float = 0.0
+
+
+def void_fit_radii(
+    void_poly: BaseGeometry | None,
+    part_area: float | None = None,
+    *,
+    shape: Polygon | None = None,
+    min_dist: float = 0.0,
+    at_pt: Point | None = None,
+    use_boundary: bool = False,
+) -> tuple[bool, float, float]:
+    """Return (fits, in_r, need_r). ``use_boundary`` includes holes (letter A).
+
+    Prefer ``shape`` → ``part_extents`` max (same as densify ``_fit_probe_ok``).
+    When only ``part_area`` is known, use equal-area disk radius.
+    """
+    del min_dist  # reserved for future clearance floor; need_r is extents today
+    if void_poly is None or getattr(void_poly, "is_empty", True):
+        return False, 0.0, 0.0
+    need_r: float | None = None
+    if shape is not None and not getattr(shape, "is_empty", True):
+        _min_e, max_e = part_extents(shape)
+        need_r = float(max_e)
+    elif part_area is not None and float(part_area) > 0.0:
+        need_r = (float(part_area) / pi) ** 0.5
+    else:
+        return True, 0.0, 0.0
+    try:
+        pt = at_pt
+        if pt is None or getattr(pt, "is_empty", True):
+            pt = void_poly.representative_point()
+        # A: boundary = exterior ∪ holes (MultiPolygon already used boundary).
+        if bool(use_boundary) or not (
+            hasattr(void_poly, "exterior") and void_poly.exterior is not None
+        ):
+            in_r = float(void_poly.boundary.distance(pt))
+        else:
+            in_r = float(void_poly.exterior.distance(pt))
+        fits = float(in_r) + 1e-9 >= float(need_r)
+        return bool(fits), float(in_r), float(need_r)
+    except Exception:
+        return True, 0.0, float(need_r or 0.0)
 
 
 def void_fits_part(
@@ -87,32 +132,18 @@ def void_fits_part(
 ) -> bool:
     """True when void inradius can host the part (densify A0 / FreeSpace SoT).
 
-    Prefer ``shape`` → ``part_extents`` max (same as densify ``_fit_probe_ok``).
-    When only ``part_area`` is known, use equal-area disk radius.
-    Caller should pass ``at_pt`` (polylabel) when available; else representative.
+    Letter A: measure against ``boundary`` (exterior + holes) so sponge free
+    with packed islands as holes does not false-report fits.
     """
-    if void_poly is None or getattr(void_poly, "is_empty", True):
-        return False
-    need_r: float | None = None
-    if shape is not None and not getattr(shape, "is_empty", True):
-        _min_e, max_e = part_extents(shape)
-        need_r = float(max_e)
-    elif part_area is not None and float(part_area) > 0.0:
-        need_r = (float(part_area) / pi) ** 0.5
-    else:
-        return True
-    try:
-        pt = at_pt
-        if pt is None or getattr(pt, "is_empty", True):
-            pt = void_poly.representative_point()
-        # Prefer exterior distance on Polygon; MultiPolygon uses boundary.
-        if hasattr(void_poly, "exterior") and void_poly.exterior is not None:
-            in_r = float(void_poly.exterior.distance(pt))
-        else:
-            in_r = float(void_poly.boundary.distance(pt))
-        return float(in_r) + 1e-9 >= float(need_r)
-    except Exception:
-        return True
+    fits, _in_r, _need_r = void_fit_radii(
+        void_poly,
+        part_area,
+        shape=shape,
+        min_dist=min_dist,
+        at_pt=at_pt,
+        use_boundary=True,
+    )
+    return bool(fits)
 
 
 def _make_free_space_analysis(
@@ -126,12 +157,15 @@ def _make_free_space_analysis(
     target_pt: Point | None = None,
 ) -> FreeSpaceAnalysis:
     fits = True
+    fit_in_r = 0.0
+    fit_need_r = 0.0
     if kind != "full" and target_poly is not None and float(part_area) > 0.0:
-        fits = void_fits_part(
+        fits, fit_in_r, fit_need_r = void_fit_radii(
             target_poly,
             float(part_area),
             min_dist=float(min_dist),
             at_pt=target_pt,
+            use_boundary=True,
         )
     return FreeSpaceAnalysis(
         kind=kind,
@@ -140,6 +174,8 @@ def _make_free_space_analysis(
         target_poly=target_poly,
         target_pt=target_pt,
         fits_part=bool(fits),
+        fit_in_r=float(fit_in_r),
+        fit_need_r=float(fit_need_r),
     )
 
 
