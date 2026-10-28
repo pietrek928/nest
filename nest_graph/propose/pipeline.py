@@ -1676,7 +1676,13 @@ def _collect_expand_candidates(
 ) -> None:
     """Emit selection_expand (and optional history_expand) after cast refine."""
     cfg = ctx.propose_cfg
-    rng = np.random.default_rng(abs(hash((group_id, round(ctx.min_dist, 6)))) % (2**31))
+    # Iter/seed from mixer when set; else stable fallback (tests / standalone).
+    base_seed = extras.expand_rng_seed
+    if base_seed is None:
+        base_seed = abs(hash((group_id, round(ctx.min_dist, 6)))) % (2**31)
+    else:
+        base_seed = (int(base_seed) + int(group_id) * 1_000_003) % (2**31)
+    rng = np.random.default_rng(int(base_seed))
     seeds: list[tuple[float, float, float]] = []
     if extras.packed_transforms is not None and extras.packed_group_ids is not None:
         for gid, tr in zip(extras.packed_group_ids, extras.packed_transforms, strict=False):
@@ -1690,12 +1696,16 @@ def _collect_expand_candidates(
     ):
         # Light emit — mixer still adds a thin expand remainder.
         # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
+        # Stratified cap: half coarse-first, half interleaved fine (one expand SoT).
         n = 1
         pool_div = 16 if state.cascade_zone == "void_seek" else 4
+        sel_cap = max(4, cfg.candidate_pool // pool_div)
         state.ext(
             "selection_expand",
-            propose_placements_selection_expand(seeds, n=n, rng=rng),
-            max_items=max(4, cfg.candidate_pool // pool_div),
+            propose_placements_selection_expand(
+                seeds, n=n, rng=rng, max_items=sel_cap,
+            ),
+            max_items=sel_cap,
         )
     if (
         seeds
@@ -1703,10 +1713,13 @@ def _collect_expand_candidates(
         and bool(getattr(cfg, "use_history_expand", True))
     ):
         hist_div = 32 if state.cascade_zone == "void_seek" else 8
+        hist_cap = max(2, cfg.candidate_pool // hist_div)
         state.ext(
             "history_expand",
-            propose_placements_history_expand(seeds, n=1, rng=rng),
-            max_items=max(2, cfg.candidate_pool // hist_div),
+            propose_placements_history_expand(
+                seeds, n=1, rng=rng, max_items=hist_cap,
+            ),
+            max_items=hist_cap,
         )
 
 
@@ -2367,6 +2380,7 @@ def propose_coords_with_strategy(
     diversity_stats_out: dict | None = None,
     part_by_group: dict[int, Polygon] | None = None,
     foreign_out: dict[int, list] | None = None,
+    expand_rng_seed: int | None = None,
 ) -> List[Tuple[float, float, float]]:
     cfg = propose_cfg
     if cfg.use_guidance_walk and should_use_border_focus(base_shape, cfg):
@@ -2432,6 +2446,7 @@ def propose_coords_with_strategy(
         part_by_group=part_by_group,
         foreign_out=foreign_out,
         hard_packed_geoms=None,
+        expand_rng_seed=expand_rng_seed,
     )
     candidates = _collect_candidates(
         ctx,
@@ -2938,6 +2953,7 @@ def collect_propose_batch_for_nest(
     full_packed_geoms: Sequence[Geometry] | None = None,
     archived_patterns: Sequence | None = None,
     force_zone: str | None = None,
+    expand_rng_seed: int | None = None,
 ) -> tuple[dict[int, np.ndarray], dict]:
     """Propose slice of nest transform-batch (proposals + densify/pocket stats).
 
@@ -2969,6 +2985,7 @@ def collect_propose_batch_for_nest(
         full_packed_geoms=full_packed_geoms,
         archived_patterns=archived_patterns,
         force_zone=force_zone,
+        expand_rng_seed=expand_rng_seed,
     )
     stats = {
         "proposal_count": sum(arr.shape[0] for arr in propose_by_group.values()),
@@ -3150,6 +3167,7 @@ def proposed_transforms_for_groups(
     full_packed_geoms: Sequence[Geometry] | None = None,
     archived_patterns: Sequence | None = None,
     force_zone: str | None = None,
+    expand_rng_seed: int | None = None,
 ) -> dict[int, np.ndarray]:
     """Propose (x, y, angle) seeds per part group.
 
@@ -3643,6 +3661,7 @@ def proposed_transforms_for_groups(
             diversity_stats_out=group_diversity,
             part_by_group=part_by_group,
             foreign_out=motif_coemit_by_gid,
+            expand_rng_seed=expand_rng_seed,
         )
         pocket_emitted += int(pocket_stats.get("emitted", 0))
         pocket_attempted += int(pocket_stats.get("attempted", 0))

@@ -1,5 +1,6 @@
 """Propose transform-batch assembly (moved from build_graph)."""
 
+import zlib
 from typing import Any, Sequence
 
 import numpy as np
@@ -34,6 +35,25 @@ from nest_graph.propose.placement_common import (
     resolve_group_allowed_angles,
 )
 from nest_graph.utils import compose_transforms
+
+
+def _expand_rng_seed_from_selection(
+    cfg: BuildGraphConfig,
+    selected_t: tuple[np.ndarray, ...],
+) -> int:
+    """Stable iter/seed fingerprint for expand jitter — does not advance mixer RNG."""
+    nest_seed = 0
+    out = getattr(cfg, "output", None)
+    if out is not None and getattr(out, "seed", None) is not None:
+        nest_seed = int(out.seed)
+    fp = nest_seed & 0xFFFFFFFF
+    for arr in selected_t:
+        a = np.asarray(arr, dtype=np.float64)
+        if a.size == 0:
+            fp = zlib.crc32(b"\0", fp)
+            continue
+        fp = zlib.crc32(np.ascontiguousarray(a).tobytes(), fp)
+    return int(fp % (2**31))
 
 
 def rim_sat_proposer_updates(
@@ -334,6 +354,9 @@ def graph_valid_carry_by_group(
     transform: Sequence,
     ngroups: int,
     max_keep: int,
+    *,
+    drop_keys_by_group: Sequence[set[tuple[float, float, float]]] | None = None,
+    sample_seed: int | None = None,
 ) -> tuple[np.ndarray, ...]:
     """Board-valid graph transforms per group (make_polygon_graph survivors)."""
     buckets: list[list[np.ndarray]] = [[] for _ in range(max(int(ngroups), 1))]
@@ -343,12 +366,23 @@ def graph_valid_carry_by_group(
             continue
         buckets[g].append(np.asarray(t, dtype=np.float64).reshape(3))
     out: list[np.ndarray] = []
-    for rows in buckets:
+    for gi, rows in enumerate(buckets):
         if not rows:
             out.append(np.zeros((0, 3), dtype=np.float64))
             continue
         stacked = np.asarray(rows, dtype=np.float64).reshape(-1, 3)
-        out.append(cap_graph_valid_carry(stacked, max_keep))
+        drop = None
+        if drop_keys_by_group is not None and gi < len(drop_keys_by_group):
+            drop = drop_keys_by_group[gi]
+        seed_g = None if sample_seed is None else int(sample_seed) + gi * 1_000_003
+        out.append(
+            cap_graph_valid_carry(
+                stacked,
+                max_keep,
+                drop_keys=drop,
+                sample_seed=seed_g,
+            )
+        )
     return tuple(out)
 
 
@@ -595,6 +629,8 @@ def build_transform_batch(
             fz = propose_stats_out.get("mcts_zone")
             if fz:
                 force_zone = str(fz)
+        # Iter/seed expand RNG without advancing mixer stream (crc of seed+selection).
+        expand_rng_seed = _expand_rng_seed_from_selection(cfg, selected_t)
         propose_by_group, batch_stats = collect_propose_batch_for_nest(
             board,
             parts,
@@ -621,6 +657,7 @@ def build_transform_batch(
             full_packed_geoms=full_packed_geoms,
             archived_patterns=archived_patterns,
             force_zone=force_zone,
+            expand_rng_seed=expand_rng_seed,
         )
         zones_used = list(batch_stats.get("zones_used") or [])
         pocket_keys_raw = dict(batch_stats.get("pocket_keys_raw") or {})
@@ -823,7 +860,8 @@ def build_transform_batch(
         hist_expand_n = int(sc.history_expand_n)
         shuffle_passes = int(sc.shuffle_passes)
         if not empty_sheet:
-            # Collect already emits selection_expand; keep mixer expand thin.
+            # Collect emits interleaved selection_expand into propose; mixer keeps a
+            # thin remainder into the transform-batch mix (different funnel / gvalid).
             expand_n = max(1, expand_n // 2)
         elite = (
             void_elite_t[group_id]

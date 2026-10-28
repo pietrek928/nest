@@ -78,12 +78,19 @@ class PolishBudget:
         return int(bool(self.run_post_pack))
 
 
-def polish_budget_mid(sel: SelectionConfig | None = None) -> PolishBudget:
-    """Cheap expand / mid-iter: one finalize_end DFS pass; no 3b/se2.
+def polish_budget_mid(
+    sel: SelectionConfig | None = None,
+    *,
+    freeze_rules: bool = False,
+) -> PolishBudget:
+    """Mid-iter: one finalize_end DFS pass; no 3b/se2.
 
     D1b: loose-only finalize_end (skip tight) — mid refine_ms was ~half wall on
     fat PoseGraphs; last leaf still uses MERGED_LOOSE_TIGHT via polish_budget_last.
     G3: attribution showed dfs_loose ≫ finalize → disable explore_shuffle mid-only.
+    C (pool widen): freeze rules only when ``freeze_rules`` (cheap expand); outer
+    mid keeps lean improve rounds. Sustained plateau still freezes via
+    ``should_freeze_improve_rules``.
     """
     tries = None
     if sel is not None:
@@ -94,7 +101,7 @@ def polish_budget_mid(sel: SelectionConfig | None = None) -> PolishBudget:
         dfs_max_tries=tries,
         run_3b=False,
         run_post_pack=False,
-        freeze_improve_rules=True,
+        freeze_improve_rules=bool(freeze_rules),
         refine_explore_shuffle=False,
     )
 
@@ -139,7 +146,14 @@ def polish_budget_for_iter(
     """
     if is_last_leaf and not cheap_expand:
         return polish_budget_last(sel)
-    mid = polish_budget_mid(sel)
+    # Cheap expand: always freeze. Outer mid: one lean improve window near last
+    # leaf under large_void (full mid unfreeze dumped late Δ; C loop).
+    allow_mid_improve = (
+        not bool(cheap_expand)
+        and bool(large_void)
+        and bool(near_last)
+    )
+    mid = polish_budget_mid(sel, freeze_rules=not allow_mid_improve)
     # C/L: mid post_pack at most near_last/plateau (every mid-iter dumped late Δ).
     # L carve: mid_hole_open OR phantom (¬fits_part) under the same temporal shield.
     phantom_post = (

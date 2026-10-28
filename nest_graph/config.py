@@ -1046,8 +1046,9 @@ class BuildGraphConfig(BaseModel):
         selection_update: dict = {}
         if seeded or n_holes >= 1:
             # Seeded void-fill: peak scrap budget (~0.55) without time miss.
+            # E (pool widen): 500 bound vs mix_props 648–878 — raise lean floor.
             base_cap = int(self.sampling.max_transforms_per_group or 500)
-            cap = min(max(base_cap, 500), 500)
+            cap = min(max(base_cap, 700), 700)
             sampling_update = {
                 "max_transforms_per_group": cap,
                 "initial_random": min(self.sampling.initial_random, 64),
@@ -1485,8 +1486,15 @@ def trim_history(
 def cap_graph_valid_carry(
     transforms: np.ndarray,
     max_keep: int,
+    *,
+    drop_keys: set[tuple[float, float, float]] | None = None,
+    sample_seed: int | None = None,
 ) -> np.ndarray:
-    """Replace-not-accumulate cap for board-valid carry rows (newest first)."""
+    """Cap board-valid carry: dedupe, drop incumbent keys, spatial-stride sample.
+
+    Same ``max_keep``. When over cap, stride across x-sorted unique rows with a
+    seed-phased offset (RNG + spatial in one helper) instead of lowest-x head trunc.
+    """
     empty = np.zeros((0, 3), dtype=np.float64)
     arr = (
         np.asarray(transforms, dtype=np.float64).reshape(-1, 3)
@@ -1498,14 +1506,49 @@ def cap_graph_valid_carry(
     cap = int(max_keep)
     if cap <= 0:
         return empty
+    drop = drop_keys or set()
     claimed: set[tuple[float, float, float]] = set()
     kept: list[np.ndarray] = []
     for row in arr:
         key = transform_row_key(row)
-        if key in claimed:
+        if key in claimed or key in drop:
             continue
         claimed.add(key)
         kept.append(row)
-        if len(kept) >= cap:
-            break
-    return np.asarray(kept, dtype=np.float64)
+    if not kept:
+        return empty
+    if len(kept) <= cap:
+        return np.asarray(kept, dtype=np.float64)
+    # Hybrid: half head-order (late winner), half seed-phased spatial stride.
+    head_n = max(1, cap // 2)
+    head = kept[:head_n]
+    head_keys = {transform_row_key(r) for r in head}
+    rest = [r for r in kept if transform_row_key(r) not in head_keys]
+    if not rest:
+        return np.asarray(head[:cap], dtype=np.float64)
+    uniq = np.asarray(rest, dtype=np.float64).reshape(-1, 3)
+    order = np.lexsort((uniq[:, 2], uniq[:, 1], uniq[:, 0]))
+    sorted_u = uniq[order]
+    n = int(sorted_u.shape[0])
+    need = cap - len(head)
+    step = n / float(max(need, 1))
+    phase = 0.0
+    if sample_seed is not None:
+        phase = (int(sample_seed) % 997) / 997.0 * step
+    picked: list[int] = []
+    seen_i: set[int] = set()
+    for i in range(need):
+        idx = min(n - 1, int(phase + i * step))
+        if idx in seen_i:
+            for j in range(n):
+                cand = (idx + j) % n
+                if cand not in seen_i:
+                    idx = cand
+                    break
+        seen_i.add(idx)
+        picked.append(idx)
+    tail = sorted_u[np.asarray(picked, dtype=np.int64)]
+    return np.concatenate(
+        [np.asarray(head, dtype=np.float64).reshape(-1, 3), tail],
+        axis=0,
+    )

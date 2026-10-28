@@ -1,6 +1,7 @@
 """Cheap MCTS expand cache adapter (Q143)."""
 
 import time
+import zlib
 from contextlib import contextmanager
 from typing import Sequence
 
@@ -217,6 +218,14 @@ def refine_cached_selection(
         float(part_areas_c[int(g)]) if int(g) < len(part_areas_c) else 0.0
         for g in group_id
     ]
+    # D: cache-key crc seed — cache-safe diversity across cheap expands.
+    ck = telem.get("cache_key")
+    if ck is None:
+        ck = pack_cache.get("cache_key")
+    if ck is not None:
+        refine_seed = int(zlib.crc32(repr(ck).encode("utf-8")) & 0x7FFFFFFF)
+    else:
+        refine_seed = 0
     selected_out = apply_refine_with_restore(
         budget=budget,
         apply_dfs_fn=apply_dfs_fn or apply_dfs_refinement,
@@ -226,7 +235,7 @@ def refine_cached_selection(
         refine_scores=pack_cache["compose_scores"],
         sel_iter=sel,
         node_areas=node_areas,
-        refine_seed=0,
+        refine_seed=refine_seed,
         locked_indices=(
             []
             if int(telem.get("refine_skip_motif_lock", 0) or 0) > 0

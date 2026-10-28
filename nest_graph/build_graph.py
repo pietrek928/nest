@@ -2113,6 +2113,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats["archive_mix_pin_survive_n"] = int(
                 len(pin_keys & graph_keys)
             )
+        # B: spatial-stride sample (seed-phased). Incumbent-drop hurt late Δ med —
+        # keep drop hook unused; stride alone unbinds lowest-x head bias.
+        propose_stats["carry_drop_keys_by_group"] = None
+        propose_stats["carry_sample_seed"] = int(
+            zlib.crc32(
+                np.int64(len(transform)).tobytes(),
+                int(propose_stats.get("graph_valid_n", 0) or 0) & 0xFFFFFFFF,
+            )
+            % (2**31)
+        )
         graph_valid_carry = inject_cohorts_and_bind_graph(
             mcts_runner.dg,
             graph,

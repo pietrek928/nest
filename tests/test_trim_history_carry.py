@@ -44,7 +44,23 @@ def test_cap_graph_valid_carry_hard_cap_and_dedupe():
     )
     out = cap_graph_valid_carry(rows, max_keep=5)
     assert out.shape[0] == 5
+    # Half head-order (lowest-x) + half spatial stride into the remainder.
     assert float(out[0, 0]) == 0.0
+    xs = [float(r[0]) for r in out]
+    assert max(xs) > 5.0
+
+
+def test_cap_graph_valid_carry_drops_incumbent_keys():
+    rows = np.asarray(
+        [[float(i), 0.0, 0.0] for i in range(10)],
+        dtype=np.float64,
+    )
+    drop = {(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)}
+    out = cap_graph_valid_carry(rows, max_keep=5, drop_keys=drop)
+    assert out.shape[0] == 5
+    keys = {(round(r[0], 4), round(r[1], 4), round(r[2], 4)) for r in out}
+    assert (0.0, 0.0, 0.0) not in keys
+    assert (1.0, 0.0, 0.0) not in keys
 
 
 def test_graph_valid_carry_by_group_buckets():

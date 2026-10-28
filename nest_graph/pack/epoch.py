@@ -259,9 +259,16 @@ def bind_graph_epoch(
     if prev_graph > 200 and prev_nest * 4 < prev_graph:
         carry_max = min(carry_max, 256)
         propose_stats["carry_thin"] = 1
+    drop_by_group = propose_stats.get("carry_drop_keys_by_group")
+    sample_seed = propose_stats.get("carry_sample_seed")
     if bool(getattr(cfg.propose, "enable_graph_valid_carry", True)):
         carry = graph_valid_carry_by_group(
-            group_id, transform, ngroups=ngroups, max_keep=carry_max,
+            group_id,
+            transform,
+            ngroups=ngroups,
+            max_keep=carry_max,
+            drop_keys_by_group=drop_by_group,
+            sample_seed=int(sample_seed) if sample_seed is not None else None,
         )
     else:
         carry = tuple(

@@ -39,6 +39,8 @@ class PackedProposeExtras:
     part_by_group: dict[int, Polygon] | None = None
     foreign_out: dict[int, list] | None = None
     hard_packed_geoms: Sequence | None = None
+    # Iter/seed from mixer RNG — diversify selection/history expand jitter.
+    expand_rng_seed: int | None = None
 
 
 @dataclass
