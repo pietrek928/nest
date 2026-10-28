@@ -17,6 +17,7 @@ from nest_graph.graph import (
     sibling_macro_actions,
     survive_rank,
 )
+from nest_graph.pack.slave_pack import _motif_inject_patterns
 
 
 def ancestors(runner: Any, node_id: int) -> list[int]:
@@ -89,8 +90,8 @@ def path_probe_budget(
         and (bool(incumbent_hold) or bool(on_plateau))
     )
     if idle_thrift:
-        if ready and bool(pick_empty):
-            return False, int(b), int(d)
+        # Letter C: never full-skip — ready∧pick_empty skip left late path_ms≈0
+        # with path_ran still set from prior iters; always shrink-run instead.
         return (
             True,
             max(1, int(b) // 2),
@@ -115,6 +116,14 @@ def _place_cohort_specs(agent: Any) -> list:
     return motif_cohort_specs(_place_cohort_raw(agent))
 
 
+def _agent_preset_ids(agent: Any) -> list[int]:
+    """Letter B: path generate_macros must see densify preset_ids (not default [0])."""
+    raw = getattr(agent, "preset_ids", None) if agent is not None else None
+    if not raw:
+        return [0]
+    return [int(x) for x in raw]
+
+
 def _sibling_actions(
     agent: Any,
     blocked_action: Any,
@@ -134,6 +143,7 @@ def _sibling_actions(
             free_kind,
             _place_cohort_specs(agent),
             blocked_action,
+            _agent_preset_ids(agent),
         )
     )
 
@@ -450,6 +460,7 @@ def macro_increase_path(
         if anc_snap is None or not anc_snap.remaining_gids:
             continue
         rem = tuple(int(g) for g in anc_snap.remaining_gids)
+        path_presets = _agent_preset_ids(agent)
         if blocked is None:
             siblings = generate_macros(
                 rem,
@@ -459,6 +470,7 @@ def macro_increase_path(
                 warm_motif_ids=agent._warm_motif_ids(anc_snap),
                 free_kind=str(getattr(anc_snap, "free_kind", "") or ""),
                 motif_cohorts=_place_cohort_raw(agent),
+                preset_ids=path_presets,
             )
         else:
             siblings = _sibling_actions(
@@ -482,6 +494,7 @@ def macro_increase_path(
                     warm_motif_ids=agent._warm_motif_ids(anc_snap),
                     free_kind=str(getattr(anc_snap, "free_kind", "") or ""),
                     motif_cohorts=_place_cohort_raw(agent),
+                    preset_ids=path_presets,
                 )
                 if getattr(a, "region", None) == MacroRegion.Motif
             ]
@@ -541,11 +554,16 @@ def macro_increase_path(
             path_type_hist[int(getattr(PathKind.Macro, "value", 0))] += 1
             zone = region_to_zone(alt.region)
             try:
+                path_patterns = (
+                    _motif_inject_patterns(agent.motif_base, alt)
+                    if agent.motif_base is not None
+                    else []
+                )
                 child_snap = execute_fn(
                     anc_snap,
                     zone=zone,
                     action=alt,
-                    patterns=[],
+                    patterns=path_patterns,
                 )
             except Exception:
                 continue

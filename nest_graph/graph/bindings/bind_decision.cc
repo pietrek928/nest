@@ -735,7 +735,8 @@ void bind_graph_decision(nb::module_ &m) {
            const std::vector<int32_t> &warm_motif_ids,
            const std::string &free_kind,
            const std::vector<MotifCohortSpec> &motif_cohorts,
-           const MacroAction &blocked_action) {
+           const MacroAction &blocked_action,
+           const std::vector<int32_t> &preset_ids) {
             return sibling_macro_actions(
                 remaining_gids,
                 rule_ids,
@@ -744,7 +745,8 @@ void bind_graph_decision(nb::module_ &m) {
                 warm_motif_ids,
                 free_kind,
                 motif_cohorts,
-                blocked_action);
+                blocked_action,
+                preset_ids);
         },
         nb::arg("remaining_gids"),
         nb::arg("rule_ids") = std::vector<int32_t>{0},
@@ -753,7 +755,8 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("warm_motif_ids") = std::vector<int32_t>{},
         nb::arg("free_kind") = std::string{},
         nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
-        nb::arg("blocked_action"));
+        nb::arg("blocked_action"),
+        nb::arg("preset_ids") = std::vector<int32_t>{});
 
     m.def(
         "survive_rank",

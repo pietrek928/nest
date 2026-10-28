@@ -145,6 +145,8 @@ inline std::vector<MacroAction> generate_macros(
     actions.insert(actions.end(), motif_actions.begin(), motif_actions.end());
     actions.insert(actions.end(), cohort_actions.begin(), cohort_actions.end());
     const int32_t rem0 = remaining_gids.front();
+    // Letter B: rem0 only here — dual late Δ regressed with Void×rem expand.
+    // part_gid still diversifies Motif/cohort macros + cache key as rem0 advances.
     for (MacroRegion region : region_order) {
         for (int32_t rid : rule_ids) {
             for (int32_t pid : presets) {

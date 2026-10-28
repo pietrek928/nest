@@ -649,18 +649,24 @@ def test_cheap_pack_cache_key_motif_distinct():
     motif = MacroAction()
     motif.region = MacroRegion.Motif
     motif.motif_id = 3
-    assert cheap_pack_cache_key("cluster_edge", rim) == ("cluster_edge", -1, 0, 0, 0, 0, 0)
-    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 0, 0, 0, 0, 0)
+    assert cheap_pack_cache_key("cluster_edge", rim) == (
+        "cluster_edge", -1, 0, 0, 0, 0, 0, 0,
+    )
+    assert cheap_pack_cache_key("void_seek", motif) == (
+        "void_seek", 3, 0, 0, 0, 0, 0, 0,
+    )
     assert cheap_pack_cache_key("void_seek", rim) != cheap_pack_cache_key(
         "void_seek", motif
     )
     motif.rule_id = 2
-    assert cheap_pack_cache_key("void_seek", motif) == ("void_seek", 3, 2, 0, 0, 0, 0)
+    assert cheap_pack_cache_key("void_seek", motif) == (
+        "void_seek", 3, 2, 0, 0, 0, 0, 0,
+    )
     assert cheap_pack_cache_key("void_seek", motif, compose_sz=2) == (
-        "void_seek", 3, 2, 2, 0, 0, 0,
+        "void_seek", 3, 2, 2, 0, 0, 0, 0,
     )
     assert cheap_pack_cache_key("void_seek", motif, compose_sz=2, cohort_sig=9) == (
-        "void_seek", 3, 2, 2, 9, 0, 0,
+        "void_seek", 3, 2, 2, 9, 0, 0, 0,
     )
     assert cheap_pack_cache_key("void_seek", motif, compose_sz=2, cohort_sig=9) != (
         cheap_pack_cache_key("void_seek", motif, compose_sz=2, cohort_sig=8)
@@ -676,9 +682,14 @@ def test_cheap_pack_cache_key_motif_distinct():
         "void_seek", motif, compose_sz=2, cohort_sig=9, lock_fp=fp_c
     )
     motif.preset_id = 2
-    assert cheap_pack_cache_key("void_seek", motif)[-1] == 2
+    assert cheap_pack_cache_key("void_seek", motif)[-2] == 2
     assert cheap_pack_cache_key("void_seek", motif) != (
-        "void_seek", 3, 2, 0, 0, 0, 0
+        "void_seek", 3, 2, 0, 0, 0, 0, 0,
+    )
+    motif.part_gid = 7
+    assert cheap_pack_cache_key("void_seek", motif)[-1] == 7
+    assert cheap_pack_cache_key("void_seek", motif) != (
+        "void_seek", 3, 2, 0, 0, 0, 2, 0,
     )
 
 

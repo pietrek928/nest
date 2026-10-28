@@ -1903,19 +1903,18 @@ def stamp_motif_leader_follower(
                 at_pole=at_pole,
                 same_gid_kiss=kiss_dual,
             )
-            # Leader-follower fallback: stamp_rels, then identity when densify
-            # clear-XY unlock poses are absolute leader cells (A1).
+            # Leader-follower fallback: try stamp_rels one-by-one, then identity
+            # when the anchor itself is packing-clear. densify same_clear often
+            # fails at pole while the leader cell is still emit_packing_clear;
+            # do not require clear-XY unlock (Letter A stamp→graph).
             fallback_rels = list(stamp_rels)
-            unlocked = (
-                int((skip_reasons or {}).get("clear_xy_ok", 0) or 0) > 0
-                or int((skip_reasons or {}).get("clear_xy_slide_ok", 0) or 0) > 0
-            )
-            if unlocked and not any(
+            has_identity = any(
                 abs(float(r[0])) <= 1e-9
                 and abs(float(r[1])) <= 1e-9
                 and abs(float(r[2])) <= 1e-9
                 for r in fallback_rels
-            ):
+            )
+            if not has_identity:
                 fallback_rels.append((0.0, 0.0, 0.0))
             for t_rel in fallback_rels:
                 coords = compose_transforms(t_anchor, t_rel)

@@ -31,11 +31,12 @@ def cheap_pack_cache_key(
     compose_sz: int = 0,
     cohort_sig: int = 0,
     lock_fp: int = 0,
-) -> tuple[str, int, int, int, int, int, int]:
-    """Q143/S2a + Q369 + M2a + P5 + DgPreset: zone + motif + rule + compose + cohort + lock + preset."""
+) -> tuple[str, int, int, int, int, int, int, int]:
+    """Q143/S2a + Q369 + M2a + P5 + DgPreset + B: zone+motif+rule+compose+cohort+lock+preset+part_gid."""
     motif_id = -1
     rule_id = 0
     preset_id = 0
+    part_gid = 0
     if action is not None:
         mid = macro_motif_id(action)
         if mid >= 0:
@@ -43,6 +44,10 @@ def cheap_pack_cache_key(
         rid = int(getattr(action, "rule_id", 0) or 0)
         rule_id = rid if rid >= 0 else 0
         preset_id = int(getattr(action, "preset_id", 0) or 0)
+        raw_gid = getattr(action, "part_gid", 0)
+        part_gid = int(raw_gid) if raw_gid is not None else 0
+        if part_gid < 0:
+            part_gid = 0
         if cohort_sig == 0:
             cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
     return (
@@ -53,6 +58,7 @@ def cheap_pack_cache_key(
         int(cohort_sig),
         int(lock_fp),
         int(preset_id),
+        int(part_gid),
     )
 
 
