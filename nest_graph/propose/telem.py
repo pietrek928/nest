@@ -970,6 +970,25 @@ def merge_phase_gate_telem(
         leak["path_carved_streak"] = int(
             mt.get("path_carved_streak", leak.get("path_carved_streak", 0)) or 0
         )
+        leak["path_geom_dropped"] = int(
+            mt.get("path_geom_dropped", leak.get("path_geom_dropped", 0)) or 0
+        )
+        leak["path_compose_retained"] = int(
+            mt.get("path_compose_retained", leak.get("path_compose_retained", 0))
+            or 0
+        )
+        leak["path_nest_adopt"] = int(
+            mt.get("path_nest_adopt", leak.get("path_nest_adopt", 0)) or 0
+        )
+        leak["path_root_advance"] = int(
+            mt.get("path_root_advance", leak.get("path_root_advance", 0)) or 0
+        )
+        leak["browse_tf_mismatch"] = int(
+            mt.get("browse_tf_mismatch", leak.get("browse_tf_mismatch", 0)) or 0
+        )
+        leak["path_adopt_eligible"] = int(
+            mt.get("path_adopt_eligible", leak.get("path_adopt_eligible", 0)) or 0
+        )
         leak["path_alt_none"] = int(
             mt.get("path_alt_none", leak.get("path_alt_none", 0)) or 0
         )
@@ -1905,6 +1924,10 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"path_skip={int(leak.get('path_probe_skip', 0) or 0)} "
         f"carved={int(leak.get('path_carved', 0) or 0)}/"
         f"{int(leak.get('path_carved_streak', 0) or 0)} "
+        f"geom_drop={int(leak.get('path_geom_dropped', 0) or 0)}/"
+        f"{int(leak.get('path_compose_retained', 0) or 0)} "
+        f"adopt={int(leak.get('path_nest_adopt', 0) or 0)}/"
+        f"{int(leak.get('path_root_advance', 0) or 0)} "
         f"alt0={int(leak.get('path_alt_none', 0) or 0)} "
         f"motif_disc={int(leak.get('path_motif_discarded', 0) or 0)}/"
         f"{int(leak.get('path_motif_tracked', 0) or 0)} "

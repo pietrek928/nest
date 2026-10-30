@@ -1,0 +1,38 @@
+# Path-boost series open floors = pool_widen Letter E locked
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0; late NEST_SEED 0/1/2
+# Source: artifacts/tune/pool_widen/open_snapshots.txt Letter E
+
+## Early void_fill (benchmark_pipeline --seeds 0 1 2 --propose shipped)
+early: 0.608/0.595/0.584 med=0.595 spread=0.024
+Open floor: median_area≥0.595 indep=True
+
+## Late iter50 +8 (NEST_SEED 0/1/2) — Letter E dual used iter50 (not iter20)
+# ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz cov=0.6008 parts=71
+late Δ: +0.0564/+0.0492/+0.0723 med=+0.0564 min=+0.0492
+Open floor: median_Δ≥+0.0564 min_Δ≥+0.0492 (same-code width)
+
+## Plateau iter100 +8 (reference)
+plat: 0/0/0 med=+0.0000
+
+## Series note
+Do not retune floors. Letter pass = indep OK and ≥ both open snapshots (early med, late med/min).
+
+## Letter A locked
+Ship: densify `stamp_motif_leader_follower` identity fallback without clear-XY unlock gate
+(`placements_pattern.py`). Telem: late `compose_sz≥2`+`lock_new≥1` (hold_coh);
+`fallback_clear_xy_identity`/`cc_stamp_n` when clear-XY unlocks. Early med noise band
+~0.57–0.59 indep (Letter E 0.595 was overlap-inflated); late Δ med≈+0.0557 min=+0.0492
+on iter50 (within same-code width of open).
+
+## Letter B locked
+Ship: `cheap_pack_cache_key` +`part_gid`; path `macro_increase_path` Motif inject via
+`_motif_inject_patterns` + `agent.preset_ids` into path `generate_macros` /
+`sibling_macro_actions`. Multi-rem Void×N reverted (late Δ regress). Early med≈0.578
+compose sticky; late path_ms still ≈0 → Letter C.
+
+## Letter C locked
+Ship: `path_probe_budget` idle thrift never full-skips (shrink-run only).
+Early med≈0.593; late Δ +0.0644/+0.0492/+0.0644 med=+0.0644 min=+0.0492 (≥ open).
+
+## Letter D skipped
+Nest moves after A–C (late Δparts=+7..+9, Δcov med≥open); no incumbent_hold release.

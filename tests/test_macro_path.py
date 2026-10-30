@@ -457,3 +457,120 @@ def test_path_edge_census_defaults_without_dg():
     assert int(telem.get("path_conflicts_cut", -1)) == 0
     assert int(telem.get("path_lock_join_overlap", -1)) == 0
     assert int(telem.get("motif_join_from_base", -1)) == 0
+
+
+def test_path_accept_apply_adopt_flag():
+    """S2: adopt = cov_ok ∧ ¬motif_soft ∧ (tip_install ∨ region ≠ Motif)."""
+    from nest_graph.pack.macro_path import path_accept_apply
+    from nest_graph.graph import MacroAction, MacroRegion
+
+    telem: dict = {}
+    void = MacroAction()
+    void.region = MacroRegion.Void
+    d = path_accept_apply(
+        mode="build_graph",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=void,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem,
+    )
+    assert d["credit"] is True
+    assert d["tip_install"] is False
+    assert d["motif_soft"] is False
+    assert d["adopt"] is True
+    motif = MacroAction()
+    motif.region = MacroRegion.Motif
+    d2 = path_accept_apply(
+        mode="build_graph",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=motif,
+        enable_macro_path_replay=False,
+        mutate_motif_base_on_path=False,
+        telem=telem,
+    )
+    assert d2["tip_install"] is True
+    assert d2["motif_soft"] is True
+    assert d2["adopt"] is False
+    d3 = path_accept_apply(
+        mode="build_graph",
+        cov_ok=True,
+        path_overlap_ok=True,
+        alt_action=void,
+        enable_macro_path_replay=True,
+        mutate_motif_base_on_path=False,
+        telem=telem,
+    )
+    assert d3["tip_install"] is True
+    assert d3["motif_soft"] is False
+    assert d3["adopt"] is True
+
+
+def test_proven_compose_row_copies_keyed_entry():
+    from nest_graph.pack.cheap import (
+        cheap_lock_fingerprint,
+        cheap_pack_cache_key,
+        proven_compose_row,
+    )
+    from nest_graph.graph import MacroAction, MacroRegion, region_to_zone
+
+    action = MacroAction()
+    action.region = MacroRegion.Void
+    key = cheap_pack_cache_key(
+        region_to_zone(action.region),
+        action,
+        compose_sz=0,
+        cohort_sig=0,
+        lock_fp=cheap_lock_fingerprint(None),
+    )
+    pack_cache = {
+        "motif_locked": (),
+        "motif_cohort_sig": 0,
+        "cheap_compose_by_key": {
+            key: {
+                "compose_sel": [1, 2],
+                "compose_polys": ["a"],
+                "compose_transform": [(0.0, 0.0, 0.0)],
+            }
+        },
+    }
+    row = proven_compose_row(pack_cache, action)
+    assert row is not None
+    assert row["compose_sel"] == [1, 2]
+    row["compose_sel"].append(3)
+    assert pack_cache["cheap_compose_by_key"][key]["compose_sel"] == [1, 2]
+
+
+def test_packed_gids_compatible_se2_multiset():
+    from nest_graph.graph import BoardSnapshot
+    from nest_graph.pack.browse import packed_gids_compatible
+    from nest_graph.utils import transform_row_key
+
+    tip = BoardSnapshot(
+        packed_gids=(1, 2),
+        packed_transforms=((0.1, 0.2, 0.0), (1.0, 2.0, 90.0)),
+    )
+    nest_keys = [
+        transform_row_key((0.1, 0.2, 0.0)),
+        transform_row_key((1.0, 2.0, 90.0)),
+    ]
+    assert packed_gids_compatible(tip, {1, 2}, nest_tf_keys=None) is True
+    assert packed_gids_compatible(tip, {1, 2}, nest_tf_keys=nest_keys) is True
+    assert (
+        packed_gids_compatible(
+            tip, {1, 2}, nest_tf_keys=[transform_row_key((0.1, 0.2, 0.0))]
+        )
+        is False
+    )
+
+
+def test_record_mcts_expand_upsert_contacts_kwarg():
+    import inspect
+
+    from nest_graph.pack.execute import record_mcts_expand
+
+    params = inspect.signature(record_mcts_expand).parameters
+    assert "upsert_contacts" in params
+    assert params["upsert_contacts"].default is True

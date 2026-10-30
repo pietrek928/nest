@@ -10,8 +10,7 @@ from nest_graph.pack.densify_preset import apply_densify_preset
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
 from nest_graph.pack.slave_pack import contact_kiss_ledger, write_propose_kiss_ledger
-from nest_graph.graph import BoardSnapshot
-from nest_graph.graph import score_elems
+from nest_graph.graph import BoardSnapshot, region_to_zone, score_elems
 from nest_graph.propose.heavy_polish import (
     apply_dfs_refinement,
     apply_refine_with_restore,
@@ -44,6 +43,38 @@ def with_isolated_pack_cache(pack_cache: dict):
     finally:
         pack_cache.clear()
         pack_cache.update(snap)
+
+
+def proven_compose_row(pack_cache: dict, action) -> dict | None:
+    """Copy cheap_compose_by_key entry for action before isolated restore (S1).
+
+    Returns a shallow field copy (lists copied) or None if missing.
+    """
+    if action is None or not isinstance(pack_cache, dict):
+        return None
+    compose_sz = len(pack_cache.get("motif_locked") or ())
+    cohort_sig = int(pack_cache.get("motif_cohort_sig", 0) or 0)
+    if cohort_sig == 0:
+        ps = pack_cache.get("propose_stats")
+        if isinstance(ps, dict):
+            cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
+    key = cheap_pack_cache_key(
+        region_to_zone(getattr(action, "region", None)),
+        action,
+        compose_sz=compose_sz,
+        cohort_sig=int(cohort_sig),
+        lock_fp=cheap_lock_fingerprint(pack_cache.get("motif_locked")),
+    )
+    cheap_map = pack_cache.get("cheap_compose_by_key")
+    if not isinstance(cheap_map, dict):
+        return None
+    row = cheap_map.get(key)
+    if not isinstance(row, dict):
+        return None
+    out: dict = {}
+    for k, v in row.items():
+        out[k] = list(v) if isinstance(v, list) else v
+    return out
 
 
 def compose_cached_selection(
@@ -432,10 +463,23 @@ def pack_execute_snapshot(
         if gids:
             packed_gids = tuple(gids)
             packed_tf = tuple(tfs)
+            # C: same unmet-catalog rem as board_snapshot_from_selection — type-set
+            # `g not in packed` emptied ancestor rem after each gid appeared once
+            # → macro_path depth skip (path_ran=1, path_ms≈0).
+            selected_set = {int(s) for s in selected_out}
             rem = tuple(
-                g for g in range(int(pack_cache["cfg"].rules.ngroups))
-                if g not in set(gids)
+                sorted(
+                    {
+                        int(gid_list[i])
+                        for i in range(len(gid_list))
+                        if i not in selected_set
+                    }
+                )
             )
+            if not rem:
+                ng = int(pack_cache["cfg"].rules.ngroups)
+                if ng > 0 and len(selected_set) < len(gid_list):
+                    rem = tuple(range(ng))
     free_kind = str(
         getattr(pack_cache.get("compose_free_info"), "kind", None)
         or getattr(snap, "free_kind", "")
@@ -567,6 +611,7 @@ __all__ = [
     "invalidate_cheap_cache",
     "maybe_invalidate_cheap_cache",
     "pack_execute_snapshot",
+    "proven_compose_row",
     "refine_cached_selection",
     "snapshot_pack_cache",
     "with_isolated_pack_cache",

@@ -52,6 +52,7 @@ __all__ = [
     "selection_coverage_pct",
     "stamp_arena_amaf",
     "stamp_pack_stage",
+    "proven_compose_row",
     "with_isolated_pack_cache",
 ]
 
@@ -107,6 +108,7 @@ _LAZY = {
     "selection_coverage_pct": ("nest_graph.pack.geoms", "selection_coverage_pct"),
     "stamp_arena_amaf": ("nest_graph.pack.execute", "stamp_arena_amaf"),
     "stamp_pack_stage": ("nest_graph.pack.execute", "stamp_pack_stage"),
+    "proven_compose_row": ("nest_graph.pack.cheap", "proven_compose_row"),
     "with_isolated_pack_cache": ("nest_graph.pack.cheap", "with_isolated_pack_cache"),
 }
 

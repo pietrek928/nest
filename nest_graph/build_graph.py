@@ -73,6 +73,7 @@ from nest_graph.pack.cheap import (
     invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
     pack_execute_snapshot,
+    proven_compose_row,
     with_isolated_pack_cache,
 )
 from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
@@ -155,6 +156,7 @@ from nest_graph.pack.execute import (
     make_execute_fn,
     prep_selection_free,
     prep_selection_freeze,
+    record_mcts_expand,
     record_outer_iter_expand,
     run_mcts_multi_sim,
     schedule_prep_selection_free,
@@ -412,6 +414,59 @@ class NestState:
                 out.append(g)
             self._native_geoms = out
         return self._native_geoms
+
+
+def nest_state_from_proven_compose(
+    proven: dict,
+    *,
+    seed_count: int,
+    pack_cache: dict,
+) -> NestState | None:
+    """S2: build a new NestState from a stashed cheap compose row (or None)."""
+    if not isinstance(proven, dict):
+        return None
+    sel = [int(i) for i in (proven.get("compose_sel") or ())]
+    if not sel:
+        return None
+    polys = list(proven.get("compose_polys") or ())
+    if not polys:
+        polys = list(pack_cache.get("polys") or ())
+    group_id = list(proven.get("compose_group_id") or ())
+    if not group_id:
+        group_id = list(pack_cache.get("group_id") or ())
+    transform = list(proven.get("compose_transform") or ())
+    if not transform:
+        transform = list(pack_cache.get("transform") or ())
+    if not polys or not group_id or not transform:
+        return None
+    if max(sel) >= len(polys) or max(sel) >= len(group_id) or max(sel) >= len(transform):
+        return None
+    if not selection_pairwise_independent(polys, sel):
+        return None
+    geoms = list(proven.get("compose_geoms") or ())
+    natives = geoms if geoms and len(geoms) == len(polys) else None
+    return NestState(
+        polys=polys,
+        group_id=group_id,
+        transform=transform,
+        selected_indices=sel,
+        seed_count=int(seed_count),
+        _native_geoms=natives,
+    )
+
+
+def history_from_nest_state(nest_state: NestState) -> tuple:
+    """Replace history with adopted selected transforms (relocate_accepted pattern)."""
+    buckets: list[list] = [[], []]
+    for i in nest_state.selected_indices:
+        ii = int(i)
+        if ii < 0 or ii >= len(nest_state.group_id) or ii >= len(nest_state.transform):
+            continue
+        gi = int(nest_state.group_id[ii])
+        if gi < 0 or gi > 1:
+            continue
+        buckets[gi].append(nest_state.transform[ii])
+    return (np.array(buckets[0]), np.array(buckets[1]))
 
 
 def _seed_parent_free_kind(
@@ -1363,6 +1418,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         spine_id = int(mcts_parent_id)
         spine_snap = mcts_runner.snapshot_at(spine_id, mcts_root)
         nest_packed: set[int] = set()
+        nest_tf_keys: list[tuple[float, float, float]] = []
         if nest_state is not None and nest_state.selected_indices:
             seed_n = int(nest_state.seed_count or 0)
             for i in nest_state.selected_indices:
@@ -1370,6 +1426,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     continue
                 if int(i) < len(nest_state.group_id):
                     nest_packed.add(int(nest_state.group_id[i]))
+                if int(i) < len(nest_state.transform):
+                    nest_tf_keys.append(
+                        transform_row_key(nest_state.transform[i])
+                    )
         # E: schedule browse for choose_browse_parent; hold+rim also unlocks
         # multi-sim tip install (Motif prefer) without forcing a parent jump.
         sched_browse = should_browse_tip(
@@ -1398,6 +1458,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             nest_packed_gids=nest_packed,
             do_browse=do_browse,
             mcts_telem=mcts_telem,
+            nest_tf_keys=nest_tf_keys,
         )
         # DgP / Q107: multi-sim on NestState cache (not tip geometry).
         tip_action = None
@@ -1426,8 +1487,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     mcts_telem[k] = cheap_t[k]
             if (do_browse or hold_browse) and tip_leaf is not None:
                 tip_snap = mcts_runner.snapshot_at(int(tip_leaf), missing_ok=True)
+                # S4: multi-sim tip keeps Se2 hard gate (soft tip regressed early med).
+                # choose_browse_parent stays gid-hard / Se2-telem.
+                if tip_snap is not None and nest_tf_keys:
+                    gid_ok = packed_gids_compatible(
+                        tip_snap, nest_packed, nest_tf_keys=None
+                    )
+                    tf_ok = packed_gids_compatible(
+                        tip_snap, nest_packed, nest_tf_keys=nest_tf_keys
+                    )
+                    if gid_ok and not tf_ok:
+                        mcts_telem["browse_tf_mismatch"] = int(
+                            mcts_telem.get("browse_tf_mismatch", 0) or 0
+                        ) + 1
                 if tip_snap is not None and packed_gids_compatible(
-                    tip_snap, nest_packed
+                    tip_snap, nest_packed, nest_tf_keys=nest_tf_keys
                 ):
                     # E: only install multi-sim tip when it actually jumps; do not
                     # clobber choose_browse_parent jump with tip_leaf==spine.
@@ -1474,6 +1548,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_telem["path_cache_miss"] = 0
         mcts_telem["path_carved"] = 0
         mcts_telem["path_hard_carve"] = 0
+        mcts_telem["path_geom_dropped"] = 0
+        mcts_telem["path_compose_retained"] = 0
+        mcts_telem["path_nest_adopt"] = 0
+        mcts_telem["path_root_advance"] = 0
         mcts_telem["path_alt_none"] = 0
         mcts_telem["path_motif_discarded"] = 0
         mcts_telem["path_motif_tracked"] = 0
@@ -1595,6 +1673,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
             # F2: sticky lock visible to _validate_join_bonus during path probe.
             mcts_telem["motif_locked"] = list(_pack_cache.get("motif_locked") or ())
+            path_proven_compose: dict | None = None
             with with_isolated_pack_cache(_pack_cache):
                 alt_action, alt_reward, path_accept_snap = macro_increase_path(
                     mcts_runner,
@@ -1611,6 +1690,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     force_motif_action=force_motif,
                 )
                 path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
+                # S1: stash compose row before isolation restore (S2 adopt consumes).
+                path_proven_compose = proven_compose_row(_pack_cache, alt_action)
             # E0/F0: census after probe (outside pack_cache isolation — telem only).
             mcts_telem["motif_join_from_base"] = max(
                 int(mcts_telem.get("motif_join_from_base", 0) or 0),
@@ -1673,6 +1754,19 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         getattr(parent_snap, "free_kind", "") or ""
                     ),
                 )
+                # S1: retain compose row on accept (geom_drop after adopt attempt).
+                path_accept_hit = (
+                    path_accept_snap is not None
+                    and not decision.get("overlap_skip")
+                    and (
+                        bool(decision.get("credit"))
+                        or bool(decision.get("tip_install"))
+                    )
+                )
+                if path_accept_hit and path_proven_compose is not None:
+                    mcts_telem["path_compose_retained"] = int(
+                        mcts_telem.get("path_compose_retained", 0) or 0
+                    ) + 1
                 if decision["overlap_skip"]:
                     mcts_telem["macro_path_overlap_skip"] = int(
                         mcts_telem.get("macro_path_overlap_skip", 0) or 0
@@ -1707,6 +1801,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     record_overlap_reject(mcts_telem, stage="path")
                 elif decision["cov_skip"]:
                     mcts_telem["macro_path_cov_skip"] = 1
+                    if path_accept_hit:
+                        mcts_telem["path_geom_dropped"] = int(
+                            mcts_telem.get("path_geom_dropped", 0) or 0
+                        ) + 1
                     if decision["motif_soft"]:
                         mcts_telem["macro_path_motif_soft"] = 1
                     if decision["credit"] and not decision.get("motif_soft"):
@@ -1725,12 +1823,87 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     hard_carve = bool(decision["tip_install"]) and not bool(
                         decision.get("motif_soft")
                     )
+                    adopted = False
+                    if (
+                        bool(decision.get("adopt"))
+                        and path_proven_compose is not None
+                        and nest_state is not None
+                        and path_accept_snap is not None
+                        and alt_action is not None
+                    ):
+                        adopted_ns = nest_state_from_proven_compose(
+                            path_proven_compose,
+                            seed_count=int(nest_state.seed_count or 0),
+                            pack_cache=_pack_cache,
+                        )
+                        if adopted_ns is not None:
+                            pre_parent = int(mcts_parent_id)
+                            nest_state = adopted_ns
+                            history = history_from_nest_state(nest_state)
+                            ps_adopt = _pack_cache.get("propose_stats")
+                            if not isinstance(ps_adopt, dict):
+                                ps_adopt = {}
+                            new_parent = record_mcts_expand(
+                                mcts_runner,
+                                parent_id=pre_parent,
+                                action=alt_action,
+                                child_snap=path_accept_snap,
+                                nest_state=nest_state,
+                                part_bases=part_bases,
+                                part_areas=part_areas,
+                                min_dist=float(
+                                    cfg.board_min_dist_for(p_sheet)
+                                ),
+                                t_expand0=time.perf_counter(),
+                                mcts_telem=mcts_telem,
+                                propose_stats=ps_adopt,
+                                motif_min_compactness=float(
+                                    getattr(
+                                        cfg.propose,
+                                        "motif_min_compactness",
+                                        0.35,
+                                    )
+                                    or 0.35
+                                ),
+                                motif_ttl=int(
+                                    getattr(
+                                        cfg.propose,
+                                        "accepted_pattern_ttl",
+                                        4,
+                                    )
+                                    or 4
+                                ),
+                                motif_max_keep=int(
+                                    getattr(
+                                        cfg.propose,
+                                        "accepted_pattern_max",
+                                        4,
+                                    )
+                                    or 4
+                                ),
+                                upsert_contacts=False,
+                            )
+                            mcts_parent_id = int(new_parent)
+                            mcts_telem["path_nest_adopt"] = int(
+                                mcts_telem.get("path_nest_adopt", 0) or 0
+                            ) + 1
+                            if int(new_parent) != pre_parent:
+                                mcts_telem["path_root_advance"] = int(
+                                    mcts_telem.get("path_root_advance", 0)
+                                    or 0
+                                ) + 1
+                            adopted = True
+                    if path_accept_hit and not adopted:
+                        mcts_telem["path_geom_dropped"] = int(
+                            mcts_telem.get("path_geom_dropped", 0) or 0
+                        ) + 1
                     if decision["tip_install"]:
                         mcts_telem["macro_path_accept"] = int(
                             mcts_telem.get("macro_path_accept", 0) or 0
                         ) + 1
-                        # C: carve tip from tested path child (Motif included).
-                        mcts_action = alt_action
+                        # S2: non-Motif adopt skips force_zone; Motif soft tip kept.
+                        if not adopted or bool(decision.get("motif_soft")):
+                            mcts_action = alt_action
                         mcts_telem["path_carved"] = int(
                             mcts_telem.get("path_carved", 0) or 0
                         ) + 1

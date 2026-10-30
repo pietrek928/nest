@@ -213,7 +213,18 @@ def board_snapshot_from_selection(
         for i in selected_polys
         if int(i) < len(transform)
     )
-    packed_set = set(packed_gids)
+    # C: rem = unmet catalog group types (multi-copy densify SoT).
+    # Prior `g not in packed_set` emptied rem once each type appeared → path_ms=0.
+    selected_set = {int(i) for i in selected_polys}
+    rem_gids = sorted(
+        {
+            int(group_id[i])
+            for i in range(len(group_id))
+            if i not in selected_set
+        }
+    )
+    if not rem_gids and int(ngroups) > 0 and len(selected_set) < len(group_id):
+        rem_gids = list(range(int(ngroups)))
     del mcts_telem  # Q131: telem stays on the Python mcts_telem dict
     leak_raw = propose_stats.get("void_leak")
     leak = leak_raw if isinstance(leak_raw, dict) else {}
@@ -234,7 +245,7 @@ def board_snapshot_from_selection(
     return BoardSnapshot(
         packed_gids=packed_gids,
         packed_transforms=packed_tf,
-        remaining_gids=tuple(g for g in range(int(ngroups)) if g not in packed_set),
+        remaining_gids=tuple(int(g) for g in rem_gids),
         coverage=float(coverage_pct) / 100.0,
         arena_node_id=int(arena_node_id),
         kiss_pairs=int(propose_stats.get("kiss_pairs", 0) or 0),
@@ -267,8 +278,13 @@ def record_mcts_expand(
     motif_min_compactness: float = 0.35,
     motif_ttl: int = 4,
     motif_max_keep: int = 0,
+    upsert_contacts: bool = True,
 ) -> int:
-    """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id."""
+    """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id.
+
+    ``upsert_contacts=False`` skips MotifBase upsert (S2 path adopt — Q389 already
+    ran via ``_path_accept_contact_upsert``).
+    """
     del part_areas
     agent = runner.agent
     realized = (getattr(agent, "realized", None) or {}) if agent is not None else {}
@@ -295,7 +311,12 @@ def record_mcts_expand(
 
     packed_gids = child_snap.packed_gids
     packed_tf = child_snap.packed_transforms
-    if len(packed_gids) >= 2 and len(packed_tf) >= 2 and part_bases:
+    if (
+        bool(upsert_contacts)
+        and len(packed_gids) >= 2
+        and len(packed_tf) >= 2
+        and part_bases
+    ):
         geoms = []
         gids_ok = []
         tfs_ok = []

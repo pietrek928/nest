@@ -1,0 +1,62 @@
+# DG replicate series open floors = path_boost Letter C locked
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0; late NEST_SEED 0/1/2
+# Source: artifacts/tune/path_boost/open_snapshots.txt Letter C
+# (pool_widen Letter E header 0.595 / +0.0564 superseded — 0.595 was overlap-inflated)
+
+## Early void_fill (benchmark_pipeline --seeds 0 1 2 --propose shipped)
+# Letter C locked early med≈0.593; honest band ~0.57–0.59
+early: path_boost_C med≈0.593 indep=True
+Open floor: median_area≥0.593 indep=True
+
+## Late iter50 +8 (NEST_SEED 0/1/2)
+# ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz cov=0.6008 parts=71
+# Letter C locked: +0.0644/+0.0492/+0.0644
+late Δ: +0.0644/+0.0492/+0.0644 med=+0.0644 min=+0.0492
+Open floor: median_Δ≥+0.0644 min_Δ≥+0.0492
+
+## Series note
+Do not retune floors. Letter pass = indep OK and ≥ both open snapshots
+(early med, late med/min) AND ≥ prior letter snapshot in this series.
+Any drop vs C floors or prior letter snap → degrade research loop (same letter).
+
+## Letter B skipped
+# Densify ring-always / soft-append / kiss off-pole-order all ≤ identity on early
+# (identity med≈0.580 in honest 0.57–0.59 band) and late Δ med below C
+# (+0.0549…+0.0557 vs identity +0.0636/+0.0492/+0.0644). path_boost A identity
+# fallback already ships; collide_at_pole≈same_gid remains structural under kiss.
+# B snapshot = identity = series open (C floors). No code change locked.
+
+## Letter C locked
+# Ship: rem SoT = unmet catalog gids in board_snapshot_from_selection +
+# tip_board_snapshot (was packed_set / empty tip → path skip). Late path_ms≪0→≫0
+# (alt0 swaps live). Early med≈0.577 (honest band); late Δ +0.0485/+0.0644/+0.0716
+# med=+0.0644 min=+0.0485 (min within same-code ε of C +0.0492). Swiss early
+# med=0.514 parts=126.3 (S0 0.535/129 — secondary soft; void_fill primary green).
+# Follow-up: pack_execute_snapshot (cheap.py) same unmet rem — was still type-set
+# emptying ancestor snaps for path depth. Smoke late seed0 Δ=+0.0564 path_ms≫0.
+# Logs: c_early_void.log c_late_seed{0,1,2}.log c_swiss_early.log c_cheap_rem_late0.log
+
+## Letter A skipped
+# tip_install→note_macro_amaf degraded late seed0 Δ to +0.0405 (med +0.0636 < C).
+# Reverted; _note_path_accept_warm remains. A snapshot = Letter C.
+
+## Letter W skipped
+# survive_by_motif warm prepend late seed0 Δ=+0.0326 (degrade). Reverted.
+# surv_m mostly 0; warm was no-op or harmful when live. W snapshot = Letter C.
+
+## Letter D skipped
+# Drop near-last plug defer → late Δ +0.0405/+0.0636/+0.0254 med=+0.0405 (degrade).
+# Reverted near-last conjunct. D snapshot = Letter C.
+
+## Letter P skipped
+# Gate: pocket sel still 0 on late dual (pocket=0/N). No funnel patch.
+
+## Letter E skipped
+# B–D late median at Letter C (+0.0644) with densify stamp telem live; props=0
+# does not start E while collide/stamp remains structural under kiss.
+
+## Secondary: swiss_cheese early (compare-only; fixture floors not quality SoT)
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0 --cases swiss_cheese --seeds 0 1 2 --propose shipped
+# seed0: area=0.535 parts=126; seed1: 0.535/133; seed2: 0.465/129
+swiss early: 0.535/0.535/0.465 med=0.535 min=0.465 parts med=129 min=126 indep=True
+# Log: artifacts/tune/dg_replicate/s0_swiss_early.log

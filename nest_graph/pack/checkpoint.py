@@ -398,14 +398,24 @@ def tip_board_snapshot(ckpt: NestCheckpoint, *, arena_node_id: int = 0) -> Board
     packed_tf = tip.get("packed_transforms")
     remaining = tip.get("remaining_gids")
     if not packed_gids:
-        packed_gids = [int(ckpt.group_id[i]) for i in ckpt.selected_indices if i < len(ckpt.group_id)]
+        packed_gids = [
+            int(ckpt.group_id[i])
+            for i in ckpt.selected_indices
+            if i < len(ckpt.group_id)
+        ]
         packed_tf = [
             _tf_row(ckpt.transform[i])
             for i in ckpt.selected_indices
             if i < len(ckpt.transform)
         ]
-        packed_set = set(packed_gids)
-        remaining = [g for g in range(2) if g not in packed_set]
+    # C: tip rem often [] after multi-copy packs (writer used packed_set).
+    # Rebuild from unmet catalog instances — do not splice a foreign parent rem.
+    if not remaining:
+        selected = {int(i) for i in (ckpt.selected_indices or ())}
+        gid = list(ckpt.group_id or [])
+        remaining = sorted(
+            {int(gid[i]) for i in range(len(gid)) if i not in selected}
+        )
     return BoardSnapshot(
         packed_gids=tuple(int(g) for g in (packed_gids or ())),
         packed_transforms=tuple(_tf_row(t) for t in (packed_tf or ())),

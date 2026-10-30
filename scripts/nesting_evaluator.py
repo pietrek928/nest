@@ -28,7 +28,11 @@ from nest_graph.build_graph import (
     void_elite_tuple_from_archive,
 )
 from nest_graph.graph import region_to_zone, BoardSnapshot, MacroRegion
-from nest_graph.pack.cheap import pack_execute_snapshot, with_isolated_pack_cache
+from nest_graph.pack.cheap import (
+    pack_execute_snapshot,
+    proven_compose_row,
+    with_isolated_pack_cache,
+)
 from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
 from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
 from nest_graph.pack.epoch import inject_cohorts_and_bind_graph
@@ -866,6 +870,7 @@ class NestingPipelineEvaluator:
                     )
                     # Isolate pack_cache: path execute mutates compose_* (poisons real iter).
                     path_overlap_ok = False
+                    path_proven_compose = None
                     with with_isolated_pack_cache(pack_cache):
                         alt_action, alt_reward, path_accept_snap = macro_increase_path(
                             mcts_runner,
@@ -881,6 +886,8 @@ class NestingPipelineEvaluator:
                             ),
                         )
                         path_overlap_ok = bool(_pack_cache_overlap_ok(pack_cache))
+                        # S1 telem parity: stash before isolation restore (no NestState adopt).
+                        path_proven_compose = proven_compose_row(pack_cache, alt_action)
                     eligible, cov_ok, _bc, _ac = path_accept_eligible(
                         alt_action=alt_action,
                         path_accept_snap=path_accept_snap,
@@ -908,6 +915,28 @@ class NestingPipelineEvaluator:
                             ),
                             telem=mcts_telem,
                         )
+                        path_accept_hit = (
+                            path_accept_snap is not None
+                            and not decision.get("overlap_skip")
+                            and (
+                                bool(decision.get("credit"))
+                                or bool(decision.get("tip_install"))
+                            )
+                        )
+                        if path_accept_hit and path_proven_compose is not None:
+                            mcts_telem["path_compose_retained"] = int(
+                                mcts_telem.get("path_compose_retained", 0) or 0
+                            ) + 1
+                        # Telem parity only — NestState adopt stays build_graph SoT.
+                        if path_accept_hit:
+                            mcts_telem["path_geom_dropped"] = int(
+                                mcts_telem.get("path_geom_dropped", 0) or 0
+                            ) + 1
+                            if bool(decision.get("adopt")):
+                                mcts_telem["path_adopt_eligible"] = int(
+                                    mcts_telem.get("path_adopt_eligible", 0) or 0
+                                ) + 1
+                        mcts_telem.setdefault("path_nest_adopt", 0)
                         if decision["overlap_skip"]:
                             mcts_telem["macro_path_overlap_skip"] = 1
                             record_overlap_reject(mcts_telem, stage="path")

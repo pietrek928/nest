@@ -1,0 +1,48 @@
+# NestState ↔ DG path handoff series
+# Open floors = dg_replicate / path_boost Letter C (do not retune)
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0; late NEST_SEED 0/1/2
+# ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz
+
+## Early void_fill
+Open floor: median_area≥0.593 indep=True
+# Honest shipped band ~0.57–0.59; aspirational C floor often GATE FAIL area_coverage.
+
+## Late iter50 +8
+Open floor: median_Δ≥+0.0644 min_Δ≥+0.0492
+
+## Letter S0 locked (telem-only)
+# path_geom_dropped live; path_ms≫0; path_hard_carve≈0.
+# Early med=0.579; late re-dual med=+0.0492 min=+0.0485.
+S0 early med=0.579 late Δ med=+0.0492 min=+0.0485 indep=True
+
+## Letter S1 locked (stash)
+# proven_compose_row + path_compose_retained (geom_drop=n/retained).
+# Dual S12 early med=0.580; late +0.0564/+0.0564/+0.0492 med=+0.0564 min=+0.0492.
+S1 early med=0.580 late Δ med=+0.0564 min=+0.0492 path_compose_retained>0
+
+## Letter S2 locked (adopt infrastructure)
+# NestState from proven compose + record_mcts_expand(upsert_contacts=False).
+# adopt = cov_ok ∧ ¬motif_soft ∧ (tip_install ∨ ¬Motif). Unit-tested.
+# Late path accepts Motif-soft dominant → path_nest_adopt≈0 on shipped dual.
+# prefer_motif_return=False moved adopt=1 but late Δ=+0.0420 (degrade) — reverted.
+# Motif-soft geometry adopt early med=0.575 (degrade) — reverted.
+# Quality dual = S12 (≥ S0). Telem path_nest_adopt remains Motif-gated.
+S2 early med=0.580 late Δ med=+0.0564 min=+0.0492 adopt_infra=shipped
+
+## Letter S3 skipped
+# Gate: path_nest_adopt≈0 on late → propose cannot mismatch adopt. No patch.
+
+## Letter S4 locked (browse Se2 soft + tip Se2 hard)
+# packed_gids_compatible + transform_row_key; choose_browse_parent: gid hard / Se2 telem.
+# Multi-sim tip install: Se2 hard (soft tip early med=0.575 — reverted).
+# Hard Se2 on browse parent late min +0.0413 — soft browse kept.
+# S4d: early 0.592/0.585/0.564 med=0.585; late +0.0564/+0.0564/+0.0492.
+S4 early med=0.585 late Δ med=+0.0564 min=+0.0492 browse_tf=telem tip_se2=hard
+
+## Letter N0 locked (native path_accept_eligible)
+# path_accept_eligible_native in mcts_agent.h; Python wrapper delegates.
+# Parity dual = S4d (≥ S2 floors). Rebuild via uv pip install -e . already done.
+N0 early med=0.585 late Δ med=+0.0564 min=+0.0492
+
+## Letter N1 skipped
+# path_ms still execute_fn compose-bound; no second cache-key SoT. Stop per plan.

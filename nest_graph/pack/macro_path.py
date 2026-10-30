@@ -11,6 +11,7 @@ from nest_graph.graph import (
     PathKind,
     leaf_reward,
     node_macro,
+    path_accept_eligible_native,
     path_reward_beats,
     rank_motif_join_neighbors,
     region_to_zone,
@@ -717,52 +718,24 @@ def path_accept_eligible(
     """Shared path-accept gate (Dp1/P2/P): reward + cov + overlap (+ void on large_void).
 
     Returns ``(eligible, cov_ok, base_cov, alt_cov)``.
-    P2: on ``free_kind==large_void``, ``cov_ok`` if coverage non-regress **and**
-    ``void_fill`` Δ ≥ ``min_void_fill_delta`` (overlap still mandatory).
-    P: when ``relax_motif_void_fill`` and Motif on large_void, drop void_fill Δ —
-    overlap + coverage non-regress only (build_graph late tip path).
-    D1: on phantom (``not fits_part``) drop void_fill Δ — cov + overlap only
-    (area-ratio void_fill cannot honestly grow on swiss-cheese). Placeable
-    large_void still requires void_fill Δ. Non-void unchanged (cov + min_cov_delta).
+    N0: delegates to C++ ``path_accept_eligible_native`` beside ``path_reward_beats``.
     """
-    if alt_action is None or path_accept_snap is None:
+    if alt_action is None or path_accept_snap is None or parent_snap is None:
         return False, False, 0.0, 0.0
     is_motif = getattr(alt_action, "region", None) == MacroRegion.Motif
-    base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
-    alt_cov = float(getattr(path_accept_snap, "coverage", 0.0) or 0.0)
-    free_kind = str(getattr(path_accept_snap, "free_kind", "") or "")
-    if not free_kind:
-        free_kind = str(getattr(parent_snap, "free_kind", "") or "")
-    # P: Motif on large_void — drop void_fill Δ; require overlap + cov non-regress
-    # (do not re-gate vs outer parent reward; macro_increase_path already filtered).
-    if relax_motif_void_fill and is_motif and free_kind == "large_void":
-        cov_ok = bool(path_overlap_ok) and alt_cov + 1e-9 >= base_cov
-        return True, cov_ok, base_cov, alt_cov
-    # D1: phantom large_void — void_fill Δ is dishonest; cov + overlap only.
-    if free_kind == "large_void" and not bool(fits_part):
-        cov_ok = bool(path_overlap_ok) and alt_cov + 1e-9 >= base_cov
-        return True, cov_ok, base_cov, alt_cov
-    if not path_reward_beats(
+    eligible, cov_ok, base_cov, alt_cov = path_accept_eligible_native(
         parent_snap,
         path_accept_snap,
-        base_reward=float(base_reward),
-        alt_reward=float(alt_reward),
-    ):
-        return False, False, 0.0, 0.0
-    if free_kind == "large_void":
-        base_vf = float(getattr(parent_snap, "void_fill", 0.0) or 0.0)
-        alt_vf = float(getattr(path_accept_snap, "void_fill", 0.0) or 0.0)
-        cov_ok = (
-            bool(path_overlap_ok)
-            and alt_cov + 1e-9 >= base_cov
-            and (alt_vf - base_vf) + 1e-12 >= float(min_void_fill_delta)
-        )
-    else:
-        cov_ok = (
-            bool(path_overlap_ok)
-            and alt_cov + 1e-9 >= base_cov + float(min_cov_delta)
-        )
-    return True, cov_ok, base_cov, alt_cov
+        float(base_reward),
+        float(alt_reward),
+        bool(path_overlap_ok),
+        bool(is_motif),
+        bool(relax_motif_void_fill),
+        bool(fits_part),
+        float(min_cov_delta),
+        float(min_void_fill_delta),
+    )
+    return bool(eligible), bool(cov_ok), float(base_cov), float(alt_cov)
 
 
 def path_accept_apply(
@@ -792,6 +765,7 @@ def path_accept_apply(
         "upsert": False,
         "overlap_skip": False,
         "cov_skip": False,
+        "adopt": False,
     }
     if not path_overlap_ok:
         out["overlap_skip"] = True
@@ -815,6 +789,10 @@ def path_accept_apply(
         else:
             out["credit"] = True
             out["motif_soft"] = bool(is_motif)
+        # S2: Motif soft never adopts (tip thrash); Void credit-only / hard carve do.
+        out["adopt"] = (not bool(out["motif_soft"])) and (
+            bool(out["tip_install"]) or not is_motif
+        )
         telem["path_tip_apply"] = int(telem.get("path_tip_apply", 0) or 0) + int(
             out["tip_install"]
         )
@@ -827,6 +805,10 @@ def path_accept_apply(
         out["upsert"] = bool(mutate_motif_base_on_path)
     else:
         out["credit"] = True
+    # S2: cov_ok ∧ ¬motif_soft ∧ (tip_install ∨ region ≠ Motif).
+    out["adopt"] = (not bool(out["motif_soft"])) and (
+        bool(out["tip_install"]) or not is_motif
+    )
     telem["path_tip_apply"] = int(telem.get("path_tip_apply", 0) or 0) + int(
         out["tip_install"]
     )

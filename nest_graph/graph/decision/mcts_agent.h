@@ -155,6 +155,49 @@ inline bool path_reward_beats(
     return coverage_delta(child, parent) >= min_abs_cov / std::max(bc, 1e-9f);
 }
 
+/** N0: path accept gate (eligible, cov_ok, base_cov, alt_cov). */
+inline std::tuple<bool, bool, float, float> path_accept_eligible(
+    const BoardSnapshot &parent,
+    const BoardSnapshot &child,
+    float base_reward,
+    float alt_reward,
+    bool path_overlap_ok,
+    bool is_motif,
+    bool relax_motif_void_fill = false,
+    bool fits_part = true,
+    float min_cov_delta = 0.005f,
+    float min_void_fill_delta = 0.02f
+) {
+    const float base_cov = parent.coverage;
+    const float alt_cov = child.coverage;
+    std::string free_kind = child.free_kind;
+    if (free_kind.empty()) {
+        free_kind = parent.free_kind;
+    }
+    if (relax_motif_void_fill && is_motif && free_kind == "large_void") {
+        const bool cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov);
+        return {true, cov_ok, base_cov, alt_cov};
+    }
+    if (free_kind == "large_void" && !fits_part) {
+        const bool cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov);
+        return {true, cov_ok, base_cov, alt_cov};
+    }
+    if (!path_reward_beats(parent, child, base_reward, alt_reward)) {
+        return {false, false, 0.f, 0.f};
+    }
+    bool cov_ok = false;
+    if (free_kind == "large_void") {
+        const float base_vf = parent.void_fill;
+        const float alt_vf = child.void_fill;
+        cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov) &&
+                 ((alt_vf - base_vf) + 1e-12f >= min_void_fill_delta);
+    } else {
+        cov_ok = path_overlap_ok &&
+                 (alt_cov + 1e-9f >= base_cov + min_cov_delta);
+    }
+    return {true, cov_ok, base_cov, alt_cov};
+}
+
 inline float leaf_reward(
     const BoardSnapshot &snapshot,
     float lam_kiss = 0.05f,

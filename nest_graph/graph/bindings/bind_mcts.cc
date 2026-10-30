@@ -280,6 +280,41 @@ void bind_graph_mcts(nb::module_ &m) {
         nb::arg("min_reward_eps") = 0.01f);
 
     m.def(
+        "path_accept_eligible_native",
+        [](const BoardSnapshot &parent,
+           const BoardSnapshot &child,
+           float base_reward,
+           float alt_reward,
+           bool path_overlap_ok,
+           bool is_motif,
+           bool relax_motif_void_fill,
+           bool fits_part,
+           float min_cov_delta,
+           float min_void_fill_delta) {
+            return path_accept_eligible(
+                parent,
+                child,
+                base_reward,
+                alt_reward,
+                path_overlap_ok,
+                is_motif,
+                relax_motif_void_fill,
+                fits_part,
+                min_cov_delta,
+                min_void_fill_delta);
+        },
+        nb::arg("parent"),
+        nb::arg("child"),
+        nb::arg("base_reward"),
+        nb::arg("alt_reward"),
+        nb::arg("path_overlap_ok"),
+        nb::arg("is_motif"),
+        nb::arg("relax_motif_void_fill") = false,
+        nb::arg("fits_part") = true,
+        nb::arg("min_cov_delta") = 0.005f,
+        nb::arg("min_void_fill_delta") = 0.02f);
+
+    m.def(
         "leaf_reward",
         [](const BoardSnapshot &snapshot,
            float lam_kiss,
