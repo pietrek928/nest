@@ -13,6 +13,7 @@ from nest_graph.geometry import (
     PlacementRankConfig,
     PlacementRankMode,
     batch_rank_local_placements,
+    batch_score_placed_contact_hybrid,
     convex_hull_area_of,
     find_polygon_distances_bipartite,
 )
@@ -325,9 +326,10 @@ def pack_tightness_cost(
     outline: BaseGeometry,
     min_dist: float,
 ) -> float:
-    """Lower is tighter for a full pack (2*excess + kiss). Uses shared kiss math.
+    """Lower is tighter for a full pack (2*excess + kiss).
 
-    Accepts native ``Geometry`` (preferred, no conversion) or Shapely polys.
+    P1b: outline kiss via ``batch_score_placed_contact_hybrid``; neighbor excess
+    stays ``pack_neighbor_excess_gap`` (one bipartite SoT).
     """
     if not geoms:
         return 0.0
@@ -338,12 +340,14 @@ def pack_tightness_cost(
         if not geoms:
             return 0.0
     ring = outline_ring_geom(outline) if outline is not None else None
-    kiss = 0.0
-    for g in geoms:
-        _excess, k = calculate_excess_and_kiss(
-            g, obstacles=[], outline=outline, min_dist=min_dist, ring_geom=ring,
-        )
-        kiss += k
+    cfg = PlacementRankConfig()
+    cfg.min_dist = float(min_dist)
+    cfg.kiss_tol = float(outline_kiss_tolerance(min_dist))
+    cfg.mode = PlacementRankMode.Border
+    results = batch_score_placed_contact_hybrid(
+        list(geoms), ring, [], None, cfg,
+    )
+    kiss = sum(float(getattr(r, "kiss", 0.0) or 0.0) for r in results)
     excess_gap = pack_neighbor_excess_gap(geoms, min_dist)
     return 2.0 * excess_gap + 1.0 * kiss
 
@@ -354,16 +358,29 @@ def score_placement_tightness(
     pt_push: Point,
     min_dist: float,
 ) -> float:
-    """Higher score = tighter outline kiss + lower neighbor excess gap."""
-    placed_geom = propose_geom.placed_at(coords)
+    """Higher score = tighter outline kiss + lower neighbor excess gap.
+
+    P1b: one ``batch_rank_local_placements`` (Border) — excess+kiss from result.
+    """
     if not propose_geom.valid_at(coords, pt_push):
         return float("-inf")
-    excess, kiss_err = calculate_excess_and_kiss(
-        placed_geom,
-        obstacles=list(propose_geom.base_geoms),
-        outline=propose_geom.sheet,
-        min_dist=min_dist,
+    cfg = ProposeConfig()
+    rank_map = _batch_rank_results(
+        [coords],
+        propose_geom,
+        cfg,
+        min_dist,
+        mode="border",
     )
+    res = rank_map.get(_coord_key(coords))
+    if res is None:
+        return float("-inf")
+    excess = float(getattr(res, "excess", 0.0) or 0.0)
+    if not math.isfinite(excess):
+        excess = 0.0
+    kiss_err = float(getattr(res, "kiss", 0.0) or 0.0)
+    if not math.isfinite(kiss_err):
+        kiss_err = 0.0
     return -(2.0 * excess + 1.0 * kiss_err)
 
 def calculate_complex_score(base, placed, base_hull_area, centroid, pt_push, w_dist, w_dir, w_hull):

@@ -1,0 +1,64 @@
+# pack/ + propose/ C++ optimization series
+# Open floors = nest_dg_unify Letter C (aspirational; do not retune)
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0; late NEST_SEED 0/1/2
+# ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz
+
+## Early void_fill
+Open floor: median_area≥0.593 indep=True
+# Honest shipped band ~0.57–0.59; aspirational C floor often GATE FAIL area_coverage.
+
+## Late iter50 +8
+Open floor: median_Δ≥+0.0644 min_Δ≥+0.0492
+# HEAD seed1 alone also lands +0.0333 (repro without WIP) — noise attractor, not P0 regress.
+
+## Letter T0 locked (pytest fixtures)
+# conftest + fixtures/propose_emit.py; parametrize emit clear/penetrate; tightness/perimeter boards.
+T0 pytest=green
+
+## Letter P0 locked (path wall telem + cch peek)
+# path_ms=total/compose/refine; peek_isolation_telem before restore; mid-pack clear no longer blinds cch.
+# Early: 0.563/0.577/0.566 med=0.568 indep=True (honest band; < aspirational 0.593).
+# Late: +0.0564/+0.0333/+0.0644 med=+0.0564 min=+0.0333 (med=S4; min=HEAD seed1 noise).
+# Telem: path_ran=1 → path_compose_ms/path_refine_ms >0; cch=hit/lookup with lookups>0.
+P0 early med=0.568 late Δ med=+0.0564 min=+0.0333 indep=True cch_live=1 path_split=1
+
+## Letter P1 locked (margin-0 Penetrating batch)
+# batch_packing_clear bind; emit_packing_clear_batch; Halton sample + anchor clear-first + prune.
+# Early isolated: 0.580/0.577/0.558 med=0.577 (≥P0). Late: +0.0644/+0.0333/+0.0564 med=+0.0564 min=+0.0333.
+P1 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Letter P1b locked (tightness via batch_rank)
+# score_placement_tightness / pack_tightness_cost → batch_rank_local_placements (Border).
+# Pytest: test_pack_tightness_batch.py green. Combined P1b–P7 early after P5 dual-skip revert.
+# Early: 0.547/0.597/0.577 med=0.577 (≥P1). Late: +0.0564/+0.0333/+0.0564 med=+0.0564 min=+0.0333.
+P1b early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Letter P2 locked (ray pose-list fuse)
+# placements_geo: hit×angle → flat pose_list → one filter_candidates_batch.
+# Pytest: test_ray_pose_fuse.py green. Wall ray share modest; structure + ≥P1 quality.
+P2 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Letter P4 locked (cloud + cluster_copy emit on P1 batch)
+# free_space_cloud + pattern anchors use emit_packing_clear_batch; stamp stays Scene.
+# Early/late dual shared with P1b–P7 bundle (≥P1).
+P4 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Letter P5 locked (path dual thrift — dual kept)
+# Research: cheap_expand skip of large_void dual late med=+0.0485 < P1 +0.0564 → revert.
+# Ship: cheap_expand still duals large_void (Q105); thrift = polish_budget mid/freeze on cheap path.
+# Pytest: test_path_dual_thrift.py. Re-dual nodualskip: early med=0.577 late med=+0.0564 min=+0.0333.
+P5 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True dual_skip_reverted=1
+
+## Letter P6 locked (perimeter bipartite once)
+# propose_placements_perimeter_walk: one find_polygon_distances_bipartite over ring verts.
+# Pytest: test_propose_perimeter_bipartite.py green. Dual shared bundle ≥P1.
+P6 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Letter P7 locked (pattern extract native)
+# cluster area/overlap → intersects_any + convex_hull_area_of; ContactGRG miner unchanged.
+# Pytest: test_pattern_extract_native.py green. Dual shared bundle ≥P1.
+P7 early med=0.577 late Δ med=+0.0564 min=+0.0333 indep=True
+
+## Series close
+# P3 cancelled (cch isolation-blind fingerprint). All unconditional letters locked.
+# Bottleneck still graph_to_nest; prop/ray structure fused onto native batches; path dual kept.

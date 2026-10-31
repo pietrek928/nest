@@ -171,4 +171,48 @@ void bind_batch_api(nb::module_ &m) {
         nb::arg("obstacles"),
         nb::arg("current_position"),
         nb::arg("config"));
+
+    // P1: margin-0 Penetrating batch (emit_packing_clear SoT). Not Scene
+    // batch_check_validity (Q13/Q327 — Scene uses min_dist+ε margin).
+    m.def(
+        "batch_packing_clear",
+        [](const GeometryHolder &part,
+           const std::vector<std::tuple<double, double, double>> &transforms,
+           const std::vector<GeometryHolder> &obstacles) {
+            std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
+            auto angle_key = [](double angle) -> long long {
+                return static_cast<long long>(std::llround(angle * 1e6));
+            };
+
+            std::vector<bool> out;
+            out.reserve(transforms.size());
+            const bool empty_obs = obstacles.empty();
+            for (const auto &[x, y, angle] : transforms) {
+                if (empty_obs) {
+                    out.push_back(true);
+                    continue;
+                }
+                const long long key = angle_key(angle);
+                auto it = rotated_by_angle_key.find(key);
+                if (it == rotated_by_angle_key.end()) {
+                    SolidGeometry2d rotated = part.solid;
+                    rotated = rotated.rotate(static_cast<Vec2d::Scalar>(angle));
+                    it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
+                }
+                SolidGeometry2d placed = it->second;
+                placed = placed.translate(Vec2d({x, y}));
+                bool clear = true;
+                for (const auto &o : obstacles) {
+                    if (solids_packing_collide(placed, o.solid)) {
+                        clear = false;
+                        break;
+                    }
+                }
+                out.push_back(clear);
+            }
+            return out;
+        },
+        nb::arg("part"),
+        nb::arg("transforms"),
+        nb::arg("obstacles"));
 }

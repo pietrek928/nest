@@ -130,9 +130,8 @@ def _void_clear_rate_sample(
     h = float(maxy) - float(miny)
     if w <= 1e-9 or h <= 1e-9:
         return 0, 0
-    clear = 0
-    trials = 0
     ang = [float(a) for a in angles]
+    rows: list[tuple[float, float, float]] = []
     for i in range(1, max(int(n_xy), 1) + 1):
         u, v = _halton_uv(i)
         x = float(minx) + u * w
@@ -140,12 +139,11 @@ def _void_clear_rate_sample(
         if not void_poly.covers(Point(x, y)):
             continue
         th = ang[(i - 1) % len(ang)]
-        trials += 1
-        if emit_packing_clear(
-            propose_geom, (x, y, th), obstacles=obstacles,
-        ):
-            clear += 1
-    return int(clear), int(trials)
+        rows.append((x, y, th))
+    if not rows:
+        return 0, 0
+    flags = emit_packing_clear_batch(propose_geom, rows, obstacles=obstacles)
+    return int(sum(1 for ok in flags if ok)), int(len(flags))
 
 
 def _order_anchors_clear_first(
@@ -156,11 +154,14 @@ def _order_anchors_clear_first(
     skip_reasons: dict[str, int] | None,
 ) -> list[tuple[float, float, float]]:
     """H1: prefer packing-clear identity anchors; keep uncleared as fallback (no sterilize)."""
+    if not anchors:
+        return []
+    rows = [(float(a[0]), float(a[1]), float(a[2])) for a in anchors]
+    flags = emit_packing_clear_batch(propose_geom, rows, obstacles=obstacles)
     clear: list[tuple[float, float, float]] = []
     unclear: list[tuple[float, float, float]] = []
-    for a in anchors:
-        coords = (float(a[0]), float(a[1]), float(a[2]))
-        if emit_packing_clear(propose_geom, coords, obstacles=obstacles):
+    for coords, ok in zip(rows, flags, strict=True):
+        if ok:
             clear.append(coords)
         else:
             unclear.append(coords)
@@ -869,10 +870,11 @@ def _generic_mate_relative(
             placed = transform_poly(poly, mate)
             if placed is None or placed.is_empty:
                 continue
-            if poly.intersects(placed) and poly.distance(placed) < gap * 0.5:
-                # Still penetrating after gap push — skip.
-                if poly.intersection(placed).area > 1e-9:
-                    continue
+            # P7: Penetrating SoT via native intersects (not Shapely intersection.area).
+            ga = _as_native_geom(poly)
+            gb = _as_native_geom(placed)
+            if ga is not None and gb is not None and ga.intersects(gb):
+                continue
             area = _pair_hull_area(poly, mate)
             if area < best_area:
                 best_area = area
@@ -901,11 +903,13 @@ def synthesize_mate_patterns(
             mate = _generic_mate_relative(poly, min_dist=min_dist)
         if mate is None:
             continue
-        # Validate clearance: pair must not penetrate at identity+mate.
+        # Validate clearance: pair must not penetrate at identity+mate (P7 native).
         placed = transform_poly(poly, mate)
         if placed is None or placed.is_empty:
             continue
-        if poly.intersects(placed) and float(poly.intersection(placed).area) > 1e-8:
+        ga = _as_native_geom(poly)
+        gb = _as_native_geom(placed)
+        if ga is not None and gb is not None and ga.intersects(gb):
             continue
         patterns.append(
             ClusterPattern(
@@ -1603,6 +1607,40 @@ def emit_packing_clear(
     if not obs:
         return True
     return not placed.intersects_any(list(obs))
+
+
+def emit_packing_clear_batch(
+    propose_geom: ProposeGeometry,
+    transforms: Sequence[tuple[float, float, float]],
+    *,
+    obstacles: Sequence | None = None,
+) -> list[bool]:
+    """P1: margin-0 Penetrating batch behind emit_packing_clear SoT.
+
+    Uses ``geometry.batch_packing_clear`` (not Scene ``batch_check_validity``).
+    """
+    from nest_graph.geometry import batch_packing_clear
+    from nest_graph.propose.placement_common import placement_obstacles
+
+    if not transforms:
+        return []
+    obs = obstacles
+    if obs is None:
+        obs = placement_obstacles(
+            propose_geom.scene.void_geoms,
+            propose_geom.full_packed_geoms,
+        )
+    obs_list = list(obs) if obs else []
+    if not obs_list:
+        return [True] * len(transforms)
+    part = propose_geom.part
+    if part is None:
+        return [False] * len(transforms)
+    rows = [
+        (float(t[0]), float(t[1]), float(t[2]))
+        for t in transforms
+    ]
+    return list(batch_packing_clear(part, rows, obs_list))
 
 
 def _foreign_member_packing_status(

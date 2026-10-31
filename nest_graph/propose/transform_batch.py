@@ -86,7 +86,8 @@ def prune_transforms_vs_packed(
 ) -> np.ndarray:
     """Drop expand_rest rows that penetrate locked packed solids.
 
-    Penetrating SoT via ``intersects_any`` (not guidance ``batch_check_validity``).
+    Penetrating SoT via ``intersects_any`` / ``batch_packing_clear`` (margin 0;
+    not Scene ``batch_check_validity``).
     """
     if (
         transforms is None
@@ -95,16 +96,14 @@ def prune_transforms_vs_packed(
         or not packed
     ):
         return transforms
-    # One list for the loop — avoid per-row list(packed) copy thrash.
+    from nest_graph.geometry import batch_packing_clear
+
     packed_list = packed if isinstance(packed, list) else list(packed)
-    keep: list[np.ndarray] = []
-    for row in np.asarray(transforms, dtype=np.float64).reshape(-1, 3):
-        placed = base.apply_transform(row)
-        if placed is None:
-            continue
-        if placed.intersects_any(packed_list):
-            continue
-        keep.append(row)
+    arr = np.asarray(transforms, dtype=np.float64).reshape(-1, 3)
+    rows = [(float(r[0]), float(r[1]), float(r[2])) for r in arr]
+    # P1: same Penetrating SoT as scalar intersects_any (parity-tested).
+    flags = list(batch_packing_clear(base, rows, packed_list))
+    keep = [arr[i] for i, ok in enumerate(flags) if ok]
     if not keep:
         return np.zeros((0, 3), dtype=np.float64)
     return np.asarray(keep, dtype=np.float64).reshape(-1, 3)

@@ -669,7 +669,11 @@ def main() -> None:
                             f"dfs={float(leak.get('dfs_loose_ms', 0.0) or 0.0):.1f}/"
                             f"{float(leak.get('finalize_ms', 0.0) or 0.0):.1f} "
                             f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
-                            f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f} "
+                            f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f}/"
+                            f"{float(leak.get('path_compose_ms', 0.0) or 0.0):.1f}/"
+                            f"{float(leak.get('path_refine_ms', 0.0) or 0.0):.1f} "
+                            f"cch={int(leak.get('cheap_cache_hit', 0) or 0)}/"
+                            f"{int(leak.get('cheap_cache_lookup', 0) or 0)} "
                             f"path_skip={int(leak.get('path_probe_skip', 0) or 0)}"
                         )
                     diag = (evaluator.last_result or {}).get("void_leak", {}).get("diag") or {}

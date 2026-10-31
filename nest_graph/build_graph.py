@@ -73,6 +73,7 @@ from nest_graph.pack.cheap import (
     invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
     pack_execute_snapshot,
+    peek_isolation_telem,
     proven_compose_row,
     with_isolated_pack_cache,
 )
@@ -1558,6 +1559,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_telem["macro_path_cov_skip"] = 0
         mcts_telem["path_motif_force_tip"] = 0
         mcts_telem["motif_hold_tip"] = 0
+        # P0: per-iter path wall + cch (pack_cache mid clear must not wipe).
+        mcts_telem["path_compose_ms"] = 0.0
+        mcts_telem["path_refine_ms"] = 0.0
+        mcts_telem["cheap_cache_hit"] = 0
+        mcts_telem["cheap_cache_lookup"] = 0
+        _pack_cache["path_compose_ms"] = 0.0
+        _pack_cache["path_refine_ms"] = 0.0
+        # Snapshot multi-sim lookups before path (path adds on top).
+        mcts_telem["cheap_cache_hit"] = int(_pack_cache.get("cache_hit_n", 0) or 0)
+        mcts_telem["cheap_cache_lookup"] = int(
+            _pack_cache.get("cache_lookup_n", 0) or 0
+        )
         # P: per-iter census reset (was cumulative max → false nbr/cut growth).
         mcts_telem["path_nbr_macro"] = 0
         mcts_telem["path_nbr_join"] = 0
@@ -1692,6 +1705,20 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
                 # S1: stash compose row before isolation restore (S2 adopt consumes).
                 path_proven_compose = proven_compose_row(_pack_cache, alt_action)
+                # P0: stamp path wall + cch before isolation restore (peek).
+                _path_telem = peek_isolation_telem(_pack_cache)
+                mcts_telem["path_compose_ms"] = float(
+                    _path_telem.get("path_compose_ms", 0.0) or 0.0
+                )
+                mcts_telem["path_refine_ms"] = float(
+                    _path_telem.get("path_refine_ms", 0.0) or 0.0
+                )
+                mcts_telem["cheap_cache_hit"] = int(
+                    _path_telem.get("cache_hit_n", 0) or 0
+                )
+                mcts_telem["cheap_cache_lookup"] = int(
+                    _path_telem.get("cache_lookup_n", 0) or 0
+                )
             # E0/F0: census after probe (outside pack_cache isolation — telem only).
             mcts_telem["motif_join_from_base"] = max(
                 int(mcts_telem.get("motif_join_from_base", 0) or 0),
@@ -2513,6 +2540,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             _f1_sticky_spent = int(_pack_cache.get("f1_sticky_spent", 0) or 0)
             if int(propose_stats.get("hold_cohort_nest", 0) or 0) > 0:
                 _f1_sticky_spent = 1
+            # P0: path/cch telem lives on mcts_telem; reset pack_cache counters
+            # for next-iter multi-sim (do not carry wiped zeros into propose_stats).
             _pack_cache.clear()
             _pack_cache.update({
                 "ready": True,
@@ -2544,6 +2573,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 "compose_transform": list(transform),
                 "motif_locked": list(propose_stats.get("motif_locked") or ()),
                 "f1_sticky_spent": int(_f1_sticky_spent),
+                "cache_hit_n": 0,
+                "cache_lookup_n": 0,
+                "cache_miss_n": 0,
+                "path_compose_ms": 0.0,
+                "path_refine_ms": 0.0,
             })
             _sync_agent_motif_cohorts(mcts_runner, propose_stats)
             _pack_cache["motif_cohort_sig"] = int(
@@ -2870,11 +2904,30 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 propose_stats["fit_need_r"] = float(
                     getattr(free_post, "fit_need_r", 0.0) or 0.0
                 )
+            # P0: prefer mcts_telem (stamped after path; mid-pack clear wipes pack_cache).
             propose_stats["cheap_cache_hit"] = int(
-                _pack_cache.get("cache_hit_n", 0) or 0
+                mcts_telem.get(
+                    "cheap_cache_hit", _pack_cache.get("cache_hit_n", 0)
+                )
+                or 0
             )
             propose_stats["cheap_cache_lookup"] = int(
-                _pack_cache.get("cache_lookup_n", 0) or 0
+                mcts_telem.get(
+                    "cheap_cache_lookup", _pack_cache.get("cache_lookup_n", 0)
+                )
+                or 0
+            )
+            propose_stats["path_compose_ms"] = float(
+                mcts_telem.get(
+                    "path_compose_ms", _pack_cache.get("path_compose_ms", 0.0)
+                )
+                or 0.0
+            )
+            propose_stats["path_refine_ms"] = float(
+                mcts_telem.get(
+                    "path_refine_ms", _pack_cache.get("path_refine_ms", 0.0)
+                )
+                or 0.0
             )
             print(
                 f"repack={repack_stats.get('accepted', 0)}/"

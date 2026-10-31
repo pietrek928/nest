@@ -26,6 +26,20 @@ from nest_graph.propose.selection_compose import (
 )
 
 
+# P0: telem keys stamped to mcts_telem *inside* the isolation block (before
+# restore). Isolation itself restores pack_cache bit-identically so path probe
+# cannot leak counter/state into mid-pack.
+_ISOLATION_TELEM_KEYS: tuple[str, ...] = (
+    "cache_hit_n",
+    "cache_lookup_n",
+    "cache_miss_n",
+    "cache_miss_rate",
+    "cache_invalidate_n",
+    "path_compose_ms",
+    "path_refine_ms",
+)
+
+
 def snapshot_pack_cache(pack_cache: dict) -> dict:
     """Shallow copy pack_cache lists/dicts for restore after path replay."""
     return {
@@ -34,9 +48,18 @@ def snapshot_pack_cache(pack_cache: dict) -> dict:
     }
 
 
+def peek_isolation_telem(pack_cache: dict) -> dict:
+    """Copy path/cch counters while pack_cache still holds path increments."""
+    return {k: pack_cache[k] for k in _ISOLATION_TELEM_KEYS if k in pack_cache}
+
+
 @contextmanager
 def with_isolated_pack_cache(pack_cache: dict):
-    """One gate: path execute mutates compose_* — restore after probe."""
+    """One gate: path execute mutates compose_* — restore after probe.
+
+    Call ``peek_isolation_telem`` before exiting the ``with`` body to stamp
+    cch / path_*_ms onto mcts_telem; restore stays bit-identical to snap.
+    """
     snap = snapshot_pack_cache(pack_cache)
     try:
         yield pack_cache
@@ -177,6 +200,7 @@ def compose_cached_selection(
             dg=pack_cache.get("dg"),
             motif_base=pack_cache.get("motif_base"),
             survive_by_motif=pack_cache.get("survive_by_motif") or {},
+            cheap_expand=True,
         )
     )
     propose_stats_c["compose_ms"] = float(
@@ -390,6 +414,7 @@ def pack_execute_snapshot(
     box = RefinePackBox()
 
     def compose_fn() -> None:
+        t0 = time.perf_counter()
         sel_out, cov = compose_cached_selection(
             pack_cache,
             rule_sets=rule_sets,
@@ -400,6 +425,11 @@ def pack_execute_snapshot(
             coverage_pct_fn=coverage_pct_fn,
             action=action,
         )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        telem["compose_ms"] = float(dt_ms)
+        pack_cache["path_compose_ms"] = float(
+            pack_cache.get("path_compose_ms", 0.0) or 0.0
+        ) + float(dt_ms)
         box.selected = list(sel_out)
         box.coverage = float(cov)
 
@@ -412,6 +442,7 @@ def pack_execute_snapshot(
     box.budget = budget
 
     def refine_fn() -> None:
+        t0 = time.perf_counter()
         sel_out, cov = refine_cached_selection(
             pack_cache,
             sel=sel,
@@ -421,6 +452,11 @@ def pack_execute_snapshot(
             coverage_pct_fn=coverage_pct_fn,
             telem=telem,
         )
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        telem["refine_ms"] = float(dt_ms)
+        pack_cache["path_refine_ms"] = float(
+            pack_cache.get("path_refine_ms", 0.0) or 0.0
+        ) + float(dt_ms)
         box.selected = list(sel_out)
         box.coverage = float(cov)
 
@@ -613,6 +649,7 @@ __all__ = [
     "pack_execute_snapshot",
     "proven_compose_row",
     "refine_cached_selection",
+    "peek_isolation_telem",
     "snapshot_pack_cache",
     "with_isolated_pack_cache",
 ]

@@ -88,13 +88,16 @@ def dual_nest_for(
     last_leaf: bool = False,
     do_heavy: bool | None = None,
     sterile_hold: bool = False,
+    cheap_expand: bool = False,
 ) -> bool:
     """Q105: dual lex when last leaf OR large_void basin.
 
-    ``sterile_hold`` reserved for D1b experiments; currently unused so dual
-    stays on for large_void (ablation: skipping dual regressed void_fill).
+    P5: ``cheap_expand`` is accepted for callers but does **not** skip large_void
+    dual — hard skip dropped late Δ med below P1 (research loop). Path thrift
+    stays polish_budget mid DFS only.
+    ``sterile_hold`` reserved for D1b experiments.
     """
-    del sterile_hold
+    del sterile_hold, cheap_expand
     if do_heavy is not None:
         last_leaf = bool(do_heavy)
     if bool(last_leaf):
@@ -189,6 +192,7 @@ def compose_nest_kwargs(
     grow_classify_seed: Sequence | None = None,
     grow_classify_mapped: Sequence | None = None,
     grow_classify_unmapped: Sequence | None = None,
+    cheap_expand: bool = False,
 ) -> dict:
     """One kwargs dict for ``compose_and_nest_selection`` (Uh + mid + evaluator)."""
     return {
@@ -214,7 +218,9 @@ def compose_nest_kwargs(
         "ngroups": ngroups,
         "packed_group_id": packed_group_id,
         "packed_transform": packed_transform,
-        "dual_nest": dual_nest_for(free_info, last_leaf=last_leaf),
+        "dual_nest": dual_nest_for(
+            free_info, last_leaf=last_leaf, cheap_expand=cheap_expand,
+        ),
         "void_geoms": void_geoms,
         "locked_seed": locked_seed,
         "dg": dg,

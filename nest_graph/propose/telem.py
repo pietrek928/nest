@@ -1079,6 +1079,24 @@ def merge_phase_gate_telem(
         leak["replay_from_ancestor_ms"] = float(
             mt.get("replay_from_ancestor_ms", leak.get("replay_from_ancestor_ms", 0.0)) or 0.0
         )
+        leak["path_compose_ms"] = float(
+            mt.get(
+                "path_compose_ms",
+                propose_stats.get(
+                    "path_compose_ms", leak.get("path_compose_ms", 0.0)
+                ),
+            )
+            or 0.0
+        )
+        leak["path_refine_ms"] = float(
+            mt.get(
+                "path_refine_ms",
+                propose_stats.get(
+                    "path_refine_ms", leak.get("path_refine_ms", 0.0)
+                ),
+            )
+            or 0.0
+        )
         leak["path_probe_skip"] = int(
             mt.get("path_probe_skip", leak.get("path_probe_skip", 0)) or 0
         )
@@ -1402,12 +1420,21 @@ def merge_phase_gate_telem(
     leak["qp_ms"] = float(
         propose_stats.get("qp_ms", leak.get("qp_ms", 0.0)) or 0.0
     )
-    leak["cheap_cache_hit"] = int(
-        propose_stats.get("cheap_cache_hit", leak.get("cheap_cache_hit", 0)) or 0
-    )
-    leak["cheap_cache_lookup"] = int(
-        propose_stats.get("cheap_cache_lookup", leak.get("cheap_cache_lookup", 0)) or 0
-    )
+    if isinstance(mt, dict) and "cheap_cache_hit" in mt:
+        leak["cheap_cache_hit"] = int(mt.get("cheap_cache_hit", 0) or 0)
+    else:
+        leak["cheap_cache_hit"] = int(
+            propose_stats.get("cheap_cache_hit", leak.get("cheap_cache_hit", 0)) or 0
+        )
+    if isinstance(mt, dict) and "cheap_cache_lookup" in mt:
+        leak["cheap_cache_lookup"] = int(mt.get("cheap_cache_lookup", 0) or 0)
+    else:
+        leak["cheap_cache_lookup"] = int(
+            propose_stats.get(
+                "cheap_cache_lookup", leak.get("cheap_cache_lookup", 0)
+            )
+            or 0
+        )
     leak["fit_in_r"] = float(
         propose_stats.get("fit_in_r", leak.get("fit_in_r", 0.0)) or 0.0
     )
@@ -1868,7 +1895,9 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
     """D0/G0: Decision-Graph expand funnel (path / Motif / PoseGraph wall-clock)."""
     return (
         f"dg_funnel "
-        f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f} "
+        f"path_ms={float(leak.get('replay_from_ancestor_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('path_compose_ms', 0.0) or 0.0):.1f}/"
+        f"{float(leak.get('path_refine_ms', 0.0) or 0.0):.1f} "
         f"path_ran={int(leak.get('path_ran', 0) or 0)}/"
         f"{int(leak.get('path_cache_miss', 0) or 0)} "
         f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "

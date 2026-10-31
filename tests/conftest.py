@@ -127,3 +127,59 @@ def build_graph_config():
         ),
         output=OutputConfig(n_iters=1, progress=False),
     )
+
+
+# --- Propose emit / tightness / perimeter fixtures (pack_propose_cpp T0) ---
+
+from tests.fixtures.propose_emit import (  # noqa: E402
+    EMIT_CLEAR_POSE_CASES,
+    EMIT_PENETRATE_CASES,
+    emit_board_empty as _emit_board_empty,
+    emit_board_with_block as _emit_board_with_block,
+    free_space_cloud_board as _free_space_cloud_board,
+    make_propose_geom,
+    perimeter_ring_board as _perimeter_ring_board,
+    tightness_pack_geoms as _tightness_pack_geoms,
+)
+
+
+@pytest.fixture
+def propose_geom_empty():
+    """20×20 sheet, 1×1 part, no packed obstacles."""
+    return _emit_board_empty()
+
+
+@pytest.fixture
+def propose_geom_blocked():
+    """20×20 sheet with a [9,12]² packed block."""
+    return _emit_board_with_block()
+
+
+@pytest.fixture
+def free_space_cloud_setup():
+    """(ProposeGeometry, void_poly, ProposeConfig) for cloud emit baselines."""
+    return _free_space_cloud_board()
+
+
+@pytest.fixture
+def perimeter_board_setup():
+    """(ProposeGeometry, base, part) for perimeter-walk ring fixtures."""
+    return _perimeter_ring_board()
+
+
+@pytest.fixture
+def tightness_pack_setup():
+    """(native_geoms, outline, min_dist) for pack_tightness_cost parity."""
+    return _tightness_pack_geoms()
+
+
+@pytest.fixture(params=EMIT_CLEAR_POSE_CASES, ids=lambda c: c[0])
+def emit_clear_pose_case(request):
+    """Parametrized (label, x, y, θ, expect_clear) on empty board."""
+    return request.param
+
+
+@pytest.fixture(params=EMIT_PENETRATE_CASES, ids=lambda c: c[0])
+def emit_penetrate_pose_case(request):
+    """Parametrized poses vs packed block (kiss vs penetrate)."""
+    return request.param

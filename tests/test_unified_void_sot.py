@@ -259,26 +259,27 @@ def test_void_pole_near_radius_shared():
     ) < 1e-12
 
 
-def test_emit_packing_clear_matches_cloud_filter(build_graph_config):
-    sheet = box(0, 0, 20, 20)
-    part = box(0, 0, 1, 1)
-    cfg = ProposeConfig()
-    geom = ProposeGeometry(
-        sheet, box(0, 0, 0.1, 0.1), part, 0.1, propose_cfg=cfg, full_packed_geoms=[],
-    )
-    assert emit_packing_clear(geom, (10.0, 10.0, 0.0))
-    assert not emit_packing_clear(geom, (100.0, 100.0, 0.0))
+def test_emit_packing_clear_pose_parametrized(propose_geom_empty, emit_clear_pose_case):
+    """P1 baseline: scalar emit_packing_clear on empty-board poses."""
+    _label, x, y, th, expect = emit_clear_pose_case
+    assert emit_packing_clear(propose_geom_empty, (x, y, th)) is expect
 
 
-def test_free_space_cloud_emits_in_void(build_graph_config):
-    sheet = box(0, 0, 30, 30)
-    void = box(10, 10, 25, 25)
-    obstacle = box(0, 0, 8, 8)
-    part = box(0, 0, 1.5, 1.5)
-    cfg = ProposeConfig(use_free_space_cloud=True, free_space_cloud_samples=32)
-    geom = ProposeGeometry(
-        sheet, obstacle, part, 0.1, propose_cfg=cfg, full_packed_geoms=[],
-    )
+def test_emit_packing_clear_vs_block_parametrized(
+    propose_geom_blocked, emit_penetrate_pose_case,
+):
+    """P1 baseline: kiss vs penetrate vs packed block (Penetrating SoT)."""
+    _label, x, y, th, expect = emit_penetrate_pose_case
+    assert emit_packing_clear(propose_geom_blocked, (x, y, th)) is expect
+
+
+def test_emit_packing_clear_empty_obstacles(propose_geom_empty):
+    """Empty obstacle list → clear (packing SoT, not Scene margin)."""
+    assert emit_packing_clear(propose_geom_empty, (10.0, 10.0, 0.0), obstacles=[])
+
+
+def test_free_space_cloud_emits_in_void(free_space_cloud_setup):
+    geom, void, cfg = free_space_cloud_setup
     out = propose_placements_free_space_cloud(
         void, propose_geom=geom, propose_cfg=cfg, top_n=16,
     )

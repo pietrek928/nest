@@ -15,3 +15,13 @@ from tests.fixtures.shapes import (  # noqa: F401
     tri_poly,
     unit_square,
 )
+from tests.fixtures.propose_emit import (  # noqa: F401
+    EMIT_CLEAR_POSE_CASES,
+    EMIT_PENETRATE_CASES,
+    emit_board_empty,
+    emit_board_with_block,
+    free_space_cloud_board,
+    make_propose_geom,
+    perimeter_ring_board,
+    tightness_pack_geoms,
+)

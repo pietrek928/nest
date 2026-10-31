@@ -10,7 +10,10 @@ from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.placement_common import obstacle_parts
 from nest_graph.propose.placement_outline import slide_toward_obstacle
-from nest_graph.propose.placements_pattern import emit_packing_clear
+from nest_graph.propose.placements_pattern import (
+    emit_packing_clear,
+    emit_packing_clear_batch,
+)
 
 
 def _halton(index: int, base: int) -> float:
@@ -110,7 +113,8 @@ def propose_placements_free_space_cloud(
     if hasattr(propose_geom, "region_geometry"):
         void_g = propose_geom.region_geometry(void_poly)
 
-    out: list[tuple[float, float, float]] = []
+    # P4: gather inside×angle rows, one emit_packing_clear_batch.
+    rows: list[tuple[float, float, float]] = []
     seen: set[tuple[float, float, float]] = set()
     # Skip first Halton index (0,0) clump; start at 1.
     for i in range(1, n_xy + 1):
@@ -131,9 +135,15 @@ def propose_placements_free_space_cloud(
             if key in seen:
                 continue
             seen.add(key)
-            if not emit_packing_clear(propose_geom, coords):
-                continue
-            out.append(coords)
-            if len(out) >= top_n:
-                return out
+            rows.append(coords)
+    if not rows:
+        return []
+    flags = emit_packing_clear_batch(propose_geom, rows)
+    out: list[tuple[float, float, float]] = []
+    for coords, ok in zip(rows, flags, strict=True):
+        if not ok:
+            continue
+        out.append(coords)
+        if len(out) >= top_n:
+            break
     return out

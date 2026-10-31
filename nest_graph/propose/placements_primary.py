@@ -77,31 +77,46 @@ def propose_placements_perimeter_walk(
         return []
 
     raw: list[tuple[float, float, float]] = []
-    costs: list[float] = []
     angles = resolve_placement_angles(placement_angles, num_angles)
 
+    # P6: collect ring-vert poses first; one bipartite vs base_geoms (not per-vert).
     for angle in angles:
         rotated = rotate(shape_to_place, angle, origin=(0, 0), use_radians=True)
         rc = rotated.centroid
         safe_zone = placement_safe_zone(region, base_shape, rotated, min_dist)
         if safe_zone.is_empty:
             continue
-
         for ring in get_shape_exteriors(safe_zone):
             for px, py in perimeter_ring_vertices(ring):
-                dx = px - rc.x
-                dy = py - rc.y
-                coords = (dx, dy, float(angle))
-                placed_geom = propose_geom.placed_at(coords)
-                if propose_geom.base_geoms:
-                    dists = find_polygon_distances_bipartite(
-                        [placed_geom], propose_geom.base_geoms,
-                    )
-                    score = min(d.distance for d in dists) if dists else 10.0
-                else:
-                    score = placed_geom.standoff_distance(propose_geom.boundary_ring_geom)
-                raw.append(coords)
-                costs.append(float(score))
+                raw.append((px - rc.x, py - rc.y, float(angle)))
+
+    if not raw:
+        return []
+    placed_geoms = [propose_geom.placed_at(c) for c in raw]
+    costs: list[float] = []
+    if propose_geom.base_geoms:
+        valid_pairs = [(i, g) for i, g in enumerate(placed_geoms) if g is not None]
+        score_by_i = {i: 10.0 for i in range(len(raw))}
+        if valid_pairs:
+            idxs, geoms = zip(*valid_pairs, strict=True)
+            dists = find_polygon_distances_bipartite(
+                list(geoms), propose_geom.base_geoms,
+            )
+            nearest = {int(i): 10.0 for i in idxs}
+            for d in dists:
+                ai = int(getattr(d, "polyA_idx", -1))
+                if 0 <= ai < len(idxs):
+                    src = int(idxs[ai])
+                    nearest[src] = min(nearest[src], float(d.distance))
+            score_by_i.update(nearest)
+        costs = [float(score_by_i[i]) for i in range(len(raw))]
+    else:
+        ring_g = propose_geom.boundary_ring_geom
+        for g in placed_geoms:
+            if g is None:
+                costs.append(10.0)
+            else:
+                costs.append(float(g.standoff_distance(ring_g)))
 
     return _score_and_keep_batch(raw, costs, propose_geom, pt_push, top_n)
 

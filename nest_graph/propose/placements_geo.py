@@ -133,7 +133,6 @@ def propose_placements_raycasting(
     """
     Proposes placements by casting rays from boundary vertices into the interior.
     """
-    propositions: list[dict] = []
     region = search_region_for_placement(
         base_shape, sheet, sheet, min_dist,
         use_free_region=use_free_region, border_focus=border_focus,
@@ -198,6 +197,8 @@ def propose_placements_raycasting(
             dy = ray_len * float(np.sin(r_angle))
             origins.append((float(ax), float(ay)))
             directions.append((dx, dy))
+    # P2: fuse ray hits into a flat hit list, then hit×angle pose rows once.
+    hits_xy: list[tuple[float, float]] = []
     if origins:
         try:
             coords_flat, offsets = region_g.clip_ray_interior_batch(
@@ -208,14 +209,9 @@ def propose_placements_raycasting(
                 a = int(offsets[i])
                 b = int(offsets[i + 1])
                 for k in range(a, b):
-                    pt_x = float(coords_flat[2 * k])
-                    pt_y = float(coords_flat[2 * k + 1])
-                    for p_angle in placement_angles:
-                        coords = (pt_x, pt_y, float(p_angle))
-                        propositions.append({
-                            "coords": coords,
-                            "cost": math.hypot(pt_x - attract_x, pt_y - attract_y),
-                        })
+                    hits_xy.append(
+                        (float(coords_flat[2 * k]), float(coords_flat[2 * k + 1]))
+                    )
         except Exception:
             for (ox, oy), (dx, dy) in zip(origins, directions, strict=True):
                 try:
@@ -225,34 +221,34 @@ def propose_placements_raycasting(
                 except Exception:
                     hits = []
                 for x, y in hits:
-                    pt_x, pt_y = float(x), float(y)
-                    for p_angle in placement_angles:
-                        coords = (pt_x, pt_y, float(p_angle))
-                        propositions.append({
-                            "coords": coords,
-                            "cost": math.hypot(pt_x - attract_x, pt_y - attract_y),
-                        })
+                    hits_xy.append((float(x), float(y)))
 
-    propositions.sort(key=lambda x: x["cost"])
-    unique_props: list[tuple[float, float, float]] = []
-    unique_costs: list[float] = []
+    pose_list: list[tuple[float, float, float]] = []
+    cost_list: list[float] = []
     seen: set[tuple[float, float, float]] = set()
     pool_cap = max(top_n * 3, top_n)
-    for p in propositions:
-        key = (round(p["coords"][0], 4), round(p["coords"][1], 4), round(p["coords"][2], 4))
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_props.append(p["coords"])
-        unique_costs.append(float(p["cost"]))
-        if len(unique_props) >= pool_cap:
+    # Sort hits by attract cost before angle expand (stable top pool).
+    hits_xy.sort(key=lambda xy: math.hypot(xy[0] - attract_x, xy[1] - attract_y))
+    for pt_x, pt_y in hits_xy:
+        hit_cost = math.hypot(pt_x - attract_x, pt_y - attract_y)
+        for p_angle in placement_angles:
+            coords = (pt_x, pt_y, float(p_angle))
+            key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
+            if key in seen:
+                continue
+            seen.add(key)
+            pose_list.append(coords)
+            cost_list.append(hit_cost)
+            if len(pose_list) >= pool_cap:
+                break
+        if len(pose_list) >= pool_cap:
             break
 
-    if not unique_props:
+    if not pose_list:
         return []
     _ray_ms = (time.perf_counter() - t_ray0) * 1000.0
     propose_geom._last_raycast_ms = float(getattr(propose_geom, "_last_raycast_ms", 0.0) or 0.0) + _ray_ms
-    cost_map = {c: cost for c, cost in zip(unique_props, unique_costs, strict=True)}
-    valid = filter_candidates_batch(propose_geom, unique_props, pt_push)
+    cost_map = {c: cost for c, cost in zip(pose_list, cost_list, strict=True)}
+    valid = filter_candidates_batch(propose_geom, pose_list, pt_push)
     valid.sort(key=lambda c: cost_map.get(c, 0.0))
     return valid[:top_n]
