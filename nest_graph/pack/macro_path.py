@@ -502,7 +502,28 @@ def macro_increase_path(
             if not motif_extra and force_motif_action is not None:
                 motif_extra = [force_motif_action]
             siblings = list(motif_extra) + list(siblings)
-        siblings.sort(key=lambda a: -survive_rank(a, realized))
+        # H3: after survive_rank, soft AMAF tie-break (hole-expand credit → path beam).
+        free_kind_anc = str(getattr(anc_snap, "free_kind", "") or "")
+        amaf_scores: dict[int, float] = {}
+        for i_alt, alt_sc in enumerate(siblings):
+            try:
+                key = agent._action_key(alt_sc)
+                amaf_scores[i_alt] = float(
+                    agent._amaf_pick_score(
+                        key, int(block_node), free_kind=free_kind_anc,
+                    )
+                )
+            except Exception:
+                amaf_scores[i_alt] = 0.0
+        order = sorted(
+            range(len(siblings)),
+            key=lambda i: (
+                -survive_rank(siblings[i], realized),
+                -float(amaf_scores.get(i, 0.0)),
+            ),
+        )
+        siblings = [siblings[i] for i in order]
+        telem["path_amaf_tiebreak"] = int(telem.get("path_amaf_tiebreak", 0) or 0) + 1
         beam_n = max(int(beam), 1)
         if motif_hold_tip:
             motifs = [

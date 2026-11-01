@@ -463,6 +463,10 @@ def build_void_leak_dict(
         "block_hole_reject_reason": str(
             propose_stats.get("block_hole_reject_reason", "") or ""
         ),
+        # H0: niche AMAF key beside 3a/3b for path/expand lag census.
+        "niche_amaf_region": int(propose_stats.get("niche_amaf_region", -1) or -1),
+        "niche_amaf_rule": int(propose_stats.get("niche_amaf_rule", 0) or 0),
+        "niche_amaf_motif": int(propose_stats.get("niche_amaf_motif", -1) or -1),
         "keep_history_on_sterile": bool(
             propose_stats.get("keep_history_on_sterile", False)
         ),

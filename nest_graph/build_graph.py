@@ -3007,6 +3007,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 refine_bp=refine_bp_credit if mcts_runner.agent is not None else None,
                 emitted_bp=emitted_bp_credit if mcts_runner.agent is not None else None,
             )
+            # H2: finalize before outer expand so MotifJoin.realized feeds next path;
+            # gainful hole skip-miss already set — record_outer stamps AMAF (no double expand).
+            if int(propose_stats.get("hole_expand_gain", 0) or 0) > 0:
+                propose_stats["hole_amaf_stamp"] = 1
+                if isinstance(propose_stats.get("void_leak"), dict):
+                    propose_stats["void_leak"]["hole_amaf_stamp"] = 1
         if mcts_runner.agent is not None:
             mcts_runner.agent.prior_motif_graph_hit_n = int(
                 propose_stats.get("motif_graph_hit_n", 0) or 0

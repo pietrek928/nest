@@ -1,0 +1,18 @@
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/home/pietrek/Documents/nest/nest_graph/build_graph.py", line 33, in <module>
+    from nest_graph.propose.placement_common import as_geometry, post_pack_overlap_ok
+  File "/home/pietrek/Documents/nest/nest_graph/propose/__init__.py", line 102, in <module>
+    from nest_graph.propose.selection_compose import (
+    ...<2 lines>...
+    )
+  File "/home/pietrek/Documents/nest/nest_graph/propose/selection_compose.py", line 40, in <module>
+    from nest_graph.propose.block_replace import (
+    ...<3 lines>...
+    )
+  File "/home/pietrek/Documents/nest/nest_graph/propose/block_replace.py", line 39, in <module>
+    from nest_graph.propose.motif_lock import hybrid_compose_pick
+  File "/home/pietrek/Documents/nest/nest_graph/propose/motif_lock.py", line 15, in <module>
+    from nest_graph.propose.block_replace import _packing_independent
+ImportError: cannot import name '_packing_independent' from partially initialized module 'nest_graph.propose.block_replace' (most likely due to a circular import) (/home/pietrek/Documents/nest/nest_graph/propose/block_replace.py)

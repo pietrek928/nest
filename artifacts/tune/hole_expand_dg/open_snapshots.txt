@@ -1,0 +1,33 @@
+# hole expand DG series
+# Prior pack_propose P7: early med=0.577 late Δ med=+0.0564 min=+0.0333
+# ckpt: artifacts/checkpoints/void_fill_seed0_iter50.npz
+# OMP_NUM_THREADS=1 PYTHONHASHSEED=0
+
+## Letter H0 locked (telem + path/3b lag census)
+# 3a_ok + amaf_k=region/rule/motif + preset on letter line; niche_amaf in void_leak.
+# Early: 0.564/0.584/0.556 med=0.564 indep=True (honest band; <P7 med noise).
+# Late: +0.0564/+0.0333/+0.0564 med=+0.0564 min=+0.0333 (=P7).
+# Census: 3b_try=1 always; reject lex×2 accept×1; hull high (50–93); path_ran=1 before mid 3b.
+# Dominant reject=lex (emit not sterile). Series floor for next letters: early≥0.564 late≥P7.
+H0 early med=0.564 late Δ med=+0.0564 min=+0.0333 indep=True reject=lex path_lag=1
+
+## Letter H1 locked (emit pose API; live call-site zeros)
+# _emit_hole_candidates accepts packed_group_ids/transforms (pytest).
+# Research: forwarding real kept poses late Δ med=+0.0413 < H0 +0.0564 → call-site zeros.
+# Early with live poses: med=0.570 (≥H0). Late with live poses: med fail → revert caller.
+H1 early med=0.570 late Δ med=+0.0413 min=+0.0405 (poses live, FAIL prior) → ship API zeros
+H1_shipped call_site_zeros=1 api=1
+
+## Letter H2 locked (post-3b void + skip niche miss on gain)
+# stages n_void_nest from selected_polys after 3b; hole_expand_gain skips note_macro_miss.
+# finalize before record_outer; AMAF via outer expand (no double stamp_arena_amaf).
+# Dual with H3 (nohybrid, no live poses): early 0.580/0.606/0.556 med=0.580.
+H2 early med=0.580 late Δ med=+0.0564 min=+0.0326 indep=True
+
+## Letter H3 locked (path AMAF tie-break after survive_rank)
+# macro_increase_path soft AMAF after survive; hybrid void-accept of count-drop reverted (late dump).
+# Late: +0.0326/+0.0564/+0.0564 med=+0.0564 min=+0.0326 (~H0 seed1 noise width).
+H3 early med=0.580 late Δ med=+0.0564 min=+0.0326 indep=True path_amaf_tiebreak=1
+
+## Series close
+# H0 telem; H1 API+zeros; H2 credit; H3 path AMAF. No Eject PathKind / PackingSolver engine.

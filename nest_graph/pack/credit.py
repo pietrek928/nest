@@ -187,6 +187,39 @@ def run_void_leak_and_niche_credit(
     )
     propose_stats["hollow_miss"] = hollow
     amaf_key = niche_amaf_key(mcts_action)
+    # H0: correlate niche AMAF tuple with 3a/3b outcomes in void_leak.
+    try:
+        _reg, _rule, _motif = amaf_key
+        propose_stats["niche_amaf_region"] = int(_reg)
+        propose_stats["niche_amaf_rule"] = int(_rule)
+        propose_stats["niche_amaf_motif"] = int(_motif)
+    except (TypeError, ValueError):
+        propose_stats["niche_amaf_region"] = -1
+        propose_stats["niche_amaf_rule"] = 0
+        propose_stats["niche_amaf_motif"] = -1
+    leak_dict["niche_amaf_region"] = int(propose_stats["niche_amaf_region"])
+    leak_dict["niche_amaf_rule"] = int(propose_stats["niche_amaf_rule"])
+    leak_dict["niche_amaf_motif"] = int(propose_stats["niche_amaf_motif"])
+    # H2: gainful 3a/3b must not poison niche AMAF (path misses stay elsewhere).
+    hole_gain = (
+        int(propose_stats.get("block_hole_accepted", 0) or 0) > 0
+        and (
+            int(propose_stats.get("block_hole_dcount", 0) or 0) > 0
+            or float(propose_stats.get("block_hole_darea", 0.0) or 0.0) > 0.0
+        )
+    )
+    cohort_gain = (
+        int(propose_stats.get("block_cohort_accepted", 0) or 0) > 0
+        and (
+            int(propose_stats.get("block_cohort_dcount", 0) or 0) > 0
+            or float(propose_stats.get("block_cohort_darea", 0.0) or 0.0) > 0.0
+        )
+    )
+    propose_stats["hole_expand_gain"] = int(hole_gain or cohort_gain)
+    leak_dict["hole_expand_gain"] = int(propose_stats["hole_expand_gain"])
+    if hole_gain or cohort_gain:
+        hollow = False
+        propose_stats["hollow_miss"] = False
     if hollow and mcts_runner.agent is not None:
         mcts_runner.agent.note_macro_miss(mcts_action)
         if (

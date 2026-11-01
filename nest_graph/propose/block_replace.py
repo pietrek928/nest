@@ -348,6 +348,8 @@ def _emit_hole_candidates(
     free_space,
     cluster_patterns,
     victim_poses: Sequence[tuple[float, float, float]] | None = None,
+    packed_group_ids: Sequence[int] | None = None,
+    packed_transforms: Sequence[tuple[float, float, float] | np.ndarray] | None = None,
 ) -> tuple[list[tuple[int, np.ndarray, BaseGeometry, Geometry]], int, int]:
     # cycle: pipeline → block_replace (3b); placements_pattern hoisted at module top
     from nest_graph.config import ProposeConfig
@@ -360,6 +362,24 @@ def _emit_hole_candidates(
     enabled = _HOLE_PROPOSERS
     packed_g = [_as_geom(p) for p in kept_list]
     packed_g = [g for g in packed_g if g is not None]
+    # H1: real kept gids/poses so hole cluster_copy sees neighborhood grain.
+    # Both sequences must align with kept_list; else fall back to zeros together.
+    n_kept = len(kept_list)
+    poses_ok = (
+        packed_group_ids is not None
+        and packed_transforms is not None
+        and len(packed_group_ids) == n_kept
+        and len(packed_transforms) == n_kept
+    )
+    if poses_ok:
+        packed_gids = [int(g) for g in packed_group_ids]
+        packed_trs: list[tuple[float, float, float]] = []
+        for tr in packed_transforms:
+            row = np.asarray(tr, dtype=np.float64).reshape(3)
+            packed_trs.append((float(row[0]), float(row[1]), float(row[2])))
+    else:
+        packed_gids = [0] * n_kept
+        packed_trs = [(0.0, 0.0, 0.0)] * n_kept
     voids = [g for g in (void_geoms or ()) if g is not None]
     out: list[tuple[int, np.ndarray, BaseGeometry, Geometry]] = []
     in_hull = 0
@@ -404,8 +424,8 @@ def _emit_hole_candidates(
                 enabled_proposers=enabled,
                 cluster_patterns=patterns,
                 packed_polys=kept_list,
-                packed_group_ids=[0] * len(kept_list),
-                packed_transforms=[(0.0, 0.0, 0.0)] * len(kept_list),
+                packed_group_ids=packed_gids,
+                packed_transforms=packed_trs,
                 full_packed_geoms=packed_g,
                 cascade_zone="void_seek",
                 void_pole=pole,
@@ -695,6 +715,8 @@ def try_block_hole_renest(
         (float(tr[0]), float(tr[1]), float(tr[2]))
         for _gid, tr, _p, _g, _vi in victim_cands
     ]
+    # H1 research: forwarding real kept poses dumped late Δ med below H0;
+    # keep _emit_hole_candidates pose API (pytest) but ship zeros at call site.
     cands, in_hull, mate_n = _emit_hole_candidates(
         sheet=sheet,
         kept_geoms=kept_geoms,
@@ -839,6 +861,8 @@ def try_block_hole_renest(
         new_count=len(new_sel),
         new_area=new_area,
     ):
+        # H3 research: hybrid unlocked_void accept of count-drop dumped late Δ;
+        # keep lex_count_area_better as sole 3b accept SoT.
         telem["block_hole_reject_reason"] = (
             "no_gain" if not append_gids else "lex"
         )

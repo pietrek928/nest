@@ -34,6 +34,7 @@ from nest_graph.propose.selection_compose import (
     kiss_lock_subset,
     sheet_diag_from,
 )
+from nest_graph.propose.void_selection import count_selected_in_free
 from nest_graph.propose.first_pass_border import (
     first_pass_border_ring_selection,
     first_pass_layered_selection,
@@ -390,6 +391,15 @@ def run_mid_pack_stages(
         pin_all_blocked_streak += 1
     elif not skip_pin:
         pin_all_blocked_streak = 0
+    # H2: post-3b/pin void nest (compose-only n_void_nest poisoned hollow miss).
+    n_void_post = int(composed.n_void_nest)
+    if composed.free_poly is not None and selected_polys:
+        try:
+            n_void_post = int(count_selected_in_free(
+                ctx.polys, selected_polys, composed.free_poly,
+            ))
+        except Exception:
+            n_void_post = int(composed.n_void_nest)
     result = MidPackStagesResult(
         selected_polys=list(selected_polys),
         polys=list(ctx.polys),
@@ -401,7 +411,7 @@ def run_mid_pack_stages(
         refine_scores=list(composed.refine_scores),
         free_poly=composed.free_poly,
         free_info=composed.free_info,
-        n_void_nest=int(composed.n_void_nest),
+        n_void_nest=int(n_void_post),
         boost_hits=dict(composed.boost_hits or {}),
         polish_budget=budget,
     )
