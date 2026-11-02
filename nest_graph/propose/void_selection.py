@@ -636,6 +636,15 @@ def apply_void_selection_boosts(
         pole_w = float(pole_w) * scale
         if propose_stats is not None:
             propose_stats["void_island_soft_scale"] = float(scale)
+            # Letter B parked: pole ×(1−p) dumped late Δ below open (research loop).
+            propose_stats["void_pole_conflict_scale"] = 1.0
+            fit_bit = 1.0 if bool(getattr(free_info, "fits_part", True)) else 0.0
+            need_r = float(getattr(free_info, "fit_need_r", 0.0) or 0.0)
+            in_r = float(getattr(free_info, "fit_in_r", 0.0) or 0.0)
+            if need_r > 1e-12:
+                propose_stats["void_fit_ratio"] = max(0.0, min(1.0, in_r / need_r))
+            else:
+                propose_stats["void_fit_ratio"] = float(fit_bit)
     # Dh1: when Motif joins exist but nest materialization is weak, nudge motif weight
     # (island boost already applied below — scale motif only here).
     if propose_stats is not None and free_info is not None and is_large_void(free_info):

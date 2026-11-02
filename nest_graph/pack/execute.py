@@ -36,6 +36,29 @@ def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -
     return 1.0 if int(fp) else 0.0
 
 
+def void_fit_ratio_from_stats(
+    propose_stats: dict | None, *, default: float = 0.0
+) -> float:
+    """Continuous clamp(in_r / need_r) for conflict_p; falls back to 0/1 fit bit."""
+    if not isinstance(propose_stats, dict):
+        return float(default)
+    in_r = propose_stats.get("fit_in_r")
+    need_r = propose_stats.get("fit_need_r")
+    leak = propose_stats.get("void_leak")
+    if isinstance(leak, dict):
+        if in_r is None:
+            in_r = leak.get("fit_in_r")
+        if need_r is None:
+            need_r = leak.get("fit_need_r")
+    if in_r is None or need_r is None:
+        return float(void_fit_r_from_stats(propose_stats, default=default))
+    need = float(need_r)
+    inn = float(in_r)
+    if need <= 1e-12:
+        return float(void_fit_r_from_stats(propose_stats, default=default))
+    return max(0.0, min(1.0, inn / need))
+
+
 def region_for_free_kind(free_kind, *, void_fit_r: float = 0.0) -> MacroRegion:
     """D1: Void when placeable (LargeVoid or SwissCheese); else Sheet fallback."""
     if void_placeable(free_kind, void_fit_r):
@@ -291,6 +314,8 @@ def board_snapshot_from_selection(
     elif free_kind != FreeKind.Empty and not is_large_void(free_kind) and max_void_ratio <= 0.0:
         void_fill = float(propose_stats.get("outline_cov", 0.0) or 0.0)
     fit_r = void_fit_r_from_stats(propose_stats)
+    fit_ratio = void_fit_ratio_from_stats(propose_stats)
+    propose_stats["void_fit_ratio"] = float(fit_ratio)
     return BoardSnapshot(
         packed_gids=packed_gids,
         packed_transforms=packed_tf,
@@ -303,6 +328,7 @@ def board_snapshot_from_selection(
         void_fill=void_fill,
         free_kind=free_kind,
         void_fit_r=float(fit_r),
+        void_fit_ratio=float(fit_ratio),
         motif_ids_used=(
             (int(mcts_action.motif_id),)
             if mcts_action is not None and int(mcts_action.motif_id) >= 0

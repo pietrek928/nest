@@ -1,3 +1,4 @@
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "decision_graph.h"
@@ -59,6 +60,29 @@ TEST_CASE("DecisionGraph Mutex is derived via conflicts PathNode", "[decision_gr
     REQUIRE(dg.mutex_n() == 1);
     dg.add_motif_join(0, 0, 3);
     REQUIRE(dg.mutex_n() == 1);
+}
+
+TEST_CASE("DecisionGraph conflict_p soft Macro vs hard Pose", "[decision_graph]") {
+    DecisionGraph dg;
+    PoseGraph g;
+    append_elem_at(g, 0, 0.0f, 0.0f);
+    append_elem_at(g, 0, 1.0f, 0.0f);
+    add_collision_pair(g, 0, 1);
+    dg.replace_poses(g);
+    dg.set_pose_kind(0, kPoseKindVoid);
+    const PathNode macro = node_macro(0);
+    const PathNode pose0 = node_pose(0);
+    const PathNode pose1 = node_pose(1);
+    REQUIRE_FALSE(dg.conflicts(macro, pose0));
+    const float p_partial = dg.conflict_p(macro, pose0, FreeKind::LargeVoid, 0.5f);
+    REQUIRE(p_partial > 0.f);
+    REQUIRE(p_partial < kConflictPAlpha);
+    REQUIRE(p_partial == Catch::Approx(kConflictPAlpha * 0.5f).margin(1e-5f));
+    const float p_phantom = dg.conflict_p(macro, pose0, FreeKind::LargeVoid, 0.f);
+    REQUIRE(p_phantom == Catch::Approx(kConflictPAlpha).margin(1e-5f));
+    REQUIRE(dg.conflict_p(macro, pose0, FreeKind::Empty, 0.f) == 0.f);
+    REQUIRE(dg.conflict_p(pose0, pose1, FreeKind::LargeVoid, 0.f) == 1.f);
+    REQUIRE(dg.conflicts(pose0, pose1));
 }
 
 TEST_CASE("nest_by_scores DecisionGraph forwards to poses", "[decision_graph]") {

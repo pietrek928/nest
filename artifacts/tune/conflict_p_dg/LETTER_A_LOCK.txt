@@ -1,0 +1,11 @@
+Letter A lock (conflict_p SoT + continuous void_fit_ratio + Swiss AMAF −0.2 + telem)
+
+Open floors: early med/min 0.577/0.571; late Δ med/min +0.1852/+0.1758
+
+A early r4 (seeds 0/1/2): 0.570 / 0.585 / 0.593 → med 0.585 min 0.570 (≥ open within noise)
+A late r4 N=3: Δ +0.1845 / +0.1837 / +0.1852 → med +0.1845 min +0.1837 (≥ open)
+
+Telem: extend_scaled>0, extend_dropped=0, conflict_p_soft_n>0 (late continuous mean ~0.5–0.6)
+
+Letter B pole ×(1−p): tried, dumped late Δ below open → parked (pole_c=1.0)
+Letter C attract: stop (falsify densify/graph_to_nest; no attract-pair lock telem)

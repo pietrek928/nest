@@ -121,6 +121,12 @@ def format_void_leak_line(
         f"browse={int(propose_stats.get('browse_jump', 0))} "
         f"amaf_hits={int(propose_stats.get('amaf_hits', 0) or (propose_stats.get('mcts') or {}).get('amaf_hits', 0) or 0)} "
         f"amaf_miss={int(propose_stats.get('amaf_miss', 0))} "
+        f"extend_scaled={int(propose_stats.get('extend_scaled_n', 0) or 0)}/"
+        f"{int(propose_stats.get('extend_dropped_n', 0) or 0)} "
+        f"conflict_p={int(propose_stats.get('conflict_p_soft_n', 0) or 0)}/"
+        f"{float(propose_stats.get('conflict_p_mean', 0.0) or 0.0):.2f} "
+        f"fit_ratio={float(propose_stats.get('void_fit_ratio', 0.0) or 0.0):.2f} "
+        f"pole_c={float(propose_stats.get('void_pole_conflict_scale', 1.0) or 1.0):.2f} "
         f"kind_survive={int(propose_stats.get('kind_survive', 0))} "
         f"motif_credit={int(propose_stats.get('motif_nest_credit', 0))} "
         f"hollow={int(propose_stats.get('hollow_miss', 0))} "
@@ -885,6 +891,43 @@ def merge_phase_gate_telem(
             mt.get("mcts_preset_id", leak.get("mcts_preset_id", 0)) or 0
         )
         leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
+        leak["extend_scaled_n"] = int(
+            mt.get(
+                "extend_scaled_n",
+                propose_stats.get("extend_scaled_n", leak.get("extend_scaled_n", 0)),
+            )
+            or 0
+        )
+        leak["extend_dropped_n"] = int(
+            mt.get(
+                "extend_dropped_n",
+                propose_stats.get("extend_dropped_n", leak.get("extend_dropped_n", 0)),
+            )
+            or 0
+        )
+        leak["conflict_p_soft_n"] = int(
+            mt.get(
+                "conflict_p_soft_n",
+                propose_stats.get("conflict_p_soft_n", leak.get("conflict_p_soft_n", 0)),
+            )
+            or 0
+        )
+        leak["conflict_p_mean"] = float(
+            mt.get(
+                "conflict_p_mean",
+                propose_stats.get("conflict_p_mean", leak.get("conflict_p_mean", 0.0)),
+            )
+            or 0.0
+        )
+        leak["void_fit_ratio"] = float(
+            propose_stats.get("void_fit_ratio", leak.get("void_fit_ratio", 0.0)) or 0.0
+        )
+        leak["void_pole_conflict_scale"] = float(
+            propose_stats.get(
+                "void_pole_conflict_scale", leak.get("void_pole_conflict_scale", 1.0)
+            )
+            or 1.0
+        )
         leak["cheap_outer_reward_delta"] = float(
             mt.get("cheap_outer_reward_delta", leak.get("cheap_outer_reward_delta", 0.0)) or 0.0
         )
@@ -1660,6 +1703,28 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         propose_stats["mcts_cohort_macro_n"] = int(
             agent.telem.get("mcts_cohort_macro_n", 0) or 0
         )
+        propose_stats["extend_scaled_n"] = int(
+            agent.telem.get("extend_scaled_n", 0) or 0
+        )
+        propose_stats["extend_dropped_n"] = int(
+            agent.telem.get("extend_dropped_n", 0) or 0
+        )
+        propose_stats["conflict_p_soft_n"] = int(
+            agent.telem.get("conflict_p_soft_n", 0) or 0
+        )
+        propose_stats["conflict_p_mean"] = float(
+            agent.telem.get("conflict_p_mean", 0.0) or 0.0
+        )
+        if ctx.mcts_telem is not None:
+            ctx.mcts_telem["extend_scaled_n"] = int(
+                propose_stats["extend_scaled_n"]
+            )
+            ctx.mcts_telem["conflict_p_soft_n"] = int(
+                propose_stats["conflict_p_soft_n"]
+            )
+            ctx.mcts_telem["conflict_p_mean"] = float(
+                propose_stats["conflict_p_mean"]
+            )
     if ctx.mcts_telem is not None:
         propose_stats["browse_jump"] = int(ctx.mcts_telem.get("browse_jump", 0) or 0)
         propose_stats["motif_nest_credit"] = int(

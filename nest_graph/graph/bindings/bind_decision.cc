@@ -111,6 +111,7 @@ void bind_graph_decision(nb::module_ &m) {
                float void_fill,
                FreeKind free_kind,
                float void_fit_r,
+               float void_fit_ratio,
                std::vector<int32_t> motif_ids_used,
                nb::object /*telem*/) {
                 new (self) BoardSnapshot();
@@ -136,6 +137,7 @@ void bind_graph_decision(nb::module_ &m) {
                 self->void_fill = void_fill;
                 self->free_kind = free_kind;
                 self->void_fit_r = void_fit_r;
+                self->void_fit_ratio = void_fit_ratio;
                 self->motif_ids_used = std::move(motif_ids_used);
             },
             nb::kw_only(),
@@ -151,6 +153,7 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("void_fill") = 0.f,
             nb::arg("free_kind") = FreeKind::Empty,
             nb::arg("void_fit_r") = 0.f,
+            nb::arg("void_fit_ratio") = 0.f,
             nb::arg("motif_ids_used") = std::vector<int32_t>{},
             nb::arg("telem") = nb::none())
         .def_rw("packed_gids", &BoardSnapshot::packed_gids)
@@ -184,6 +187,7 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("void_fill", &BoardSnapshot::void_fill)
         .def_rw("free_kind", &BoardSnapshot::free_kind)
         .def_rw("void_fit_r", &BoardSnapshot::void_fit_r)
+        .def_rw("void_fit_ratio", &BoardSnapshot::void_fit_ratio)
         .def_rw("motif_ids_used", &BoardSnapshot::motif_ids_used)
         .def_prop_ro("n_packed", &BoardSnapshot::n_packed)
         .def_prop_ro("has_remaining", &BoardSnapshot::has_remaining);
@@ -478,6 +482,13 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("a"),
             nb::arg("b"))
         .def("conflicts", &DecisionGraph::conflicts, nb::arg("u"), nb::arg("v"))
+        .def(
+            "conflict_p",
+            &DecisionGraph::conflict_p,
+            nb::arg("u"),
+            nb::arg("v"),
+            nb::arg("free_kind") = FreeKind::Empty,
+            nb::arg("void_fit_ratio") = 0.f)
         .def("mutex_n", &DecisionGraph::mutex_n)
         .def("attach_n", &DecisionGraph::attach_n)
         .def("motif_n", &DecisionGraph::motif_n)

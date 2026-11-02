@@ -66,6 +66,8 @@ struct BoardSnapshot {
     FreeKind free_kind = FreeKind::Empty;
     // D1: ≥1 → placeable large_void; 0 unknown/phantom → no void_w boost.
     float void_fit_r = 0.f;
+    // Soft-p SoT: clamp(in_r / need_r) from void_fit_radii (continuous, not 0/1 bit).
+    float void_fit_ratio = 0.f;
     std::vector<int32_t> motif_ids_used;
 
     int32_t n_packed() const {

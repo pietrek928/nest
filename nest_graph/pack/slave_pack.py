@@ -434,6 +434,7 @@ def cheap_expand_slave(
             void_fill=parent.void_fill,
             free_kind=parent.free_kind,
             void_fit_r=float(getattr(parent, "void_fit_r", 0.0) or 0.0),
+            void_fit_ratio=float(getattr(parent, "void_fit_ratio", 0.0) or 0.0),
             motif_ids_used=parent.motif_ids_used,
         )
     timed_expand_ms(telem, t0)

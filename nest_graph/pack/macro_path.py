@@ -549,11 +549,8 @@ def macro_increase_path(
                 motif_extra = [force_motif_action]
             siblings = list(motif_extra) + list(siblings)
         # H3: after survive_rank, soft AMAF tie-break (hole-expand credit → path beam).
-        # P1: anc_id parent for pb (not block_node). void_fit_r omitted on path —
-        # placeable Void +0.35 / Rim −0.15 dumped early med below H3 (improve revert).
-        free_kind_anc = free_kind_from_any(
-            getattr(anc_snap, "free_kind", FreeKind.Empty)
-        )
+        # P1: void_fit_r / phantom omitted on path — placeable + phantom demotes dumped
+        # early med (Letter A r1). Soft conflict_p consumes on UCB expand only.
         amaf_scores: dict[int, float] = {}
         for i_alt, alt_sc in enumerate(siblings):
             try:
@@ -562,7 +559,7 @@ def macro_increase_path(
                     agent._amaf_pick_score(
                         key,
                         int(anc_id),
-                        free_kind=free_kind_anc,
+                        free_kind=FreeKind.Empty,
                     )
                 )
             except Exception:

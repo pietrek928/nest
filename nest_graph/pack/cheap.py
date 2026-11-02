@@ -558,6 +558,7 @@ def pack_execute_snapshot(
         void_fill=float(getattr(snap, "void_fill", 0.0) or 0.0),
         free_kind=free_kind,
         void_fit_r=float(getattr(snap, "void_fit_r", 0.0) or 0.0),
+        void_fit_ratio=float(getattr(snap, "void_fit_ratio", 0.0) or 0.0),
         motif_ids_used=motif_used or tuple(getattr(snap, "motif_ids_used", ()) or ()),
     )
     pack_cache["last_execute_telem"] = telem

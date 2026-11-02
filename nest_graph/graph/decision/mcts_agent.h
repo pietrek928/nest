@@ -14,6 +14,7 @@
 
 #include "decision/action_gen.h"
 #include "decision_arena.h"
+#include "decision_graph.h"
 #include "macro_niche_archive.h"
 #include "motif_base.h"
 #include "node_signature.h"
@@ -49,6 +50,10 @@ struct MctsTelem {
     int32_t nearest_warm = 0;
     int32_t amaf_pick = 0;
     float amaf_survive_scale = 0.f;
+    int32_t extend_scaled_n = 0;
+    int32_t extend_dropped_n = 0;
+    int32_t conflict_p_soft_n = 0;
+    float conflict_p_sum = 0.f;
 };
 
 struct MotifCohortEntry {
@@ -621,7 +626,8 @@ public:
         const ActionKey &key,
         int32_t parent_id,
         FreeKind free_kind = FreeKind::Empty,
-        float void_fit_r = 0.f
+        float void_fit_r = 0.f,
+        float void_fit_ratio = 0.f
     ) {
         if (arena == nullptr) {
             return MCTS_NEG_INF;
@@ -715,8 +721,17 @@ public:
             miss_rate = std::max(0.f, std::min(1.f, miss_rate));
             score += void_bonus * (1.f - miss_rate);
         }
+        // Soft Macro↔Void: keep Swiss −0.2 magnitude under phantom (fit_r bit).
+        // Continuous conflict_p telem from void_fit_ratio; Letter B consumes p on pole.
+        // (×(1−α) and ratio-softened −0.2 both dumped early min below open.)
         if (phantom && region_i == void_i) {
             score -= 0.2f;
+            const float p = soft_macro_conflict_p(free_kind, void_fit_ratio);
+            telem.extend_scaled_n += 1;
+            if (p > 0.f) {
+                telem.conflict_p_soft_n += 1;
+                telem.conflict_p_sum += p;
+            }
         }
         if (placeable && region_i == rim_i) {
             score -= 0.15f;
@@ -802,10 +817,12 @@ public:
         std::vector<int32_t> warm;
         FreeKind free_kind = FreeKind::Empty;
         float void_fit_r = 0.f;
+        float void_fit_ratio = 0.f;
         if (snapshot != nullptr) {
             warm = warm_motif_ids(snapshot);
             free_kind = snapshot->free_kind;
             void_fit_r = snapshot->void_fit_r;
+            void_fit_ratio = snapshot->void_fit_ratio;
         }
         std::vector<MotifCohortSpec> cohort_specs;
         if (place_cohort_ready) {
@@ -867,7 +884,8 @@ public:
         float best_score = MCTS_NEG_INF;
         for (const MacroAction *a : untried) {
             const ActionKey key = action_key(*a);
-            const float score = amaf_pick_score(key, parent_id, free_kind, void_fit_r);
+            const float score = amaf_pick_score(
+                key, parent_id, free_kind, void_fit_r, void_fit_ratio);
             if (score > best_score) {
                 best_score = score;
                 best = a;

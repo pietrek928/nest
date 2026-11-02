@@ -9,6 +9,26 @@
 
 /** Untagged MemberOf (history / elite / carry unless stamped). Q158. */
 inline constexpr uint8_t kPoseKindUntagged = 255;
+/** Soft Macro↔* conflict scale: p = α · (1 − void_fit_ratio). */
+inline constexpr float kConflictPAlpha = 0.85f;
+/** pose_kind values match MacroRegion (Rim=0 Void=1 Sheet=2 Motif=3). */
+inline constexpr uint8_t kPoseKindRim = 0;
+inline constexpr uint8_t kPoseKindVoid = 1;
+inline constexpr uint8_t kPoseKindSheet = 2;
+
+/** Region-level soft-p for Void AMAF (same formula as Macro↔Void, no kind scale). */
+inline float soft_macro_conflict_p(FreeKind free_kind, float void_fit_ratio) {
+    if (free_kind != FreeKind::LargeVoid) {
+        return 0.f;
+    }
+    float r = void_fit_ratio;
+    if (r < 0.f) {
+        r = 0.f;
+    } else if (r > 1.f) {
+        r = 1.f;
+    }
+    return kConflictPAlpha * (1.f - r);
+}
 
 struct AttachNode {
     Tvertex a = -1;
@@ -159,7 +179,10 @@ public:
         return node_attach(static_cast<int32_t>(i), e.a, e.b);
     }
 
-    /** Soft mutex for Macro↔*; Join/Attach use member-set Collision (Q380). */
+    /**
+     * Hard mutex only (Q380). Macro↔* never hard-conflicts — soft mass is conflict_p.
+     * Join/Attach use member-set Collision.
+     */
     bool conflicts(PathNode u, PathNode v) const {
         if (u.kind == PathKind::Macro || v.kind == PathKind::Macro) {
             return false;
@@ -181,6 +204,33 @@ public:
             return false;
         }
         return member_sets_collide(ua, ub, va, vb);
+    }
+
+    /** Soft Macro↔* conflict mass; hard pairs return 0 or 1 (conflicts saturation). */
+    float conflict_p(
+        PathNode u,
+        PathNode v,
+        FreeKind free_kind,
+        float void_fit_ratio
+    ) const {
+        const bool u_macro = u.kind == PathKind::Macro;
+        const bool v_macro = v.kind == PathKind::Macro;
+        if (u_macro || v_macro) {
+            if (free_kind != FreeKind::LargeVoid) {
+                return 0.f;
+            }
+            float r = void_fit_ratio;
+            if (r < 0.f) {
+                r = 0.f;
+            } else if (r > 1.f) {
+                r = 1.f;
+            }
+            float p = kConflictPAlpha * (1.f - r);
+            const PathNode &other = u_macro ? v : u;
+            const float kind_scale = conflict_p_kind_scale(other);
+            return p * kind_scale;
+        }
+        return conflicts(u, v) ? 1.f : 0.f;
     }
 
     /** One-shot derived Mutex count via conflicts(PathNode, PathNode) (Q380). */
@@ -470,6 +520,28 @@ private:
     bool member_sets_collide(Tvertex a, Tvertex b, Tvertex c, Tvertex d) const {
         return pose_has_collision(poses_, a, c) || pose_has_collision(poses_, a, d)
             || pose_has_collision(poses_, b, c) || pose_has_collision(poses_, b, d);
+    }
+
+    float conflict_p_kind_scale(PathNode other) const {
+        auto scale_of = [this](Tvertex v) -> float {
+            if (v < 0 || static_cast<std::size_t>(v) >= pose_kind_.size()) {
+                return 1.f;
+            }
+            const uint8_t k = pose_kind_[static_cast<std::size_t>(v)];
+            if (k == kPoseKindRim || k == kPoseKindSheet) {
+                return 0.5f;
+            }
+            return 1.f;
+        };
+        if (other.kind == PathKind::Pose) {
+            return scale_of(static_cast<Tvertex>(other.id));
+        }
+        if (other.kind == PathKind::MotifJoin || other.kind == PathKind::Attach) {
+            const float sa = scale_of(other.a);
+            const float sb = scale_of(other.b);
+            return sa > sb ? sa : sb;
+        }
+        return 1.f;
     }
 
     DecisionArena macros_;

@@ -72,6 +72,10 @@ void sync_telem_to_agent(MctsAgent &agent, const nb::dict &telem) {
     t.nearest_warm = get_i("nearest_warm", t.nearest_warm);
     t.amaf_pick = get_i("amaf_pick", t.amaf_pick);
     t.amaf_survive_scale = get_f("amaf_survive_scale", t.amaf_survive_scale);
+    t.extend_scaled_n = get_i("extend_scaled_n", t.extend_scaled_n);
+    t.extend_dropped_n = get_i("extend_dropped_n", t.extend_dropped_n);
+    t.conflict_p_soft_n = get_i("conflict_p_soft_n", t.conflict_p_soft_n);
+    t.conflict_p_sum = get_f("conflict_p_sum", t.conflict_p_sum);
 }
 
 void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
@@ -96,6 +100,14 @@ void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
     }
     if (t.amaf_survive_scale > 0.f) {
         telem["amaf_survive_scale"] = t.amaf_survive_scale;
+    }
+    if (t.extend_scaled_n > 0) {
+        telem["extend_scaled_n"] = t.extend_scaled_n;
+    }
+    telem["extend_dropped_n"] = t.extend_dropped_n;
+    if (t.conflict_p_soft_n > 0) {
+        telem["conflict_p_soft_n"] = t.conflict_p_soft_n;
+        telem["conflict_p_mean"] = t.conflict_p_sum / static_cast<float>(t.conflict_p_soft_n);
     }
 }
 
@@ -619,10 +631,15 @@ void bind_graph_mcts(nb::module_ &m) {
                nb::object key,
                int32_t parent_id,
                FreeKind free_kind,
-               float void_fit_r) {
+               float void_fit_r,
+               float void_fit_ratio) {
                 h.pull_state();
                 const float score = h.agent.amaf_pick_score(
-                    action_key_from_py_tuple(key), parent_id, free_kind, void_fit_r);
+                    action_key_from_py_tuple(key),
+                    parent_id,
+                    free_kind,
+                    void_fit_r,
+                    void_fit_ratio);
                 h.push_state();
                 return score;
             },
@@ -630,5 +647,6 @@ void bind_graph_mcts(nb::module_ &m) {
             nb::arg("parent_id"),
             nb::kw_only(),
             nb::arg("free_kind") = FreeKind::Empty,
-            nb::arg("void_fit_r") = 0.f);
+            nb::arg("void_fit_r") = 0.f,
+            nb::arg("void_fit_ratio") = 0.f);
 }
