@@ -10,6 +10,7 @@ from shapely.ops import nearest_points
 
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
+from nest_graph.free_kind_util import void_phantom
 from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
 from nest_graph.propose.placement_common import (
     as_geometry,
@@ -419,15 +420,16 @@ def local_se2_selection(
         pass
 
     force_hole = bool(getattr(ctx, "force_hole_open", False)) if ctx is not None else False
-    # C: when void fits (or phantom), floaters slide away from the true void
-    # pole in the main pass. Per-move guard keeps r ≥ r_entry (no restore /
-    # no rim wipe). Force-hole folded into this pass.
+    # C: away_floaters only for LargeVoid phantom (or force_hole∧fits). Swiss !fit
+    # does not hole-open — that was sliver-widening noise.
     pole_live = (
         pole is not None
         and not getattr(pole, "is_empty", False)
         and bool(propose_cfg.enable_gravity_compaction)
     )
-    phantom_hole = (not fits_part) and pole_live
+    free_kind = getattr(ctx, "free_kind", None) if ctx is not None else None
+    fit_r = 1.0 if fits_part else 0.0
+    phantom_hole = pole_live and void_phantom(free_kind, fit_r)
     away_floaters = pole_live and (phantom_hole or (force_hole and bool(fits_part)))
     r_entry = 0.0
     if pole_live and pole is not None:

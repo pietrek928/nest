@@ -143,6 +143,11 @@ def _sibling_actions(
         if snapshot is not None
         else FreeKind.Empty
     )
+    void_fit_r = (
+        float(getattr(snapshot, "void_fit_r", 0.0) or 0.0)
+        if snapshot is not None
+        else 0.0
+    )
     return list(
         sibling_macro_actions(
             [int(g) for g in remaining_gids],
@@ -154,6 +159,7 @@ def _sibling_actions(
             _place_cohort_specs(agent),
             blocked_action,
             _agent_preset_ids(agent),
+            void_fit_r,
         )
     )
 
@@ -497,6 +503,7 @@ def macro_increase_path(
             continue
         rem = tuple(int(g) for g in anc_snap.remaining_gids)
         path_presets = _agent_preset_ids(agent)
+        void_fit_anc = float(getattr(anc_snap, "void_fit_r", 0.0) or 0.0)
         if blocked is None:
             siblings = generate_macros(
                 rem,
@@ -507,6 +514,7 @@ def macro_increase_path(
                 free_kind=free_kind_from_any(getattr(anc_snap, "free_kind", FreeKind.Empty)),
                 motif_cohorts=_place_cohort_raw(agent),
                 preset_ids=path_presets,
+                void_fit_r=void_fit_anc,
             )
         else:
             siblings = _sibling_actions(
@@ -533,6 +541,7 @@ def macro_increase_path(
                     ),
                     motif_cohorts=_place_cohort_raw(agent),
                     preset_ids=path_presets,
+                    void_fit_r=void_fit_anc,
                 )
                 if getattr(a, "region", None) == MacroRegion.Motif
             ]

@@ -3279,10 +3279,12 @@ def proposed_transforms_for_groups(
                     float(part_poly.area),
                     min_dist,
                     void_ratio_threshold=void_thr,
+                    fit_shape=part_poly,
                 )
                 if (
                     getattr(propose_cfg, "enable_void_large_hijack", True)
                     and is_large_void(free_analysis)
+                    and bool(getattr(free_analysis, "fits_part", True))
                     and free_analysis.target_pt is not None
                     and not (zone_info.is_corridor or zone_info.is_annulus)
                     and not force_zone
@@ -3330,6 +3332,7 @@ def proposed_transforms_for_groups(
                     if (
                         getattr(propose_cfg, "enable_void_large_hijack", True)
                         and is_large_void(free_analysis)
+                        and bool(getattr(free_analysis, "fits_part", True))
                         and free_analysis.target_pt is not None
                         and place_zone_token(force_zone) == place_zone_token(PlaceZone.InteriorPocket)
                     ):
@@ -3349,6 +3352,7 @@ def proposed_transforms_for_groups(
                     elif (
                         getattr(propose_cfg, "enable_void_large_hijack", True)
                         and is_large_void(free_analysis)
+                        and bool(getattr(free_analysis, "fits_part", True))
                         and free_analysis.target_pt is not None
                         and place_zone_token(force_zone) in ("cluster_edge", "empty_border", "border_gap")
                     ):

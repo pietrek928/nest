@@ -30,6 +30,7 @@ def generate_macros(
     free_kind=None,
     motif_cohorts=None,
     preset_ids=(),
+    void_fit_r: float = 0.0,
 ):
     return _generate_macros_native(
         [int(g) for g in remaining_gids],
@@ -40,4 +41,5 @@ def generate_macros(
         free_kind_from_any(free_kind if free_kind is not None else FreeKind.Empty),
         motif_cohort_specs(motif_cohorts),
         [int(p) for p in (preset_ids or ())],
+        float(void_fit_r),
     )

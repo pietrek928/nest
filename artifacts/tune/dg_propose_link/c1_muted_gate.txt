@@ -1,0 +1,6 @@
+n_graph=8
+score_diff=True
+nest_diff=True
+nest0=(2, 4, 5, 7)
+nest1=(2, 3, 6, 7)
+C1_OPEN=True

@@ -39,6 +39,19 @@ inline MacroRegion zone_to_region(PlaceZone zone) {
     }
 }
 
+/** Close arm: LargeVoid or SwissCheese with void_fit_r ≥ 1 (matches Python void_placeable). */
+inline bool void_placeable(FreeKind free_kind, float void_fit_r) {
+    if (free_kind != FreeKind::LargeVoid && free_kind != FreeKind::SwissCheese) {
+        return false;
+    }
+    return void_fit_r >= 1.f;
+}
+
+/** Phantom LargeVoid only — Swiss !fit stays the else arm. */
+inline bool void_phantom(FreeKind free_kind, float void_fit_r) {
+    return free_kind == FreeKind::LargeVoid && void_fit_r < 1.f;
+}
+
 /** Niche AMAF stays (region, rule=0, motif) — deliberately ignores preset_id/rule_id. */
 inline std::tuple<int32_t, int32_t, int32_t> niche_amaf_key(const MacroAction *action) {
     if (action == nullptr) {
@@ -65,7 +78,8 @@ inline std::vector<MacroAction> generate_macros(
     const std::vector<int32_t> &warm_motif_ids,
     FreeKind free_kind,
     const std::vector<MotifCohortSpec> &motif_cohorts,
-    const std::vector<int32_t> &preset_ids = {}) {
+    const std::vector<int32_t> &preset_ids = {},
+    float void_fit_r = 0.f) {
     std::vector<MacroAction> actions;
     if (remaining_gids.empty()) {
         return actions;
@@ -134,13 +148,14 @@ inline std::vector<MacroAction> generate_macros(
             }
             seen_motifs.insert(mid_i);
             const MotifRecord &rec = motif_base->at(mid_i);
-            // Pair rem preferred; D: single-gid Motif tip when one mate already packed.
+            // Pair rem preferred; D: single-gid Motif tip when placeable void.
             int32_t part = -1;
+            const bool placeable = void_placeable(free_kind, void_fit_r);
             if (rem.count(rec.gid_a) && rem.count(rec.gid_b)) {
                 part = rec.gid_a;
-            } else if (free_kind == FreeKind::LargeVoid && rem.count(rec.gid_a)) {
+            } else if (placeable && rem.count(rec.gid_a)) {
                 part = rec.gid_a;
-            } else if (free_kind == FreeKind::LargeVoid && rem.count(rec.gid_b)) {
+            } else if (placeable && rem.count(rec.gid_b)) {
                 part = rec.gid_b;
             }
             if (part < 0) {
@@ -178,7 +193,11 @@ inline std::vector<MacroAction> generate_macros(
     }
 
     std::vector<MacroRegion> region_order;
-    if (free_kind == FreeKind::LargeVoid) {
+    // Placeable (LV or Swiss) → Void-first. Phantom LV keeps historical Void-first
+    // (AMAF −0.2 soft-demotes); hard Rim→Sheet→Void dumped early min vs open.
+    // Swiss !fit / Full keep Rim→Void→Sheet.
+    if (void_placeable(free_kind, void_fit_r)
+        || free_kind == FreeKind::LargeVoid) {
         region_order = {MacroRegion::Void, MacroRegion::Rim, MacroRegion::Sheet};
     } else {
         region_order = {MacroRegion::Rim, MacroRegion::Void, MacroRegion::Sheet};

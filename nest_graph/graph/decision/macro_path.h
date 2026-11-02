@@ -119,7 +119,8 @@ inline std::vector<MacroAction> sibling_macro_actions(
     FreeKind free_kind,
     const std::vector<MotifCohortSpec> &motif_cohorts,
     const MacroAction &blocked_action,
-    const std::vector<int32_t> &preset_ids = {}) {
+    const std::vector<int32_t> &preset_ids = {},
+    float void_fit_r = 0.f) {
     const auto blocked_key = macro_action_key(blocked_action);
     std::vector<MacroAction> actions = generate_macros(
         remaining_gids,
@@ -129,7 +130,8 @@ inline std::vector<MacroAction> sibling_macro_actions(
         warm_motif_ids,
         free_kind,
         motif_cohorts,
-        preset_ids);
+        preset_ids,
+        void_fit_r);
     std::vector<MacroAction> out;
     out.reserve(actions.size());
     for (const MacroAction &a : actions) {

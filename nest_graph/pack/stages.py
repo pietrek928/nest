@@ -3,8 +3,8 @@
 import time
 from typing import Any, Callable, Sequence
 
-from nest_graph.free_kind_util import free_kind_token, is_large_void
-from nest_graph.graph import score_elems
+from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
+from nest_graph.graph import FreeKind, score_elems
 from nest_graph.pack.ctx import (
     FirstPassBorderResult,
     MidPackStagesResult,
@@ -527,6 +527,7 @@ def run_first_pass_border_pack(
             packed_shapely=rim_geoms,
             pack_geoms=rim_pack,
             run_uh=True,
+            part_by_group=getattr(ctx, "part_by_group", None),
         )
         if post_rim is None:
             raise RuntimeError("uh free prep skipped")
@@ -665,7 +666,8 @@ def run_post_pack_stage(
             void_leak_stats.setdefault("relocate", {})
             void_leak_stats.setdefault("local_se2", {})
         return list(ctx.polys), list(ctx.transform), list(selected_polys), empty_stats
-    if prep.push_pt is None or not is_large_void(prep.free_post):
+    fk_post = free_kind_from_any(getattr(prep.free_post, "kind", None))
+    if prep.push_pt is None or fk_post not in (FreeKind.LargeVoid, FreeKind.SwissCheese):
         return list(ctx.polys), list(ctx.transform), list(selected_polys), empty_stats
     out: dict = {
         "polys": list(ctx.polys),

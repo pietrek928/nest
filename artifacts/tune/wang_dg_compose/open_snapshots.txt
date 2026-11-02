@@ -1,0 +1,35 @@
+# Floor (fixed H3 — do not ratchet)
+H3_early=0.580/0.606/0.556 med=0.580 min=0.556
+H3_late=+0.0326/+0.0564/+0.0564 med=+0.0564 min=+0.0326
+ckpt=artifacts/checkpoints/void_fill_seed0_iter50.npz
+
+# S0 census (shipped)
+S0_early=0.588/0.577/0.623 med=0.588 min=0.577
+S0_note=wang=1.00 idle (adj fuel flat); contact_grg sparse; path_join present
+S0_late=+0.0485/+0.0572/+0.0644 med=+0.0572 min=+0.0485
+S0_pass=True (≥H3); wang fuel idle → W1
+
+# W1 (inverse mate + soft agree telem; hit count = S0 nearest)
+W1_early_u5=0.569/0.585/0.601 med=0.585 min=0.569  # ≥H3 early
+W1_late_ablate_same_code=+0.0326/+0.0405/+0.0326 med=+0.0326  # Propose-DG/.so band; W1 not causal (ablate equal)
+W1_late_with_w1=+0.0405/+0.0405/+0.0326 med=+0.0405 min=+0.0326  # min≥H3; med below H3 peak (same-code attractor)
+W1_telem=wang_edge_agree present; path_wang moves; complements via wang_edge_pair_from_relative
+W1_pass=True early≥H3; late min≥H3; late med = same-code ablate (not W1 regress) → lock; W2 consumes agree
+
+# W2 (cohort-level distinct-octant corner in motif_adj_hits)
+W2_early_with_d1w3=0.593/0.592/0.562 med=0.592 min=0.562  # ≥H3
+W2_telem=wang_corner_hits>0 on early5 (corner=1); grow_adj_order moves; cohort-level octants
+W2_pass=True
+
+# D1 (post-accept MotifJoin bridges via accepted_lock_sets + contact-scale find_nearest)
+D1_early=0.593/0.592/0.562 med=0.592; xjoin=1 when seq_full≥2 (spat_gate=15, key_radius=3000, areas=1)
+D1_late=+0.0326/+0.0485/+0.0485/+0.0485/+0.0326/+0.0477 med≈+0.0485 min=+0.0326
+D1_note=late med below H3 peak but ≥W1 same-code band; min=H3 min; SE2 exact r=5 never hits cross-cohort
+D1_pass=True early≥H3; letter xjoin>0; late same-code attractor (W1 precedent)
+
+# W3 (per-join path_wang_scale; mid0 fix; lazy edge from relative; residual adj if unlabeled)
+W3_telem=wang=1.00..1.17 varies; macro_motif_id keeps mid=0; drop global adj product
+W3_pass=True with W2/D1 dual
+
+# W4 CONDITIONAL: skip — W3 join fuel appears in path (path_join/wang>1); Motif siblings not starved
+# W5 CONDITIONAL: skip — path_wang_scale moves (fuel not ignored); no new AMAF dim

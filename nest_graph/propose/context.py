@@ -151,6 +151,62 @@ def void_fits_part(
     return bool(fits)
 
 
+def _void_component_polylabel(
+    poly: Polygon,
+    min_dist: float,
+    *,
+    void_polylabel,
+) -> Point:
+    try:
+        return Point(void_polylabel(poly, tolerance=max(float(min_dist), 1e-3)))
+    except Exception:
+        return poly.representative_point()
+
+
+def _pick_fit_target(
+    components: Sequence[Polygon],
+    *,
+    part_area: float,
+    min_dist: float,
+    fit_shape: Polygon | None,
+    void_polylabel,
+) -> tuple[bool, float, float, Polygon | None, Point | None]:
+    """Fit rem0/shape against any free component; prefer a fitting pocket.
+
+    Kind classification still uses the max-area component separately. Placeability
+    ORs across components so a rounder pocket is not hidden by a larger crescent.
+    """
+    if not components:
+        return True, 0.0, 0.0, None, None
+    ordered = sorted(components, key=lambda p: -float(p.area))
+    fallback_poly = ordered[0]
+    fallback_pt = _void_component_polylabel(
+        fallback_poly, min_dist, void_polylabel=void_polylabel
+    )
+    fallback_in = 0.0
+    fallback_need = 0.0
+    saw_probe = False
+    for poly in ordered:
+        pt = _void_component_polylabel(poly, min_dist, void_polylabel=void_polylabel)
+        fits, in_r, need_r = void_fit_radii(
+            poly,
+            None if fit_shape is not None else float(part_area),
+            shape=fit_shape,
+            min_dist=float(min_dist),
+            at_pt=pt,
+            use_boundary=True,
+        )
+        if not saw_probe:
+            fallback_in = float(in_r)
+            fallback_need = float(need_r)
+            fallback_poly = poly
+            fallback_pt = pt
+            saw_probe = True
+        if fits:
+            return True, float(in_r), float(need_r), poly, pt
+    return False, float(fallback_in), float(fallback_need), fallback_poly, fallback_pt
+
+
 def _make_free_space_analysis(
     *,
     kind: FreeKind | str,
@@ -160,15 +216,25 @@ def _make_free_space_analysis(
     largest_area: float = 0.0,
     target_poly: Polygon | None = None,
     target_pt: Point | None = None,
+    fit_shape: Polygon | None = None,
+    fits_part: bool | None = None,
+    fit_in_r: float | None = None,
+    fit_need_r: float | None = None,
 ) -> FreeSpaceAnalysis:
     kind_e = free_kind_from_any(kind)
-    fits = True
-    fit_in_r = 0.0
-    fit_need_r = 0.0
-    if kind_e != FreeKind.Full and target_poly is not None and float(part_area) > 0.0:
-        fits, fit_in_r, fit_need_r = void_fit_radii(
+    fits = True if fits_part is None else bool(fits_part)
+    in_r = 0.0 if fit_in_r is None else float(fit_in_r)
+    need_r = 0.0 if fit_need_r is None else float(fit_need_r)
+    if (
+        fits_part is None
+        and kind_e != FreeKind.Full
+        and target_poly is not None
+        and (fit_shape is not None or float(part_area) > 0.0)
+    ):
+        fits, in_r, need_r = void_fit_radii(
             target_poly,
-            float(part_area),
+            None if fit_shape is not None else float(part_area),
+            shape=fit_shape,
             min_dist=float(min_dist),
             at_pt=target_pt,
             use_boundary=True,
@@ -180,8 +246,8 @@ def _make_free_space_analysis(
         target_poly=target_poly,
         target_pt=target_pt,
         fits_part=bool(fits),
-        fit_in_r=float(fit_in_r),
-        fit_need_r=float(fit_need_r),
+        fit_in_r=float(in_r),
+        fit_need_r=float(need_r),
     )
 
 
@@ -217,6 +283,7 @@ def prep_free_space(
     pack_geoms: Sequence[Geometry] | None = None,
     snapshot: bool = False,
     max_topology_anchors: int = 6,
+    fit_shape: Polygon | None = None,
 ) -> FreeSpaceAnalysis | FreeSpaceSnapshot:
     """One free-space prep: analysis mid-pack, or full snapshot post-pack."""
     if snapshot:
@@ -228,6 +295,7 @@ def prep_free_space(
             void_ratio_threshold=void_ratio_threshold,
             max_topology_anchors=max_topology_anchors,
             pack_geoms=pack_geoms,
+            fit_shape=fit_shape,
         )
     return analyze_free_space(
         sheet,
@@ -236,6 +304,7 @@ def prep_free_space(
         min_dist,
         void_ratio_threshold=void_ratio_threshold,
         pack_geoms=pack_geoms,
+        fit_shape=fit_shape,
     )
 
 
@@ -269,6 +338,7 @@ def analyze_free_space(
     void_ratio_threshold: float = 2.5,
     free: BaseGeometry | None = None,
     pack_geoms: Sequence[Geometry] | None = None,
+    fit_shape: Polygon | None = None,
 ) -> FreeSpaceAnalysis:
     """Classify free space as one large void vs Swiss-cheese slivers.
 
@@ -276,6 +346,8 @@ def analyze_free_space(
     so Mode A / late-sat / MIS agree on what counts as large_void.
     Pass ``free`` when the caller already computed ``sheet.difference(union(packed))``.
     Pass ``pack_geoms`` to derive ``free`` via native union when ``free`` is omitted.
+    Pass ``fit_shape`` (rem0 / smallest remaining) so placeability uses ``part_extents``;
+    kind ratio still uses ``part_area`` (typically mean catalog area).
     """
     from nest_graph.propose.void_topology import polylabel as void_polylabel
 
@@ -287,10 +359,14 @@ def analyze_free_space(
     if not placed and not pack_geoms:
         area = float(sheet.area)
         ratio = area / max(float(part_area), 1e-12)
-        try:
-            pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
-        except Exception:
-            pt = sheet.representative_point()
+        target = sheet if isinstance(sheet, Polygon) else None
+        pt = (
+            _void_component_polylabel(
+                sheet, min_dist, void_polylabel=void_polylabel
+            )
+            if isinstance(sheet, Polygon)
+            else sheet.representative_point()
+        )
         return _make_free_space_analysis(
             kind=(
                 FreeKind.LargeVoid if ratio > void_ratio_threshold
@@ -300,8 +376,9 @@ def analyze_free_space(
             part_area=part_area,
             min_dist=min_dist,
             largest_area=area,
-            target_poly=sheet if isinstance(sheet, Polygon) else None,
+            target_poly=target,
             target_pt=pt,
+            fit_shape=fit_shape,
         )
     if free is None:
         free = free_difference_from_pack_geoms(sheet, pack_geoms)
@@ -310,10 +387,14 @@ def analyze_free_space(
     if free is None and not placed:
         area = float(sheet.area)
         ratio = area / max(float(part_area), 1e-12)
-        try:
-            pt = Point(void_polylabel(sheet, tolerance=max(float(min_dist), 1e-3)))
-        except Exception:
-            pt = sheet.representative_point()
+        target = sheet if isinstance(sheet, Polygon) else None
+        pt = (
+            _void_component_polylabel(
+                sheet, min_dist, void_polylabel=void_polylabel
+            )
+            if isinstance(sheet, Polygon)
+            else sheet.representative_point()
+        )
         return _make_free_space_analysis(
             kind=(
                 FreeKind.LargeVoid if ratio > void_ratio_threshold
@@ -323,8 +404,9 @@ def analyze_free_space(
             part_area=part_area,
             min_dist=min_dist,
             largest_area=area,
-            target_poly=sheet if isinstance(sheet, Polygon) else None,
+            target_poly=target,
             target_pt=pt,
+            fit_shape=fit_shape,
         )
     components = _polygon_components(free)
     if not components:
@@ -333,28 +415,27 @@ def analyze_free_space(
         )
     largest = max(components, key=lambda p: float(p.area))
     ratio = float(largest.area) / max(float(part_area), 1e-12)
-    if ratio > void_ratio_threshold:
-        try:
-            pt = Point(void_polylabel(largest, tolerance=max(float(min_dist), 1e-3)))
-        except Exception:
-            pt = largest.representative_point()
-        return _make_free_space_analysis(
-            kind=FreeKind.LargeVoid,
-            max_void_ratio=ratio,
-            part_area=part_area,
-            min_dist=min_dist,
-            largest_area=float(largest.area),
-            target_poly=largest,
-            target_pt=pt,
-        )
+    kind = (
+        FreeKind.LargeVoid if ratio > void_ratio_threshold else FreeKind.SwissCheese
+    )
+    fits, fit_in_r, fit_need_r, target_poly, target_pt = _pick_fit_target(
+        components,
+        part_area=float(part_area),
+        min_dist=float(min_dist),
+        fit_shape=fit_shape,
+        void_polylabel=void_polylabel,
+    )
     return _make_free_space_analysis(
-        kind=FreeKind.SwissCheese,
+        kind=kind,
         max_void_ratio=ratio,
         part_area=part_area,
         min_dist=min_dist,
         largest_area=float(largest.area),
-        target_poly=largest,
-        target_pt=largest.representative_point(),
+        target_poly=target_poly,
+        target_pt=target_pt,
+        fits_part=bool(fits),
+        fit_in_r=float(fit_in_r),
+        fit_need_r=float(fit_need_r),
     )
 
 
@@ -367,6 +448,7 @@ def build_free_space_snapshot(
     void_ratio_threshold: float = 2.5,
     max_topology_anchors: int = 6,
     pack_geoms: Sequence[Geometry] | None = None,
+    fit_shape: Polygon | None = None,
 ) -> FreeSpaceSnapshot:
     """Build analyze + trapped voids + hull bays + topology poles once per pack.
 
@@ -394,6 +476,7 @@ def build_free_space_snapshot(
         void_ratio_threshold=void_ratio_threshold,
         free=free,
         pack_geoms=pack_geoms,
+        fit_shape=fit_shape,
     )
     voids = tuple(trapped_void_polygons(sheet, packed, free=free))
     bays = tuple(hull_bay_polygons(packed, min_dist=min_dist, sheet=sheet))

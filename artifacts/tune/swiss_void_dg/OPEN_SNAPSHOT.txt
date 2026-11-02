@@ -1,0 +1,5 @@
+Early open (HEAD before letters): seeds 0/1/2 area 0.571 / 0.615 / 0.577 → med 0.577 min 0.571
+Late open N=3 from void_fill_seed0_iter20.npz +8: Δcov +0.1924 / +0.1758 / +0.1852 → med +0.1852 min +0.1758
+
+ABC r1 early: 0.601 / 0.577 / 0.608 → med 0.601 min 0.577 (≥ open)
+ABC r1 late: see abc_late_r1_seed*.log

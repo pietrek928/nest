@@ -213,15 +213,17 @@ inline float leaf_reward(
     const int32_t packed = std::max(snapshot.n_packed(), 1);
     float void_w = lam_void;
     float rim_w = lam_rim;
-    // D1: phantom/unknown (void_fit_r < 1) — no large_void void_w inflate;
-    // scale void_fill by fit so area-ratio alone cannot inflate reward.
+    // D1: placeable LargeVoid inflates void_w; Swiss placeable keeps lam_void
+    // (high Swiss void_fill would reward staying Swiss). Scale void_fill by fit
+    // for LargeVoid and Swiss so hopeless contributes 0.
     const float fit_r = snapshot.void_fit_r;
     if (snapshot.free_kind == FreeKind::LargeVoid && fit_r >= 1.f) {
         void_w = std::max(void_w, 0.75f);
         rim_w = std::min(rim_w, 0.05f);
     }
     float void_fill_term = snapshot.void_fill;
-    if (snapshot.free_kind == FreeKind::LargeVoid) {
+    if (snapshot.free_kind == FreeKind::LargeVoid
+        || snapshot.free_kind == FreeKind::SwissCheese) {
         void_fill_term *= std::min(std::max(fit_r, 0.f), 1.f);
     }
     float base = snapshot.coverage + void_w * void_fill_term + rim_w * snapshot.rim_fill
@@ -684,12 +686,10 @@ public:
             (motif_base != nullptr && motif_base->size() > 0)
             || place_cohort_ready
             || !motif_cohorts.empty();
-        // D1: phantom soft-down Void AMAF; placeable large_void keeps void_bonus.
-        const bool void_placeable =
-            free_kind == FreeKind::LargeVoid && void_fit_r >= 1.f;
-        const bool void_phantom =
-            free_kind == FreeKind::LargeVoid && void_fit_r < 1.f;
-        if (void_placeable && region_i == void_i) {
+        // D1: placeable (LV or Swiss) Void AMAF; phantom LV soft-down Void.
+        const bool placeable = void_placeable(free_kind, void_fit_r);
+        const bool phantom = void_phantom(free_kind, void_fit_r);
+        if (placeable && region_i == void_i) {
             float void_bonus = 0.35f;
             float miss_rate = 0.f;
             if (visits > 0 && misses > 0) {
@@ -715,13 +715,13 @@ public:
             miss_rate = std::max(0.f, std::min(1.f, miss_rate));
             score += void_bonus * (1.f - miss_rate);
         }
-        if (void_phantom && region_i == void_i) {
+        if (phantom && region_i == void_i) {
             score -= 0.2f;
         }
-        if (void_placeable && region_i == rim_i) {
+        if (placeable && region_i == rim_i) {
             score -= 0.15f;
         }
-        if (free_kind == FreeKind::LargeVoid && region_i == motif_i && motif_fuel) {
+        if (placeable && region_i == motif_i && motif_fuel) {
             // Plan D Motif cohort/fuel bonus (Void keeps niche soft-scale only).
             score += 0.2f;
         }
@@ -826,7 +826,8 @@ public:
             warm,
             free_kind,
             cohort_specs,
-            preset_ids
+            preset_ids,
+            void_fit_r
         );
         int32_t cohort_n = 0;
         if (place_cohort_ready) {

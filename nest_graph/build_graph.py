@@ -479,6 +479,7 @@ def _seed_parent_free_kind(
     p_sheet: Any,
     part_areas: Sequence[float],
     nest_state: NestState | None,
+    part_by_group: dict | None = None,
 ):
     """P: seed ``free_kind`` before path probe (was after path — late path_ms starved)."""
     kind = free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
@@ -494,6 +495,7 @@ def _seed_parent_free_kind(
                     continue
                 if int(i) < len(nest_state.polys):
                     packed_fk.append(nest_state.polys[i])
+        rem = getattr(parent_snap, "remaining_gids", None)
         fk_prep = prep_selection_free(
             sheet=p_sheet,
             part_areas=part_areas,
@@ -501,6 +503,8 @@ def _seed_parent_free_kind(
             cfg_propose=cfg.propose,
             packed_shapely=packed_fk,
             pack_geoms=None,
+            part_by_group=part_by_group,
+            remaining_gids=list(rem) if rem is not None else None,
         )
         kind = free_kind_from_any(getattr(fk_prep.free_info, "kind", FreeKind.Empty))
         parent_snap.free_kind = kind
@@ -1533,6 +1537,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 p_sheet=p_sheet,
                 part_areas=part_areas,
                 nest_state=nest_state,
+                part_by_group={0: p1, 1: p2},
             )
             if is_large_void(fk) and not parent_free_hint:
                 parent_free_hint = True
@@ -2007,6 +2012,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             continue
                         if int(i) < len(nest_state.polys):
                             packed_fk.append(nest_state.polys[i])
+                rem_fk = getattr(parent_snap, "remaining_gids", None)
                 fk_prep = prep_selection_free(
                     sheet=p_sheet,
                     part_areas=part_areas,
@@ -2014,6 +2020,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     cfg_propose=cfg.propose,
                     packed_shapely=packed_fk,
                     pack_geoms=None,
+                    part_by_group={0: p1, 1: p2},
+                    remaining_gids=list(rem_fk) if rem_fk is not None else None,
                 )
                 parent_snap.free_kind = free_kind_from_any(
                     getattr(fk_prep.free_info, "kind", FreeKind.Empty)
@@ -2461,6 +2469,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sheet, void_geoms_compose = board_ctx_outline
             min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
 
+            rem_mid = (
+                list(getattr(parent_snap, "remaining_gids", ()) or ())
+                if parent_snap is not None
+                else None
+            )
             free_prep = schedule_prep_selection_free(
                 phase="mid",
                 sheet=sheet,
@@ -2468,6 +2481,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 min_dist=min_dist,
                 cfg_propose=cfg.propose,
                 nest_state=nest_state,
+                part_by_group={0: p1, 1: p2},
+                remaining_gids=rem_mid,
             )
             assert free_prep is not None
             free_info = free_prep.free_info
@@ -2756,6 +2771,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
         relocate_accepted = False
         void_leak_stats = propose_stats.get("void_leak") if propose_stats else None
+        rem_post = (
+            list(getattr(parent_snap, "remaining_gids", ()) or ())
+            if parent_snap is not None
+            else None
+        )
         post_prep = prepare_post_pack(
             sheet_compact=sheet_compact,
             void_geoms_post=void_geoms_post,
@@ -2773,6 +2793,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             void_leak_stats=void_leak_stats if isinstance(void_leak_stats, dict) else None,
             propose_stats=propose_stats,
             archived_patterns=archived_for_propose,
+            part_by_group=part_by_group,
+            remaining_gids=rem_post,
         )
         # L: refresh budget with densify pack_cfg (mid_hole_open) after tip settle.
         _free_post = getattr(post_prep, "free_post", None)

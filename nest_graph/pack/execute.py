@@ -4,7 +4,12 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from nest_graph.free_kind_util import coalesce_free_kind, free_kind_from_any, is_large_void
+from nest_graph.free_kind_util import (
+    coalesce_free_kind,
+    free_kind_from_any,
+    is_large_void,
+    void_placeable,
+)
 from nest_graph.graph import BoardSnapshot, FreeKind, MacroAction, MacroRegion, leaf_reward
 from nest_graph.pack.cache_key import macro_motif_id
 from nest_graph.pack.slave_pack import upsert_from_contacts
@@ -32,8 +37,8 @@ def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -
 
 
 def region_for_free_kind(free_kind, *, void_fit_r: float = 0.0) -> MacroRegion:
-    """D1: Sheet on phantom large_void; Void only when placeable (void_fit_r ≥ 1)."""
-    if is_large_void(free_kind) and float(void_fit_r) >= 1.0:
+    """D1: Void when placeable (LargeVoid or SwissCheese); else Sheet fallback."""
+    if void_placeable(free_kind, void_fit_r):
         return MacroRegion.Void
     return MacroRegion.Sheet
 
@@ -81,6 +86,35 @@ class SelectionFreePrep:
         return r if hasattr(r, "analysis") else None
 
 
+def fit_shape_for_remaining(
+    part_by_group: dict | None,
+    remaining_gids: Sequence[int] | None = None,
+) -> object | None:
+    """Smallest-extent remaining catalog polygon for void fit (rem0 fallback)."""
+    if not part_by_group:
+        return None
+    from nest_graph.propose.context import part_extents
+
+    gids: list[int]
+    if remaining_gids:
+        gids = [int(g) for g in remaining_gids if int(g) in part_by_group]
+    else:
+        gids = [int(g) for g in part_by_group.keys()]
+    if not gids:
+        return None
+    best_g = gids[0]
+    best_ext = float("inf")
+    for g in gids:
+        poly = part_by_group.get(int(g))
+        if poly is None or getattr(poly, "is_empty", False):
+            continue
+        _mn, mx = part_extents(poly)
+        if float(mx) < best_ext:
+            best_ext = float(mx)
+            best_g = int(g)
+    return part_by_group.get(best_g)
+
+
 def schedule_prep_selection_free(
     *,
     phase: str,
@@ -96,6 +130,9 @@ def schedule_prep_selection_free(
     selection_changed: bool = True,
     run_uh: bool = False,
     nest_state=None,
+    part_by_group: dict | None = None,
+    remaining_gids: Sequence[int] | None = None,
+    fit_shape=None,
 ) -> SelectionFreePrep | None:
     """Hybrid free-prep schedule (G3): Uh when needed; reuse mid when safe.
 
@@ -123,6 +160,9 @@ def schedule_prep_selection_free(
         packed_group_id=packed_group_id,
         packed_transform=packed_transform,
         snapshot=snap,
+        part_by_group=part_by_group,
+        remaining_gids=remaining_gids,
+        fit_shape=fit_shape,
     )
 
 
@@ -138,8 +178,15 @@ def prep_selection_free(
     packed_group_id: Sequence[int] | None = None,
     packed_transform: Sequence | None = None,
     snapshot: bool = False,
+    part_by_group: dict | None = None,
+    remaining_gids: Sequence[int] | None = None,
+    fit_shape=None,
 ) -> SelectionFreePrep:
-    """One free/board prep for mid-pack, post-DFS, and post-rim (Ua)."""
+    """One free/board prep for mid-pack, post-DFS, and post-rim (Ua).
+
+    Kind ratio uses mean ``part_areas``; placeability uses ``fit_shape`` (rem0 /
+    smallest remaining extent) when provided.
+    """
     mean_part = float(sum(part_areas) / len(part_areas)) if part_areas else 1.0
     void_thr = void_ratio_threshold(cfg_propose)
     geoms: list = list(pack_geoms) if pack_geoms is not None else []
@@ -171,6 +218,9 @@ def prep_selection_free(
                     continue
                 gids.append(int(nest_state.group_id[i]))
                 tfs.append(nest_state.transform[i])
+    shape = fit_shape
+    if shape is None:
+        shape = fit_shape_for_remaining(part_by_group, remaining_gids)
     free_result = prep_free_space(
         sheet,
         shapely_list,
@@ -179,6 +229,7 @@ def prep_selection_free(
         void_ratio_threshold=void_thr,
         pack_geoms=geoms or None,
         snapshot=snapshot,
+        fit_shape=shape,
     )
     return SelectionFreePrep(
         free_result=free_result,
@@ -794,6 +845,7 @@ __all__ = [
     "board_snapshot_from_selection",
     "ensure_motif_tip_for_fuel",
     "execute_pack",
+    "fit_shape_for_remaining",
     "make_execute_fn",
     "prep_selection_free",
     "prep_selection_freeze",

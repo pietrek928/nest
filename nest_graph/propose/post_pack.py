@@ -18,7 +18,12 @@ from nest_graph.propose.pipeline import allow_void_repack
 from nest_graph.propose.placement_common import post_pack_overlap_ok
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import iterative_multi_poles
-from nest_graph.free_kind_util import is_large_void
+from nest_graph.free_kind_util import (
+    free_kind_from_any,
+    is_large_void,
+    void_placeable,
+)
+from nest_graph.graph import FreeKind
 
 
 def run_post_pack_passes(
@@ -53,6 +58,7 @@ def run_post_pack_passes(
     archived_patterns: Sequence | None = None,
     fits_part: bool = True,
     force_hole_open: bool = False,
+    free_kind=None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity).
 
@@ -92,6 +98,7 @@ def run_post_pack_passes(
         board_geom=board_geom,
         fits_part=bool(fits_part),
         force_hole_open=bool(force_hole_open),
+        free_kind=free_kind,
     )
     if allow_repack and propose_cfg.enable_cluster_repack:
         out_polys, out_tr, sel, repack_stats = cluster_repack_selection(
@@ -259,6 +266,8 @@ def prepare_post_pack(
     void_leak_stats: dict | None,
     propose_stats: dict | None,
     archived_patterns: Sequence | None = None,
+    part_by_group: dict | None = None,
+    remaining_gids: Sequence[int] | None = None,
 ) -> PostPackPrep:
     from nest_graph.pack.execute import schedule_prep_selection_free  # cycle: execute→heavy_polish→post_pack
     sel_geoms = [
@@ -283,6 +292,8 @@ def prepare_post_pack(
         pack_geoms=sel_pack_geoms,
         prior=free_prep_mid,
         selection_changed=True,
+        part_by_group=part_by_group,
+        remaining_gids=remaining_gids,
     )
     assert free_prep_post is not None
     free_post = free_prep_post.free_info
@@ -315,7 +326,12 @@ def prepare_post_pack(
         propose_stats["repair_patterns_n"] = 0
     push_pt: Point | None = None
     reloc_poles: list = []
-    if is_large_void(free_post) and free_post.target_pt is not None:
+    fit_r_post = 1.0 if bool(getattr(free_post, "fits_part", True)) else 0.0
+    # LV always (phantom + placeable); Swiss only when placeable — no is_large_void widen.
+    allow_void_pole = free_post is not None and free_post.target_pt is not None and (
+        is_large_void(free_post) or void_placeable(free_post, fit_r_post)
+    )
+    if allow_void_pole:
         push_pt = free_post.target_pt
         reloc_poles = [free_post.target_pt]
         if (
@@ -386,7 +402,8 @@ def apply_post_pack_and_telem(
     native_pack_geoms_fn: Callable | None = None,
     void_leak_stats: dict | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
-    if prep.push_pt is None or not is_large_void(prep.free_post):
+    fk_post = free_kind_from_any(getattr(prep.free_post, "kind", FreeKind.Empty))
+    if prep.push_pt is None or fk_post not in (FreeKind.LargeVoid, FreeKind.SwissCheese):
         return list(polys), list(transform), list(selected_polys), {}
     if isinstance(void_leak_stats, dict):
         void_leak_stats["multi_pole_count"] = len(prep.reloc_poles)
@@ -424,6 +441,7 @@ def apply_post_pack_and_telem(
         fits_part=bool(getattr(prep.free_post, "fits_part", True)),
         # C: last-leaf post_pack always probes hole-open (strict restore if no grow).
         force_hole_open=True,
+        free_kind=fk_post,
     )
     if isinstance(void_leak_stats, dict):
         void_leak_stats["repack"] = pack_stats.get("repack") or {

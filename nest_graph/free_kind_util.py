@@ -70,6 +70,19 @@ def is_large_void(v: Any) -> bool:
     return free_kind_from_any(v) == FreeKind.LargeVoid
 
 
+def void_placeable(free_kind: Any, void_fit_r: float = 0.0) -> bool:
+    """D1 Close arm: LargeVoid or SwissCheese with placeable void_fit_r."""
+    kind = free_kind_from_any(free_kind)
+    if kind not in (FreeKind.LargeVoid, FreeKind.SwissCheese):
+        return False
+    return float(void_fit_r) >= 1.0
+
+
+def void_phantom(free_kind: Any, void_fit_r: float = 0.0) -> bool:
+    """D1 phantom LargeVoid (growable basin); Swiss !fit is plain else."""
+    return is_large_void(free_kind) and float(void_fit_r) < 1.0
+
+
 def coalesce_free_kind(*vals: Any) -> FreeKind:
     """First non-Empty FreeKind. ``FreeKind.Empty`` is truthy — never use ``a or b``."""
     for v in vals:

@@ -715,7 +715,8 @@ void bind_graph_decision(nb::module_ &m) {
            const std::vector<int32_t> &warm_motif_ids,
            FreeKind free_kind,
            const std::vector<MotifCohortSpec> &motif_cohorts,
-           const std::vector<int32_t> &preset_ids) {
+           const std::vector<int32_t> &preset_ids,
+           float void_fit_r) {
             return generate_macros(
                 remaining_gids,
                 rule_ids,
@@ -724,7 +725,8 @@ void bind_graph_decision(nb::module_ &m) {
                 warm_motif_ids,
                 free_kind,
                 motif_cohorts,
-                preset_ids);
+                preset_ids,
+                void_fit_r);
         },
         nb::arg("remaining_gids"),
         nb::arg("rule_ids") = std::vector<int32_t>{0},
@@ -733,7 +735,8 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("warm_motif_ids") = std::vector<int32_t>{},
         nb::arg("free_kind") = FreeKind::Empty,
         nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
-        nb::arg("preset_ids") = std::vector<int32_t>{});
+        nb::arg("preset_ids") = std::vector<int32_t>{},
+        nb::arg("void_fit_r") = 0.f);
 
     m.def(
         "rank_motif_join_neighbors",
@@ -760,7 +763,8 @@ void bind_graph_decision(nb::module_ &m) {
            FreeKind free_kind,
            const std::vector<MotifCohortSpec> &motif_cohorts,
            const MacroAction &blocked_action,
-           const std::vector<int32_t> &preset_ids) {
+           const std::vector<int32_t> &preset_ids,
+           float void_fit_r) {
             return sibling_macro_actions(
                 remaining_gids,
                 rule_ids,
@@ -770,7 +774,8 @@ void bind_graph_decision(nb::module_ &m) {
                 free_kind,
                 motif_cohorts,
                 blocked_action,
-                preset_ids);
+                preset_ids,
+                void_fit_r);
         },
         nb::arg("remaining_gids"),
         nb::arg("rule_ids") = std::vector<int32_t>{0},
@@ -780,7 +785,8 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("free_kind") = FreeKind::Empty,
         nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
         nb::arg("blocked_action"),
-        nb::arg("preset_ids") = std::vector<int32_t>{});
+        nb::arg("preset_ids") = std::vector<int32_t>{},
+        nb::arg("void_fit_r") = 0.f);
 
     m.def(
         "survive_rank",

@@ -1,0 +1,24 @@
+# Floor (fixed H3 — do not ratchet)
+H3_early=0.580/0.606/0.556 med=0.580 min=0.556
+H3_late=+0.0326/+0.0564/+0.0564 med=+0.0564 min=+0.0326
+ckpt=artifacts/checkpoints/void_fill_seed0_iter50.npz
+
+# L1 lock (bind source buckets + Motif hollow Sheet restore + soft off-zone boost)
+L1_early=0.562/0.607/0.586 med=0.586 min=0.562
+L1_late=+0.0405/+0.0572/+0.0644 med=+0.0572 min=+0.0405
+L1_note=no densify_zone/proposal Void; Motif-only hollow epoch/proposer→Sheet; boost soft×0.75 off-zone
+
+# P1 lock (anc_id parent for path AMAF pb; void_fit_r on path reverted — early dump)
+P1_early=0.584/0.586/0.564 med=0.584 min=0.564
+P1_late=+0.0405/+0.0652/+0.0564 med=+0.0564 min=+0.0405
+P1_note=anc_id parent; no path void_fit_r placeable bonus; no cold-cohort fallthrough
+
+# L2 lock (always macro_survive_n; MacroPathRealized.kind + cap3 survive_rank; no void_leak max)
+L2_early=0.564/0.616/0.592 med=0.592 min=0.564
+L2_late=+0.0326/+0.0572/+0.0564 med=+0.0564 min=+0.0326
+L2_note=core locked; C1 only if muted Motif rule_id nest-diff
+
+# C1 lock (warm/cohort Motif×rule_ids; cold Motif rule0; cohort dedupe; nest-diff gate open)
+C1_early=0.600/0.582/0.571 med=0.582 min=0.571
+C1_late=+0.0477/+0.0572/+0.0564 med=+0.0564 min=+0.0477
+C1_note=tip mcts_rid=0 expected (last-leaf Motif force rule0 + PW); muted nest-diff proven; full Motif×rules failed early

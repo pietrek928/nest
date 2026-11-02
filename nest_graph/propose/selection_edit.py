@@ -29,7 +29,9 @@ class SelectionEditCtx:
     board_adj_indices: Sequence[int] | None = None
     part_bases: dict[int, Geometry] | None = None
     board_geom: Geometry | None = None
-    # P/C: FreeSpaceAnalysis.fits_part — False → hole-open (slide away from pole).
+    # P/C: FreeSpaceAnalysis.fits_part — LV !fit → hole-open (slide away from pole).
     fits_part: bool = True
     # C: last-leaf forces one hole-open attempt (strict accept restores if no grow).
     force_hole_open: bool = False
+    # FreeKind for void_phantom gate (Swiss !fit must not hole-open).
+    free_kind: object | None = None
