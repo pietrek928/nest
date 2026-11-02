@@ -7,6 +7,7 @@
 #include <tuple>
 #include <vector>
 
+#include "contact_edge.h"
 #include "se2.h"
 
 /** In-RAM motif library with geometric-hash keys (order-invariant gid pair + round-3 relative). */
@@ -66,7 +67,12 @@ public:
         if (rec.compactness < min_compactness) {
             return -1;
         }
+        const bool had_edges = rec.edge_a >= 0 || rec.edge_b >= 0;
         motif_order_invariant(rec.gid_a, rec.gid_b, rec.relative, rec.area_a, rec.area_b);
+        // W1: re-pair from order-invariant relative so complements survive swap.
+        if (had_edges) {
+            wang_edge_pair_from_relative(rec.relative, rec.edge_a, rec.edge_b);
+        }
         const auto key = motif_key(rec);
         for (std::size_t i = 0; i < motifs_.size(); ++i) {
             if (motif_key(motifs_[i]) == key) {

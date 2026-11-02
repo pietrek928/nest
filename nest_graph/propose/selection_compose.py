@@ -48,6 +48,7 @@ from nest_graph.propose.motif_lock import (
     hollow_cc_score_steer,
     motif_join_lock_sets,
     pin_if_in_nest,
+    stamp_cross_cohort_motif_joins,
     _sort_lock_sets_bonded,
 )
 from nest_graph.propose.first_pass_border import border_kiss_indices
@@ -62,6 +63,8 @@ from nest_graph.pack.epoch import bind_epoch
 from nest_graph.pack.cache_key import cheap_lock_fingerprint
 from shapely.geometry import Polygon
 import math
+from nest_graph.free_kind_util import is_large_void
+from nest_graph.place_zone_util import is_void_seek
 
 
 def _motif_key_density(
@@ -102,7 +105,7 @@ def dual_nest_for(
         last_leaf = bool(do_heavy)
     if bool(last_leaf):
         return True
-    return free_info is not None and getattr(free_info, "kind", None) == "large_void"
+    return free_info is not None and is_large_void(free_info)
 
 
 def free_basin_is_fat(
@@ -537,7 +540,7 @@ def compose_and_nest_selection(
     free_predicate: FreeCentroidPredicate | None = None
     if (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     ):
@@ -587,15 +590,15 @@ def compose_and_nest_selection(
     # L1: void-centroid term on nest scores before MIS (refine shares same helper).
     # Q118: deepen island boost under large_void / void_seek.
     void_scale = 2.0
-    mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
-    if mcts_zone == "void_seek":
+    mcts_zone = (propose_stats or {}).get("mcts_zone")
+    if is_void_seek(mcts_zone):
         void_scale = 2.5
-    if free_info is not None and getattr(free_info, "kind", None) == "large_void":
+    if free_info is not None and is_large_void(free_info):
         void_scale = max(void_scale, 4.0)
     on_plateau = bool((propose_stats or {}).get("on_plateau", False))
-    if on_plateau and mcts_zone == "void_seek":
+    if on_plateau and is_void_seek(mcts_zone):
         void_scale = max(void_scale, 5.0)
-    if on_plateau and free_info is not None and getattr(free_info, "kind", None) == "large_void":
+    if on_plateau and free_info is not None and is_large_void(free_info):
         void_scale = max(void_scale, 5.0)
     void_scale = min(float(void_scale), 5.0)
     void_term = float(getattr(cfg.propose, "void_island_score_boost", 0.0) or 0.0) * void_scale
@@ -653,7 +656,7 @@ def compose_and_nest_selection(
             ),
             rcl_top_k=10,
             large_void=bool(
-                free_info is not None and getattr(free_info, "kind", None) == "large_void"
+                free_info is not None and is_large_void(free_info)
             ),
             polys=polys,
             free_poly=free_poly,
@@ -668,6 +671,21 @@ def compose_and_nest_selection(
         boost_hits["motif_sequential"] = int(
             pre_result.telem.get("motif_sequential_full", 0)
         )
+        # D1: post-accept sparse MotifJoin bridges between accepted cohorts.
+        accepted_for_stamp = list(
+            pre_result.telem.get("motif_accepted_lock_sets") or lock_sets
+        )
+        if dg is not None and motif_base is not None and len(accepted_for_stamp) >= 2:
+            cross_telem: dict = {}
+            stamp_cross_cohort_motif_joins(
+                dg,
+                accepted_for_stamp,
+                group_id=group_id,
+                transform=transform,
+                motif_base=motif_base,
+                telem=cross_telem,
+            )
+            pre_result.telem.update(cross_telem)
         if propose_stats is not None:
             propose_stats.update(pre_result.telem)
             boost_idxs = pre_result.boost_idxs
@@ -862,7 +880,7 @@ def compose_and_nest_selection(
     nest_void_ratio = 1.0
     if (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     ):
@@ -1374,7 +1392,7 @@ def compose_and_nest_selection(
         void_override = False
         if (
             free_info is not None
-            and getattr(free_info, "kind", None) == "large_void"
+            and is_large_void(free_info)
             and free_poly is not None
             and not getattr(free_poly, "is_empty", True)
             and len(incumbent) > 0
@@ -1792,7 +1810,7 @@ def compose_and_nest_selection(
     ):
         interior_m = float(min_dist) * 0.25
         on_plateau_void_col = bool((propose_stats or {}).get("on_plateau", False)) and (
-            free_info is not None and getattr(free_info, "kind", None) == "large_void"
+            free_info is not None and is_large_void(free_info)
         )
         # Q344: plateau + large_void colonize margin 1 (margin 0 on hollow hurt area).
         if on_plateau_void_col:
@@ -1990,7 +2008,7 @@ def compose_and_nest_selection(
     if (
         first_pass
         and should_use_border_focus(Polygon(), cfg.propose)
-        and free_info.kind != "large_void"
+        and not is_large_void(free_info)
         and geom_w <= 0.0  # G22: skip border boost when selection geom on
     ):
         boost_border_scores(

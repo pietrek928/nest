@@ -3,6 +3,8 @@
 import zlib
 from typing import Any, Sequence
 
+from nest_graph.place_zone_util import place_zone_token
+
 
 def macro_motif_id(action: Any | None) -> int:
     """Motif id from MacroAction; motif_id=0 is valid (never use ``x or -1``)."""
@@ -51,7 +53,7 @@ def cheap_pack_cache_key(
         if cohort_sig == 0:
             cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
     return (
-        str(zone or ""),
+        place_zone_token(zone) or "",
         motif_id,
         rule_id,
         int(compose_sz),

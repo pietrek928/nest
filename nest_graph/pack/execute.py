@@ -4,11 +4,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from nest_graph.graph import leaf_reward
+from nest_graph.free_kind_util import coalesce_free_kind, free_kind_from_any, is_large_void
+from nest_graph.graph import BoardSnapshot, FreeKind, MacroAction, MacroRegion, leaf_reward
 from nest_graph.pack.cache_key import macro_motif_id
 from nest_graph.pack.slave_pack import upsert_from_contacts
-from nest_graph.graph import BoardSnapshot
-from nest_graph.graph import MacroAction, MacroRegion
 from nest_graph.propose.context import prep_free_space, void_ratio_threshold
 from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.heavy_polish import (
@@ -32,9 +31,9 @@ def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -
     return 1.0 if int(fp) else 0.0
 
 
-def region_for_free_kind(free_kind: str, *, void_fit_r: float = 0.0) -> MacroRegion:
+def region_for_free_kind(free_kind, *, void_fit_r: float = 0.0) -> MacroRegion:
     """D1: Sheet on phantom large_void; Void only when placeable (void_fit_r ≥ 1)."""
-    if free_kind == "large_void" and float(void_fit_r) >= 1.0:
+    if is_large_void(free_kind) and float(void_fit_r) >= 1.0:
         return MacroRegion.Void
     return MacroRegion.Sheet
 
@@ -228,18 +227,17 @@ def board_snapshot_from_selection(
     del mcts_telem  # Q131: telem stays on the Python mcts_telem dict
     leak_raw = propose_stats.get("void_leak")
     leak = leak_raw if isinstance(leak_raw, dict) else {}
-    free_kind = str(
-        leak.get("free_kind")
-        or propose_stats.get("post_rim_free_kind")
-        or propose_stats.get("free_kind")
-        or ""
+    free_kind = coalesce_free_kind(
+        leak.get("free_kind"),
+        propose_stats.get("post_rim_free_kind"),
+        propose_stats.get("free_kind"),
     )
     rim_fill = float(propose_stats.get("rim_progress", leak.get("rim_progress", 0.0)) or 0.0)
     max_void_ratio = float(leak.get("max_void_ratio", 0.0) or 0.0)
     void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
-    if free_kind == "large_void" and max_void_ratio <= 0.0:
+    if is_large_void(free_kind) and max_void_ratio <= 0.0:
         void_fill = 0.0
-    elif free_kind and free_kind != "large_void" and max_void_ratio <= 0.0:
+    elif free_kind != FreeKind.Empty and not is_large_void(free_kind) and max_void_ratio <= 0.0:
         void_fill = float(propose_stats.get("outline_cov", 0.0) or 0.0)
     fit_r = void_fit_r_from_stats(propose_stats)
     return BoardSnapshot(
@@ -413,8 +411,9 @@ def stamp_arena_amaf(
         )
     if action is None:
         action = MacroAction()
-        free_kind = str(
-            getattr(child_snap, "free_kind", "") or propose_stats.get("free_kind") or ""
+        free_kind = coalesce_free_kind(
+            getattr(child_snap, "free_kind", None),
+            propose_stats.get("free_kind"),
         )
         action.region = region_for_free_kind(
             free_kind,
@@ -497,10 +496,9 @@ def record_outer_iter_expand(
             )
         if act is None:
             act = MacroAction()
-            free_kind = str(
-                getattr(child_snap, "free_kind", "")
-                or propose_stats.get("free_kind")
-                or ""
+            free_kind = coalesce_free_kind(
+                getattr(child_snap, "free_kind", None),
+                propose_stats.get("free_kind"),
             )
             act.region = region_for_free_kind(
                 free_kind,
@@ -628,7 +626,6 @@ def run_mcts_multi_sim(
     if agent is None or int(n_sims) <= 0 or agent.expand_frozen:
         mcts_telem["multi_sim"] = 0
         return None, tip_leaf
-    free_kind = str(getattr(parent_snap, "free_kind", "") or "")
     for _ in range(max(int(n_sims), 1)):
         leaf = int(agent.select_leaf())
         tip_leaf = leaf

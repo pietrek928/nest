@@ -133,6 +133,8 @@ from nest_graph.propose.post_pack import prepare_post_pack
 from nest_graph.propose.void_selection import colonize_void_onto_base
 from nest_graph.utils import transform_poly
 from scripts.nesting_fixtures import NestCase
+from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
+from nest_graph.place_zone_util import place_zone_token
 
 
 def _seed_transforms_by_group(case: NestCase) -> list[np.ndarray]:
@@ -777,7 +779,7 @@ class NestingPipelineEvaluator:
                 int(iter_idx) == int(self.case.iters) - 2
             )
             parent_free_hint = (
-                str(last_void_leak.get("free_kind") or "") == "large_void"
+                is_large_void(last_void_leak.get("free_kind"))
             )
             polish_budget = polish_budget_for_iter(
                 is_last_leaf=is_last_leaf,
@@ -804,12 +806,12 @@ class NestingPipelineEvaluator:
                 rem = tuple(range(max(len(self.parts), 1)))
                 max_void_ratio = float(last_void_leak.get("max_void_ratio", 0.0) or 0.0)
                 void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
-                if str(last_void_leak.get("free_kind") or "") == "large_void" and max_void_ratio <= 0.0:
+                if is_large_void(last_void_leak.get("free_kind")) and max_void_ratio <= 0.0:
                     void_fill = 0.0
                 parent_snap = BoardSnapshot(
                     remaining_gids=rem,
                     coverage=float(last_void_leak.get("outline_cov", 0.0) or 0.0),
-                    free_kind=str(last_void_leak.get("free_kind") or ""),
+                    free_kind=free_kind_from_any(last_void_leak.get("free_kind")),
                     arena_node_id=int(mcts_parent_id),
                     rim_fill=float(last_void_leak.get("rim_progress", 0.0) or 0.0),
                     void_fill=void_fill,
@@ -1027,7 +1029,9 @@ class NestingPipelineEvaluator:
                     force=bool(is_last_leaf),
                 )
                 if mcts_action is not None:
-                    mcts_force_zone = region_to_zone(mcts_action.region)
+                    mcts_force_zone = place_zone_token(
+                        region_to_zone(mcts_action.region)
+                    )
                     mcts_telem["mcts_rule_id"] = int(
                         getattr(mcts_action, "rule_id", 0) or 0
                     )
@@ -1056,7 +1060,7 @@ class NestingPipelineEvaluator:
                 "on_plateau": bool(plateau.on_plateau),
                 "is_last_leaf": bool(is_last_leaf),
                 "near_last": bool(near_last),
-                "free_kind": str(last_void_leak.get("free_kind") or ""),
+                "free_kind": free_kind_token(last_void_leak.get("free_kind")),
             }
             if inward_peak_state:
                 propose_stats["inward_peak"] = dict(inward_peak_state)
@@ -1165,7 +1169,7 @@ class NestingPipelineEvaluator:
             ]
             # Keep first-pass-tight clearance under persistent large_void scrap.
             tight_clearance = bool(first_pass) or (
-                str(last_void_leak.get("free_kind") or "") == "large_void"
+                is_large_void(last_void_leak.get("free_kind"))
             )
             iter_min_dist = self._min_dist(first_pass=tight_clearance)
             _mpg_t0 = time.perf_counter()
@@ -1492,7 +1496,9 @@ class NestingPipelineEvaluator:
             refine_bp = count_selected_by_proposer(
                 transform, selected_polys, proposer_keys,
             )
-            propose_stats["free_kind"] = str(getattr(free_info, "kind", "") or "")
+            propose_stats["free_kind"] = free_kind_token(
+                getattr(free_info, "kind", None)
+            )
             packed_area = 0.0
             for si in selected_polys:
                 gi = int(group_id[int(si)]) if int(si) < len(group_id) else -1
@@ -1623,7 +1629,7 @@ class NestingPipelineEvaluator:
                 last_void_leak["gls_separate_moved"] = int(
                     propose_stats["gls_separate_moved"]
                 )
-            if post_prep.push_pt is not None and post_prep.free_post.kind == "large_void":
+            if post_prep.push_pt is not None and is_large_void(post_prep.free_post):
                 assert selection_pairwise_independent(polys, selected_polys)
             motif_ttl = int(
                 getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4
@@ -2171,7 +2177,7 @@ class NestingPipelineEvaluator:
             void_graph=int(last_void_leak.get("graph", 0)),
             void_selected_nest=int(last_void_leak.get("nest", 0)),
             void_selected_refine=int(last_void_leak.get("refine", 0)),
-            free_kind=str(last_void_leak.get("free_kind", "")),
+            free_kind=free_kind_token(last_void_leak.get("free_kind", "")),
             time_to_frac_final=time_to_frac,
             density_auc=density_auc,
             coverage_trajectory=tuple(trajectory),

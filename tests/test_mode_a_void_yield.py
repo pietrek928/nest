@@ -16,6 +16,7 @@ from nest_graph.propose.placements_pocket import (
     propose_placements_pocket_fit,
 )
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 
 def test_void_yield_densify_accept_flag_default():
@@ -111,7 +112,7 @@ def test_open_void_relaxed_medial_emits_attempted():
     ]
     part = box(0, 0, 2.5, 2.5)
     analysis = analyze_free_space(sheet, packed, part_area=float(part.area), min_dist=0.15)
-    assert analysis.kind == "large_void"
+    assert is_large_void(analysis)
     assert analysis.target_poly is not None
     snap = FreeSpaceSnapshot(analysis=analysis, trapped_voids=(), hull_bays=())
     geom = ProposeGeometry(sheet, packed[0], part, 0.15)

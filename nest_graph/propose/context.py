@@ -9,7 +9,9 @@ from shapely.ops import unary_union
 
 from nest_graph.board import board_context_from_geometry, sheet_hole_polygons
 from nest_graph.config import ProposeConfig, RankingMode
+from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
 from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
+from nest_graph.graph import FreeKind
 from nest_graph.propose.placement_outline import outline_standoff_distance
 
 
@@ -68,7 +70,7 @@ def free_space_targets(
 class FreeSpaceAnalysis:
     """Topological free-space summary for mid-pack routing."""
 
-    kind: str  # "large_void" | "swiss_cheese" | "full"
+    kind: FreeKind
     max_void_ratio: float
     largest_area: float = 0.0
     target_poly: Polygon | None = None
@@ -78,6 +80,9 @@ class FreeSpaceAnalysis:
     # T0 telem: measured inradius vs part need (same SoT as fits_part).
     fit_in_r: float = 0.0
     fit_need_r: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "kind", free_kind_from_any(self.kind))
 
 
 def void_fit_radii(
@@ -148,7 +153,7 @@ def void_fits_part(
 
 def _make_free_space_analysis(
     *,
-    kind: str,
+    kind: FreeKind | str,
     max_void_ratio: float,
     part_area: float,
     min_dist: float,
@@ -156,10 +161,11 @@ def _make_free_space_analysis(
     target_poly: Polygon | None = None,
     target_pt: Point | None = None,
 ) -> FreeSpaceAnalysis:
+    kind_e = free_kind_from_any(kind)
     fits = True
     fit_in_r = 0.0
     fit_need_r = 0.0
-    if kind != "full" and target_poly is not None and float(part_area) > 0.0:
+    if kind_e != FreeKind.Full and target_poly is not None and float(part_area) > 0.0:
         fits, fit_in_r, fit_need_r = void_fit_radii(
             target_poly,
             float(part_area),
@@ -168,7 +174,7 @@ def _make_free_space_analysis(
             use_boundary=True,
         )
     return FreeSpaceAnalysis(
-        kind=kind,
+        kind=kind_e,
         max_void_ratio=float(max_void_ratio),
         largest_area=float(largest_area),
         target_poly=target_poly,
@@ -276,7 +282,7 @@ def analyze_free_space(
     placed = [p for p in packed if p is not None and not p.is_empty]
     if sheet is None or sheet.is_empty:
         return _make_free_space_analysis(
-            kind="full", max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
+            kind=FreeKind.Full, max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
         )
     if not placed and not pack_geoms:
         area = float(sheet.area)
@@ -286,7 +292,10 @@ def analyze_free_space(
         except Exception:
             pt = sheet.representative_point()
         return _make_free_space_analysis(
-            kind="large_void" if ratio > void_ratio_threshold else "swiss_cheese",
+            kind=(
+                FreeKind.LargeVoid if ratio > void_ratio_threshold
+                else FreeKind.SwissCheese
+            ),
             max_void_ratio=ratio,
             part_area=part_area,
             min_dist=min_dist,
@@ -306,7 +315,10 @@ def analyze_free_space(
         except Exception:
             pt = sheet.representative_point()
         return _make_free_space_analysis(
-            kind="large_void" if ratio > void_ratio_threshold else "swiss_cheese",
+            kind=(
+                FreeKind.LargeVoid if ratio > void_ratio_threshold
+                else FreeKind.SwissCheese
+            ),
             max_void_ratio=ratio,
             part_area=part_area,
             min_dist=min_dist,
@@ -317,7 +329,7 @@ def analyze_free_space(
     components = _polygon_components(free)
     if not components:
         return _make_free_space_analysis(
-            kind="full", max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
+            kind=FreeKind.Full, max_void_ratio=0.0, part_area=part_area, min_dist=min_dist,
         )
     largest = max(components, key=lambda p: float(p.area))
     ratio = float(largest.area) / max(float(part_area), 1e-12)
@@ -327,7 +339,7 @@ def analyze_free_space(
         except Exception:
             pt = largest.representative_point()
         return _make_free_space_analysis(
-            kind="large_void",
+            kind=FreeKind.LargeVoid,
             max_void_ratio=ratio,
             part_area=part_area,
             min_dist=min_dist,
@@ -336,7 +348,7 @@ def analyze_free_space(
             target_pt=pt,
         )
     return _make_free_space_analysis(
-        kind="swiss_cheese",
+        kind=FreeKind.SwissCheese,
         max_void_ratio=ratio,
         part_area=part_area,
         min_dist=min_dist,
@@ -1606,13 +1618,13 @@ def late_border_saturation_info(
         void_ratio_threshold=void_thr,
         pack_geoms=pack_geoms,
     )
-    free_kind = str(free_info.kind)
+    free_kind = free_kind_token(free_info.kind)
     void_ratio = float(free_info.max_void_ratio)
     override_ratio = float(cfg.propose.late_border_void_override_ratio)
     release_ratio = float(cfg.propose.late_border_void_release_ratio)
     entry_override = (
         override_ratio > 0.0
-        and free_info.kind == "large_void"
+        and is_large_void(free_info.kind)
         and void_ratio > override_ratio
     )
     # Hysteresis: once unlocked this pack, hold while void still meaningful.

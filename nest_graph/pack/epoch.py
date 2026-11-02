@@ -4,13 +4,15 @@ from typing import Sequence
 
 import numpy as np
 
-from nest_graph.graph import DecisionGraph, MacroRegion, zone_to_region
+from nest_graph.graph import DecisionGraph, MacroRegion
 from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
 from nest_graph.propose.transform_batch import graph_valid_carry_by_group
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
+from nest_graph.proposer_names import ZONE_PROPOSERS, PlaceZone
 
 _UNTAGGED = 255
+_VOID_PROPOSER_NAMES = frozenset(p.value for p in ZONE_PROPOSERS[PlaceZone.VoidSeek])
 
 
 def _elem_area_proxy(graph, idx: int) -> float:
@@ -47,20 +49,24 @@ def _cohort_leader_idx(idxs: Sequence[int], graph) -> int:
     return best_i
 
 
-def _zone_kind(zone: str | None) -> int | None:
-    z = str(zone or "")
-    if not z:
-        return None
-    reg = zone_to_region(z)
-    return int(getattr(reg, "value", reg))
-
-
 def _gid_key_union(src: dict | None) -> dict[int, set[tuple[float, float, float]]]:
     out: dict[int, set[tuple[float, float, float]]] = {}
     if not src:
         return out
     for gid, keys in src.items():
         out.setdefault(int(gid), set()).update(keys or ())
+    return out
+
+
+def _void_seek_proposer_keys(proposer_keys: dict | None) -> set[tuple[float, float, float]]:
+    """Keys from proposers allowed under VOID_SEEK — not flat proposal/epoch unions."""
+    out: set[tuple[float, float, float]] = set()
+    if not proposer_keys:
+        return out
+    for name, keys in proposer_keys.items():
+        if str(name) not in _VOID_PROPOSER_NAMES:
+            continue
+        out.update(keys or ())
     return out
 
 
@@ -71,6 +77,33 @@ def _proposer_key_union(proposer_keys: dict | None) -> set[tuple[float, float, f
     for keys in proposer_keys.values():
         out.update(keys or ())
     return out
+
+
+def _hollow_graph_kind_gate(stats: dict, n_graph: int) -> bool:
+    """Same thin-nest numbers as bind_graph_epoch carry_thin — restore kind mass late."""
+    if n_graph <= 200:
+        return False
+    prev_nest = int(stats.get("last_nest_n", 0) or 0)
+    return prev_nest * 4 < n_graph
+
+
+def _action_region_i(stats: dict) -> int | None:
+    raw = stats.get("mcts_region")
+    if raw is None:
+        return None
+    if isinstance(raw, MacroRegion):
+        return int(getattr(raw, "value", raw))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _allow_void_proposer_kind(stats: dict) -> bool:
+    """Void-proposer keys → Void kind only for Void-region macros (not Motif/Q104)."""
+    ri = _action_region_i(stats)
+    void_i = int(getattr(MacroRegion.Void, "value", 1))
+    return ri == void_i
 
 
 def bind_epoch(
@@ -93,45 +126,59 @@ def bind_epoch(
         stats.setdefault("kind_keys", {})
         return
 
-    motif_keys = _gid_key_union(stats.get("motif_keys"))
-    pocket_keys = _gid_key_union(stats.get("pocket_keys"))
-    proposal_keys = _gid_key_union(stats.get("proposal_keys"))
-    sniper_keys = _gid_key_union(stats.get("sniper_keys"))
     densify = stats.get("densify_stats") or {}
+    motif_keys = _gid_key_union(stats.get("motif_keys"))
+    if densify.get("motif_keys"):
+        for gi, keys in _gid_key_union(densify.get("motif_keys")).items():
+            motif_keys.setdefault(gi, set()).update(keys)
+    pocket_keys = _gid_key_union(stats.get("pocket_keys"))
+    if not pocket_keys:
+        pocket_keys = _gid_key_union(densify.get("pocket_keys"))
+    sniper_keys = _gid_key_union(stats.get("sniper_keys"))
     if not sniper_keys:
         sniper_keys = _gid_key_union(densify.get("sniper_keys"))
-    proposer_any = _proposer_key_union(stats.get("proposer_keys"))
-    if not proposer_any:
-        proposer_any = _proposer_key_union(densify.get("proposer_keys"))
+    # L1: source buckets; unclassified emits → Sheet (not Void/Q104 zone paint).
+    proposal_keys = _gid_key_union(stats.get("proposal_keys"))
     epoch_keys = _gid_key_union(stats.get("epoch_keys"))
-    zone_kind = _zone_kind(stats.get("mcts_zone"))
-    densify_zone = _zone_kind(densify.get("cascade_zone") or densify.get("mcts_zone"))
+    proposer_src = stats.get("proposer_keys") or densify.get("proposer_keys")
+    void_prop_keys = _void_seek_proposer_keys(proposer_src)
+    proposer_any = _proposer_key_union(proposer_src)
+    allow_void_kind = _allow_void_proposer_kind(stats)
+    ri = _action_region_i(stats)
+    void_i = int(getattr(MacroRegion.Void, "value", 1))
+    motif_val = int(getattr(MacroRegion.Motif, "value", 3))
+    sheet_val = int(getattr(MacroRegion.Sheet, "value", 2))
+    rim_val = int(getattr(MacroRegion.Rim, "value", 0))
+    void_val = void_i
+    # Hollow restore only on Motif tips (Q104 void_seek zone) — always-on hollow
+    # flooded early Void epochs with Sheet and dropped early med below H3.
+    hollow_kind = (
+        _hollow_graph_kind_gate(stats, n) and ri == motif_val
+    )
 
     kinds: list[int] = [_UNTAGGED] * n
     kind_keys: dict[int, set[tuple[float, float, float]]] = {}
     for i, (gid, tr) in enumerate(zip(group_id, transform, strict=False)):
         gi = int(gid)
         key = transform_row_key(tr)
-        tagged = (
-            key in motif_keys.get(gi, ())
-            or key in pocket_keys.get(gi, ())
-            or key in proposal_keys.get(gi, ())
-            or key in sniper_keys.get(gi, ())
-            or key in proposer_any
-            or key in epoch_keys.get(gi, ())
-        )
         if key in motif_keys.get(gi, ()):
-            kinds[i] = int(getattr(MacroRegion.Motif, "value", 3))
-        elif not tagged:
-            kinds[i] = _UNTAGGED
-        elif zone_kind is not None:
-            kinds[i] = int(zone_kind)
-        elif densify_zone is not None:
-            kinds[i] = int(densify_zone)
+            kinds[i] = motif_val
         elif key in pocket_keys.get(gi, ()):
-            kinds[i] = int(getattr(MacroRegion.Sheet, "value", 2))
+            kinds[i] = sheet_val
+        elif key in sniper_keys.get(gi, ()):
+            kinds[i] = rim_val
+        elif allow_void_kind and key in void_prop_keys:
+            kinds[i] = void_val
+        elif key in proposal_keys.get(gi, ()):
+            # Emitted but not pocket/sniper/void — Sheet, never Void via zone.
+            kinds[i] = sheet_val
+        elif hollow_kind and (
+            key in epoch_keys.get(gi, ()) or key in proposer_any
+        ):
+            # Late hollow Motif tips: Sheet (not Void — region is Motif).
+            kinds[i] = sheet_val
         else:
-            kinds[i] = int(getattr(MacroRegion.Rim, "value", 0))
+            kinds[i] = _UNTAGGED
         if kinds[i] != _UNTAGGED:
             kind_keys.setdefault(gi, set()).add(key)
     dg.set_pose_kinds(kinds)
@@ -156,7 +203,9 @@ def bind_epoch(
     for cohort in cohorts:
         if not isinstance(cohort, dict):
             continue
-        mid = int(cohort.get("motif_id", -1) or -1)
+        # motif_id=0 is valid — never ``x or -1``.
+        _mid_raw = cohort.get("motif_id", -1)
+        mid = -1 if _mid_raw is None else int(_mid_raw)
         idxs, _missing = cohort_member_indices(cohort, verts, first_only=False)
         if len(idxs) < 2:
             continue

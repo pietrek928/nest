@@ -1,3 +1,4 @@
+from nest_graph.graph import FreeKind
 """Unit tests for mid-pack free-space analysis and local_se2 gravity gate."""
 
 import numpy as np
@@ -13,6 +14,7 @@ from nest_graph.propose.placement_common import (
 )
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 
 def test_analyze_free_space_large_void():
@@ -20,7 +22,7 @@ def test_analyze_free_space_large_void():
     part = box(0, 0, 1, 1)
     packed = [transform_poly(part, (1.0, 1.0, 0.0))]
     info = analyze_free_space(sheet, packed, part_area=1.0, min_dist=0.1)
-    assert info.kind == "large_void"
+    assert is_large_void(info)
     assert info.max_void_ratio > 2.5
     assert info.target_pt is not None
     assert info.target_poly is not None
@@ -42,7 +44,7 @@ def test_analyze_free_space_swiss_cheese():
     # Near-full obstacle leaves only a thin rim (~2.24 area < 2.5 * part).
     packed = [box(0.2, 0.2, 2.8, 2.8)]
     info = analyze_free_space(sheet, packed, part_area=1.0, min_dist=0.05)
-    assert info.kind == "swiss_cheese", info
+    assert info.kind == FreeKind.SwissCheese, info
     assert info.max_void_ratio <= 2.5
 
 

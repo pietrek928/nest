@@ -25,11 +25,11 @@ from nest_graph.utils import transform_poly
 
 def test_zone_includes_side_pack():
     # Void: permission matches staging (no side_pack on void_seek).
-    assert ProposerName.SIDE_PACK not in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
-    assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.CLUSTER_EDGE]
-    assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.BORDER_GAP]
+    assert ProposerName.SIDE_PACK not in ZONE_PROPOSERS[PlaceZone.VoidSeek]
+    assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.ClusterEdge]
+    assert ProposerName.SIDE_PACK in ZONE_PROPOSERS[PlaceZone.BorderGap]
     # Void path XOR: group_fit not in VOID_SEEK set.
-    assert ProposerName.GROUP_FIT not in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+    assert ProposerName.GROUP_FIT not in ZONE_PROPOSERS[PlaceZone.VoidSeek]
 
 
 def test_length_only_stratify_matches_wrapper():

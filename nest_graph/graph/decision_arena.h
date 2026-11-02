@@ -33,6 +33,24 @@ inline std::vector<int32_t> remaining_gids_from_mask(uint64_t mask) {
     return out;
 }
 
+/** Free-space basin tag (was string free_kind). Empty = unset / inherit parent. */
+enum class FreeKind : uint8_t {
+    Empty = 0,
+    LargeVoid = 1,
+    SwissCheese = 2,
+    Full = 3,
+};
+
+/** Propose place zones (Python ZONE_PROPOSERS keys). Full set; C++ SoT. */
+enum class PlaceZone : int32_t {
+    EmptyBorder = 0,
+    BorderGap = 1,
+    InteriorPocket = 2,
+    ClusterEdge = 3,
+    InterCluster = 4,
+    VoidSeek = 5,
+};
+
 /** POD board ledger on the arena (Q130–Q134). No telem field. */
 struct BoardSnapshot {
     std::vector<int32_t> packed_gids;
@@ -45,7 +63,7 @@ struct BoardSnapshot {
     float mean_compactness = 0.f;
     float rim_fill = 0.f;
     float void_fill = 0.f;
-    std::string free_kind;
+    FreeKind free_kind = FreeKind::Empty;
     // D1: ≥1 → placeable large_void; 0 unknown/phantom → no void_w boost.
     float void_fit_r = 0.f;
     std::vector<int32_t> motif_ids_used;

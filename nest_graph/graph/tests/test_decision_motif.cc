@@ -141,7 +141,7 @@ TEST_CASE("DecisionArena snapshots copy parent then mutate", "[decision_arena]")
     BoardSnapshot root;
     root.coverage = 0.25f;
     board_snapshot_set_remaining(root, {0, 1});
-    root.free_kind = "large_void";
+    root.free_kind = FreeKind::LargeVoid;
     arena.set_snapshot(0, root);
     REQUIRE(arena.snapshot(0).coverage == Catch::Approx(0.25f));
     REQUIRE(arena.snapshot(0).has_remaining());
@@ -153,7 +153,7 @@ TEST_CASE("DecisionArena snapshots copy parent then mutate", "[decision_arena]")
     REQUIRE(arena.size() == 2);
     REQUIRE(arena.snapshot(c0).arena_node_id == c0);
     REQUIRE(arena.snapshot(c0).coverage == Catch::Approx(0.25f));
-    REQUIRE(arena.snapshot(c0).free_kind == "large_void");
+    REQUIRE(arena.snapshot(c0).free_kind == FreeKind::LargeVoid);
     arena.snapshot(c0).coverage = 0.4f;
     REQUIRE(arena.snapshot(0).coverage == Catch::Approx(0.25f));
     REQUIRE(arena.snapshot(c0).coverage == Catch::Approx(0.4f));

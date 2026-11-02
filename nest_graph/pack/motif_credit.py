@@ -5,12 +5,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from nest_graph.graph import MacroRegion, Se2
+from nest_graph.free_kind_util import is_large_void
+from nest_graph.graph import MacroRegion, Se2, niche_amaf_key
 from nest_graph.propose.void_selection import centroid_in_free, transform_row_key
 from nest_graph.utils import relative_transform
-
-
-from nest_graph.graph import niche_amaf_key
 
 
 def _key_is_void_seek(key: tuple[int, int, int]) -> bool:
@@ -295,7 +293,7 @@ def credit_void_niche_from_iter(
     """
     cif = centroid_in_free_fn or centroid_in_free
     telem = {"hollow_miss": 0, "niche_pos": 0, "niche_rescue": 0}
-    large_void = str(free_kind or "") == "large_void"
+    large_void = is_large_void(free_kind)
     if niche_archive is None or not large_void:
         return telem
     key = amaf_key if amaf_key is not None else niche_amaf_key(action)

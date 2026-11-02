@@ -18,6 +18,7 @@ from .graph import (
     ScoreRulesOptions,
 )
 from .geometry import PlacementRankMode
+from .place_zone_util import place_zone_token
 from .proposer_names import (
     PLACE_ZONES,
     PROPOSER_FLAG,
@@ -741,16 +742,17 @@ class ProposeConfig(BaseModel):
         # Call for_place without a False-locked base so profile patches apply.
         _ = cfg  # reserved for future seed configs
         for zone, proposers in ZONE_PROPOSERS.items():
-            placed = cls.for_place(zone.value)
+            placed = cls.for_place(place_zone_token(zone))
             for name in proposers:
                 flag = PROPOSER_FLAG.get(name)
                 if flag is None:
                     continue
                 if not bool(getattr(placed, flag, False)):
                     raise AssertionError(
-                        f"zone={zone.value} proposer={name.value} requires {flag}=True"
+                        f"zone={place_zone_token(zone)} proposer={name.value} "
+                        f"requires {flag}=True"
                     )
-            if zone == PlaceZone.VOID_SEEK:
+            if zone == PlaceZone.VoidSeek:
                 assert ProposerName.VORONOI not in proposers
                 assert ProposerName.NEIGHBOR_SLIDE not in proposers
                 assert placed.use_voronoi is False
@@ -759,26 +761,27 @@ class ProposeConfig(BaseModel):
     @classmethod
     def obstacle_scope_for_place(
         cls,
-        zone: str,
+        zone: str | PlaceZone,
         *,
         n_clusters: int = 1,
         outline_coverage: float = 0.0,
         border_coverage_threshold: float = 0.35,
     ) -> tuple[bool, int]:
+        zone = place_zone_token(zone) or (zone if isinstance(zone, str) else "")
         if zone in (
-            PlaceZone.INTERIOR_POCKET.value,
-            PlaceZone.INTER_CLUSTER.value,
-            PlaceZone.VOID_SEEK.value,
+            place_zone_token(PlaceZone.InteriorPocket),
+            place_zone_token(PlaceZone.InterCluster),
+            place_zone_token(PlaceZone.VoidSeek),
         ):
             return True, 0
-        if zone == PlaceZone.BORDER_GAP.value:
+        if zone == place_zone_token(PlaceZone.BorderGap):
             if (
                 n_clusters >= 3
                 or outline_coverage >= border_coverage_threshold
             ):
                 return True, 0
             return False, 4
-        if zone == PlaceZone.CLUSTER_EDGE.value:
+        if zone == place_zone_token(PlaceZone.ClusterEdge):
             return False, 3
         return False, 3
 
@@ -790,13 +793,16 @@ class ProposeConfig(BaseModel):
     @classmethod
     def for_place(
         cls,
-        zone: str,
+        zone: str | PlaceZone,
         base: "ProposeConfig | None" = None,
         **overrides: Any,
     ) -> "ProposeConfig":
+        zone = place_zone_token(zone) if not isinstance(zone, str) else (
+            place_zone_token(zone) or zone
+        )
         root = base.model_dump() if base is not None else cls().model_dump()
         profiles: dict[str, dict[str, Any]] = {
-            PlaceZone.EMPTY_BORDER.value: {
+            place_zone_token(PlaceZone.EmptyBorder): {
                 "ranking_mode": RankingMode.BORDER,
                 "border_focus_ranking": True,
                 "use_border_focus": True,
@@ -804,7 +810,7 @@ class ProposeConfig(BaseModel):
                 "cast_squeeze_top_k": 12,
                 "edge_free_weight": 0.0,
             },
-            PlaceZone.BORDER_GAP.value: {
+            place_zone_token(PlaceZone.BorderGap): {
                 "ranking_mode": RankingMode.BORDER,
                 "border_focus_ranking": True,
                 "use_contact_ranking": False,
@@ -819,7 +825,7 @@ class ProposeConfig(BaseModel):
                 "group_edge_samples_per_edge": 8,
                 "placement_num_angles": 8,
             },
-            PlaceZone.INTERIOR_POCKET.value: {
+            place_zone_token(PlaceZone.InteriorPocket): {
                 "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
@@ -830,7 +836,7 @@ class ProposeConfig(BaseModel):
                 "use_board_edge_seeds": False,
                 "use_group_edge_seeds": True,
             },
-            PlaceZone.CLUSTER_EDGE.value: {
+            place_zone_token(PlaceZone.ClusterEdge): {
                 "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_guidance_propositions": True,
                 "guidance_use_tight_packing": True,
@@ -848,7 +854,7 @@ class ProposeConfig(BaseModel):
                 "use_side_pack": True,
                 "use_group_edge_seeds": True,
             },
-            PlaceZone.INTER_CLUSTER.value: {
+            place_zone_token(PlaceZone.InterCluster): {
                 "ranking_mode": RankingMode.CLEARANCE,
                 "use_contact_ranking": False,
                 "use_full_packed_obstacle": True,
@@ -858,7 +864,7 @@ class ProposeConfig(BaseModel):
                 "use_ribbon_seeds": True,
                 "use_voronoi": True,
             },
-            PlaceZone.VOID_SEEK.value: {
+            place_zone_token(PlaceZone.VoidSeek): {
                 "ranking_mode": RankingMode.CONTACT_HYBRID,
                 "use_contact_ranking": True,
                 "use_contact_clearance_hybrid": True,
@@ -877,7 +883,7 @@ class ProposeConfig(BaseModel):
         }
         patch = dict(profiles.get(zone, {}))
         if (
-            zone == PlaceZone.VOID_SEEK.value
+            zone == place_zone_token(PlaceZone.VoidSeek)
             and not bool(root.get("void_seek_contact_hybrid", True))
         ):
             patch["ranking_mode"] = RankingMode.CLEARANCE
@@ -891,7 +897,7 @@ class ProposeConfig(BaseModel):
                     del patch[key]
         root.update(patch)
         cfg = cls(**root)
-        if zone == PlaceZone.VOID_SEEK.value:
+        if zone == place_zone_token(PlaceZone.VoidSeek):
             cfg = floor_void_seek_budgets(cfg)
         return cfg
 

@@ -24,6 +24,9 @@ from nest_graph.geometry import (
     batch_score_placed_contact_hybrid,
 )
 from nest_graph.utils import transform_row_key
+from nest_graph.free_kind_util import is_large_void
+from nest_graph.graph import PlaceZone
+from nest_graph.place_zone_util import is_void_seek, place_zone_from_any
 from nest_graph.propose.motif_keys import (
     boost_score_indices,
     cohort_keys_from_cohorts,
@@ -250,7 +253,7 @@ def apply_void_centroid_score_term(
     if (
         void_term <= 0.0
         or free_info is None
-        or getattr(free_info, "kind", None) != "large_void"
+        or not is_large_void(free_info)
         or free_poly is None
         or getattr(free_poly, "is_empty", True)
     ):
@@ -547,7 +550,12 @@ def boost_scores_by_pose_kind(
     mcts_zone: str,
     free_info,
 ) -> int:
-    """G1b (Q175): Kind CSR overlay — one predicate with bind_epoch pose_kind[]."""
+    """G1b (Q175): Kind CSR overlay — one predicate with bind_epoch pose_kind[].
+
+    L1: trust pose_kind[] (no hard Void/Rim AND with zone). Soft ×0.75 off-zone so
+    Motif→void_seek still boosts honest Rim/Void without full zone hijack (full
+    off-zone weight failed early dual vs H3).
+    """
     if dg is None or pocket_w <= 0.0:
         return 0
     try:
@@ -558,20 +566,21 @@ def boost_scores_by_pose_kind(
         return 0
     large_void = (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
     )
-    void_zone = str(mcts_zone or "") in ("void_seek", "void") or large_void
-    rim_zone = str(mcts_zone or "") in ("cluster_edge", "empty_border")
+    pz = place_zone_from_any(mcts_zone)
+    void_zone = pz == PlaceZone.VoidSeek or large_void
+    rim_zone = pz in (PlaceZone.ClusterEdge, PlaceZone.EmptyBorder)
     hits = 0
     for i, raw in enumerate(kinds):
         k = int(raw)
         if k == _UNTAGGED_KIND:
             continue
-        if k == _VOID_KIND and void_zone:
-            scores[i] += float(pocket_w)
+        if k == _VOID_KIND:
+            scores[i] += float(pocket_w) if void_zone else float(pocket_w) * 0.75
             hits += 1
-        elif k == _RIM_KIND and rim_zone:
-            scores[i] += float(pocket_w)
+        elif k == _RIM_KIND:
+            scores[i] += float(pocket_w) if rim_zone else float(pocket_w) * 0.75
             hits += 1
         elif k == _SHEET_KIND:
             scores[i] += float(pocket_w) * 0.5
@@ -621,24 +630,22 @@ def apply_void_selection_boosts(
     small_w = float(getattr(cfg.propose, "small_part_void_score_boost", 0.0) or 0.0)
     geom_w = float(getattr(cfg.propose, "selection_geom_weight", 0.0) or 0.0)
     # Soft nest scale on large_void (decision + evaluator share this SoT).
-    mcts_zone = str((propose_stats or {}).get("mcts_zone") or "")
-    if free_info is not None and getattr(free_info, "kind", None) == "large_void" and pole_w > 0.0:
-        scale = 1.5 if mcts_zone == "void_seek" else 1.25
+    mcts_zone = (propose_stats or {}).get("mcts_zone")
+    if free_info is not None and is_large_void(free_info) and pole_w > 0.0:
+        scale = 1.5 if is_void_seek(mcts_zone) else 1.25
         pole_w = float(pole_w) * scale
         if propose_stats is not None:
             propose_stats["void_island_soft_scale"] = float(scale)
     # Dh1: when Motif joins exist but nest materialization is weak, nudge motif weight
     # (island boost already applied below — scale motif only here).
-    if propose_stats is not None and free_info is not None and getattr(
-        free_info, "kind", None
-    ) == "large_void":
+    if propose_stats is not None and free_info is not None and is_large_void(free_info):
         hollow_graph = int(propose_stats.get("graph_to_nest_hollow", 0) or 0) > 0
         mat_motif = int(propose_stats.get("materialized_motif", 0) or 0)
         join_n = int(propose_stats.get("motif_join_n", 0) or 0)
         if hollow_graph or (join_n > 0 and mat_motif <= 0):
             motif_w = float(motif_w) * 1.15
             propose_stats["hollow_motif_boost_scale"] = 1.15
-    if free_info.kind == "large_void" and pole_w > 0.0:
+    if is_large_void(free_info) and pole_w > 0.0:
         hits["void_island"] = boost_void_island_scores(
             polys,
             scores,
@@ -701,7 +708,7 @@ def apply_void_selection_boosts(
             motif_keys.setdefault(int(gid), set()).update(kset)
         if (
             free_info is not None
-            and getattr(free_info, "kind", None) == "large_void"
+            and is_large_void(free_info)
             and bool(propose_stats.get("on_plateau", False))
             and int(propose_stats.get("motif_graph_hit_n", 0) or 0) > 0
         ):
@@ -729,7 +736,7 @@ def apply_void_selection_boosts(
     void_ratio = float(getattr(free_info, "max_void_ratio", 0.0) or 0.0)
     if (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and void_ratio >= 8.0
         and small_w > 0.0
     ):

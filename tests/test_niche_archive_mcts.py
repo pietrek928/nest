@@ -5,7 +5,7 @@ import math
 import numpy as np
 
 from nest_graph.pack.browse import should_browse_tip
-from nest_graph.graph import MctsAgent
+from nest_graph.graph import MctsAgent, FreeKind
 from nest_graph.pack.motif_credit import merge_void_elite_with_archive
 from nest_graph.graph import MacroNicheArchive, NICHE_RING_H
 from nest_graph.pack.ram_budget import evaluate_ram_band, ram_budget_mb
@@ -16,7 +16,7 @@ from nest_graph.graph import DecisionArena, MacroAction, MacroRegion, MotifBase,
 def test_progressive_bias_no_1e9():
     arena = DecisionArena()
     agent = MctsAgent(arena=arena, motif_base=MotifBase())
-    snap = BoardSnapshot(remaining_gids=(0, 1), coverage=0.0, free_kind="large_void")
+    snap = BoardSnapshot(remaining_gids=(0, 1), coverage=0.0, free_kind=FreeKind.LargeVoid)
     a = agent.pick_expand_action(snap.remaining_gids, parent_id=0, snapshot=snap)
     assert a is not None
     # Score path must be finite Progressive Bias (never 1e9 sentinel).

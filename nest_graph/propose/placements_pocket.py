@@ -24,6 +24,7 @@ from nest_graph.propose.void_topology import (
     touches_sheet_exterior,
     trapped_void_polygons,
 )
+from nest_graph.free_kind_util import is_large_void
 from nest_graph.utils import (
     compose_transforms,
     invert_transform,
@@ -410,7 +411,7 @@ def propose_placements_pocket_fit(
     # Drop oversized open bays (hull-diff can dwarf the part); keep trapped voids.
     # Large exterior-connected voids bypass the bay size filter (open-void channel).
     max_bay = part_area * 5.0
-    large_void = analysis is not None and analysis.kind == "large_void"
+    large_void = analysis is not None and is_large_void(analysis)
     n_bays_raw = len(bays)
     if large_void:
         # Keep oversized bays so open voids can still seed pocket teleports.
@@ -431,7 +432,7 @@ def propose_placements_pocket_fit(
     if (
         bool(getattr(propose_cfg, "use_open_void_pocket", True))
         and analysis is not None
-        and analysis.kind == "large_void"
+        and is_large_void(analysis)
         and analysis.target_poly is not None
         and not analysis.target_poly.is_empty
         and _touches_sheet_exterior(analysis.target_poly, sheet)
@@ -470,7 +471,7 @@ def propose_placements_pocket_fit(
     elif (
         bool(getattr(propose_cfg, "use_open_void_pocket", True))
         and analysis is not None
-        and analysis.kind == "large_void"
+        and is_large_void(analysis)
         and (analysis.target_poly is None or analysis.target_poly.is_empty)
     ):
         skips.append("open_void_empty")

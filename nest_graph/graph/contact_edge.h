@@ -46,6 +46,15 @@ inline int32_t wang_edge_id(float dx, float dy) {
     return q % 8;
 }
 
+/** Mate color = octant of inverse relative (not tautological +4). */
+inline void wang_edge_pair_from_relative(
+    const Se2 &rel, int32_t &edge_a, int32_t &edge_b
+) {
+    edge_a = wang_edge_id(rel.x, rel.y);
+    const Se2 inv = se2_invert(rel);
+    edge_b = wang_edge_id(inv.x, inv.y);
+}
+
 /** Parallel / anti-parallel relative θ (edge-aligned kiss). */
 inline bool wang_flush_theta(float theta, float tol = 0.35f) {
     constexpr float kPi = 3.14159265358979323846f;

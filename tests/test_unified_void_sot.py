@@ -27,10 +27,11 @@ from nest_graph.propose.placements_pattern import (
 )
 from nest_graph.propose.void_selection import void_pole_near_radius
 from nest_graph.proposer_names import PlaceZone, ProposerName, ZONE_PROPOSERS
+from nest_graph.graph import FreeKind
 
 
 def test_allow_void_repack_predicate():
-    assert allow_void_repack(free_kind="large_void", n_void_nest=0, n_void_refine=0)
+    assert allow_void_repack(free_kind=FreeKind.LargeVoid, n_void_nest=0, n_void_refine=0)
     assert allow_void_repack(free_kind="gap", n_void_nest=5, n_void_refine=2)
     assert not allow_void_repack(free_kind="gap", n_void_nest=2, n_void_refine=2)
 
@@ -38,11 +39,11 @@ def test_allow_void_repack_predicate():
 def test_allow_repack_fallback_without_void_leak():
     """Parity with build_graph: no leak + non-large_void → False."""
     assert not allow_void_repack(free_kind="gap", n_void_nest=0, n_void_refine=0)
-    assert allow_void_repack(free_kind="large_void", n_void_nest=0, n_void_refine=0)
+    assert allow_void_repack(free_kind=FreeKind.LargeVoid, n_void_nest=0, n_void_refine=0)
 
 
 def test_void_seek_includes_free_space_cloud():
-    zone = ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+    zone = ZONE_PROPOSERS[PlaceZone.VoidSeek]
     assert ProposerName.FREE_SPACE_CLOUD in zone
     assert ProposerName.CLUSTER_COPY in zone
 
@@ -292,7 +293,7 @@ def test_free_space_cloud_emits_in_void(free_space_cloud_setup):
 
 def test_proposer_enabled_blocks_cloud_when_excluded():
     enabled = frozenset(
-        p.value for p in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+        p.value for p in ZONE_PROPOSERS[PlaceZone.VoidSeek]
         if p != ProposerName.FREE_SPACE_CLOUD
     )
     assert not _proposer_enabled("free_space_cloud", enabled)
@@ -369,7 +370,7 @@ def test_explorer_emits_free_space_cloud_on_void_seek():
     )
     snap = FreeSpaceSnapshot(
         analysis=FreeSpaceAnalysis(
-            kind="large_void",
+            kind=FreeKind.LargeVoid,
             max_void_ratio=5.0,
             largest_area=float(void.area),
             target_poly=void,

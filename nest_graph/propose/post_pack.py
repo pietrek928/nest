@@ -18,6 +18,7 @@ from nest_graph.propose.pipeline import allow_void_repack
 from nest_graph.propose.placement_common import post_pack_overlap_ok
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import iterative_multi_poles
+from nest_graph.free_kind_util import is_large_void
 
 
 def run_post_pack_passes(
@@ -314,7 +315,7 @@ def prepare_post_pack(
         propose_stats["repair_patterns_n"] = 0
     push_pt: Point | None = None
     reloc_poles: list = []
-    if free_post.kind == "large_void" and free_post.target_pt is not None:
+    if is_large_void(free_post) and free_post.target_pt is not None:
         push_pt = free_post.target_pt
         reloc_poles = [free_post.target_pt]
         if (
@@ -385,7 +386,7 @@ def apply_post_pack_and_telem(
     native_pack_geoms_fn: Callable | None = None,
     void_leak_stats: dict | None = None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
-    if prep.push_pt is None or prep.free_post.kind != "large_void":
+    if prep.push_pt is None or not is_large_void(prep.free_post):
         return list(polys), list(transform), list(selected_polys), {}
     if isinstance(void_leak_stats, dict):
         void_leak_stats["multi_pole_count"] = len(prep.reloc_poles)

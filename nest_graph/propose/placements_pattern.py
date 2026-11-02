@@ -26,6 +26,7 @@ from nest_graph.propose.void_topology import (
     polylabel,
     topology_pocket_poles,
 )
+from nest_graph.free_kind_util import is_large_void
 from nest_graph.utils import (
     compose_transforms,
     relative_transform,
@@ -1433,7 +1434,7 @@ def void_seek_motif_anchors(
                 and not getattr(void_poly, "is_empty", True)
                 and float(void_poly.area) > 0.2 * max(float(sheet.area), 1e-9)
             )
-            or str(getattr(free_space, "kind", "") or "") == "large_void"
+            or is_large_void(free_space)
         )
         lattice: list[tuple[float, float, float]] = []
         base_for_lattice = list(anchors)

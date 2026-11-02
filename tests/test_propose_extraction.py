@@ -46,6 +46,7 @@ from nest_graph.propose.void_selection import (
 )
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 
 def _cfg() -> BuildGraphConfig:
@@ -193,7 +194,7 @@ def test_late_border_saturation_lives_on_context():
         selected_indices=[0],
     )
     info = late_border_saturation_info(_cfg(), state, sheet)
-    assert info.free_kind == "large_void"
+    assert is_large_void(info.free_kind)
     assert info.active is False
     assert late_border_saturation_active(_cfg(), state, sheet) is False
 

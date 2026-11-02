@@ -615,15 +615,20 @@ void bind_graph_mcts(nb::module_ &m) {
             nb::arg("action"))
         .def(
             "_amaf_pick_score",
-            [](MctsAgentHolder &h, nb::object key, int32_t parent_id, std::string free_kind) {
+            [](MctsAgentHolder &h,
+               nb::object key,
+               int32_t parent_id,
+               FreeKind free_kind,
+               float void_fit_r) {
                 h.pull_state();
                 const float score = h.agent.amaf_pick_score(
-                    action_key_from_py_tuple(key), parent_id, free_kind);
+                    action_key_from_py_tuple(key), parent_id, free_kind, void_fit_r);
                 h.push_state();
                 return score;
             },
             nb::arg("key"),
             nb::arg("parent_id"),
             nb::kw_only(),
-            nb::arg("free_kind") = std::string{});
+            nb::arg("free_kind") = FreeKind::Empty,
+            nb::arg("void_fit_r") = 0.f);
 }

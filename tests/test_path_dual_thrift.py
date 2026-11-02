@@ -1,10 +1,11 @@
 """P5: cheap_expand keeps large_void dual (hard skip late-degraded vs P1)."""
 
 from nest_graph.propose.selection_compose import dual_nest_for
+from nest_graph.graph import FreeKind
 
 
 class _Free:
-    kind = "large_void"
+    kind=FreeKind.LargeVoid
 
 
 def test_dual_nest_cheap_expand_keeps_large_void_dual():

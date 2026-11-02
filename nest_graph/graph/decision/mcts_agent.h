@@ -170,15 +170,15 @@ inline std::tuple<bool, bool, float, float> path_accept_eligible(
 ) {
     const float base_cov = parent.coverage;
     const float alt_cov = child.coverage;
-    std::string free_kind = child.free_kind;
-    if (free_kind.empty()) {
+    FreeKind free_kind = child.free_kind;
+    if (free_kind == FreeKind::Empty) {
         free_kind = parent.free_kind;
     }
-    if (relax_motif_void_fill && is_motif && free_kind == "large_void") {
+    if (relax_motif_void_fill && is_motif && free_kind == FreeKind::LargeVoid) {
         const bool cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov);
         return {true, cov_ok, base_cov, alt_cov};
     }
-    if (free_kind == "large_void" && !fits_part) {
+    if (free_kind == FreeKind::LargeVoid && !fits_part) {
         const bool cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov);
         return {true, cov_ok, base_cov, alt_cov};
     }
@@ -186,7 +186,7 @@ inline std::tuple<bool, bool, float, float> path_accept_eligible(
         return {false, false, 0.f, 0.f};
     }
     bool cov_ok = false;
-    if (free_kind == "large_void") {
+    if (free_kind == FreeKind::LargeVoid) {
         const float base_vf = parent.void_fill;
         const float alt_vf = child.void_fill;
         cov_ok = path_overlap_ok && (alt_cov + 1e-9f >= base_cov) &&
@@ -216,12 +216,12 @@ inline float leaf_reward(
     // D1: phantom/unknown (void_fit_r < 1) — no large_void void_w inflate;
     // scale void_fill by fit so area-ratio alone cannot inflate reward.
     const float fit_r = snapshot.void_fit_r;
-    if (snapshot.free_kind == "large_void" && fit_r >= 1.f) {
+    if (snapshot.free_kind == FreeKind::LargeVoid && fit_r >= 1.f) {
         void_w = std::max(void_w, 0.75f);
         rim_w = std::min(rim_w, 0.05f);
     }
     float void_fill_term = snapshot.void_fill;
-    if (snapshot.free_kind == "large_void") {
+    if (snapshot.free_kind == FreeKind::LargeVoid) {
         void_fill_term *= std::min(std::max(fit_r, 0.f), 1.f);
     }
     float base = snapshot.coverage + void_w * void_fill_term + rim_w * snapshot.rim_fill
@@ -618,7 +618,7 @@ public:
     float amaf_pick_score(
         const ActionKey &key,
         int32_t parent_id,
-        const std::string &free_kind = "",
+        FreeKind free_kind = FreeKind::Empty,
         float void_fit_r = 0.f
     ) {
         if (arena == nullptr) {
@@ -686,9 +686,9 @@ public:
             || !motif_cohorts.empty();
         // D1: phantom soft-down Void AMAF; placeable large_void keeps void_bonus.
         const bool void_placeable =
-            free_kind == "large_void" && void_fit_r >= 1.f;
+            free_kind == FreeKind::LargeVoid && void_fit_r >= 1.f;
         const bool void_phantom =
-            free_kind == "large_void" && void_fit_r < 1.f;
+            free_kind == FreeKind::LargeVoid && void_fit_r < 1.f;
         if (void_placeable && region_i == void_i) {
             float void_bonus = 0.35f;
             float miss_rate = 0.f;
@@ -721,7 +721,7 @@ public:
         if (void_placeable && region_i == rim_i) {
             score -= 0.15f;
         }
-        if (free_kind == "large_void" && region_i == motif_i && motif_fuel) {
+        if (free_kind == FreeKind::LargeVoid && region_i == motif_i && motif_fuel) {
             // Plan D Motif cohort/fuel bonus (Void keeps niche soft-scale only).
             score += 0.2f;
         }
@@ -738,10 +738,12 @@ public:
             if (sit != realized.survive_by_motif.end()) {
                 survive_n = sit->second;
             }
+            if (survive_n <= 0) {
+                survive_n = realized.survive_motif_n;
+            }
         }
-        if (survive_n <= 0) {
-            survive_n = realized.survive_motif_n;
-        }
+        // L2: motif_id<0 must not fall through to aggregate survive_motif_n on Void;
+        // realized.kind[region] already soft-boosts above.
         if (region_i == void_i || region_i == motif_i || region_i == rim_i) {
             score += 0.1f * (static_cast<float>(attach_n) / static_cast<float>(sel_n));
         }
@@ -798,7 +800,7 @@ public:
     ) {
         static MacroAction fallback{};
         std::vector<int32_t> warm;
-        std::string free_kind;
+        FreeKind free_kind = FreeKind::Empty;
         float void_fit_r = 0.f;
         if (snapshot != nullptr) {
             warm = warm_motif_ids(snapshot);

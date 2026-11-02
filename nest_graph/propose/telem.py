@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from dataclasses import dataclass
 
+from nest_graph.free_kind_util import free_kind_token
 from nest_graph.propose.placement_common import count_edge_parallel_transforms
 from nest_graph.propose.void_selection import (
     centroid_in_free,
@@ -97,7 +98,7 @@ def format_void_leak_line(
     pocket = f" pocket_skip=[{skip_snip}]" if skip_snip else ""
     prop = f" prop_accept {prop_accept}" if prop_accept else ""
     return (
-        f"void_leak free={free_kind} ratio={max_void_ratio:.1f} "
+        f"void_leak free={free_kind_token(free_kind)} ratio={max_void_ratio:.1f} "
         f"props={n_void_props} props_pole={n_props_pole} hijack={hijack} "
         f"graph={n_void_graph} "
         f"nest={n_void_nest} refine={n_void_refine} delta={nest_refine_delta} "
@@ -339,7 +340,7 @@ def build_void_leak_dict(
 ) -> dict:
     """void_leak dict for propose_stats (keys unchanged)."""
     return {
-        "free_kind": free_kind,
+        "free_kind": free_kind_token(free_kind),
         "max_void_ratio": float(max_void_ratio),
         "props": n_void_props,
         "props_pole": n_props_pole,
@@ -1189,6 +1190,10 @@ def merge_phase_gate_telem(
         "hybrid_pick_sticky_soft",
         "hybrid_pick_adj_soft",
         "motif_adj_hits",
+        "wang_nearest_n",
+        "wang_edge_agree",
+        "wang_corner_hits",
+        "motif_cross_join_n",
         "lock_new_n",
         "lock_inc_n",
         "lock_n_realize",
@@ -1971,6 +1976,9 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{int(leak.get('path_motif_force_tip', 0) or 0)} "
         f"attach={int(leak.get('path_step_attach', 0) or 0)} "
         f"wang={float(leak.get('path_wang_scale', 0.0) or 0.0):.2f} "
+        f"agree={int(leak.get('wang_edge_agree', 0) or 0)}/"
+        f"{int(leak.get('wang_nearest_n', 0) or 0)} "
+        f"corner={int(leak.get('wang_corner_hits', 0) or 0)} "
         f"nbr={int(leak.get('path_nbr_macro', 0) or 0)}/"
         f"{int(leak.get('path_nbr_join', 0) or 0)}/"
         f"{int(leak.get('path_nbr_attach', 0) or 0)}/"

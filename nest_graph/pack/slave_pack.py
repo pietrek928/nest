@@ -5,10 +5,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-from nest_graph.graph import region_to_zone
-from nest_graph.graph import leaf_reward, timed_expand_ms
-from nest_graph.graph import BoardSnapshot
 from nest_graph.graph import (
+    BoardSnapshot,
     ContactEdge,
     MacroAction,
     MacroRegion,
@@ -16,7 +14,12 @@ from nest_graph.graph import (
     Se2,
     clamp01,
     gci_surrogate,
+    leaf_reward,
+    region_to_zone,
+    timed_expand_ms,
+    wang_edge_pair_from_relative,
 )
+from nest_graph.place_zone_util import place_zone_token
 from nest_graph.utils import relative_transform
 
 # F2: share H1 kiss identity (placements_pattern._same_gid_leader_rel = min |Δxy|).
@@ -319,10 +322,12 @@ def upsert_from_contacts(
         edge.contact_score = float(contact_score)
         edge.compactness = float(compactness)
         edge.flush = bool(flush)
-        ang = math.atan2(float(rel[1]), float(rel[0]))
-        ea = int(math.floor((ang + math.pi) / (math.pi * 0.25))) % 8
+        # W1: mate octant from inverse relative (not tautological +4).
+        ea, eb = wang_edge_pair_from_relative(
+            Se2(float(rel[0]), float(rel[1]), float(rel[2]))
+        )
         edge.edge_a = int(ea)
-        edge.edge_b = int((ea + 4) % 8)
+        edge.edge_b = int(eb)
         edge.gci = float(gci)
         mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
         if mid >= 0:
@@ -400,7 +405,7 @@ def cheap_expand_slave(
     D3: tip ``leaf_reward`` Motif parity with outer ``record_mcts_expand``.
     """
     t0 = time.perf_counter()
-    zone = region_to_zone(action.region)
+    zone = place_zone_token(region_to_zone(action.region))
     patterns = []
     if action.region == MacroRegion.Motif:
         patterns = _motif_inject_patterns(motif_base, action)

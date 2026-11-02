@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 from nest_graph.propose.telem import build_void_leak_dict
+from nest_graph.graph import FreeKind
 
 
 def test_void_leak_includes_block_and_niche_amaf_keys():
@@ -24,7 +25,7 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         "repair_patterns_n": 2,
     }
     leak = build_void_leak_dict(
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         max_void_ratio=0.5,
         n_void_props=0,
         n_props_pole=0,

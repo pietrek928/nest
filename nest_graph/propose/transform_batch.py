@@ -35,6 +35,13 @@ from nest_graph.propose.placement_common import (
     resolve_group_allowed_angles,
 )
 from nest_graph.utils import compose_transforms
+from nest_graph.free_kind_util import is_large_void
+from nest_graph.graph import PlaceZone
+from nest_graph.place_zone_util import (
+    is_void_seek,
+    place_zone_from_any,
+    place_zone_token,
+)
 
 
 def _expand_rng_seed_from_selection(
@@ -73,8 +80,8 @@ def rim_sat_proposer_updates(
         updates["side_pack_top_n"] = max(1, int(float(side_pack_top_n) * scale))
     else:
         updates["use_side_pack"] = False
-    zone = str(mcts_zone or "")
-    if zone in ("cluster_edge", "interior_pocket"):
+    zone = place_zone_from_any(mcts_zone)
+    if zone in (PlaceZone.ClusterEdge, PlaceZone.InteriorPocket):
         updates["use_history_expand"] = False
     return updates
 
@@ -252,11 +259,11 @@ def _motif_mix_floor_rows(
         if not rows and propose_stats_out is not None and group_id == 0:
             skip_reason = "floor_zero"
     elif propose_stats_out is not None and group_id == 0 and skip_reason == "none":
-        fk = str((propose_stats_out or {}).get("free_kind", "") or "")
+        fk = (propose_stats_out or {}).get("free_kind", "")
         on_plat = bool((propose_stats_out or {}).get("on_plateau", False))
         if not on_plat:
             skip_reason = "no_plateau"
-        elif fk != "large_void":
+        elif not is_large_void(fk):
             skip_reason = "no_void_seek"
     if motif_key_set and len(rows) < motif_floor_n:
         cc_before = len(rows)
@@ -626,8 +633,9 @@ def build_transform_batch(
         force_zone = None
         if propose_stats_out is not None:
             fz = propose_stats_out.get("mcts_zone")
-            if fz:
-                force_zone = str(fz)
+            tok = place_zone_token(fz) if fz is not None else ""
+            if tok:
+                force_zone = tok
         # Iter/seed expand RNG without advancing mixer stream (crc of seed+selection).
         expand_rng_seed = _expand_rng_seed_from_selection(cfg, selected_t)
         propose_by_group, batch_stats = collect_propose_batch_for_nest(
@@ -942,7 +950,7 @@ def build_transform_batch(
             )
         densify_hit = (
             int((densify_stats or {}).get("accepted", 0) or 0) > 0
-            or any("void_seek" in str(z) for z in zones_used)
+            or any(is_void_seek(z) or "void_seek" in str(z) for z in zones_used)
         )
         n_props = (
             int(ProposeConfig.void_seek_budget_floors()[1])
@@ -953,15 +961,15 @@ def build_transform_batch(
         # Last leaf also boosts when short fixtures never reach plateau.
         on_plateau = bool((propose_stats_out or {}).get("on_plateau", False))
         last_leaf = bool((propose_stats_out or {}).get("is_last_leaf", False))
-        free_kind = str((propose_stats_out or {}).get("free_kind", "") or "")
-        if free_kind == "large_void" and (on_plateau or last_leaf):
+        free_kind = (propose_stats_out or {}).get("free_kind", "")
+        if is_large_void(free_kind) and (on_plateau or last_leaf):
             n_props = max(n_props, int(n_props * 1.35) + 32)
             if propose_stats_out is not None and group_id == 0:
                 propose_stats_out["plateau_props_boost"] = 1
         # P1: DG / Motif soft steer — raise mix floors under void_seek or Motif gids.
-        mcts_zone = str((propose_stats_out or {}).get("mcts_zone") or "")
+        mcts_zone = (propose_stats_out or {}).get("mcts_zone")
         motif_gids_pre = (propose_stats_out or {}).get("mcts_motif_gids") or []
-        if mcts_zone == "void_seek" or motif_gids_pre:
+        if is_void_seek(mcts_zone) or motif_gids_pre:
             floor_props = int(ProposeConfig.void_seek_budget_floors()[1])
             n_props = max(n_props, int(floor_props * 1.25) + 8)
             if propose_stats_out is not None and group_id == 0:
@@ -1040,9 +1048,9 @@ def build_transform_batch(
                 and nest_state is not None
                 and part_bases is not None
                 and (
-                    on_plateau and free_kind == "large_void"
-                    or mcts_zone == "void_seek"
-                    or any("void_seek" in str(z) for z in zones_used)
+                    on_plateau and is_large_void(free_kind)
+                    or is_void_seek(mcts_zone)
+                    or any(is_void_seek(z) or "void_seek" in str(z) for z in zones_used)
                 )
             )
             motif_pin, _pin_keys = _motif_mix_floor_rows(

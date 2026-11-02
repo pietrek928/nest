@@ -9,8 +9,18 @@ from nest_graph.utils import transform_row_key
 BROWSE_K = 3
 
 
-def should_browse_tip(*, iter_idx: int, n_iters: int, is_last_leaf: bool) -> bool:
+def should_browse_tip(
+    *,
+    iter_idx: int,
+    n_iters: int,
+    is_last_leaf: bool,
+    large_void: bool = False,
+    incumbent_hold: bool = False,
+) -> bool:
     if is_last_leaf:
+        return True
+    # E: hold + large_void every iter (not only BROWSE_K).
+    if bool(large_void) and bool(incumbent_hold):
         return True
     return (int(iter_idx) % int(BROWSE_K)) == (int(BROWSE_K) - 1)
 

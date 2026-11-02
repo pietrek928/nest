@@ -12,7 +12,7 @@ from nest_graph.propose.void_selection import (
     transform_row_key,
 )
 from nest_graph.config import ProposeConfig
-from nest_graph.graph import PoseGraph
+from nest_graph.graph import PoseGraph, FreeKind
 from nest_graph.propose.context import classify_propose_zone
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.pipeline import _extend_counted, _proposal_key
@@ -215,7 +215,7 @@ def test_credit_void_niche_uses_current_amaf_key_not_void_dump():
     arch = MacroNicheArchive()
     telem = credit_void_niche_from_iter(
         arch,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         bottleneck="graph_to_nest",
         n_void_nest=0,
         n_void_graph=2,
@@ -255,7 +255,7 @@ def test_credit_void_niche_rescue_on_void_seek_key():
     arch = MacroNicheArchive()
     telem = credit_void_niche_from_iter(
         arch,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         bottleneck="graph_to_nest",
         n_void_nest=0,
         n_void_graph=1,
@@ -291,7 +291,7 @@ def test_credit_void_niche_pos_from_proposer_keys():
     arch = MacroNicheArchive()
     telem = credit_void_niche_from_iter(
         arch,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         bottleneck="",
         n_void_nest=2,
         n_void_graph=2,

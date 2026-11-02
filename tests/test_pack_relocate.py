@@ -26,6 +26,7 @@ from nest_graph.propose.placements_pocket import (
     trapped_void_polygons,
 )
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 
 def test_open_void_defaults():
@@ -45,7 +46,7 @@ def test_open_void_separate_from_trapped():
     voids = trapped_void_polygons(sheet, packed)
     assert voids == []
     analysis = analyze_free_space(sheet, packed, part_area=10.0, min_dist=0.1)
-    assert analysis.kind == "large_void"
+    assert is_large_void(analysis)
     snap = FreeSpaceSnapshot(analysis=analysis, trapped_voids=(), hull_bays=())
     part = box(0, 0, 2, 2)
     geom = ProposeGeometry(sheet, packed[0], part, 0.1)

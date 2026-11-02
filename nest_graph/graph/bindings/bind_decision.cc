@@ -66,11 +66,25 @@ void bind_graph_decision(nb::module_ &m) {
     m.def("se2_compose", &se2_compose, nb::arg("a"), nb::arg("b"));
     m.def("se2_relative", &se2_relative, nb::arg("ref"), nb::arg("t"));
 
+    nb::enum_<FreeKind>(m, "FreeKind")
+        .value("Empty", FreeKind::Empty)
+        .value("LargeVoid", FreeKind::LargeVoid)
+        .value("SwissCheese", FreeKind::SwissCheese)
+        .value("Full", FreeKind::Full);
+
     nb::enum_<MacroRegion>(m, "MacroRegion")
         .value("Rim", MacroRegion::Rim)
         .value("Void", MacroRegion::Void)
         .value("Sheet", MacroRegion::Sheet)
         .value("Motif", MacroRegion::Motif);
+
+    nb::enum_<PlaceZone>(m, "PlaceZone")
+        .value("EmptyBorder", PlaceZone::EmptyBorder)
+        .value("BorderGap", PlaceZone::BorderGap)
+        .value("InteriorPocket", PlaceZone::InteriorPocket)
+        .value("ClusterEdge", PlaceZone::ClusterEdge)
+        .value("InterCluster", PlaceZone::InterCluster)
+        .value("VoidSeek", PlaceZone::VoidSeek);
 
     nb::class_<MacroAction>(m, "MacroAction")
         .def(nb::init<>())
@@ -95,7 +109,7 @@ void bind_graph_decision(nb::module_ &m) {
                float mean_compactness,
                float rim_fill,
                float void_fill,
-               std::string free_kind,
+               FreeKind free_kind,
                float void_fit_r,
                std::vector<int32_t> motif_ids_used,
                nb::object /*telem*/) {
@@ -120,7 +134,7 @@ void bind_graph_decision(nb::module_ &m) {
                 self->mean_compactness = mean_compactness;
                 self->rim_fill = rim_fill;
                 self->void_fill = void_fill;
-                self->free_kind = std::move(free_kind);
+                self->free_kind = free_kind;
                 self->void_fit_r = void_fit_r;
                 self->motif_ids_used = std::move(motif_ids_used);
             },
@@ -135,7 +149,7 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("mean_compactness") = 0.f,
             nb::arg("rim_fill") = 0.f,
             nb::arg("void_fill") = 0.f,
-            nb::arg("free_kind") = std::string{},
+            nb::arg("free_kind") = FreeKind::Empty,
             nb::arg("void_fit_r") = 0.f,
             nb::arg("motif_ids_used") = std::vector<int32_t>{},
             nb::arg("telem") = nb::none())
@@ -655,6 +669,16 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("beta") = 0.5f,
         nb::arg("flush") = false);
     m.def("clamp01", &clamp01, nb::arg("v"));
+    m.def("wang_edge_id", &wang_edge_id, nb::arg("dx"), nb::arg("dy"));
+    m.def(
+        "wang_edge_pair_from_relative",
+        [](const Se2 &rel) {
+            int32_t ea = -1;
+            int32_t eb = -1;
+            wang_edge_pair_from_relative(rel, ea, eb);
+            return nb::make_tuple(ea, eb);
+        },
+        nb::arg("rel"));
 
     nb::class_<NodeSignature>(m, "NodeSignature")
         .def(nb::init<>())
@@ -689,7 +713,7 @@ void bind_graph_decision(nb::module_ &m) {
            const MotifBase *motif_base,
            bool prefer_motifs,
            const std::vector<int32_t> &warm_motif_ids,
-           const std::string &free_kind,
+           FreeKind free_kind,
            const std::vector<MotifCohortSpec> &motif_cohorts,
            const std::vector<int32_t> &preset_ids) {
             return generate_macros(
@@ -707,7 +731,7 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("motif_base") = nullptr,
         nb::arg("prefer_motifs") = true,
         nb::arg("warm_motif_ids") = std::vector<int32_t>{},
-        nb::arg("free_kind") = std::string{},
+        nb::arg("free_kind") = FreeKind::Empty,
         nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
         nb::arg("preset_ids") = std::vector<int32_t>{});
 
@@ -733,7 +757,7 @@ void bind_graph_decision(nb::module_ &m) {
            const MotifBase *motif_base,
            bool prefer_motifs,
            const std::vector<int32_t> &warm_motif_ids,
-           const std::string &free_kind,
+           FreeKind free_kind,
            const std::vector<MotifCohortSpec> &motif_cohorts,
            const MacroAction &blocked_action,
            const std::vector<int32_t> &preset_ids) {
@@ -753,7 +777,7 @@ void bind_graph_decision(nb::module_ &m) {
         nb::arg("motif_base") = nullptr,
         nb::arg("prefer_motifs") = true,
         nb::arg("warm_motif_ids") = std::vector<int32_t>{},
-        nb::arg("free_kind") = std::string{},
+        nb::arg("free_kind") = FreeKind::Empty,
         nb::arg("motif_cohorts") = std::vector<MotifCohortSpec>{},
         nb::arg("blocked_action"),
         nb::arg("preset_ids") = std::vector<int32_t>{});
@@ -771,6 +795,14 @@ void bind_graph_decision(nb::module_ &m) {
             }
             if (realized.contains("survive_motif_n")) {
                 r.survive_motif_n = nb::cast<int32_t>(realized["survive_motif_n"]);
+            }
+            // L2: agent.realized["kind"] — same four bins as MctsRealized.
+            if (realized.contains("kind")) {
+                nb::sequence kind = nb::cast<nb::sequence>(realized["kind"]);
+                const auto n = static_cast<std::size_t>(nb::len(kind));
+                for (std::size_t i = 0; i < 4 && i < n; ++i) {
+                    r.kind[i] = nb::cast<int32_t>(kind[i]);
+                }
             }
             return survive_rank(action, r);
         },

@@ -144,7 +144,9 @@ from .propose.telem import (
     maybe_restore_best_pack,
     record_overlap_reject,
 )
-from nest_graph.graph import region_to_zone, BoardSnapshot
+from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
+from nest_graph.graph import BoardSnapshot, FreeKind, region_to_zone
+from nest_graph.place_zone_util import is_void_seek, place_zone_token
 from nest_graph.pack.browse import (
     choose_browse_parent,
     packed_gids_compatible,
@@ -477,10 +479,10 @@ def _seed_parent_free_kind(
     p_sheet: Any,
     part_areas: Sequence[float],
     nest_state: NestState | None,
-) -> str:
+):
     """P: seed ``free_kind`` before path probe (was after path — late path_ms starved)."""
-    kind = str(getattr(parent_snap, "free_kind", "") or "")
-    if kind:
+    kind = free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
+    if kind != FreeKind.Empty:
         return kind
     try:
         md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
@@ -500,10 +502,10 @@ def _seed_parent_free_kind(
             packed_shapely=packed_fk,
             pack_geoms=None,
         )
-        kind = str(getattr(fk_prep.free_info, "kind", "") or "")
+        kind = free_kind_from_any(getattr(fk_prep.free_info, "kind", FreeKind.Empty))
         parent_snap.free_kind = kind
     except Exception:
-        kind = ""
+        kind = FreeKind.Empty
     return kind
 
 
@@ -1378,10 +1380,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         near_last = (
             len(iters) >= 2 and int(_it) == int(iters[-2])
         )
-        parent_free_hint = str(
-            getattr(mcts_runner.snapshot_at(int(mcts_parent_id), mcts_root), "free_kind", "")
-            or ""
-        ) == "large_void"
+        parent_free_hint = is_large_void(
+            getattr(
+                mcts_runner.snapshot_at(int(mcts_parent_id), mcts_root),
+                "free_kind",
+                FreeKind.Empty,
+            )
+        )
         # mid_hole_open applied after densify pack_cfg in stages (PackIterCtx.cfg).
         polish_budget = polish_budget_for_iter(
             is_last_leaf=is_last_leaf,
@@ -1441,7 +1446,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         hold_browse = (
             (
                 bool(parent_free_hint)
-                or str(getattr(spine_snap, "free_kind", "") or "") == "large_void"
+                or is_large_void(spine_snap)
             )
             and (
                 bool(plateau.on_plateau)
@@ -1529,7 +1534,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 part_areas=part_areas,
                 nest_state=nest_state,
             )
-            if fk == "large_void" and not parent_free_hint:
+            if is_large_void(fk) and not parent_free_hint:
                 parent_free_hint = True
                 polish_budget = polish_budget_for_iter(
                     is_last_leaf=is_last_leaf,
@@ -1777,8 +1782,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         getattr(cfg.propose, "mutate_motif_base_on_path", False)
                     ),
                     telem=mcts_telem,
-                    free_kind=str(
-                        getattr(parent_snap, "free_kind", "") or ""
+                    free_kind=free_kind_token(
+                        getattr(parent_snap, "free_kind", FreeKind.Empty)
                     ),
                 )
                 # S1: retain compose row on accept (geom_drop after adopt attempt).
@@ -1809,8 +1814,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     if isinstance(cheap_by_key, dict):
                         cheap_by_key.pop(
                             cheap_pack_cache_key(
-                                region_to_zone(
-                                    getattr(alt_action, "region", None)
+                                place_zone_token(
+                                    region_to_zone(
+                                        getattr(alt_action, "region", None)
+                                    )
                                 ),
                                 alt_action,
                                 compose_sz=len(
@@ -1989,7 +1996,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             path_carved_streak += 1
             mcts_telem["path_carved_streak"] = int(path_carved_streak)
         # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
-        if not str(getattr(parent_snap, "free_kind", "") or ""):
+        if free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty)) == FreeKind.Empty:
             try:
                 md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
                 packed_fk = []
@@ -2008,8 +2015,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     packed_shapely=packed_fk,
                     pack_geoms=None,
                 )
-                parent_snap.free_kind = str(
-                    getattr(fk_prep.free_info, "kind", "") or ""
+                parent_snap.free_kind = free_kind_from_any(
+                    getattr(fk_prep.free_info, "kind", FreeKind.Empty)
                 )
             except Exception:
                 pass
@@ -2078,7 +2085,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_telem["cache_preset_key_only"] = 1
         _last_mcts_preset_id = int(mcts_preset_id)
         if mcts_action is not None:
-            mcts_force_zone = region_to_zone(mcts_action.region)
+            mcts_force_zone = place_zone_token(region_to_zone(mcts_action.region))
 
         propose_rules = (
             _mcts_active_rules(rule_sets, mcts_action)
@@ -2110,8 +2117,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             "on_plateau": bool(plateau.on_plateau),
             "is_last_leaf": bool(is_last_leaf),
             "near_last": bool(near_last),
-            "free_kind": str(getattr(parent_snap, "free_kind", "") or ""),
+            "free_kind": free_kind_token(
+                getattr(parent_snap, "free_kind", FreeKind.Empty)
+            ),
             "mcts_zone": mcts_force_zone,
+            # L1: region SoT for bind_epoch Void kind (zone alone is Q104-ambiguous).
+            "mcts_region": (
+                int(getattr(mcts_action.region, "value", mcts_action.region))
+                if mcts_action is not None
+                else None
+            ),
             "mcts_heavy": int(polish_budget.mcts_heavy),
             "dfs_passes": int(polish_budget.dfs_passes),
             "dfs_mode": str(polish_budget.dfs_mode.value),
@@ -2139,10 +2154,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         void_elite_t = void_elite_tuple_from_archive(void_elite_by_group, ngroups)
         elite_n = void_elite_count(void_elite_by_group)
         # Q137: under void_seek / large_void, merge MacroNicheArchive into elite niche.
-        void_seek_mix = str(mcts_force_zone or "") in ("void_seek", "void")
+        void_seek_mix = is_void_seek(mcts_force_zone)
         if not void_seek_mix:
             void_seek_mix = bool(
-                str(parent_snap.free_kind or "") == "large_void"
+                is_large_void(parent_snap)
                 or int(mcts_runner.niche_archive.size) > 0
             )
         arch_rows = mcts_runner.niche_archive.active_by_group(ngroups)
@@ -2210,7 +2225,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 telem=propose_stats,
                 polish=not (
                     bool(plateau.on_plateau)
-                    and str(parent_snap.free_kind or "") == "large_void"
+                    and is_large_void(parent_snap)
                 ),
             )
             if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
@@ -2228,7 +2243,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         # K: hand path_carved into propose stamp densify_clear unlock.
         propose_stats["path_carved"] = int(mcts_telem.get("path_carved", 0) or 0)
         if mcts_force_zone:
-            enabled_z = ProposeConfig.proposers_for_place(str(mcts_force_zone))
+            enabled_z = ProposeConfig.proposers_for_place(
+                place_zone_token(mcts_force_zone)
+            )
             propose_stats["enabled_proposers_n"] = (
                 len(enabled_z) if enabled_z is not None else 0
             )
@@ -2609,7 +2626,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             _fit_r = 1.0 if int(mcts_telem["last_fits_part"]) else 0.0
             mcts_telem["leaf_fit_r"] = float(_fit_r)
             if (
-                str(getattr(free_info, "kind", "") or "") == "large_void"
+                is_large_void(free_info)
                 and float(_fit_r) < 1.0
             ):
                 mcts_telem["mcts_phantom_n"] = int(
@@ -2764,14 +2781,14 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sel=sel,
             large_void=bool(
                 _free_post is not None
-                and getattr(_free_post, "kind", "") == "large_void"
+                and is_large_void(_free_post)
             ),
             cheap_expand=False,
             near_last=near_last,
             on_plateau=bool(plateau.on_plateau),
             free_remaining=bool(
                 _free_post is not None
-                and getattr(_free_post, "kind", "") == "large_void"
+                and is_large_void(_free_post)
             ),
             fits_part=bool(
                 getattr(_free_post, "fits_part", True) if _free_post is not None else True
@@ -2803,7 +2820,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             void_leak_stats=void_leak_stats if isinstance(void_leak_stats, dict) else None,
             polish_budget=polish_budget,
         )
-        if post_prep.push_pt is not None and post_prep.free_post.kind == "large_void":
+        if post_prep.push_pt is not None and is_large_void(post_prep.free_post):
             repack_stats = pack_stats.get("repack") or {
                 "attempted": 0,
                 "accepted": 0,

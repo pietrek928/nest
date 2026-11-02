@@ -1,6 +1,6 @@
 from nest_graph.pack.macro_path import ancestors
 from nest_graph.pack.runner import MacroMctsRunner
-from nest_graph.graph import MacroAction, MacroRegion
+from nest_graph.graph import MacroAction, MacroRegion, FreeKind
 
 
 def test_runner_ancestors_root_only():
@@ -35,7 +35,7 @@ def test_macro_increase_path_rejects_overlap_fail():
 
     runner = MacroMctsRunner()
     root = int(runner.arena.root_id())
-    snap = BoardSnapshot(remaining_gids=(0, 1), coverage=0.5, free_kind="large_void")
+    snap = BoardSnapshot(remaining_gids=(0, 1), coverage=0.5, free_kind=FreeKind.LargeVoid)
     runner.store_snapshot(root, snap)
     child = int(runner.arena.add_node(root, MacroAction()))
     runner.store_snapshot(child, BoardSnapshot(remaining_gids=(0,), coverage=0.6))
@@ -71,13 +71,13 @@ def test_path_accept_eligible_large_void_needs_void_fill_delta():
         remaining_gids=(0,),
         coverage=0.50,
         void_fill=0.10,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     alt = BoardSnapshot(
         remaining_gids=(0,),
         coverage=0.51,
         void_fill=0.13,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     action = MacroAction()
     action.region = MacroRegion.Void
@@ -97,7 +97,7 @@ def test_path_accept_eligible_large_void_needs_void_fill_delta():
         remaining_gids=(0,),
         coverage=0.51,
         void_fill=0.11,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     elig2, cov_ok2, _, _ = path_accept_eligible(
         alt_action=action,
@@ -152,7 +152,7 @@ def test_path_accept_eligible_large_void_needs_void_fill_delta():
         remaining_gids=(0,),
         coverage=0.49,
         void_fill=0.20,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     elig_rg, cov_rg, _, _ = path_accept_eligible(
         alt_action=motif,
@@ -170,13 +170,13 @@ def test_path_accept_eligible_large_void_needs_void_fill_delta():
         remaining_gids=(0,),
         coverage=0.50,
         void_fill=0.0,
-        free_kind="swiss_cheese",
+        free_kind=FreeKind.SwissCheese,
     )
     alt_rim = BoardSnapshot(
         remaining_gids=(0,),
         coverage=0.506,
         void_fill=0.0,
-        free_kind="swiss_cheese",
+        free_kind=FreeKind.SwissCheese,
     )
     elig3, cov_ok3, _, _ = path_accept_eligible(
         alt_action=action,
@@ -357,7 +357,7 @@ def test_path_accept_apply_void_soft_tip_large_void():
         enable_macro_path_replay=False,
         mutate_motif_base_on_path=False,
         telem=telem,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     assert out["tip_install"] is False
     assert out["credit"] is True
@@ -373,7 +373,7 @@ def test_path_accept_apply_void_soft_tip_large_void():
         enable_macro_path_replay=False,
         mutate_motif_base_on_path=False,
         telem=telem_m,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     assert out_m["tip_install"] is True
     assert out_m["motif_soft"] is True
@@ -390,7 +390,7 @@ def test_path_accept_apply_void_soft_tip_large_void():
         enable_macro_path_replay=False,
         mutate_motif_base_on_path=False,
         telem=telem_skip,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     assert out_skip["cov_skip"] is True
     assert out_skip["tip_install"] is False
@@ -407,7 +407,7 @@ def test_path_accept_apply_void_soft_tip_large_void():
         enable_macro_path_replay=False,
         mutate_motif_base_on_path=False,
         telem=telem_ev,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     assert out_ev["tip_install"] is False
     assert out_ev["credit"] is True
@@ -518,8 +518,10 @@ def test_proven_compose_row_copies_keyed_entry():
 
     action = MacroAction()
     action.region = MacroRegion.Void
+    from nest_graph.place_zone_util import place_zone_token
+
     key = cheap_pack_cache_key(
-        region_to_zone(action.region),
+        place_zone_token(region_to_zone(action.region)),
         action,
         compose_sz=0,
         cohort_sig=0,

@@ -1,21 +1,25 @@
 """Canonical place zones, proposer identifiers, and zone→proposer enable sets.
 
 Leaf module: no imports from nest_graph.config (config imports this).
+PlaceZone SoT is the C++ enum exported from nest_graph.graph.
 """
 
 from enum import StrEnum
 
+from nest_graph.graph import PlaceZone
+from nest_graph.place_zone_util import place_zone_from_any, place_zone_token
 
-class PlaceZone(StrEnum):
-    EMPTY_BORDER = "empty_border"
-    BORDER_GAP = "border_gap"
-    INTERIOR_POCKET = "interior_pocket"
-    CLUSTER_EDGE = "cluster_edge"
-    INTER_CLUSTER = "inter_cluster"
-    VOID_SEEK = "void_seek"
-
-
-PLACE_ZONES: tuple[str, ...] = tuple(z.value for z in PlaceZone)
+PLACE_ZONES: tuple[str, ...] = tuple(
+    place_zone_token(z)
+    for z in (
+        PlaceZone.EmptyBorder,
+        PlaceZone.BorderGap,
+        PlaceZone.InteriorPocket,
+        PlaceZone.ClusterEdge,
+        PlaceZone.InterCluster,
+        PlaceZone.VoidSeek,
+    )
+)
 
 
 class ProposerName(StrEnum):
@@ -69,7 +73,7 @@ PROPOSER_FLAG: dict[ProposerName, str | None] = {
 }
 
 ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
-    PlaceZone.EMPTY_BORDER: frozenset({
+    PlaceZone.EmptyBorder: frozenset({
         ProposerName.BOARD_EDGE,
         ProposerName.SHEET_CORNERS,
         ProposerName.PERIMETER_WALK,
@@ -77,7 +81,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.RAYCASTING,
         ProposerName.EROSION,
     }),
-    PlaceZone.BORDER_GAP: frozenset({
+    PlaceZone.BorderGap: frozenset({
         ProposerName.BOARD_EDGE,
         ProposerName.SIDE_PACK,
         ProposerName.SHEET_CORNERS,
@@ -95,7 +99,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.VORONOI,
         ProposerName.EROSION,
     }),
-    PlaceZone.INTERIOR_POCKET: frozenset({
+    PlaceZone.InteriorPocket: frozenset({
         ProposerName.EROSION,
         ProposerName.VORONOI,
         ProposerName.RIBBON_FREE,
@@ -107,7 +111,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.SELECTION_EXPAND,
         ProposerName.HISTORY_EXPAND,
     }),
-    PlaceZone.CLUSTER_EDGE: frozenset({
+    PlaceZone.ClusterEdge: frozenset({
         ProposerName.GROUP_FIT,
         ProposerName.SIDE_PACK,
         ProposerName.NEIGHBOR_SLIDE,
@@ -120,7 +124,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
         ProposerName.SELECTION_EXPAND,
         ProposerName.HISTORY_EXPAND,
     }),
-    PlaceZone.INTER_CLUSTER: frozenset({
+    PlaceZone.InterCluster: frozenset({
         ProposerName.RIBBON_FREE,
         ProposerName.RAYCASTING,
         ProposerName.VORONOI,
@@ -133,7 +137,7 @@ ZONE_PROPOSERS: dict[PlaceZone, frozenset[ProposerName]] = {
     }),
     # No VORONOI / NEIGHBOR_SLIDE — large open void drift spam; explorers = erosion+raycast.
     # No SIDE_PACK — staging void XOR skips wall-fill; permission matches staging.
-    PlaceZone.VOID_SEEK: frozenset({
+    PlaceZone.VoidSeek: frozenset({
         ProposerName.EROSION,
         ProposerName.RIBBON_FREE,
         ProposerName.RAYCASTING,
@@ -158,7 +162,7 @@ CORRIDOR_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.POCKET_FIT,
 })
 
-# Q180: explorers live in BORDER_GAP baseline; annulus union is a no-op keep for API.
+# Q180: explorers live in BorderGap baseline; annulus union is a no-op keep for API.
 ANNULUS_EXTRA_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.RAYCASTING,
     ProposerName.EROSION,
@@ -189,7 +193,7 @@ BATCH_FOLLOW_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.RIBBON_FREE,
 })
 
-# Q183: pin empty first-pass to rim snaps (not ZONE_PROPOSERS[EMPTY_BORDER]).
+# Q183: pin empty first-pass to rim snaps (not ZONE_PROPOSERS[EmptyBorder]).
 FIRST_PASS_EMPTY_BORDER_PROPOSERS: frozenset[ProposerName] = frozenset({
     ProposerName.BOARD_EDGE,
     ProposerName.SHEET_CORNERS,
@@ -198,8 +202,8 @@ FIRST_PASS_EMPTY_BORDER_PROPOSERS: frozenset[ProposerName] = frozenset({
 
 
 def first_pass_packed_border_proposers() -> frozenset[ProposerName]:
-    """BORDER_GAP minus motif/pocket/cast/inward explorers (explicit subtract)."""
-    return ZONE_PROPOSERS[PlaceZone.BORDER_GAP] - _FIRST_PASS_PACKED_EXCLUDE
+    """BorderGap minus motif/pocket/cast/inward explorers (explicit subtract)."""
+    return ZONE_PROPOSERS[PlaceZone.BorderGap] - _FIRST_PASS_PACKED_EXCLUDE
 
 
 def strip_inward_border_explorers(
@@ -221,14 +225,13 @@ def proposers_for_zone(
     *,
     annulus: bool = False,
 ) -> frozenset[str] | None:
-    try:
-        place_zone = zone if isinstance(zone, PlaceZone) else PlaceZone(zone)
-    except ValueError:
+    place_zone = place_zone_from_any(zone)
+    if place_zone is None:
         return None
     proposers = ZONE_PROPOSERS.get(place_zone)
     if proposers is None:
         return None
     out = proposers
-    if annulus and place_zone == PlaceZone.BORDER_GAP:
+    if annulus and place_zone == PlaceZone.BorderGap:
         out = out | ANNULUS_EXTRA_PROPOSERS
     return frozenset(p.value for p in out)

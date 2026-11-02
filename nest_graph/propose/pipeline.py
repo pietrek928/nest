@@ -135,6 +135,8 @@ from nest_graph.propose.pose_diversity import (
     apply_conflict_degree_penalty,
     apply_pose_nms,
 )
+from nest_graph.free_kind_util import is_large_void
+from nest_graph.place_zone_util import is_void_seek, place_zone_token
 from nest_graph.propose.void_selection import (
     FreeCentroidPredicate,
     transform_row_key,
@@ -415,7 +417,7 @@ def allow_void_repack(
     n_void_refine: int,
 ) -> bool:
     """Unified allow_repack predicate (§9)."""
-    if free_kind == "large_void":
+    if is_large_void(free_kind):
         return True
     return int(n_void_nest) > int(n_void_refine)
 
@@ -540,7 +542,7 @@ def _void_seek_densify(
         and not border_only_propose
         and (
             void_hijack_from is not None
-            or zone == "void_seek"
+            or is_void_seek(zone)
         )
         and (
             group_pocket_emitted == 0
@@ -558,7 +560,7 @@ def _void_seek_densify(
     # P densify_skip_no_fit cancelled (dumped late Δ); fits_part telem only until D1.
     if (
         not need_densify
-        and zone == "void_seek"
+        and is_void_seek(zone)
         and arr.shape[0] == 0
         and placed
         and not border_only_propose
@@ -727,10 +729,10 @@ def _void_seek_densify(
 
     densify_arr = propositions_to_ndarray(densify_coords)
     yield_poly = _free_space_target_poly(part_free_space)
-    void_path = void_hijack_from is not None or zone == "void_seek"
+    void_path = void_hijack_from is not None or is_void_seek(zone)
     use_void_yield = (
         bool(getattr(propose_cfg, "enable_void_yield_densify_accept", True))
-        and (void_hijack_from is not None or zone == "void_seek")
+        and (void_hijack_from is not None or is_void_seek(zone))
         and yield_poly is not None
         and not yield_poly.is_empty
     )
@@ -747,7 +749,7 @@ def _void_seek_densify(
         if extra.shape[0] == 0:
             return old
         # P1: densify pin budget — keep more void densify under void_seek.
-        pin_frac = 2 if (zone == "void_seek" or void_hijack_from is not None) else 1
+        pin_frac = 2 if (is_void_seek(zone) or void_hijack_from is not None) else 1
         half = max(1, (max_n * (1 + pin_frac)) // (2 + pin_frac))
         if half <= 0:
             return old
@@ -1301,7 +1303,7 @@ def _collect_builder_candidates(
     n_angles = ctx.n_angles
     border_focus = ctx.border_focus
     packed_n = _packed_count(extras)
-    void_path = cascade_zone == "void_seek"
+    void_path = is_void_seek(cascade_zone)
     # Staging: mid-pack → side_pack; void XOR: group_fit not side_pack.
     use_side = (
         bool(getattr(cfg, "use_side_pack", True))
@@ -1482,7 +1484,7 @@ def _collect_explorer_candidates(
             if (
                 bool(getattr(cfg, "enable_inward_bridge", True))
                 and state.cascade_zone
-                not in (PlaceZone.VOID_SEEK.value, "void_seek")
+                not in (place_zone_token(PlaceZone.VoidSeek), "void_seek")
             ):
                 rim_anchors = extras.packed_polys
             _ray_t0 = time.perf_counter()
@@ -1698,7 +1700,7 @@ def _collect_expand_candidates(
         # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         # Stratified cap: half coarse-first, half interleaved fine (one expand SoT).
         n = 1
-        pool_div = 16 if state.cascade_zone == "void_seek" else 4
+        pool_div = 16 if is_void_seek(state.cascade_zone) else 4
         sel_cap = max(4, cfg.candidate_pool // pool_div)
         state.ext(
             "selection_expand",
@@ -1712,7 +1714,7 @@ def _collect_expand_candidates(
         and _proposer_enabled("history_expand", ctx.enabled_proposers)
         and bool(getattr(cfg, "use_history_expand", True))
     ):
-        hist_div = 32 if state.cascade_zone == "void_seek" else 8
+        hist_div = 32 if is_void_seek(state.cascade_zone) else 8
         hist_cap = max(2, cfg.candidate_pool // hist_div)
         state.ext(
             "history_expand",
@@ -1739,7 +1741,7 @@ def _apply_cascade_budget(
     hard_zone = bool(cascade_zone) and cascade_zone in _CASCADE_HARD_ZONES
     if hard_zone:
         # void_seek density SoT: free order + full explorer budget (S1 0.555).
-        if cascade_zone == "void_seek":
+        if is_void_seek(cascade_zone):
             if state.cascade_stats_out is not None:
                 state.cascade_stats_out["cascade_stopped_after"] = "void_free"
             return
@@ -1793,7 +1795,7 @@ def _collect_candidates(
     """
     cascade_on = _cascade_active(ctx.propose_cfg, cascade_zone)
     if mode is None:
-        if cascade_zone == "void_seek":
+        if is_void_seek(cascade_zone):
             mode = "free"
         else:
             mode = "cascade" if cascade_on else "free"
@@ -1811,8 +1813,8 @@ def _collect_candidates(
     early_inward = (
         bool(getattr(ctx.propose_cfg, "enable_inward_bridge", True))
         and cascade_zone in (
-            PlaceZone.EMPTY_BORDER.value,
-            PlaceZone.BORDER_GAP.value,
+            place_zone_token(PlaceZone.EmptyBorder),
+            place_zone_token(PlaceZone.BorderGap),
         )
     )
     if early_inward:
@@ -1842,7 +1844,7 @@ def _collect_candidates(
 
     # Void / mid-pack: claim board_edge rim slots before explorers / side_pack
     # flood claimed_keys (mode=free runs explorers first).
-    if cascade_zone == "void_seek":
+    if is_void_seek(cascade_zone):
         if _emit_board_edge_reserve(ctx, extras, state, reserve_only=True):
             state.board_edge_reserved = True
 
@@ -3280,7 +3282,7 @@ def proposed_transforms_for_groups(
                 )
                 if (
                     getattr(propose_cfg, "enable_void_large_hijack", True)
-                    and free_analysis.kind == "large_void"
+                    and is_large_void(free_analysis)
                     and free_analysis.target_pt is not None
                     and not (zone_info.is_corridor or zone_info.is_annulus)
                     and not force_zone
@@ -3300,7 +3302,7 @@ def proposed_transforms_for_groups(
                 # Q70: Macro-MCTS forces ProposeConfig.for_place(zone); densify stays
                 # on void_seek via for_place (Q74) — do not strip proposers here.
                 if force_zone:
-                    zone = str(force_zone)
+                    zone = place_zone_token(force_zone) or str(force_zone)
                     zone_info = PlaceZoneInfo(
                         zone=zone,
                         free_ratio=zone_info.free_ratio if zone_info is not None else 1.0,
@@ -3312,7 +3314,7 @@ def proposed_transforms_for_groups(
                         is_annulus=False,
                         is_corridor=False,
                     )
-                    if zone == "void_seek" and free_analysis is not None:
+                    if is_void_seek(zone) and free_analysis is not None:
                         if free_analysis.target_pt is not None:
                             primary_target = free_analysis.target_pt
                             zone_info = PlaceZoneInfo(
@@ -3327,12 +3329,12 @@ def proposed_transforms_for_groups(
                     # Q97: soft override — Sheet/interior_pocket under large_void.
                     if (
                         getattr(propose_cfg, "enable_void_large_hijack", True)
-                        and free_analysis.kind == "large_void"
+                        and is_large_void(free_analysis)
                         and free_analysis.target_pt is not None
-                        and str(force_zone) == "interior_pocket"
+                        and place_zone_token(force_zone) == place_zone_token(PlaceZone.InteriorPocket)
                     ):
                         void_hijack_over_mcts += 1
-                        void_hijack_from = str(force_zone)
+                        void_hijack_from = place_zone_token(force_zone) or "interior_pocket"
                         zone = "void_seek"
                         primary_target = free_analysis.target_pt
                         zone_info = PlaceZoneInfo(
@@ -3346,14 +3348,13 @@ def proposed_transforms_for_groups(
                         )
                     elif (
                         getattr(propose_cfg, "enable_void_large_hijack", True)
-                        and free_analysis.kind == "large_void"
+                        and is_large_void(free_analysis)
                         and free_analysis.target_pt is not None
-                        and str(force_zone)
-                        in ("cluster_edge", "empty_border", "border_gap")
+                        and place_zone_token(force_zone) in ("cluster_edge", "empty_border", "border_gap")
                     ):
                         # DgS: Rim force reclaim matches Sheet (void_hijack_from + zone).
                         void_hijack_over_mcts += 1
-                        void_hijack_from = str(force_zone)
+                        void_hijack_from = place_zone_token(force_zone) or "cluster_edge"
                         zone = "void_seek"
                         primary_target = free_analysis.target_pt
                         zone_info = PlaceZoneInfo(
@@ -3367,7 +3368,7 @@ def proposed_transforms_for_groups(
                         )
             cfg = ProposeConfig.for_place(zone, base=propose_cfg)
             cfg = apply_proposer_pool_scales(cfg, propose_cfg.place_proposer_pool_scales)
-            if zone == "void_seek":
+            if is_void_seek(zone):
                 cfg = floor_void_seek_budgets(cfg)
             if (
                 zone == "border_gap"
@@ -3426,7 +3427,7 @@ def proposed_transforms_for_groups(
                 num_angles=min(4, int(cfg.placement_num_angles) if cfg.placement_num_angles else 4),
             )
         elif (
-            zone == "void_seek"
+            is_void_seek(zone)
             and primary_target is not None
             and not border_only_propose
         ):
@@ -3442,8 +3443,8 @@ def proposed_transforms_for_groups(
             corridor_guidance_seeds is None
             and bool(getattr(propose_cfg, "enable_inward_bridge", True))
             and zone in (
-                PlaceZone.EMPTY_BORDER.value,
-                PlaceZone.BORDER_GAP.value,
+                place_zone_token(PlaceZone.EmptyBorder),
+                place_zone_token(PlaceZone.BorderGap),
             )
             and free_snap is not None
             and free_snap.analysis is not None
@@ -3548,15 +3549,15 @@ def proposed_transforms_for_groups(
                 enabled is not None
                 and not bool(getattr(propose_cfg, "enable_inward_bridge", True))
                 and zone in (
-                    PlaceZone.EMPTY_BORDER.value,
-                    PlaceZone.BORDER_GAP.value,
+                    place_zone_token(PlaceZone.EmptyBorder),
+                    place_zone_token(PlaceZone.BorderGap),
                 )
             ):
                 enabled = strip_inward_border_explorers(enabled)
             # Q179: EMPTY_BORDER explorers only after packed_n threshold (staging).
             if (
                 enabled is not None
-                and zone == PlaceZone.EMPTY_BORDER.value
+                and zone == place_zone_token(PlaceZone.EmptyBorder)
                 and bool(getattr(propose_cfg, "enable_inward_bridge", True))
             ):
                 min_packed = int(
@@ -3574,7 +3575,7 @@ def proposed_transforms_for_groups(
 
         if zone_info is not None and zone_info.is_corridor and primary_target is not None:
             push = primary_target
-        elif zone == "void_seek" and primary_target is not None:
+        elif is_void_seek(zone) and primary_target is not None:
             # OOS-4: void_pole is not the packed-centroid push; attract to polylabel.
             push = primary_target
         elif (
@@ -3586,7 +3587,7 @@ def proposed_transforms_for_groups(
             push = zone_info.gap_midpoint
         void_pole = (
             primary_target
-            if zone == "void_seek" and primary_target is not None
+            if is_void_seek(zone) and primary_target is not None
             else None
         )
 
@@ -3599,7 +3600,7 @@ def proposed_transforms_for_groups(
                     angle_override = np.asarray(allowed, dtype=np.float64)
         part_free_space = free_snap
         # Per-part target_poly for void_seek (hijack or MCTS/Motif Q104), not mean-area snap.
-        void_seek_free = void_hijack_from is not None or zone == "void_seek"
+        void_seek_free = void_hijack_from is not None or is_void_seek(zone)
         if (
             void_seek_free
             and free_analysis is not None
@@ -3763,7 +3764,7 @@ def proposed_transforms_for_groups(
         sterile_zones = ("cluster_edge", "border_gap", "interior_pocket")
         densify_count_floor = max(4, int(cfg.max_proposals) // 3)
         # D1: soft densify floor when Macro-MCTS steers void_seek / Motif.
-        if str(force_zone or "") == "void_seek" or zone == "void_seek":
+        if is_void_seek(force_zone) or is_void_seek(zone):
             densify_count_floor = max(densify_count_floor, max(8, int(cfg.max_proposals) // 2))
         floor_ratio = float(getattr(propose_cfg, "densify_clearance_floor_ratio", 1.0))
         group_pocket_emitted = int(pocket_stats.get("emitted", 0))

@@ -13,6 +13,7 @@ import numpy as np
 from shapely import wkt as shapely_wkt
 from shapely.geometry.base import BaseGeometry
 
+from nest_graph.free_kind_util import free_kind_from_any, free_kind_token
 from nest_graph.graph import BoardSnapshot, MacroNicheArchive, MotifBase, MotifRecord, Se2
 
 
@@ -144,7 +145,7 @@ def _tip_snap_dict(snap: Any) -> dict[str, Any]:
         "mean_compactness": float(getattr(snap, "mean_compactness", 0.0) or 0.0),
         "rim_fill": float(getattr(snap, "rim_fill", 0.0) or 0.0),
         "void_fill": float(getattr(snap, "void_fill", 0.0) or 0.0),
-        "free_kind": str(getattr(snap, "free_kind", "") or ""),
+        "free_kind": free_kind_token(getattr(snap, "free_kind", None)),
         "motif_ids_used": list(getattr(snap, "motif_ids_used", ()) or ()),
     }
 
@@ -426,7 +427,7 @@ def tip_board_snapshot(ckpt: NestCheckpoint, *, arena_node_id: int = 0) -> Board
         mean_compactness=float(tip.get("mean_compactness", 0.0) or 0.0),
         rim_fill=float(tip.get("rim_fill", 0.0) or 0.0),
         void_fill=float(tip.get("void_fill", 0.0) or 0.0),
-        free_kind=str(tip.get("free_kind", ckpt.free_kind) or ""),
+        free_kind=free_kind_from_any(tip.get("free_kind", ckpt.free_kind)),
         void_fit_r=float(tip.get("void_fit_r", 0.0) or 0.0),
         motif_ids_used=tuple(int(x) for x in (tip.get("motif_ids_used") or ())),
     )

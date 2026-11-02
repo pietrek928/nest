@@ -102,8 +102,7 @@ inline std::vector<ContactEdge> build_contact_relations(
         // W2: flush when near-kiss + edge-aligned relative θ.
         const bool near_kiss = r.intersect || dist <= gap * static_cast<Scalar>(1.05);
         e.flush = near_kiss && wang_flush_theta(e.relative_pose.a);
-        e.edge_a = wang_edge_id(e.relative_pose.x, e.relative_pose.y);
-        e.edge_b = (e.edge_a + 4) % 8;
+        wang_edge_pair_from_relative(e.relative_pose, e.edge_a, e.edge_b);
         e.gci = gci_surrogate(compactness, contact_score, 0.5f, 0.5f, e.flush);
         out.push_back(e);
     }

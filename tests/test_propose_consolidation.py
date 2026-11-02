@@ -23,7 +23,7 @@ def test_void_seek_no_voronoi_contact_hybrid():
     proposers = ProposeConfig.proposers_for_place("void_seek")
     assert proposers is not None
     assert "voronoi" not in proposers
-    assert ProposerName.VORONOI not in ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+    assert ProposerName.VORONOI not in ZONE_PROPOSERS[PlaceZone.VoidSeek]
     cfg = ProposeConfig.for_place("void_seek")
     assert cfg.use_voronoi is False
     assert cfg.ranking_mode == "contact_hybrid"
@@ -38,7 +38,7 @@ def test_void_seek_no_voronoi_contact_hybrid():
 
 def test_first_pass_packed_is_border_gap_subset():
     packed = first_pass_packed_border_proposers()
-    border = ZONE_PROPOSERS[PlaceZone.BORDER_GAP]
+    border = ZONE_PROPOSERS[PlaceZone.BorderGap]
     assert packed <= border
     assert ProposerName.CLUSTER_COPY not in packed
     assert ProposerName.POCKET_FIT not in packed
@@ -230,8 +230,12 @@ def test_ablation_flags_toggle():
 
 
 def test_all_place_zones_have_zone_proposers():
+    from nest_graph.place_zone_util import place_zone_from_any
+
     for zone in PLACE_ZONES:
-        assert zone in ZONE_PROPOSERS
+        pz = place_zone_from_any(zone)
+        assert pz is not None
+        assert pz in ZONE_PROPOSERS
         assert ProposeConfig.proposers_for_place(zone) is not None
 
 

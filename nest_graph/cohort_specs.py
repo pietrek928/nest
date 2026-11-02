@@ -1,9 +1,10 @@
 """Convert Python motif cohort dicts for C++ generate_macros."""
 
+from nest_graph.free_kind_util import free_kind_from_any
+from nest_graph.graph import FreeKind, MotifCohortSpec, generate_macros as _generate_macros_native
+
 
 def motif_cohort_specs(cohorts) -> list:
-    from nest_graph.graph import MotifCohortSpec
-
     specs: list = []
     for c in cohorts or ():
         if not isinstance(c, dict):
@@ -26,19 +27,17 @@ def generate_macros(
     motif_base=None,
     prefer_motifs=True,
     warm_motif_ids=(),
-    free_kind="",
+    free_kind=None,
     motif_cohorts=None,
     preset_ids=(),
 ):
-    from nest_graph.graph import generate_macros as _generate_macros_native
-
     return _generate_macros_native(
         [int(g) for g in remaining_gids],
         [int(r) for r in rule_ids],
         motif_base,
         bool(prefer_motifs),
         [int(m) for m in warm_motif_ids],
-        str(free_kind or ""),
+        free_kind_from_any(free_kind if free_kind is not None else FreeKind.Empty),
         motif_cohort_specs(motif_cohorts),
         [int(p) for p in (preset_ids or ())],
     )

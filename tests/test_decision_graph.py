@@ -47,7 +47,8 @@ def test_bind_epoch_stamps_kind_keys_and_attach():
     k1 = transform_row_key((1.6, 0.5, 0.0))
     stats = {
         "mcts_zone": "void_seek",
-        "proposal_keys": {0: {k0}, 1: {k1}},
+        "mcts_region": int(getattr(MacroRegion.Void, "value", 1)),
+        "proposer_keys": {"raycasting": {k0, k1}},
         "motif_keys": {},
     }
     bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
@@ -64,7 +65,8 @@ def test_bind_epoch_history_stays_untagged():
     k0 = transform_row_key((0.5, 0.5, 0.0))
     stats = {
         "mcts_zone": "void_seek",
-        "proposal_keys": {0: {k0}},
+        "mcts_region": int(getattr(MacroRegion.Void, "value", 1)),
+        "proposer_keys": {"raycasting": {k0}},
         "motif_keys": {},
     }
     bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
@@ -73,22 +75,77 @@ def test_bind_epoch_history_stays_untagged():
     assert 1 not in stats["kind_keys"]
 
 
-def test_bind_epoch_stamps_epoch_keys_when_proposals_empty():
+def test_bind_epoch_source_buckets_not_zone_or_proposal():
+    """L1: pocket→Sheet, sniper→Rim; proposal/epoch alone stay untagged."""
+    g = _two_poses()
+    dg = DecisionGraph()
+    k0 = transform_row_key((0.5, 0.5, 0.0))
+    k1 = transform_row_key((1.6, 0.5, 0.0))
+    stats = {
+        "mcts_zone": "void_seek",
+        "mcts_region": int(getattr(MacroRegion.Motif, "value", 3)),
+        "free_kind": "carved",
+        "proposal_keys": {0: {k0}, 1: {k1}},
+        "epoch_keys": {1: {k1}},
+        "pocket_keys": {0: {k0}},
+        "sniper_keys": {1: {k1}},
+        "proposer_keys": {"raycasting": {k0, k1}},
+        "motif_keys": {},
+    }
+    bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
+    # pocket wins over proposal → Sheet; sniper wins over proposal → Rim.
+    assert int(dg.pose_kind[0]) == int(getattr(MacroRegion.Sheet, "value", 2))
+    assert int(dg.pose_kind[1]) == int(getattr(MacroRegion.Rim, "value", 0))
+    bind_epoch(None, _two_poses(), {}, [0], [(0.0, 0.0, 0.0)])
+
+
+def test_bind_epoch_proposal_alone_is_sheet_not_void():
+    g = _two_poses()
+    dg = DecisionGraph()
+    k0 = transform_row_key((0.5, 0.5, 0.0))
+    stats = {
+        "mcts_zone": "void_seek",
+        "mcts_region": int(getattr(MacroRegion.Motif, "value", 3)),
+        "proposal_keys": {0: {k0}},
+        "motif_keys": {},
+    }
+    bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
+    assert int(dg.pose_kind[0]) == int(getattr(MacroRegion.Sheet, "value", 2))
+    assert int(dg.pose_kind[1]) == 255
+
+
+
+def test_bind_epoch_motif_tip_void_proposers_stay_untagged():
+    g = _two_poses()
+    dg = DecisionGraph()
+    k0 = transform_row_key((0.5, 0.5, 0.0))
+    stats = {
+        "mcts_zone": "void_seek",
+        "mcts_region": int(getattr(MacroRegion.Motif, "value", 3)),
+        "free_kind": "large_void",
+        "proposer_keys": {"raycasting": {k0}},
+        "motif_keys": {},
+    }
+    bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
+    assert int(dg.pose_kind[0]) == 255
+    assert int(dg.pose_kind[1]) == 255
+
+
+def test_bind_epoch_epoch_keys_alone_untagged():
     g = _two_poses()
     dg = DecisionGraph()
     k1 = transform_row_key((1.6, 0.5, 0.0))
     stats = {
         "mcts_zone": "void_seek",
+        "mcts_region": int(getattr(MacroRegion.Void, "value", 1)),
         "proposal_keys": {},
         "motif_keys": {},
         "epoch_keys": {1: {k1}},
     }
     bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])
-    assert stats["kind_n"] == 1
-    assert k1 in stats["kind_keys"][1]
-    assert int(dg.pose_kind[1]) == int(getattr(MacroRegion.Void, "value", 1))
+    assert stats["kind_n"] == 0
+    assert int(dg.pose_kind[1]) == 255
     assert int(dg.pose_kind[0]) == 255
-    bind_epoch(None, _two_poses(), {}, [0], [(0.0, 0.0, 0.0)])
 
 
 def test_realize_selection_flags_surviving_attach():
@@ -99,7 +156,8 @@ def test_realize_selection_flags_surviving_attach():
     k1 = transform_row_key((1.6, 0.5, 0.0))
     stats = {
         "mcts_zone": "void_seek",
-        "proposal_keys": {0: {k0}, 1: {k1}},
+        "mcts_region": int(getattr(MacroRegion.Void, "value", 1)),
+        "proposer_keys": {"raycasting": {k0, k1}},
         "motif_keys": {},
     }
     bind_epoch(dg, g, stats, [0, 1], [(0.5, 0.5, 0.0), (1.6, 0.5, 0.0)])

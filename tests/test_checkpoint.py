@@ -6,7 +6,7 @@ import numpy as np
 from shapely.geometry import box, Polygon
 
 from nest_graph.build_graph import NestState
-from nest_graph.graph import MotifBase, MotifRecord, Se2, MacroNicheArchive, BoardSnapshot
+from nest_graph.graph import MotifBase, MotifRecord, Se2, MacroNicheArchive, BoardSnapshot, FreeKind
 from nest_graph.pack.checkpoint import (
     load_nest_checkpoint,
     nest_state_from_checkpoint,
@@ -45,7 +45,7 @@ def test_checkpoint_round_trip(tmp_path: Path):
         coverage=0.42,
         kiss_pairs=3,
         mean_compactness=0.55,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
     )
     path = tmp_path / "ckpt.npz"
     save_nest_checkpoint(

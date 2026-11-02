@@ -6,6 +6,7 @@ from nest_graph.build_graph import NestState
 from nest_graph.propose.context import late_border_saturation_info as _late_border_saturation_info
 from nest_graph.config import BuildGraphConfig, ProposeConfig
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 
 def _cfg(**propose_kw) -> BuildGraphConfig:
@@ -38,7 +39,7 @@ def test_large_void_overrides_late_sat():
     part = box(0, 0, 1, 1)
     placed = [transform_poly(part, (1.0, 1.0, 0.0))]
     info = _late_border_saturation_info(_cfg(), _state(placed), sheet)
-    assert info.free_kind == "large_void"
+    assert is_large_void(info.free_kind)
     assert info.sat_override is True
     assert info.active is False
     assert info.outline_cov < 0.35
@@ -53,7 +54,7 @@ def test_override_disabled_keeps_sat_on_large_void():
         _state(placed),
         sheet,
     )
-    assert info.free_kind == "large_void"
+    assert is_large_void(info.free_kind)
     assert info.sat_override is False
     assert info.active is True
 

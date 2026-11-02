@@ -55,7 +55,7 @@ def test_compactness_prefers_dense_over_stringy():
 
 
 def test_motif_base_ttl_reset_and_age():
-    from nest_graph.graph import MotifBase, MotifRecord, Se2
+    from nest_graph.graph import MotifBase, MotifRecord, Se2, FreeKind
 
     base = MotifBase()
     r = MotifRecord()
@@ -601,14 +601,14 @@ def test_peel_sort_by_compactness_no_hard_min():
 
 def test_large_void_motif_plateau_q27():
     tr = LargeVoidMotifPlateau(flat_iters=3, cov_eps=1.0)
-    assert not tr.update(free_kind="swiss_cheese", cov=50.0, cluster_copy_refine=2)
-    assert not tr.update(free_kind="large_void", cov=40.0, cluster_copy_refine=1)
-    assert not tr.update(free_kind="large_void", cov=40.4, cluster_copy_refine=1)
-    assert not tr.update(free_kind="large_void", cov=40.5, cluster_copy_refine=1)
-    assert tr.update(free_kind="large_void", cov=40.6, cluster_copy_refine=2)
+    assert not tr.update(free_kind=FreeKind.SwissCheese, cov=50.0, cluster_copy_refine=2)
+    assert not tr.update(free_kind=FreeKind.LargeVoid, cov=40.0, cluster_copy_refine=1)
+    assert not tr.update(free_kind=FreeKind.LargeVoid, cov=40.4, cluster_copy_refine=1)
+    assert not tr.update(free_kind=FreeKind.LargeVoid, cov=40.5, cluster_copy_refine=1)
+    assert tr.update(free_kind=FreeKind.LargeVoid, cov=40.6, cluster_copy_refine=2)
     assert tr.ready
     # Reset on non-large_void.
-    assert not tr.update(free_kind="full", cov=40.6, cluster_copy_refine=2)
+    assert not tr.update(free_kind=FreeKind.Full, cov=40.6, cluster_copy_refine=2)
     assert not tr.ready
 
 

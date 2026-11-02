@@ -19,6 +19,7 @@ from nest_graph.propose.block_replace import _packing_independent, lex_count_are
 from nest_graph.propose.void_selection import _sel_area
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.void_selection import count_selected_in_free
+from nest_graph.free_kind_util import is_large_void
 
 
 def _shrink_independent_locks(idxs: Sequence[int], graph) -> list[int]:
@@ -377,7 +378,7 @@ def apply_refine_with_restore(
     count_tie = len(selected_polys) == len(nest_before_refine)
     if (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
     ):
@@ -398,7 +399,7 @@ def apply_refine_with_restore(
     if (
         restore_refine
         and free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and norm_score_delta > score_eps
     ):
         restore_refine = False
@@ -420,7 +421,7 @@ def apply_refine_with_restore(
     # Score accept (Q245–246) wins over U1 when norm_score_delta already cleared restore.
     if (
         free_info is not None
-        and getattr(free_info, "kind", None) == "large_void"
+        and is_large_void(free_info)
         and free_poly is not None
         and not getattr(free_poly, "is_empty", True)
         and norm_score_delta <= score_eps

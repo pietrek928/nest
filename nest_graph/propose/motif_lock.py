@@ -11,7 +11,7 @@ from typing import Any
 from shapely.geometry import Point
 
 from nest_graph.geometry import Geometry
-from nest_graph.graph import Se2
+from nest_graph.graph import Se2, wang_edge_id
 from nest_graph.propose.block_replace import _packing_independent
 from nest_graph.propose.motif_keys import (
     boost_score_indices,
@@ -33,6 +33,7 @@ from nest_graph.propose.void_selection import (
     transform_row_key,
 )
 from nest_graph.utils import relative_transform, transform_row_key
+from nest_graph.free_kind_util import is_large_void
 
 
 def _lock_bonded_components(
@@ -152,7 +153,7 @@ class LargeVoidMotifPlateau:
         cov: float,
         cluster_copy_refine: int,
     ) -> bool:
-        if free_kind != "large_void":
+        if not is_large_void(free_kind):
             self.streak = 0
             self.last_cov = None
             self.ready = False
@@ -273,11 +274,55 @@ def order_idxs_seed_unmapped_mapped(
     return hard_ok + rest
 
 
+def _pose_areas_from_geoms(geoms: Sequence | None, n: int) -> list[float] | None:
+    """Per-pose areas for MotifBase order-invariant (W1 find_nearest)."""
+    if geoms is None or n <= 0:
+        return None
+    out: list[float] = []
+    for i in range(n):
+        a = 1.0
+        if i < len(geoms) and geoms[i] is not None:
+            try:
+                a = float(getattr(geoms[i], "area", 1.0) or 1.0)
+            except Exception:
+                a = 1.0
+        out.append(a if a > 0.0 else 1.0)
+    return out
+
+
+def _pose_areas_from_motif_base(
+    motif_base: Any | None, group_id: Sequence[int],
+) -> list[float] | None:
+    """Map MotifRecord area_a/area_b onto poses by gid (exact upsert match)."""
+    if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
+        return None
+    gid_area: dict[int, float] = {}
+    try:
+        n_m = int(motif_base.size())
+        for mi in range(n_m):
+            rec = motif_base.at(mi)
+            ga = int(getattr(rec, "gid_a", -1))
+            gb = int(getattr(rec, "gid_b", -1))
+            aa = float(getattr(rec, "area_a", 1.0) or 1.0)
+            ab = float(getattr(rec, "area_b", 1.0) or 1.0)
+            if ga >= 0 and aa > 0.0:
+                gid_area[ga] = aa
+            if gb >= 0 and ab > 0.0:
+                gid_area[gb] = ab
+    except Exception:
+        return None
+    if not gid_area:
+        return None
+    return [float(gid_area.get(int(g), 1.0)) for g in group_id]
+
+
 def _motif_adj_within_tier_key(
     group_id: Sequence[int],
     transform: Sequence,
     packed: Sequence[int],
     motif_base: Any | None,
+    telem: dict | None = None,
+    pose_areas: Sequence[float] | None = None,
 ) -> Callable[[int], float] | None:
     """F5a: sort key = −motif_adj_hits for one member vs packed (max-adj first)."""
     if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
@@ -292,6 +337,8 @@ def _motif_adj_within_tier_key(
                 packed=packed,
                 motif_base=motif_base,
                 weight_accept=True,
+                telem=telem,
+                pose_areas=pose_areas,
             )
         )
 
@@ -451,6 +498,13 @@ def _cohort_motif_complete(
     return 1 if missing == 0 and len(idxs) >= 2 else 0
 
 
+def _pose_area(i: int, pose_areas: Sequence[float] | None) -> float:
+    if pose_areas is None or i < 0 or i >= len(pose_areas):
+        return 1.0
+    a = float(pose_areas[i])
+    return a if a > 0.0 else 1.0
+
+
 def motif_adj_hits(
     lock: Sequence[int],
     *,
@@ -459,11 +513,15 @@ def motif_adj_hits(
     packed: Sequence[int],
     motif_base: Any,
     weight_accept: bool = True,
+    telem: dict | None = None,
+    pose_areas: Sequence[float] | None = None,
 ) -> int:
     """Count MotifBase-compatible contacts of lock vs packed (Wang adj).
 
     Uses ``find_nearest`` on relative SE2; optional ``accept_count`` weight.
-    One shared helper for hybrid soft arm / RCL / sequential grow order.
+    W1: count only when probe octant agrees with ``rec.edge_a`` / ``edge_b``.
+    Flush +1 only on agree. Soft only — no hard reject.
+    ``pose_areas`` must match MotifBase upsert areas so order-invariant agrees.
     """
     if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
         return 0
@@ -475,11 +533,18 @@ def motif_adj_hits(
     n_g = len(group_id)
     n_t = len(transform)
     hits = 0
+    nearest_n = 0
+    agree_n = 0
+    corner_n = 0
+    # W2: cohort-level distinct agreed octants (corner / temp-2 glue).
+    # Per-member rarely fires on size-2 locks (one pair → one octant).
+    cohort_octants: set[int] = set()
     seen_pairs: set[tuple[int, int]] = set()
     for ia in lock_idxs:
         if ia >= n_g or ia >= n_t:
             continue
         ga = int(group_id[ia])
+        aa = _pose_area(ia, pose_areas)
         ta = (
             float(transform[ia][0]),
             float(transform[ia][1]),
@@ -493,12 +558,14 @@ def motif_adj_hits(
                 continue
             seen_pairs.add(pair)
             gb = int(group_id[ib])
+            ab = _pose_area(ib, pose_areas)
             tb = (
                 float(transform[ib][0]),
                 float(transform[ib][1]),
                 float(transform[ib][2]),
             )
             rel = relative_transform(ta, tb)
+            probe_rel = rel
             rec = None
             try:
                 rec = motif_base.find_nearest(
@@ -506,6 +573,7 @@ def motif_adj_hits(
                 )
                 if rec is None:
                     rel_ba = relative_transform(tb, ta)
+                    probe_rel = rel_ba
                     rec = motif_base.find_nearest(
                         gb, ga, Se2(rel_ba[0], rel_ba[1], rel_ba[2]),
                     )
@@ -513,13 +581,39 @@ def motif_adj_hits(
                 rec = None
             if rec is None:
                 continue
+            nearest_n += 1
+            ea_raw = getattr(rec, "edge_a", -1)
+            eb_raw = getattr(rec, "edge_b", -1)
+            ea = int(ea_raw) if ea_raw is not None else -1
+            eb = int(eb_raw) if eb_raw is not None else -1
+            probe = int(wang_edge_id(float(probe_rel[0]), float(probe_rel[1])))
+            labeled = ea >= 0 or eb >= 0
+            agreed = (not labeled) or probe == ea or probe == eb
+            if agreed:
+                agree_n += 1
+            # Soft: nearest hit always (S0 grow); corner bonus only on agree.
             if weight_accept:
                 hits += max(int(getattr(rec, "accept_count", 0) or 0), 1)
             else:
                 hits += 1
-            # W2: flush MotifRecords count as Wang adj matches.
-            if bool(getattr(rec, "flush", False)):
+            if agreed and bool(getattr(rec, "flush", False)):
                 hits += 1
+            if agreed:
+                if probe not in cohort_octants and cohort_octants:
+                    # Second distinct octant in the lock = corner glue.
+                    corner_n += 1
+                    hits += 1
+                cohort_octants.add(probe)
+    if isinstance(telem, dict):
+        telem["wang_nearest_n"] = int(
+            telem.get("wang_nearest_n", 0) or 0
+        ) + int(nearest_n)
+        telem["wang_edge_agree"] = int(
+            telem.get("wang_edge_agree", 0) or 0
+        ) + int(agree_n)
+        telem["wang_corner_hits"] = int(
+            telem.get("wang_corner_hits", 0) or 0
+        ) + int(corner_n)
     return int(hits)
 
 
@@ -1440,6 +1534,7 @@ def sequential_accept_motif_cohorts(
         "motif_sequential_packing_clear": 0,
         "motif_packing_score_boost_idxs": [],
         "motif_lock_sets": [],
+        "motif_accepted_lock_sets": [],
         "motif_beam_sets": 0,
         "motif_scene_max_sz": 0,
         "motif_pack_max_sz": 0,
@@ -1465,6 +1560,8 @@ def sequential_accept_motif_cohorts(
         return [], telem
     key_map = pose_key_to_index(group_id, transform)
     rank_polys = polys if polys is not None else candidate_geoms
+    # W1 improve: keep find_nearest areas=1 (S0 SoT); areas helper retained for D1+.
+    pose_areas = None
     rcl = _rank_cohorts(
         list(cohorts),
         key_map,
@@ -1513,6 +1610,7 @@ def sequential_accept_motif_cohorts(
     locked: list[int] = []
     locked_set: set[int] = set()
     lock_sets: list[list[int]] = []
+    accepted_sets: list[list[int]] = []
     accepted = 0
     for cohort in rcl:
         idxs, missing = cohort_member_indices(cohort, key_map)
@@ -1529,8 +1627,13 @@ def sequential_accept_motif_cohorts(
         # Motif seed lock exists so cold-start cohort order stays R2-only.
         adj_key = None
         if len(locked) >= 2:
+            # No telem here — sort probes would inflate wang_* census.
             adj_key = _motif_adj_within_tier_key(
-                group_id, transform, list(locked), motif_base,
+                group_id,
+                transform,
+                list(locked),
+                motif_base,
+                pose_areas=pose_areas,
             )
         order_idxs = order_idxs_seed_unmapped_mapped(
             idxs,
@@ -1599,6 +1702,7 @@ def sequential_accept_motif_cohorts(
                 locked_set.add(i)
             growing_packed.extend(member_geoms)
             accepted += 1
+            accepted_sets.append(list(scene_idxs))
             telem["motif_sequential_full"] += 1
             continue
         if large_void:
@@ -1628,6 +1732,191 @@ def sequential_accept_motif_cohorts(
                 telem["motif_packing_score_boost_idxs"] = boost_list
                 continue
         telem["motif_sequential_clear_fail"] += 1
+    # W1/W2 census; motif_adj_hits feeds W3 residual when MotifRecord edges idle.
+    if locked and motif_base is not None:
+        adj_n = motif_adj_hits(
+            locked,
+            group_id=group_id,
+            transform=transform,
+            packed=locked,
+            motif_base=motif_base,
+            weight_accept=True,
+            telem=telem,
+            pose_areas=pose_areas,
+        )
+        telem["motif_adj_hits"] = max(
+            int(telem.get("motif_adj_hits", 0) or 0), int(adj_n)
+        )
     telem["motif_lock_sets"] = lock_sets
+    telem["motif_accepted_lock_sets"] = accepted_sets
     telem["motif_beam_sets"] = len(lock_sets)
     return locked, telem
+
+
+def stamp_cross_cohort_motif_joins(
+    dg: Any,
+    lock_sets: Sequence[Sequence[int]],
+    *,
+    group_id: Sequence[int],
+    transform: Sequence,
+    motif_base: Any,
+    telem: dict | None = None,
+) -> int:
+    """D1: sparse MotifJoin bridges between accepted disjoint cohorts.
+
+    Honest MotifBase contact keys only: ``find_nearest_id`` radius 5, areas 1
+    (same as upsert). Cap ≤ n_cohorts. Prefer unjoined endpoints. mid ≥ 0.
+    """
+    if dg is None or motif_base is None:
+        return 0
+    try:
+        if int(motif_base.size()) <= 0:
+            return 0
+    except Exception:
+        return 0
+    cohorts = [
+        [int(i) for i in s if int(i) >= 0]
+        for s in lock_sets
+        if s is not None and len(s) >= 2
+    ]
+    # Keep only pairwise-disjoint accepted sets (beam subsets often overlap).
+    disjoint: list[list[int]] = []
+    used: set[int] = set()
+    for s in cohorts:
+        ss = set(s)
+        if ss & used:
+            continue
+        disjoint.append(list(s))
+        used |= ss
+    cohorts = disjoint
+    if len(cohorts) < 2:
+        return 0
+    n_g = len(group_id)
+    n_t = len(transform)
+    # Pose indices already starred by bind_epoch MotifJoin.
+    joined: set[int] = set()
+    n_joins_before = 0
+    try:
+        motifs_fn = getattr(dg, "motifs", None)
+        motifs = list(motifs_fn() if callable(motifs_fn) else (motifs_fn or []))
+        n_joins_before = len(motifs)
+        for m in motifs:
+            joined.add(int(getattr(m, "a", -1)))
+            joined.add(int(getattr(m, "b", -1)))
+    except Exception:
+        joined = set()
+        n_joins_before = 0
+    # se2_key3 is ×1000: dist 5 ≈ 0.005 world (exact motif). Cross-cohort
+    # board relatives need a contact-scale ball (~3 world → 3000) plus a board
+    # spat gate so distant compositions never gid-match.
+    spat_gate = 15.0
+    key_radius = 3000.0
+    cap = max(len(cohorts), 1)
+    stamped = 0
+    se2_hits = 0
+    for ci in range(len(cohorts)):
+        if stamped >= cap:
+            break
+        for cj in range(ci + 1, len(cohorts)):
+            if stamped >= cap:
+                break
+            ca, cb = cohorts[ci], cohorts[cj]
+            if set(ca) & set(cb):
+                continue
+            # best_key: (agreed, accept, unjoined, -spatial)
+            best_pair: tuple[int, int, int] | None = None
+            best_key: tuple[int, int, int, float] = (-1, -1, -1, 0.0)
+            for ia in ca:
+                if ia >= n_g or ia >= n_t:
+                    continue
+                ga = int(group_id[ia])
+                ta = (
+                    float(transform[ia][0]),
+                    float(transform[ia][1]),
+                    float(transform[ia][2]),
+                )
+                for ib in cb:
+                    if ib >= n_g or ib >= n_t:
+                        continue
+                    gb = int(group_id[ib])
+                    tb = (
+                        float(transform[ib][0]),
+                        float(transform[ib][1]),
+                        float(transform[ib][2]),
+                    )
+                    rel = relative_transform(ta, tb)
+                    spat = abs(float(rel[0])) + abs(float(rel[1]))
+                    if spat > spat_gate:
+                        continue
+                    mid = -1
+                    rec = None
+                    probe_rel = rel
+                    try:
+                        # areas=1 matches ContactGRG upsert (order-invariant SoT).
+                        mid = int(
+                            motif_base.find_nearest_id(
+                                ga, gb, Se2(rel[0], rel[1], rel[2]),
+                                key_radius, 1.0, 1.0,
+                            )
+                        )
+                        if mid < 0:
+                            rel_ba = relative_transform(tb, ta)
+                            probe_rel = rel_ba
+                            mid = int(
+                                motif_base.find_nearest_id(
+                                    gb, ga, Se2(rel_ba[0], rel_ba[1], rel_ba[2]),
+                                    key_radius, 1.0, 1.0,
+                                )
+                            )
+                        if mid >= 0:
+                            rec = motif_base.at(mid)
+                            se2_hits += 1
+                    except Exception:
+                        mid = -1
+                        rec = None
+                    if mid < 0 or rec is None:
+                        continue
+                    ea_raw = getattr(rec, "edge_a", -1)
+                    eb_raw = getattr(rec, "edge_b", -1)
+                    ea = int(ea_raw) if ea_raw is not None else -1
+                    eb = int(eb_raw) if eb_raw is not None else -1
+                    probe = int(
+                        wang_edge_id(float(probe_rel[0]), float(probe_rel[1]))
+                    )
+                    labeled = ea >= 0 or eb >= 0
+                    agreed = (not labeled) or probe == ea or probe == eb
+                    ac = max(int(getattr(rec, "accept_count", 0) or 0), 1)
+                    unjoined = (
+                        (0 if ia in joined else 1) + (0 if ib in joined else 1)
+                    )
+                    key = (1 if agreed else 0, ac, unjoined, -spat)
+                    if key > best_key:
+                        best_key = key
+                        best_pair = (ia, ib, mid)
+            if best_pair is None:
+                continue
+            ia, ib, mid = best_pair
+            try:
+                dg.add_motif_join(int(mid), int(ia), int(ib))
+                motifs_after = list(
+                    dg.motifs() if callable(getattr(dg, "motifs", None)) else dg.motifs
+                )
+                if len(motifs_after) <= n_joins_before + stamped:
+                    continue
+            except Exception:
+                continue
+            stamped += 1
+            joined.add(ia)
+            joined.add(ib)
+    if isinstance(telem, dict):
+        telem["motif_cross_join_se2"] = int(
+            telem.get("motif_cross_join_se2", 0) or 0
+        ) + int(se2_hits)
+        if stamped > 0:
+            telem["motif_cross_join_n"] = int(
+                telem.get("motif_cross_join_n", 0) or 0
+            ) + int(stamped)
+            telem["motif_join_from_base"] = int(
+                telem.get("motif_join_from_base", 0) or 0
+            ) + int(stamped)
+    return int(stamped)

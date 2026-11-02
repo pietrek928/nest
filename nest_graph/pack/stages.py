@@ -3,6 +3,7 @@
 import time
 from typing import Any, Callable, Sequence
 
+from nest_graph.free_kind_util import free_kind_token, is_large_void
 from nest_graph.graph import score_elems
 from nest_graph.pack.ctx import (
     FirstPassBorderResult,
@@ -200,7 +201,7 @@ def _compose_from_ctx(
     box.composed = composed
     large_void = bool(
         composed.free_info is not None
-        and composed.free_info.kind == "large_void"
+        and is_large_void(composed.free_info)
     )
     fits_part = bool(int(ctx.propose_stats.get("fits_part", 1) or 0))
     if composed.free_info is not None:
@@ -529,11 +530,11 @@ def run_first_pass_border_pack(
         )
         if post_rim is None:
             raise RuntimeError("uh free prep skipped")
-        ctx.propose_stats["post_rim_free_kind"] = getattr(
-            post_rim.free_info, "kind", None
+        ctx.propose_stats["post_rim_free_kind"] = free_kind_token(
+            getattr(post_rim.free_info, "kind", None)
         )
         ctx.propose_stats["post_rim_uh_candidate"] = int(
-            ctx.propose_stats["post_rim_free_kind"] == "large_void"
+            is_large_void(post_rim.free_info)
         )
         print(
             f"r0 post_rim free={ctx.propose_stats['post_rim_free_kind']} "
@@ -664,7 +665,7 @@ def run_post_pack_stage(
             void_leak_stats.setdefault("relocate", {})
             void_leak_stats.setdefault("local_se2", {})
         return list(ctx.polys), list(ctx.transform), list(selected_polys), empty_stats
-    if prep.push_pt is None or prep.free_post.kind != "large_void":
+    if prep.push_pt is None or not is_large_void(prep.free_post):
         return list(ctx.polys), list(ctx.transform), list(selected_polys), empty_stats
     out: dict = {
         "polys": list(ctx.polys),

@@ -10,7 +10,9 @@ from nest_graph.pack.densify_preset import apply_densify_preset
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
 from nest_graph.pack.slave_pack import contact_kiss_ledger, write_propose_kiss_ledger
+from nest_graph.free_kind_util import coalesce_free_kind, free_kind_from_any
 from nest_graph.graph import BoardSnapshot, region_to_zone, score_elems
+from nest_graph.place_zone_util import place_zone_token
 from nest_graph.propose.heavy_polish import (
     apply_dfs_refinement,
     apply_refine_with_restore,
@@ -82,7 +84,7 @@ def proven_compose_row(pack_cache: dict, action) -> dict | None:
         if isinstance(ps, dict):
             cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
     key = cheap_pack_cache_key(
-        region_to_zone(getattr(action, "region", None)),
+        place_zone_token(region_to_zone(getattr(action, "region", None))),
         action,
         compose_sz=compose_sz,
         cohort_sig=int(cohort_sig),
@@ -132,7 +134,7 @@ def compose_cached_selection(
         )
     free_info_c = pack_cache.get("free_info")
     propose_stats_c = dict(pack_cache.get("propose_stats") or {})
-    propose_stats_c["mcts_zone"] = zone
+    propose_stats_c["mcts_zone"] = place_zone_token(zone) if zone is not None else ""
     pats = list(patterns or [])
     n_cc = 0
     if pats:
@@ -516,10 +518,9 @@ def pack_execute_snapshot(
                 ng = int(pack_cache["cfg"].rules.ngroups)
                 if ng > 0 and len(selected_set) < len(gid_list):
                     rem = tuple(range(ng))
-    free_kind = str(
-        getattr(pack_cache.get("compose_free_info"), "kind", None)
-        or getattr(snap, "free_kind", "")
-        or ""
+    free_kind = coalesce_free_kind(
+        getattr(pack_cache.get("compose_free_info"), "kind", None),
+        getattr(snap, "free_kind", None),
     )
     motif_used: tuple[int, ...] = ()
     if cache_key[1] >= 0:

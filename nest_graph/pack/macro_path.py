@@ -5,8 +5,10 @@ from collections.abc import Sequence
 from typing import Any, Callable
 
 from nest_graph.cohort_specs import generate_macros, motif_cohort_specs
+from nest_graph.free_kind_util import free_kind_from_any, is_large_void
 from nest_graph.graph import (
     BoardSnapshot,
+    FreeKind,
     MacroRegion,
     PathKind,
     leaf_reward,
@@ -17,7 +19,10 @@ from nest_graph.graph import (
     region_to_zone,
     sibling_macro_actions,
     survive_rank,
+    wang_edge_pair_from_relative,
 )
+from nest_graph.place_zone_util import place_zone_token
+from nest_graph.pack.cache_key import macro_motif_id
 from nest_graph.pack.slave_pack import _motif_inject_patterns
 
 
@@ -133,7 +138,11 @@ def _sibling_actions(
     rule_ids: tuple[int, ...],
     snapshot: BoardSnapshot | None,
 ) -> list[Any]:
-    free_kind = str(getattr(snapshot, "free_kind", "") or "") if snapshot else ""
+    free_kind = (
+        free_kind_from_any(getattr(snapshot, "free_kind", FreeKind.Empty))
+        if snapshot is not None
+        else FreeKind.Empty
+    )
     return list(
         sibling_macro_actions(
             [int(g) for g in remaining_gids],
@@ -326,12 +335,15 @@ def _join_endpoints(step: Any) -> tuple[int, int]:
 def _validate_join_bonus(
     agent: Any, join_step: Any, baseline: float, telem: dict | None = None
 ) -> float:
-    mid = int(getattr(join_step, "motif_id", -1) or -1)
+    # motif_id=0 is valid — never ``x or -1``.
+    mid = int(macro_motif_id(join_step))
     survive = float(
         _realized_dict(agent).get("survive_by_motif", {}).get(mid, 0) or 0
     )
-    # W: soft-scale by MotifBase accept_count + motif_adj_hits (Wang adj fuel).
+    # W3: per-join MotifRecord fuel; soft residual adj when edges unlabeled.
     accept_scale = 1.0
+    edge_fuel = 0.0
+    odd_octant = False
     mb = getattr(agent, "motif_base", None)
     if mb is not None and mid >= 0:
         try:
@@ -339,15 +351,34 @@ def _validate_join_bonus(
                 rec = mb.at(mid)
                 ac = float(getattr(rec, "accept_count", 0) or 0)
                 accept_scale = 1.0 + 0.05 * min(ac, 8.0)
+                ea_raw = getattr(rec, "edge_a", -1)
+                eb_raw = getattr(rec, "edge_b", -1)
+                ea = int(ea_raw) if ea_raw is not None else -1
+                eb = int(eb_raw) if eb_raw is not None else -1
+                if ea < 0 and eb < 0:
+                    # Lazy fill from stored relative (same helper as upsert).
+                    rel = getattr(rec, "relative", None)
+                    if rel is not None:
+                        ea, eb = wang_edge_pair_from_relative(rel)
+                        ea = int(ea)
+                        eb = int(eb)
+                if ea >= 0 and eb >= 0:
+                    edge_fuel += 1.0
+                    odd_octant = (ea % 2 == 1) or (eb % 2 == 1)
+                if bool(getattr(rec, "flush", False)):
+                    edge_fuel += 1.0
         except Exception:
             accept_scale = 1.0
-    adj_hits = 0.0
     src = telem if isinstance(telem, dict) else getattr(agent, "telem", None)
-    try:
-        adj_hits = float((src or {}).get("motif_adj_hits", 0) or 0)
-    except Exception:
-        adj_hits = 0.0
-    wang_scale = accept_scale * (1.0 + 0.02 * min(adj_hits, 8.0))
+    wang_scale = accept_scale * (1.0 + 0.02 * min(edge_fuel, 8.0))
+    # Residual soft adj when MotifRecord edges still idle after lazy fill.
+    if edge_fuel <= 0.0 and isinstance(src, dict):
+        try:
+            adj = float(src.get("motif_adj_hits", 0) or 0)
+        except Exception:
+            adj = 0.0
+        if adj > 0.0:
+            wang_scale = max(wang_scale, 1.0 + 0.02 * min(adj, 8.0))
     # F2: soft-scale by Join/Attach endpoints ∩ sticky motif_locked.
     lock_idxs: set[int] = set()
     if isinstance(src, dict):
@@ -360,7 +391,10 @@ def _validate_join_bonus(
     a, b = _join_endpoints(join_step)
     ov = (1 if a in lock_idxs else 0) + (1 if b in lock_idxs else 0)
     lock_scale = 1.0 + 0.06 * float(ov)
-    # Partial-endpoint soft when Wang fuel is idle (accept/adj flat).
+    # Soft odd-octant bump when lock overlap ≥1 (hypotenuse stair).
+    if odd_octant and ov >= 1:
+        wang_scale *= 1.03
+    # Partial-endpoint soft when Wang fuel is idle (accept/edge flat).
     wang_idle = wang_scale <= 1.0 + 1e-9
     if wang_idle and ov == 1:
         lock_scale = max(lock_scale, 1.08)
@@ -383,7 +417,8 @@ def _validate_join_bonus(
             )
             # F4: winning Join motif_id for Motif tip force.
             if mid >= 0:
-                prev = int(telem.get("path_lock_join_motif_id", -1) or -1)
+                prev_raw = telem.get("path_lock_join_motif_id", -1)
+                prev = -1 if prev_raw is None else int(prev_raw)
                 prev_ov = int(telem.get("path_lock_join_overlap", 0) or 0)
                 if prev < 0 or ov >= prev_ov:
                     telem["path_lock_join_motif_id"] = int(mid)
@@ -469,7 +504,7 @@ def macro_increase_path(
                 motif_base=agent.motif_base,
                 prefer_motifs=True,
                 warm_motif_ids=agent._warm_motif_ids(anc_snap),
-                free_kind=str(getattr(anc_snap, "free_kind", "") or ""),
+                free_kind=free_kind_from_any(getattr(anc_snap, "free_kind", FreeKind.Empty)),
                 motif_cohorts=_place_cohort_raw(agent),
                 preset_ids=path_presets,
             )
@@ -493,7 +528,9 @@ def macro_increase_path(
                     motif_base=agent.motif_base,
                     prefer_motifs=True,
                     warm_motif_ids=agent._warm_motif_ids(anc_snap),
-                    free_kind=str(getattr(anc_snap, "free_kind", "") or ""),
+                    free_kind=free_kind_from_any(
+                        getattr(anc_snap, "free_kind", FreeKind.Empty)
+                    ),
                     motif_cohorts=_place_cohort_raw(agent),
                     preset_ids=path_presets,
                 )
@@ -503,14 +540,20 @@ def macro_increase_path(
                 motif_extra = [force_motif_action]
             siblings = list(motif_extra) + list(siblings)
         # H3: after survive_rank, soft AMAF tie-break (hole-expand credit → path beam).
-        free_kind_anc = str(getattr(anc_snap, "free_kind", "") or "")
+        # P1: anc_id parent for pb (not block_node). void_fit_r omitted on path —
+        # placeable Void +0.35 / Rim −0.15 dumped early med below H3 (improve revert).
+        free_kind_anc = free_kind_from_any(
+            getattr(anc_snap, "free_kind", FreeKind.Empty)
+        )
         amaf_scores: dict[int, float] = {}
         for i_alt, alt_sc in enumerate(siblings):
             try:
                 key = agent._action_key(alt_sc)
                 amaf_scores[i_alt] = float(
                     agent._amaf_pick_score(
-                        key, int(block_node), free_kind=free_kind_anc,
+                        key,
+                        int(anc_id),
+                        free_kind=free_kind_anc,
                     )
                 )
             except Exception:
@@ -574,7 +617,7 @@ def macro_increase_path(
             path_extend_n += 1
             path_step_macro += 1
             path_type_hist[int(getattr(PathKind.Macro, "value", 0))] += 1
-            zone = region_to_zone(alt.region)
+            zone = place_zone_token(region_to_zone(alt.region))
             try:
                 path_patterns = (
                     _motif_inject_patterns(agent.motif_base, alt)
@@ -647,9 +690,13 @@ def macro_increase_path(
             # (unify with relax_motif_void_fill); else require path_reward_beats.
             # Prefer-return gated by prefer_motif_return (build_graph phantom gate).
             if getattr(alt, "region", None) == MacroRegion.Motif:
-                free_k = str(getattr(child_snap, "free_kind", "") or "")
-                if not free_k:
-                    free_k = str(getattr(anc_snap, "free_kind", "") or "")
+                free_k = free_kind_from_any(
+                    getattr(child_snap, "free_kind", FreeKind.Empty)
+                )
+                if free_k == FreeKind.Empty:
+                    free_k = free_kind_from_any(
+                        getattr(anc_snap, "free_kind", FreeKind.Empty)
+                    )
                 child_cov = float(getattr(child_snap, "coverage", 0.0) or 0.0)
                 anc_cov = float(getattr(anc_snap, "coverage", 0.0) or 0.0)
                 motif_cov_ok = child_cov + 1e-9 >= anc_cov
@@ -660,7 +707,7 @@ def macro_increase_path(
                     alt_reward=reward,
                 )
                 take_motif = False
-                if free_k == "large_void" and motif_cov_ok:
+                if is_large_void(free_k) and motif_cov_ok:
                     if motif_hold_tip or motif_beats:
                         take_motif = (
                             best_motif_action is None or reward > best_motif_reward

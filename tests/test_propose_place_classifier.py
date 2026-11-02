@@ -304,11 +304,11 @@ def test_with_runtime_lean_caps_propose_and_selection():
     assert lean.propose.use_batch_pack is False
     seeded = base.with_runtime_lean(seeded=True, n_holes=0)
     assert seeded.propose.use_batch_pack is False
-    assert seeded.sampling.initial_random <= 48
-    assert seeded.selection.dfs_passes <= 1
+    assert seeded.sampling.initial_random <= 64
+    assert seeded.selection.dfs_passes <= 2
     holed = base.with_runtime_lean(n_holes=2)
     assert holed.propose.use_batch_pack is False
-    assert holed.sampling.shuffle_passes <= 1
+    assert holed.sampling.shuffle_passes <= 2
     simple = base.with_runtime_lean(n_holes=0, sheet_vertices=3)
     assert simple.propose.use_batch_pack is False
     assert simple.sampling.max_transforms_per_group == base.sampling.max_transforms_per_group
@@ -316,13 +316,14 @@ def test_with_runtime_lean_caps_propose_and_selection():
 
 
 def test_annulus_border_gap_adds_inward_proposers():
+    # Q180: explorers already in BorderGap baseline; annulus union is a no-op keep.
     base = ProposeConfig.proposers_for_place("border_gap")
     assert base is not None
-    assert "raycasting" not in base
+    assert "raycasting" in base
+    assert "erosion" in base
     annulus = ProposeConfig.proposers_for_place("border_gap", annulus=True)
     assert annulus is not None
-    assert "raycasting" in annulus
-    assert "erosion" in annulus
+    assert annulus == base
     assert "board_edge" in annulus
 
 

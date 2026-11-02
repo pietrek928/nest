@@ -97,7 +97,7 @@ def test_stratified_proposals_keep_prefix_order():
 
 
 def test_void_seek_zone_includes_expand_proposers():
-    zone = ZONE_PROPOSERS[PlaceZone.VOID_SEEK]
+    zone = ZONE_PROPOSERS[PlaceZone.VoidSeek]
     assert ProposerName.SELECTION_EXPAND in zone
     assert ProposerName.HISTORY_EXPAND in zone
     assert ProposerName.CLUSTER_COPY in zone

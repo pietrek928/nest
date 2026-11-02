@@ -42,7 +42,12 @@ inline std::vector<int32_t> decision_arena_ancestors(const DecisionArena &arena,
 struct MacroPathRealized {
     std::unordered_map<int32_t, int32_t> survive_by_motif;
     int32_t survive_motif_n = 0;
+    /** Same four bins as MctsRealized.kind (Rim/Void/Sheet/Motif). */
+    int32_t kind[4] = {0, 0, 0, 0};
 };
+
+/** Soft prior under H3 path AMAF — uncapped kind counts swamp Motif siblings. */
+constexpr int32_t kSurviveRankKindCap = 3;
 
 inline float survive_rank_motif_id(int32_t motif_id, const MacroPathRealized &realized) {
     float base = 0.f;
@@ -57,7 +62,18 @@ inline float survive_rank_motif_id(int32_t motif_id, const MacroPathRealized &re
 }
 
 inline float survive_rank(const MacroAction &action, const MacroPathRealized &realized) {
-    return survive_rank_motif_id(action.motif_id, realized);
+    if (action.motif_id >= 0) {
+        return survive_rank_motif_id(action.motif_id, realized);
+    }
+    const int32_t ri = static_cast<int32_t>(action.region);
+    float base = 0.f;
+    if (ri >= 0 && ri < 4) {
+        base = static_cast<float>(
+            std::min(realized.kind[static_cast<std::size_t>(ri)], kSurviveRankKindCap)
+        );
+    }
+    base += 0.01f * static_cast<float>(realized.survive_motif_n);
+    return base;
 }
 
 inline std::vector<PathNode> rank_motif_join_neighbors(
@@ -100,7 +116,7 @@ inline std::vector<MacroAction> sibling_macro_actions(
     const MotifBase *motif_base,
     bool prefer_motifs,
     const std::vector<int32_t> &warm_motif_ids,
-    const std::string &free_kind,
+    FreeKind free_kind,
     const std::vector<MotifCohortSpec> &motif_cohorts,
     const MacroAction &blocked_action,
     const std::vector<int32_t> &preset_ids = {}) {

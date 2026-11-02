@@ -21,6 +21,7 @@ from nest_graph.propose.telem import (
     merge_phase_gate_telem,
     void_elite_count,
 )
+from nest_graph.free_kind_util import is_large_void
 from nest_graph.propose.void_selection import (
     count_props_near_pole,
     transform_row_key,
@@ -180,7 +181,7 @@ def run_void_leak_and_niche_credit(
         print(f"{void_leak}{motif_wire}")
         print(format_dg_expand_funnel(leak_dict))
     bottleneck = str(funnel.get("bottleneck") or "")
-    large_void = str(getattr(free_info, "kind", "") or "") == "large_void"
+    large_void = is_large_void(free_info)
     hollow = bool(
         large_void
         and (bottleneck == "graph_to_nest" or int(n_void_nest) <= 0)
@@ -232,7 +233,7 @@ def run_void_leak_and_niche_credit(
             )
     niche_telem = credit_void_niche_from_iter(
         mcts_runner.niche_archive,
-        free_kind=str(getattr(free_info, "kind", "") or ""),
+        free_kind=getattr(free_info, "kind", None),
         bottleneck=bottleneck,
         n_void_nest=int(n_void_nest),
         n_void_graph=int(n_void_graph),
@@ -314,8 +315,6 @@ def finalize_iter_mcts(
             propose_stats.get("materialized_motif", 0) or 0
         )
         mid = int(getattr(getattr(runner, "mcts_action", None), "motif_id", -1) or -1)
-        if mid >= 0:
-            runner.agent.realized["macro_survive_n"] = int(sc.get(mid, 0) or 0)
         if sc and refine_bp is not None and emitted_bp is not None:
             motif_names = (
                 "cluster_copy", "motif", "pocket_fit", "pattern", "archive_mix",
@@ -347,6 +346,20 @@ def finalize_iter_mcts(
                 (propose_stats.get("repack") or {}).get("upsert_patterns")
             ),
         )
+        # L2: always overwrite macro_survive_n (Void/Rim used to keep prior Motif value).
+        if mid >= 0:
+            runner.agent.realized["macro_survive_n"] = int(sc.get(mid, 0) or 0)
+        else:
+            kind = runner.agent.realized.get("kind") or (0, 0, 0, 0)
+            action = getattr(runner, "mcts_action", None)
+            ri = -1
+            if action is not None:
+                reg = getattr(action, "region", None)
+                ri = int(getattr(reg, "value", reg) if reg is not None else -1)
+            if 0 <= ri < 4:
+                runner.agent.realized["macro_survive_n"] = int(kind[ri])
+            else:
+                runner.agent.realized["macro_survive_n"] = 0
     if isinstance(propose_stats.get("void_leak"), dict):
         leak = propose_stats["void_leak"]
         leak["kind_survive"] = int(propose_stats.get("kind_survive", 0) or 0)
@@ -366,13 +379,11 @@ def finalize_iter_mcts(
                 else 0
             ),
         )
-        leak["macro_survive_n"] = max(
-            int(leak.get("macro_survive_n", 0) or 0),
-            int(
-                (runner.agent.realized or {}).get("macro_survive_n", 0)
-                if runner.agent is not None
-                else 0
-            ),
+        # L2: assign, do not max-mask stale Motif tip values onto Void tips.
+        leak["macro_survive_n"] = int(
+            (runner.agent.realized or {}).get("macro_survive_n", 0)
+            if runner.agent is not None
+            else 0
         )
         leak["motif_compose_accepted_size"] = int(
             propose_stats.get("motif_compose_accepted_size", 0) or 0

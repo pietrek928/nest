@@ -1,12 +1,13 @@
 import math
 
-from nest_graph.graph import MctsAgent, leaf_reward
+from nest_graph.graph import MctsAgent, leaf_reward, FreeKind
 from nest_graph.geometry import nfp_lite_relative
 from nest_graph.pack.runner import MacroMctsRunner
 from nest_graph.graph import BoardSnapshot
 from nest_graph.graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
 from nest_graph.geometry import Geometry
 from shapely.geometry import box
+from nest_graph.free_kind_util import is_large_void
 
 
 def test_decision_arena_python_roundtrip():
@@ -61,7 +62,7 @@ def test_mcts_runner_stub_sims():
 def test_arena_snapshot_size_invariant():
     arena = DecisionArena()
     assert arena.size() == 1
-    root = BoardSnapshot(remaining_gids=(0, 1), coverage=0.1, free_kind="large_void")
+    root = BoardSnapshot(remaining_gids=(0, 1), coverage=0.1, free_kind=FreeKind.LargeVoid)
     arena.set_snapshot(0, root)
     assert abs(arena.snapshot(0).coverage - 0.1) < 1e-6
     assert arena.snapshot(0).has_remaining
@@ -72,7 +73,7 @@ def test_arena_snapshot_size_invariant():
     assert arena.size() == 2
     child = arena.snapshot(cid)
     assert abs(child.coverage - 0.1) < 1e-6
-    assert child.free_kind == "large_void"
+    assert is_large_void(child.free_kind)
     child.coverage = 0.2
     assert abs(arena.snapshot(0).coverage - 0.1) < 1e-6
     assert abs(arena.snapshot(cid).coverage - 0.2) < 1e-6
@@ -102,7 +103,7 @@ def test_leaf_reward_terms():
         coverage=0.5,
         void_fill=0.4,
         rim_fill=0.2,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         void_fit_r=1.0,
         packed_gids=(1,),
     )
@@ -112,7 +113,7 @@ def test_leaf_reward_terms():
         coverage=0.5,
         void_fill=0.4,
         rim_fill=0.2,
-        free_kind="large_void",
+        free_kind=FreeKind.LargeVoid,
         void_fit_r=0.0,
         packed_gids=(1,),
     )
@@ -123,7 +124,7 @@ def test_cheap_expand_slave_motif_reward_parity():
     from nest_graph.pack.slave_pack import cheap_expand_slave
     from nest_graph.graph import MacroAction, MacroRegion, MotifBase
 
-    parent = BoardSnapshot(coverage=0.4, remaining_gids=(0, 1), free_kind="large_void")
+    parent = BoardSnapshot(coverage=0.4, remaining_gids=(0, 1), free_kind=FreeKind.LargeVoid)
     action = MacroAction()
     action.region = MacroRegion.Motif
     action.motif_id = 1
@@ -269,7 +270,7 @@ def test_amaf_pick_reads_realized_kind_attach():
     a.rule_id = 0
     a.motif_id = -1
     key = agent._action_key(a)
-    base = agent._amaf_pick_score(key, 0, free_kind="")
+    base = agent._amaf_pick_score(key, 0, free_kind=FreeKind.Empty)
     credit_motif_on_nest_survival(
         agent.motif_base,
         selected_polys=[0, 1],
@@ -285,7 +286,7 @@ def test_amaf_pick_reads_realized_kind_attach():
     )
     assert int(agent.realized["sel_n"]) == 2
     assert agent.realized["kind"][1] == 4
-    boosted = agent._amaf_pick_score(key, 0, free_kind="")
+    boosted = agent._amaf_pick_score(key, 0, free_kind=FreeKind.Empty)
     assert boosted > base
 
 

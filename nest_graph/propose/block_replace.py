@@ -39,6 +39,7 @@ from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
+from nest_graph.free_kind_util import is_large_void
 
 _HOLE_PROPOSERS = frozenset({ProposerName.CLUSTER_COPY, ProposerName.POCKET_FIT})
 _HOLE_EMIT_CAP = 128
@@ -910,7 +911,7 @@ def maybe_block_hole_renest(
         or not bool(getattr(propose_cfg, "enable_lns_rebuild", True))
         or not selected
         or free_info is None
-        or getattr(free_info, "kind", None) != "large_void"
+        or not is_large_void(free_info)
     ):
         return list(selected), polys, transforms, group_id, candidate_geoms, {}
     from nest_graph.propose.repair_cohort import (
