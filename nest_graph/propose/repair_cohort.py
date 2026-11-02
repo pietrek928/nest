@@ -59,6 +59,7 @@ def pick_repair_victim(
     void_poly: Any = None,
     min_size: int = 3,
     max_size: int = 6,
+    prefer_void_facing: bool = False,
 ) -> tuple[list[int] | None, bool]:
     """Q203: 3b victim first; BFS peel only if mid-3b returned nothing."""
     victim = pick_block_hole_victim(
@@ -71,6 +72,7 @@ def pick_repair_victim(
         min_size=min_size,
         max_size=max_size,
         allow_board_adj_fallback=True,
+        prefer_void_facing=bool(prefer_void_facing),
     )
     if victim:
         return list(victim), False
@@ -147,6 +149,7 @@ def begin_repair_cohort(
     max_patterns: int = 8,
     min_size: int = 3,
     max_size: int = 6,
+    prefer_void_facing: bool = False,
 ) -> RepairCohort:
     """Pick victim + build shared pattern list before 3b emit."""
     cohort = RepairCohort()
@@ -159,6 +162,7 @@ def begin_repair_cohort(
         void_poly=void_poly,
         min_size=min_size,
         max_size=max_size,
+        prefer_void_facing=bool(prefer_void_facing),
     )
     if not victim:
         return cohort

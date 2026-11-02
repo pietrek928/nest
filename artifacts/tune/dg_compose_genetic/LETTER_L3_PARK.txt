@@ -1,0 +1,8 @@
+Letter L3 PARK — inject polish on plateau∧LV
+
+Tried: polish=True always (remove plateau∧LV skip).
+Early: 0.577 / 0.600 / 0.623 → med 0.600 min 0.577 (≥ open); nfp_lite_ok>0.
+Late N=3: Δ +0.1845 / +0.1678 / +0.1852 → med +0.1845 min +0.1678 (< open min +0.1758).
+
+Park: restore polish=not (plateau∧LV). Keep nfp telem merge fix + inject_polish telem keys.
+No local_se2 motif_locked skip (join demotion not observed this letter).

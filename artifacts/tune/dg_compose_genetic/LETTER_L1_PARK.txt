@@ -1,0 +1,13 @@
+Letter L1 PARK — prefer_void_facing peel lex
+
+Open floors: early med/min 0.577/0.571; late Δ med/min +0.1852/+0.1758
+
+Tried:
+- Gate phantom∧sterile → pvf=0 on early cold (n_packed<60 densify_clear; fits recovers)
+- Always-on pvf under LV 3b → early r3 med/min 0.577/0.561; r4 med/min 0.571/0.550
+  late N=3 Δ +0.1924 / +0.1678 / +0.1852 → med +0.1852 min +0.1678 (< open min)
+- Densify late still void_clear_rate=0 with try>0; 3b often no_gain|lex
+
+Park: production prefer_void_facing=False (W3 strip lex). Keep helper + unit tests + sterile/phantom telem.
+
+Falsify: peel cannot open packing-clear pocket (plan stop signal). Proceed L2+ without L1 lex.

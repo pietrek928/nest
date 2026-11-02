@@ -1,0 +1,6 @@
+Letter L4 NO-OP / replicate
+
+Gate requires L3 polished patterns or L2 compose>0 with arch_n>0.
+L3 parked; early telem already shows arch_n>0 and cluster_copy_emitted>0
+(32–36) with mix_floor hits — emit path healthy, no accepted∧emitted=0 gap.
+No second replicator. No code change.

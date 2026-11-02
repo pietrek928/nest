@@ -2223,6 +2223,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             and bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
         ):
             note_motif_ref_anchors_from_nest(mcts_runner.motif_base, nest_state)
+        # L3 park: always-on inject polish early-green but late Δ min +0.1678
+        # (< open +0.1758). Restore plateau∧LV polish skip (intentional).
+        _plateau_lv = bool(plateau.on_plateau) and is_large_void(parent_snap)
+        _inject_polish = not _plateau_lv
+        propose_stats["inject_polish"] = int(_inject_polish)
+        propose_stats["inject_polish_plateau_lv"] = int(_plateau_lv)
         archived_for_propose = (
             motif_patterns_for_inject(
                 mcts_runner.motif_base,
@@ -2231,10 +2237,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 part_bases=part_bases,
                 min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=False)),
                 telem=propose_stats,
-                polish=not (
-                    bool(plateau.on_plateau)
-                    and is_large_void(parent_snap)
-                ),
+                polish=_inject_polish,
             )
             if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
             else []
@@ -2244,7 +2247,12 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         propose_stats["motif_base_seed_n"] = int(
             mcts_telem.get("motif_base_seed_n", _mate_seed_n) or 0
         )
-        propose_stats["nfp_lite_ok"] = int(mcts_telem.get("nfp_lite_ok", 0))
+        propose_stats["nfp_lite_ok"] = int(propose_stats.get("nfp_lite_ok", 0) or 0) + int(
+            mcts_telem.get("nfp_lite_ok", 0) or 0
+        )
+        propose_stats["nfp_lite_keep"] = int(
+            propose_stats.get("nfp_lite_keep", 0) or 0
+        ) + int(mcts_telem.get("nfp_lite_keep", 0) or 0)
         propose_stats["dg_force_zone"] = mcts_force_zone
         propose_stats["last_graph_n"] = int(mcts_telem.get("last_graph_n", 0) or 0)
         propose_stats["last_nest_n"] = int(mcts_telem.get("last_nest_n", 0) or 0)

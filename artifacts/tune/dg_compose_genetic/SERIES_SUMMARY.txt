@@ -1,0 +1,13 @@
+DG compose / genetic series summary
+
+Open floors (swiss): early med/min 0.577/0.571; late Δ med/min +0.1852/+0.1758
+
+L1 PARK — prefer_void_facing peel: always-on dumped late Δ min +0.1678; sterile gate rarely armed early.
+  Keep: densify_void_clear_sterile, prefer_void_facing API (production off), unit tests.
+L2 NO-OP — seq_miss=0; cluster_copy already emits with arch_n>0.
+L3 PARK — inject polish always-on early green (med/min 0.600/0.577) but late Δ min +0.1678.
+  Restore plateau∧LV polish skip. Keep nfp_lite telem merge + inject_polish keys.
+L4 NO-OP — replicate path already healthy (cluster_copy_emitted>0).
+
+Falsify funnel: densify void_clear_rate=0 with try>0; graph_to_nest; peel/polish cannot invent packing-clear poses.
+Final early after parks: 0.569 / 0.602 / 0.592 → med 0.592 min 0.569 (~open / Letter-A noise).

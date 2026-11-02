@@ -464,6 +464,13 @@ def build_void_leak_dict(
         "block_hole_accepted": int(propose_stats.get("block_hole_accepted", 0)),
         "block_hole_emit_in_hull": int(propose_stats.get("block_hole_emit_in_hull", 0)),
         "block_hole_tried": int(propose_stats.get("block_hole_tried", 0) or 0),
+        "prefer_void_facing": int(propose_stats.get("prefer_void_facing", 0) or 0),
+        "nfp_lite_ok": int(propose_stats.get("nfp_lite_ok", 0) or 0),
+        "nfp_lite_keep": int(propose_stats.get("nfp_lite_keep", 0) or 0),
+        "inject_polish": int(propose_stats.get("inject_polish", 0) or 0),
+        "inject_polish_plateau_lv": int(
+            propose_stats.get("inject_polish_plateau_lv", 0) or 0
+        ),
         "block_hole_mate_n": int(propose_stats.get("block_hole_mate_n", 0) or 0),
         "block_hole_dcount": int(propose_stats.get("block_hole_dcount", 0) or 0),
         "block_hole_darea": float(propose_stats.get("block_hole_darea", 0.0) or 0.0),

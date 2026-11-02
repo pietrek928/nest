@@ -1,0 +1,6 @@
+Letter L2 NO-OP / lock
+
+Telem on void_fill early: seq_miss=0, seq_clear=0, arch_n>0, cluster_copy_emitted>0.
+No inject-from-lock path exists; clear_fail does not call 3b.
+Emit gap (accepted_patterns_n>0 ∧ cluster_copy_emitted==0 ∧ seq_miss>0) not observed.
+No code change. Proceed L3.

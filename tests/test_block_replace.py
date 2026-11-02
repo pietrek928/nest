@@ -10,6 +10,7 @@ from nest_graph.graph import (
 )
 from nest_graph.geometry import Geometry
 from nest_graph.propose.block_replace import (
+    densify_void_clear_sterile,
     lex_count_area_better,
     pick_block_hole_victim,
     try_block_cohort_swap,
@@ -163,6 +164,78 @@ def test_hole_victim_skips_board_adj():
     assert victim is not None
     assert set(victim) <= {3, 4, 5}
     assert not (set(victim) & {0, 1, 2})
+
+
+def test_hole_victim_prefer_void_facing_over_strip():
+    """L1: void-facing round interior beats elongated non-void-facing strip."""
+    sheet = box(0, 0, 30, 30)
+    void_poly = box(20, 10, 28, 20)
+    # Elongated strip far from void (aspect≥2), nearer pole.
+    strip = [
+        box(2.0, 14.0, 4.0, 14.8),
+        box(4.1, 14.0, 6.1, 14.8),
+        box(6.2, 14.0, 8.2, 14.8),
+    ]
+    # Roundish blob at void wall (farther from pole at 5,14).
+    wall = [
+        box(18.0, 12.0, 19.5, 13.5),
+        box(19.6, 12.0, 21.1, 13.5),
+        box(18.0, 13.6, 19.5, 15.1),
+    ]
+    polys = strip + wall
+    pole = Point(5.0, 14.0)
+    base = pick_block_hole_victim(
+        list(range(6)),
+        polys,
+        min_dist=0.15,
+        sheet=sheet,
+        pole=pole,
+        void_poly=void_poly,
+        min_size=3,
+        max_size=6,
+        prefer_strip=True,
+        prefer_void_facing=False,
+    )
+    facing = pick_block_hole_victim(
+        list(range(6)),
+        polys,
+        min_dist=0.15,
+        sheet=sheet,
+        pole=pole,
+        void_poly=void_poly,
+        min_size=3,
+        max_size=6,
+        prefer_strip=True,
+        prefer_void_facing=True,
+    )
+    assert base is not None and facing is not None
+    assert set(base) <= {0, 1, 2}
+    assert set(facing) <= {3, 4, 5}
+
+
+def test_densify_void_clear_sterile_requires_try():
+    assert not densify_void_clear_sterile({})
+    assert not densify_void_clear_sterile({"densify_stats": {"motif_skip": {}}})
+    assert not densify_void_clear_sterile(
+        {"densify_stats": {"motif_skip": {"void_clear_rate": 0}}}
+    )
+    assert densify_void_clear_sterile(
+        {
+            "densify_stats": {
+                "motif_skip": {"void_clear_try": 8, "void_clear_rate": 0},
+            }
+        }
+    )
+    assert not densify_void_clear_sterile(
+        {
+            "densify_stats": {
+                "motif_skip": {"void_clear_try": 8, "void_clear_rate": 100},
+            }
+        }
+    )
+    assert densify_void_clear_sterile(
+        {"densify_stats": {"motif_skip": {"fit_stop_all_groups": 1}}}
+    )
 
 
 def test_enable_block_replace_default_on():

@@ -39,7 +39,7 @@ from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
-from nest_graph.free_kind_util import is_large_void
+from nest_graph.free_kind_util import is_large_void, void_phantom
 
 _HOLE_PROPOSERS = frozenset({ProposerName.CLUSTER_COPY, ProposerName.POCKET_FIT})
 _HOLE_EMIT_CAP = 128
@@ -246,6 +246,26 @@ def block_hole_peel_max_size(
     return max(int(getattr(propose_cfg, "cluster_repack_max_size", 6) or 6), 1)
 
 
+def densify_void_clear_sterile(propose_stats: dict | None) -> bool:
+    """True when densify proved the void unfillable (clear-try or fit-stop).
+
+    Missing ``void_clear_try`` alone is *not* sterile. ``fit_stop_all_groups``
+    (densify fired, all fit probes fail, clear_ok=0) is an alternate sterile
+    SoT when clear-rate sampling never ran (``n_packed<60`` densify_clear gate).
+    """
+    if not propose_stats:
+        return False
+    dens = propose_stats.get("densify_stats") or {}
+    skip = dens.get("motif_skip") or propose_stats.get("motif_skip") or {}
+    if int(skip.get("fit_stop_all_groups", 0) or 0) > 0:
+        return True
+    try_n = int(skip.get("void_clear_try", 0) or skip.get("motif_void_clear_try", 0) or 0)
+    if try_n <= 0:
+        return False
+    rate = int(skip.get("void_clear_rate", 0) or skip.get("motif_void_clear_rate", 0) or 0)
+    return rate == 0
+
+
 def pick_block_hole_victim(
     selected: Sequence[int],
     polys: Sequence[BaseGeometry],
@@ -258,11 +278,14 @@ def pick_block_hole_victim(
     max_size: int = 6,
     allow_board_adj_fallback: bool = True,
     prefer_strip: bool = True,
+    prefer_void_facing: bool = False,
 ) -> list[int] | None:
     """Contact CC of size [min,max]; prefer non-board_adj; Q215 void-facing board_adj only.
 
     W3: when ``prefer_strip``, interior CCs with MRR aspect≥2 beat nearer round
     blobs (strip re-tile for lattice emit + lex).
+    L1: when ``prefer_void_facing``, interior CCs with any ``part_void_adj`` beat
+    non-void-facing strips; among same class keep aspect-then-distance.
     """
     sel = [int(i) for i in selected if 0 <= int(i) < len(polys)]
     placed = [polys[i] for i in sel]
@@ -273,6 +296,7 @@ def pick_block_hole_victim(
     best_interior: list[int] | None = None
     best_interior_d = float("inf")
     best_interior_aspect = 0.0
+    best_interior_void = False
     best_rim: list[int] | None = None
     best_rim_d = float("inf")
     void_geom = as_geometry(void_poly) if void_poly is not None else None
@@ -300,12 +324,25 @@ def pick_block_hole_victim(
             dist = float(blob.centroid.distance(pole))
         aspect = _victim_blob_aspect(blob)
         if not board_hit:
+            void_facing = False
+            if prefer_void_facing and void_poly is not None:
+                void_facing = any(
+                    part_void_adj(
+                        polys[i], void_poly, min_dist, void_geom=void_geom,
+                    )
+                    for i in global_idxs
+                    if polys[i] is not None
+                )
             # W3: strip (aspect≥2) lex over nearer round; else nearest-to-pole.
             strip = prefer_strip and aspect >= 2.0
             best_strip = prefer_strip and best_interior_aspect >= 2.0
             better = False
             if best_interior is None:
                 better = True
+            elif prefer_void_facing and void_facing and not best_interior_void:
+                better = True
+            elif prefer_void_facing and (not void_facing) and best_interior_void:
+                better = False
             elif strip and not best_strip:
                 better = True
             elif strip == best_strip and (
@@ -316,6 +353,7 @@ def pick_block_hole_victim(
             if better:
                 best_interior_d = dist
                 best_interior_aspect = aspect
+                best_interior_void = bool(void_facing)
                 best_interior = list(global_idxs)
         elif allow_board_adj_fallback and dist < best_rim_d:
             # Q215: board_adj only if void-facing (pure rim peel is waste on void_fill).
@@ -921,6 +959,15 @@ def maybe_block_hole_renest(
         begin_repair_cohort,
     )
 
+    # L1 park: void-facing peel lex dumped late Δ min (+0.1678 < open +0.1758)
+    # and early min under always-on; densify still void_clear_rate=0 / 3b no_gain|lex.
+    # Keep prefer_void_facing API + unit tests; production stays W3 strip lex.
+    fit_r = 1.0 if bool(getattr(free_info, "fits_part", True)) else 0.0
+    sterile = densify_void_clear_sterile(propose_stats)
+    phantom = void_phantom(free_info, fit_r)
+    propose_stats["prefer_void_facing"] = 0
+    propose_stats["prefer_void_facing_sterile"] = int(sterile)
+    propose_stats["prefer_void_facing_phantom"] = int(phantom)
     cohort = begin_repair_cohort(
         selected,
         list(polys),
@@ -936,6 +983,7 @@ def maybe_block_hole_renest(
         max_size=block_hole_peel_max_size(
             propose_cfg, prefer_strip=True, n_packed=len(selected)
         ),
+        prefer_void_facing=False,
     )
     patterns_for_emit = cohort.patterns if cohort.patterns else cluster_patterns
     (
