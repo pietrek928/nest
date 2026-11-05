@@ -2069,29 +2069,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         if mcts_action is not None:
             mcts_telem["mcts_rule_id"] = int(getattr(mcts_action, "rule_id", 0) or 0)
             mcts_preset_id = int(getattr(mcts_action, "preset_id", 0) or 0)
-        # L: path/Motif tip usually preset 0 — apply first online carve preset to
-        # pack_cfg when densify-hold + near_last/plateau (post_pack temporal shield).
+        # L2: AMAF tip keeps its preset_id (Motif/cohort stay 0). Pack-only
+        # densify when tip is Motif@0 on densify-hold so carve/flush still run
+        # without rewriting the Motif AMAF key (late −0.1678 without this).
+        pack_preset_id = int(mcts_preset_id)
         if (
             len(preset_ids) > 1
             and densify_hold
             and (bool(near_last) or bool(plateau.on_plateau))
             and int(mcts_preset_id) == 0
+            and mcts_action is not None
+            and getattr(mcts_action, "region", None) == MacroRegion.Motif
         ):
             for _pid in preset_ids:
                 if int(_pid) != 0:
-                    mcts_preset_id = int(_pid)
-                    mcts_telem["carve_preset_force"] = 1
-                    # D: AMAF credits applied preset (Motif tips included).
-                    if mcts_action is not None:
-                        mcts_action.preset_id = int(_pid)
+                    pack_preset_id = int(_pid)
+                    mcts_telem["carve_preset_pack_only"] = 1
                     break
         mcts_telem["mcts_preset_id"] = int(mcts_preset_id)
-        pack_cfg = apply_densify_preset(cfg, mcts_preset_id, _densify_presets)
-        # P: cheap_pack_cache_key already includes preset_id — do not wipe cache.
-        if int(mcts_preset_id) != int(_last_mcts_preset_id):
+        mcts_telem["pack_preset_id"] = int(pack_preset_id)
+        pack_cfg = apply_densify_preset(cfg, pack_preset_id, _densify_presets)
+        # P: cheap_pack_cache_key uses pack densify preset (may differ from tip).
+        if int(pack_preset_id) != int(_last_mcts_preset_id):
             mcts_telem["cache_invalidate_preset"] = 0
             mcts_telem["cache_preset_key_only"] = 1
-        _last_mcts_preset_id = int(mcts_preset_id)
+        _last_mcts_preset_id = int(pack_preset_id)
         if mcts_action is not None:
             mcts_force_zone = place_zone_token(region_to_zone(mcts_action.region))
 

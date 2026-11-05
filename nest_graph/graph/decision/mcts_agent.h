@@ -231,29 +231,17 @@ inline float leaf_reward(
         || snapshot.free_kind == FreeKind::SwissCheese) {
         void_fill_term *= std::min(std::max(fit_r, 0.f), 1.f);
     }
-    float base = snapshot.coverage + void_w * void_fill_term + rim_w * snapshot.rim_fill
+    // Layout-only: rule/motif additives live in amaf_pick_score (Gelly–Silver),
+    // not backed into the leaf mean (Q286 hollow index / double-count).
+    // L1b restore of survive_* re-hit late +0.1678 attractor — keep stripped.
+    (void)rule_id;
+    (void)member_hits;
+    (void)materialized_motif;
+    (void)survive_motif_n;
+    (void)macro_survive_n;
+    return snapshot.coverage + void_w * void_fill_term + rim_w * snapshot.rim_fill
         + lam_kiss * (static_cast<float>(snapshot.kiss_pairs) / static_cast<float>(packed))
         + lam_comp * snapshot.mean_compactness;
-    if (rule_id > 0) {
-        base += 0.02f * std::min(static_cast<float>(rule_id), 3.f);
-    }
-    const int32_t mh = std::max(member_hits, 0);
-    const int32_t mm = std::max(materialized_motif, 0);
-    if (mh > 0) {
-        base += 0.03f * std::min(static_cast<float>(mh), 12.f) / 12.f;
-    }
-    if (mm > 0) {
-        base += 0.05f * std::min(static_cast<float>(mm), 4.f) / 4.f;
-    }
-    const int32_t sn = std::max(survive_motif_n, 0);
-    const int32_t msn = std::max(macro_survive_n, 0);
-    if (sn > 0) {
-        base += 0.04f * std::min(static_cast<float>(sn), 8.f) / 8.f;
-    }
-    if (msn > 0) {
-        base += 0.06f * std::min(static_cast<float>(msn), 4.f) / 4.f;
-    }
-    return base;
 }
 
 inline void timed_expand_ms(MctsTelem &telem, double elapsed_ms) {
@@ -670,19 +658,17 @@ public:
                 }
             }
         }
-        const float amaf_scale = survival_live ? 0.65f : 1.f;
-        if (survival_live) {
-            telem.amaf_survive_scale = amaf_scale;
-        }
+        // L4: drop uniform amaf_survive_scale (dead argmax multiply).
+        telem.amaf_survive_scale = survival_live ? 1.f : 0.f;
         float score = 0.f;
         if (visits <= 0) {
-            score = pb * amaf_scale;
+            score = pb;
         } else {
             float miss_term = 0.f;
             if (misses > 0) {
                 miss_term = MCTS_LAMBDA_MISS * (static_cast<float>(misses) / static_cast<float>(visits));
             }
-            score = (mean - miss_term + pb) * amaf_scale;
+            score = mean - miss_term + pb;
         }
         const int32_t void_i = static_cast<int32_t>(MacroRegion::Void);
         const int32_t rim_i = static_cast<int32_t>(MacroRegion::Rim);
@@ -776,7 +762,12 @@ public:
         }
         if (motif_id >= 0 && motif_base != nullptr && motif_id < motif_base->size()) {
             const MotifRecord &rec = motif_base->at(motif_id);
-            score += 0.04f * std::min(static_cast<float>(rec.accept_count), 8.f);
+            // L4: Gelly–Silver β(visits) fades accept_count prior; gci stays max quality.
+            const float beta_accept =
+                visits <= 0 ? 1.f
+                            : (8.f / (static_cast<float>(visits) + 8.f));
+            score += beta_accept * 0.04f
+                * std::min(static_cast<float>(rec.accept_count), 8.f);
             score += 0.12f * rec.gci;
         }
         if (niche_archive != nullptr) {
@@ -800,10 +791,7 @@ public:
                                          : static_cast<float>(parent_visits) + 1.f;
             score += prop_h / den;
         }
-        // DgPreset: prefer baseline preset on ties so ×K does not reshuffle cold picks.
-        if (preset_id == 0) {
-            score += 1e-3f;
-        }
+        // L2: drop preset_id==0 +1e-3 cold-tie bias so online presets compete.
         return score;
     }
 

@@ -145,8 +145,16 @@ def test_cheap_expand_slave_motif_reward_parity():
         realized=realized,
         telem={},
     )
-    bare = leaf_reward(res.snapshot, rule_id=0)
-    assert res.reward > bare
+    # Layout-only leaf_reward: motif/rule realized fields no longer inflate reward.
+    bare = leaf_reward(
+        res.snapshot,
+        rule_id=1,
+        member_hits=8,
+        materialized_motif=1,
+        survive_motif_n=2,
+    )
+    assert abs(res.reward - bare) < 1e-6
+    assert abs(bare - leaf_reward(res.snapshot)) < 1e-6
 
 
 def test_polish_patterns_at_inject_keeps_on_missing_bases():

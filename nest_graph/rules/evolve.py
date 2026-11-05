@@ -88,6 +88,108 @@ def dedupe_rule_sets(rule_sets: list[PlacementRuleSet]) -> list[PlacementRuleSet
     return out
 
 
+def _iter_rule_atoms(rule_set: PlacementRuleSet):
+    """Yield (fingerprint_atom, rule_obj) for either/or building-block recombine."""
+    q = _quantize_rule_scalar
+    for pr in rule_set.point_rules:
+        yield ("p", pr.group, q(pr.pos[0]), q(pr.pos[1]), q(pr.r), q(pr.w)), pr
+    for cr in rule_set.circle_rules:
+        yield (
+            (
+                "c",
+                cr.group,
+                q(cr.circle.center.x),
+                q(cr.circle.center.y),
+                q(cr.circle.radius),
+                q(cr.r),
+                q(cr.w),
+            ),
+            cr,
+        )
+    for pr in rule_set.point_angle_rules:
+        yield (
+            (
+                "pa",
+                pr.group,
+                q(pr.pos[0]),
+                q(pr.pos[1]),
+                q(pr.a),
+                q(pr.r),
+                q(pr.w),
+            ),
+            pr,
+        )
+    for cr in rule_set.circle_angle_rules:
+        yield (
+            (
+                "ca",
+                cr.group,
+                q(cr.circle.center.x),
+                q(cr.circle.center.y),
+                q(cr.a),
+                q(cr.r),
+                q(cr.w),
+            ),
+            cr,
+        )
+
+
+def either_or_recombine_rule_sets(
+    parent_a: PlacementRuleSet,
+    parent_b: PlacementRuleSet,
+    *,
+    seed: int = 0,
+) -> PlacementRuleSet:
+    """Radcliffe R³ / 2412.17104 either-or: shared atoms once; exclusive either/or."""
+    rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+    atoms_a = dict(_iter_rule_atoms(parent_a))
+    atoms_b = dict(_iter_rule_atoms(parent_b))
+    keys_a = set(atoms_a)
+    keys_b = set(atoms_b)
+    out = PlacementRuleSet()
+    for key in keys_a & keys_b:
+        out.append_rule(atoms_a[key])
+    for key in keys_a - keys_b:
+        if float(rng.random()) < 0.5:
+            out.append_rule(atoms_a[key])
+    for key in keys_b - keys_a:
+        if float(rng.random()) < 0.5:
+            out.append_rule(atoms_b[key])
+    return out
+
+
+def _atom_overlap_sim(fp_a: tuple, fp_b: tuple) -> float:
+    if not fp_a and not fp_b:
+        return 1.0
+    sa = set(fp_a)
+    sb = set(fp_b)
+    denom = max(min(len(sa), len(sb)), 1)
+    return float(len(sa & sb)) / float(denom)
+
+
+def diversify_survivor_select(
+    scored: list[tuple[float, PlacementRuleSet]],
+    n: int,
+    *,
+    d0: float,
+) -> list[PlacementRuleSet]:
+    """2412.17104 iterative survivor: pick best, subtract D0·atom_overlap from rest."""
+    if n <= 0 or not scored:
+        return []
+    remaining = [(float(f), rs, _fingerprint_rule_set(rs)) for f, rs in scored]
+    selected: list[PlacementRuleSet] = []
+    while remaining and len(selected) < n:
+        remaining.sort(key=lambda item: item[0], reverse=True)
+        _best_f, best_rs, best_fp = remaining.pop(0)
+        selected.append(best_rs)
+        next_remaining: list[tuple[float, PlacementRuleSet, tuple]] = []
+        for fit, rs, fp in remaining:
+            pen = float(d0) * _atom_overlap_sim(best_fp, fp)
+            next_remaining.append((fit - pen, rs, fp))
+        remaining = next_remaining
+    return selected
+
+
 def truncate_rule_set(
     rule_set: PlacementRuleSet,
     max_rules: int,
@@ -164,6 +266,13 @@ def improve_rules(
         elites = [rs for _, rs in ranked[:k]]
 
     pool: list[PlacementRuleSet] = list(parents)
+    # L3: one either/or child from top-two elites before mutate scales (2412.17104).
+    if len(elites) >= 2:
+        xo = either_or_recombine_rule_sets(
+            elites[0], elites[1], seed=int(seed) ^ 0xA5A5
+        )
+        if xo.size() > 0:
+            pool.append(xo)
     for preset_idx, preset in enumerate(mutation_presets):
         mutate_seed = (int(seed) + preset_idx * 10007) & 0xFFFFFFFF
         children = augment_rules(elites, preset, seed=mutate_seed)
@@ -176,8 +285,11 @@ def improve_rules(
         return []
 
     fitness = score_rules(graphs, pool, score_options)
-    scored = sorted(zip(fitness, pool), key=lambda item: item[0], reverse=True)
-    return [rs for _, rs in scored[:n]]
+    scored = list(zip(fitness, pool))
+    # D0 in near-tie band: ≤ count_weight so one extra selected part cannot invert.
+    cw = float(getattr(score_options, "count_weight", 0.02) or 0.02)
+    d0 = min(cw, 0.02)
+    return diversify_survivor_select(scored, n, d0=d0)
 
 
 def score_rule_sets_with_dfs(

@@ -96,6 +96,29 @@ def test_dedupe_rule_sets():
     assert len(out) == 1
 
 
+def test_either_or_and_diversify_survivor():
+    from nest_graph.rules.evolve import (
+        either_or_recombine_rule_sets,
+        diversify_survivor_select,
+        _fingerprint_rule_set,
+    )
+
+    a = PlacementRuleSet()
+    a.append_point_at(Vec2(0.1, 0.2), 0.1, 1.0, 0)
+    a.append_point_at(Vec2(0.3, 0.4), 0.1, 1.0, 0)
+    b = PlacementRuleSet()
+    b.append_point_at(Vec2(0.1, 0.2), 0.1, 1.0, 0)
+    b.append_point_at(Vec2(0.5, 0.6), 0.1, 1.0, 0)
+    child = either_or_recombine_rule_sets(a, b, seed=1)
+    assert child.size() >= 1
+    shared = set(_fingerprint_rule_set(a)) & set(_fingerprint_rule_set(b))
+    assert shared.issubset(set(_fingerprint_rule_set(child)))
+    scored = [(1.0, a), (0.99, b), (0.5, child)]
+    picked = diversify_survivor_select(scored, 2, d0=0.02)
+    assert len(picked) == 2
+    assert picked[0] is a
+
+
 def test_score_rules_latest_graph_only(nest_board, rect_poly, small_transforms):
     transforms = small_transforms(8, seed=1)
     g_old, _, _, _ = make_polygon_graph(nest_board, [(rect_poly, transforms[:4])])

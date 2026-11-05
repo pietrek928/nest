@@ -423,6 +423,35 @@ def record_mcts_expand(
     mcts_telem["expand_ms"] = float(mcts_telem.get("expand_ms", 0.0)) + (
         time.perf_counter() - t_expand0
     ) * 1000.0
+    act_rid = int(getattr(action, "rule_id", 0) or 0)
+    region_i = int(getattr(action.region, "value", action.region))
+    motif_id = macro_motif_id(action)
+    preset_id = int(getattr(action, "preset_id", 0) or 0)
+    # Aggregate AMAF visits across tip motif and motif=-1 so rid/preset
+    # diversity telem is visible even when the tip Motif key is cold.
+    for rid in range(max(act_rid + 1, 3)):
+        visits = 0
+        for mid in (motif_id, -1):
+            visits = max(
+                visits,
+                int(agent.arena.amaf_visits(region_i, rid, mid, preset_id)),
+                int(agent.arena.amaf_visits(region_i, rid, mid, 0)),
+            )
+        if visits > 0:
+            mcts_telem[f"rule_id_amaf_{rid}"] = visits
+            propose_stats[f"rule_id_amaf_{rid}"] = visits
+    for pid in range(max(preset_id + 1, 3)):
+        visits = 0
+        for mid in (motif_id, -1):
+            visits = max(
+                visits,
+                int(agent.arena.amaf_visits(region_i, act_rid, mid, pid)),
+                int(agent.arena.amaf_visits(region_i, 0, mid, pid)),
+            )
+        if visits > 0:
+            mcts_telem[f"preset_amaf_{pid}"] = visits
+            propose_stats[f"preset_amaf_{pid}"] = visits
+    # Sync mcts dict after rid/preset AMAF keys (assemble_void_leak reads mt).
     propose_stats["mcts"] = dict(mcts_telem)
     propose_stats["mcts"]["arena_size"] = int(runner.arena.size())
     propose_stats["mcts"]["motif_library"] = int(runner.motif_base.size())
@@ -433,20 +462,6 @@ def record_mcts_expand(
             if k in agent.telem
         }
     )
-    act_rid = int(getattr(action, "rule_id", 0) or 0)
-    region_i = int(getattr(action.region, "value", action.region))
-    motif_id = macro_motif_id(action)
-    preset_id = int(getattr(action, "preset_id", 0) or 0)
-    for rid in range(max(act_rid + 1, 2)):
-        visits = int(agent.arena.amaf_visits(region_i, rid, motif_id, preset_id))
-        if visits > 0:
-            mcts_telem[f"rule_id_amaf_{rid}"] = visits
-            propose_stats[f"rule_id_amaf_{rid}"] = visits
-    for pid in range(max(preset_id + 1, 2)):
-        visits = int(agent.arena.amaf_visits(region_i, act_rid, motif_id, pid))
-        if visits > 0:
-            mcts_telem[f"preset_amaf_{pid}"] = visits
-            propose_stats[f"preset_amaf_{pid}"] = visits
     return int(child_id)
 
 
