@@ -1913,9 +1913,22 @@ def compose_and_nest_selection(
                     propose_stats, locked_motif, incumbent=incumbent,
                 )
                 if int(propose_stats.get("lock_new_n", 0) or 0) < 1:
-                    locked_motif = []
-                    propose_stats["lock_new_n"] = 0
-                    propose_stats["lock_inc_n"] = 0
+                    # Letter D: hollow + wang agree + seq_full → keep Scene-clear
+                    # locks even when all members were already incumbent (lock_new=0).
+                    hollow_keep = (
+                        int(propose_stats.get("graph_to_nest_hollow", 0) or 0) > 0
+                        and int(propose_stats.get("wang_edge_agree", 0) or 0) > 0
+                        and int(
+                            propose_stats.get("motif_sequential_full", 0) or 0
+                        )
+                        > 0
+                    )
+                    if hollow_keep:
+                        propose_stats["hollow_agree_lock_keep"] = 1
+                    else:
+                        locked_motif = []
+                        propose_stats["lock_new_n"] = 0
+                        propose_stats["lock_inc_n"] = 0
         if not locked_motif:
             propose_stats["lock_new_n"] = 0
             propose_stats["lock_inc_n"] = 0

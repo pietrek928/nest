@@ -471,6 +471,9 @@ def build_void_leak_dict(
         "inject_polish_plateau_lv": int(
             propose_stats.get("inject_polish_plateau_lv", 0) or 0
         ),
+        "inject_polish_hollow_nfp": int(
+            propose_stats.get("inject_polish_hollow_nfp", 0) or 0
+        ),
         "block_hole_mate_n": int(propose_stats.get("block_hole_mate_n", 0) or 0),
         "block_hole_dcount": int(propose_stats.get("block_hole_dcount", 0) or 0),
         "block_hole_darea": float(propose_stats.get("block_hole_darea", 0.0) or 0.0),
@@ -502,6 +505,21 @@ def build_void_leak_dict(
             propose_stats.get("inward_bridge_attempt", 0)
             or (propose_stats.get("densify_stats") or {}).get("inward_bridge_attempt", 0)
             or 0
+        ),
+        "ray_short_span_kept": int(
+            propose_stats.get("ray_short_span_kept", 0)
+            or densify.get("ray_short_span_kept", 0)
+            or 0
+        ),
+        "ray_short_span_n": int(
+            propose_stats.get("ray_short_span_n", 0)
+            or densify.get("ray_short_span_n", 0)
+            or 0
+        ),
+        "ray_min_span": float(
+            densify["ray_min_span"]
+            if "ray_min_span" in densify
+            else propose_stats.get("ray_min_span", -1.0)
         ),
         # F0/Q211 repair + repack stamp telem (aliases until RepairCohort).
         "repair_mode": int(propose_stats.get("repair_mode", 0) or 0),

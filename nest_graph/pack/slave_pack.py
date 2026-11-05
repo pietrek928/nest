@@ -245,6 +245,7 @@ def upsert_from_contacts(
     floor = motif_floor_compactness(motif_base, min_compactness)
     n_up = 0
     n_demote = 0
+    n_flush_stair_prefer = 0
     lim2 = _SAME_GID_KISS_XY * _SAME_GID_KISS_XY
     if patterns:
         n_pat = _upsert_leader_star_patterns(
@@ -329,6 +330,27 @@ def upsert_from_contacts(
         edge.edge_a = int(ea)
         edge.edge_b = int(eb)
         edge.gci = float(gci)
+        # A: flush+even coexists with odd stair (MotifBase key SoT). Prefer is already
+        # gci_surrogate(+0.1 flush). Destructive replace / extra gci bump dual-missed.
+        flush_even = bool(flush) and (int(ea) % 2 == 0) and (int(eb) % 2 == 0)
+        if flush_even:
+            ga, gb = int(edge.gid_a), int(edge.gid_b)
+            if ga > gb:
+                ga, gb = gb, ga
+            for si in range(int(motif_base.size())):
+                rec = motif_base.at(si)
+                if int(rec.gid_a) != ga or int(rec.gid_b) != gb:
+                    continue
+                rea_raw = getattr(rec, "edge_a", -1)
+                reb_raw = getattr(rec, "edge_b", -1)
+                rea = int(rea_raw) if rea_raw is not None else -1
+                reb = int(reb_raw) if reb_raw is not None else -1
+                if rea < 0 and reb < 0:
+                    rea, reb = wang_edge_pair_from_relative(rec.relative)
+                    rea, reb = int(rea), int(reb)
+                if (rea % 2 == 1) or (reb % 2 == 1):
+                    n_flush_stair_prefer += 1
+                    break
         mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
         if mid >= 0:
             n_up += 1
@@ -339,6 +361,10 @@ def upsert_from_contacts(
         telem["motif_floor"] = float(floor)
         if n_demote > 0:
             telem["kiss_demote"] = int(telem.get("kiss_demote", 0) or 0) + int(n_demote)
+        if n_flush_stair_prefer > 0:
+            telem["flush_stair_prefer"] = int(
+                telem.get("flush_stair_prefer", 0) or 0
+            ) + int(n_flush_stair_prefer)
         kiss_n, mean_c = contact_kiss_ledger(geoms, gap=float(gap))
         telem["kiss_pairs"] = int(kiss_n)
         telem["mean_compactness"] = float(mean_c)

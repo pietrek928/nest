@@ -174,6 +174,29 @@ _SNIPER_PROPOSER_NAMES = (
 )
 
 
+def _accumulate_ray_span_telem(
+    cascade_stats_out: dict | None,
+    propose_geom: ProposeGeometry | None,
+) -> None:
+    """Fold last-call short-span ray telem into cascade densify stats."""
+    if cascade_stats_out is None or propose_geom is None:
+        return
+    kept = int(getattr(propose_geom, "_last_ray_short_span_kept", 0) or 0)
+    short_n = int(getattr(propose_geom, "_last_ray_short_span_n", 0) or 0)
+    min_span = float(getattr(propose_geom, "_last_ray_min_span", -1.0) or -1.0)
+    cascade_stats_out["ray_short_span_kept"] = int(
+        cascade_stats_out.get("ray_short_span_kept", 0) or 0
+    ) + kept
+    cascade_stats_out["ray_short_span_n"] = int(
+        cascade_stats_out.get("ray_short_span_n", 0) or 0
+    ) + short_n
+    prev = float(cascade_stats_out.get("ray_min_span", -1.0) or -1.0)
+    if min_span >= 0.0:
+        cascade_stats_out["ray_min_span"] = (
+            min_span if prev < 0.0 else min(prev, min_span)
+        )
+
+
 def _union_sniper_keys(
     sniper_keys_by_group: dict[int, set],
     group_id: int,
@@ -1509,6 +1532,7 @@ def _collect_explorer_candidates(
                 max_items=rc_cap,
             )
             state.ray_ms += (time.perf_counter() - _ray_t0) * 1000.0
+            _accumulate_ray_span_telem(state.cascade_stats_out, ctx.propose_geom)
     if (
         _proposer_enabled("voronoi", ctx.enabled_proposers)
         and cfg.use_voronoi
@@ -1936,6 +1960,7 @@ def _collect_inward_bridge_explorers(
             after = len((state.proposer_keys or {}).get("raycasting") or ())
             if state.cascade_stats_out is not None:
                 state.cascade_stats_out["inward_ray_keys"] = int(after - before)
+            _accumulate_ray_span_telem(state.cascade_stats_out, ctx.propose_geom)
     if _proposer_enabled("erosion", ctx.enabled_proposers):
         er_cap = state.explorer_cap(pool)
         if er_cap > 0:
@@ -3721,6 +3746,18 @@ def proposed_transforms_for_groups(
         cascade_agg["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0) + float(
             group_cascade.get("ray_ms", 0.0) or 0.0
         )
+        cascade_agg["ray_short_span_kept"] = int(
+            cascade_agg.get("ray_short_span_kept", 0) or 0
+        ) + int(group_cascade.get("ray_short_span_kept", 0) or 0)
+        cascade_agg["ray_short_span_n"] = int(
+            cascade_agg.get("ray_short_span_n", 0) or 0
+        ) + int(group_cascade.get("ray_short_span_n", 0) or 0)
+        g_min = float(group_cascade.get("ray_min_span", -1.0) or -1.0)
+        if g_min >= 0.0:
+            prev_min = float(cascade_agg.get("ray_min_span", -1.0) or -1.0)
+            cascade_agg["ray_min_span"] = (
+                g_min if prev_min < 0.0 else min(prev_min, g_min)
+            )
         cascade_agg["erosion_ms"] = float(
             cascade_agg.get("erosion_ms", 0.0) or 0.0
         ) + float(group_cascade.get("erosion_ms", 0.0) or 0.0)
@@ -3986,6 +4023,15 @@ def proposed_transforms_for_groups(
             cascade_agg.get("inward_rc_cap", 0) or 0
         )
         densify_stats_out["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0)
+        densify_stats_out["ray_short_span_kept"] = int(
+            cascade_agg.get("ray_short_span_kept", 0) or 0
+        )
+        densify_stats_out["ray_short_span_n"] = int(
+            cascade_agg.get("ray_short_span_n", 0) or 0
+        )
+        densify_stats_out["ray_min_span"] = float(
+            cascade_agg.get("ray_min_span", -1.0) or -1.0
+        )
         densify_stats_out["erosion_ms"] = float(
             cascade_agg.get("erosion_ms", 0.0) or 0.0
         )

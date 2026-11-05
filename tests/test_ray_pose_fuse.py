@@ -34,3 +34,6 @@ def test_ray_pose_fuse_emits_unique_keys():
         for c in out
     }
     assert len(keys) == len(out)
+    # Letter A telem: span pairing ran (min_span set when any interior hit).
+    assert float(getattr(geom, "_last_ray_min_span", -1.0) or -1.0) >= 0.0
+    assert int(getattr(geom, "_last_ray_short_span_n", 0) or 0) >= 0

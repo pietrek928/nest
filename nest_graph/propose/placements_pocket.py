@@ -424,8 +424,38 @@ def propose_placements_pocket_fit(
     if large_void and not voids and not pockets and analysis is not None and analysis.target_poly is not None:
         # no_trapped is expected for exterior-connected voids; route via open-void.
         skips.append("large_void_no_trapped")
-    pockets.sort(key=lambda p: float(p.area), reverse=True)
-    pockets = pockets[:max_targets]
+    if large_void and not voids:
+        # B: exterior giant stays on open-void channel; reserve max_targets for
+        # area-feasible hull bays, smallest-first (BLF small-hole), depth via
+        # pocket_target (same medial gate as aligned_poses_for_pocket).
+        part_min, _ = part_extents(shape_to_place)
+        depth_pad = (part_min / 2.0) + float(min_dist)
+        bay_feas: list[Polygon] = [
+            p for p in bays if float(p.area) >= part_area * area_ratio
+        ]
+        bay_feas.sort(key=lambda p: float(p.area))
+        kept_bays: list[Polygon] = []
+        for bay in bay_feas:
+            tgt = pocket_target(bay, min_dist=min_dist)
+            if tgt is None:
+                continue
+            poi, _ang, _tag = tgt
+            try:
+                if float(poi.distance(bay.exterior)) < depth_pad:
+                    continue
+            except Exception:
+                continue
+            kept_bays.append(bay)
+            if len(kept_bays) >= max_targets:
+                break
+        if kept_bays:
+            pockets = kept_bays
+            skips.append("bay_small_first")
+        else:
+            pockets = []
+    else:
+        pockets.sort(key=lambda p: float(p.area), reverse=True)
+        pockets = pockets[:max_targets]
 
     # Separate channel: exterior-touching Mode A target (do not mutate trapped_voids).
     open_voids: list[Polygon] = []

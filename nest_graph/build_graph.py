@@ -2223,12 +2223,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             and bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
         ):
             note_motif_ref_anchors_from_nest(mcts_runner.motif_base, nest_state)
-        # L3 park: always-on inject polish early-green but late Δ min +0.1678
-        # (< open +0.1758). Restore plateau∧LV polish skip (intentional).
+        # L3 park + Letter B dual: hollow/graph_to_nest polish exception late-missed
+        # (Δ min +0.1614; nfp_lite_keep stayed 0). Keep plateau∧LV polish skip.
         _plateau_lv = bool(plateau.on_plateau) and is_large_void(parent_snap)
         _inject_polish = not _plateau_lv
         propose_stats["inject_polish"] = int(_inject_polish)
         propose_stats["inject_polish_plateau_lv"] = int(_plateau_lv)
+        propose_stats["inject_polish_hollow_nfp"] = 0
         archived_for_propose = (
             motif_patterns_for_inject(
                 mcts_runner.motif_base,

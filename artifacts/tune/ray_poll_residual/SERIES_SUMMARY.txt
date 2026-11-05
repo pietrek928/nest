@@ -1,0 +1,29 @@
+Ray / pole residual waste fill — series summary
+Open floors (swiss): early med/min 0.577/0.571; late Δ med/min +0.1852/+0.1758
+HEAD pre-letter early: 0.546/0.584/0.555 → med 0.555 min 0.546
+
+A — short-span ray lex (propose_placements_raycasting)
+  Pair (0.1,0.5) samples → span; expand by attract; among clears prefer corridor
+  band [ray_len/32, med] then mouth then attract. Demote march-noise spans.
+  Telem: ray_short_span_kept/n, ray_min_span.
+  Early r4: 0.593/0.607/0.584 → med 0.593 min 0.584 (≥ open)
+  Late r4: +0.2004/+0.1678/+0.1773 → med +0.1773 min +0.1678 (seed1 known attractor)
+  LOCK with early ≥ open; densify ray moved (e.g. ray=22/15).
+
+B — smallest feasible hull bays (propose_placements_pocket_fit)
+  large_void+no_trapped: bay_small_first + pocket_target depth; open-void channel kept.
+  Early: 0.569/0.612/0.616 → med 0.612
+  Late: +0.1845/+0.1758/+0.1924 → med +0.1845 min +0.1758 (≥ open min)
+  Telem: pocket_skip bay_small_first. LOCK.
+
+C — mouth/pole-seeded slide polish (_unlock_clear_xy_anchors)
+  Slide cloud: exterior mouth verts + multi_pole + local Halton around pole, then bbox.
+  Early: 0.600/0.616/0.585 → med 0.600 min 0.585 (≥ open)
+  Late: +0.1924/+0.1917/+0.1852 → med +0.1917 min +0.1852 (≥ open)
+  LOCK.
+
+D — 3b residual escape PARK
+  Funnel still bn=graph_to_nest; run_3b=1 3b_try=1 always (gate OK).
+  Rejects are lex|no_gain via lex_count_area_better (sole SoT; H3 / void-facing peel parked).
+  No skip/plateau gate bug — do not invent props or soften 3b lex.
+  PARK with evidence.

@@ -405,19 +405,65 @@ def _unlock_clear_xy_anchors(
                 skip_reasons=skip_reasons,
             )
 
-    # A1: kiss-slide unclear Halton/pole samples already tried (Dc1).
+    # A1/C: kiss-slide — seed mouths (rim samples) + bay/open poles first, then
+    # local Halton around pole; full-bbox Halton remains fallback (no 2nd mode).
     if len(found) < cap and sheet is not None and base_shape is not None:
-        # Cycle: placements_free_space_cloud → emit_packing_clear (this module).
+        # Cycle: placements_free_space_cloud ↔ placements_pattern.emit_packing_clear.
         from nest_graph.propose.placements_free_space_cloud import (
             polish_cloud_slide_toward_obstacles,
         )
         cloud: list[tuple[float, float, float]] = []
-        for i in range(1, 25):
+        th0 = float(angles_all[0]) if angles_all else 0.0
+        mouth_n = 0
+        # Mouth proxies: free-void exterior vertices (corridor lips).
+        try:
+            ext = getattr(void_poly, "exterior", None)
+            coords_ext = list(ext.coords) if ext is not None else []
+            step = max(1, len(coords_ext) // 12) if coords_ext else 1
+            for i, xy in enumerate(coords_ext[::step]):
+                if i >= 12:
+                    break
+                cloud.append((float(xy[0]), float(xy[1]), th0))
+                mouth_n += 1
+        except Exception:
+            pass
+        # Bay / open poles via multi_pole spine (same SoT as densify anchors).
+        pole_n = 0
+        for sx, sy, sang in multi_pole_seed_coords(
+            void_poly, min_dist=float(min_dist), max_poles=3,
+        ):
+            cloud.append((float(sx), float(sy), float(sang)))
+            pole_n += 1
+        if pole is not None and not getattr(pole, "is_empty", True):
+            cloud.append((float(pole.x), float(pole.y), th0))
+            pole_n += 1
+        # Local Halton window around pole (or void centroid) before full bbox.
+        try:
+            if pole is not None and not getattr(pole, "is_empty", True):
+                lx, ly = float(pole.x), float(pole.y)
+            else:
+                c0 = void_poly.centroid
+                lx, ly = float(c0.x), float(c0.y)
+        except Exception:
+            lx, ly = 0.5 * (minx + maxx), 0.5 * (miny + maxy)
+        half_w = max(0.25 * w, float(min_dist) * 4.0)
+        half_h = max(0.25 * h, float(min_dist) * 4.0)
+        for i in range(1, 13):
             u, v = _halton_uv(i + 50)
             th = float(angles_all[i % max(len(angles_all), 1)]) if angles_all else 0.0
+            cloud.append(
+                (
+                    lx + (u - 0.5) * 2.0 * half_w,
+                    ly + (v - 0.5) * 2.0 * half_h,
+                    th,
+                )
+            )
+        for i in range(1, 13):
+            u, v = _halton_uv(i + 70)
+            th = float(angles_all[i % max(len(angles_all), 1)]) if angles_all else 0.0
             cloud.append((minx + u * w, miny + v * h, th))
-        if pole is not None and not getattr(pole, "is_empty", True):
-            cloud.append((float(pole.x), float(pole.y), 0.0))
+        _bump_skip(skip_reasons, "clear_xy_mouth_seed", mouth_n)
+        _bump_skip(skip_reasons, "clear_xy_pole_seed", pole_n)
         polished, slid_n = polish_cloud_slide_toward_obstacles(
             cloud,
             propose_geom=propose_geom,
@@ -1391,6 +1437,7 @@ def void_seek_motif_anchors(
     n_seed = int(propose_cfg.cluster_copy_anchor_seeds)
     lattice_added = 0
     lattice_kept = 0
+    lattice_kept_coords: list[tuple[float, float, float]] = []
 
     if free_space is not None and getattr(free_space, "topology_poles", None):
         anchors.extend(list(free_space.topology_poles))
@@ -1547,9 +1594,11 @@ def void_seek_motif_anchors(
                 lattice.sort(key=_dist)
             lattice = lattice[:top_k]
             lattice_kept = len(lattice)
+            lattice_kept_coords = list(lattice)
             anchors.extend(lattice)
         elif lattice:
             lattice_kept = len(lattice)
+            lattice_kept_coords = list(lattice)
             anchors.extend(lattice)
 
     if bool(getattr(propose_cfg, "enable_motif_mirror_anchors", False)):
@@ -1580,6 +1629,9 @@ def void_seek_motif_anchors(
     if lattice_stats_out is not None:
         lattice_stats_out["lattice_anchors_added"] = int(lattice_added)
         lattice_stats_out["lattice_anchors_kept"] = int(lattice_kept)
+        # Letter C: lattice poses for sterile densify clear-first prepend.
+        if lattice_kept_coords:
+            lattice_stats_out["lattice_anchor_coords"] = list(lattice_kept_coords)
 
     out = _dedupe_anchors(anchors)
     if anchor_cache is not None:
@@ -2126,32 +2178,56 @@ def propose_placements_cluster_copy(
             min_dist=float(min_dist),
             base_shape=base_shape,
         )
-        # A2: densify sterile → prepend packing-clear topo only (never unclear).
-        if int((skip_reasons or {}).get("clear_xy_none", 0) or 0) > 0 and topo_anchors:
-            pole_xy = None
-            if pole is not None and not getattr(pole, "is_empty", True):
-                pole_xy = (float(pole.x), float(pole.y))
-            off_pole = [
-                a for a in topo_anchors
-                if not _anchor_near_pole(a, pole_xy)
-            ]
-            use = off_pole if off_pole else list(topo_anchors)
-            if skip_reasons is not None:
-                skip_reasons["topo_off_pole_n"] = int(len(off_pole))
-                skip_reasons["topo_near_pole_n"] = int(
-                    max(0, len(topo_anchors) - len(off_pole))
-                )
-            clear_topo = [
-                a for a in use
-                if emit_packing_clear(propose_geom, a, obstacles=obs)
-            ]
-            if clear_topo:
-                _bump_skip(skip_reasons, "clear_xy_topo_fallback_clear", len(clear_topo))
-                _bump_skip(skip_reasons, "clear_xy_topo_fallback", len(clear_topo))
-                anchors = list(clear_topo) + list(anchors)
-            else:
-                # A2 honest: never prepend unclear; telem stays unclear=0 (not used).
-                _bump_skip(skip_reasons, "clear_xy_topo_fallback_refuse", len(use))
+        # A2 + Letter C: densify sterile → packing-clear MotifBase lattice first,
+        # then packing-clear topo (never unclear).
+        if int((skip_reasons or {}).get("clear_xy_none", 0) or 0) > 0:
+            lat_coords = list(lattice_stats.get("lattice_anchor_coords") or ())
+            if lat_coords:
+                clear_lat = [
+                    a
+                    for a in lat_coords
+                    if emit_packing_clear(propose_geom, a, obstacles=obs)
+                ]
+                if clear_lat:
+                    _bump_skip(
+                        skip_reasons, "clear_xy_lattice_fallback_clear", len(clear_lat)
+                    )
+                    anchors = list(clear_lat) + list(anchors)
+                elif skip_reasons is not None:
+                    skip_reasons["clear_xy_lattice_fallback_refuse"] = int(
+                        len(lat_coords)
+                    )
+            if topo_anchors:
+                pole_xy = None
+                if pole is not None and not getattr(pole, "is_empty", True):
+                    pole_xy = (float(pole.x), float(pole.y))
+                off_pole = [
+                    a for a in topo_anchors
+                    if not _anchor_near_pole(a, pole_xy)
+                ]
+                use = off_pole if off_pole else list(topo_anchors)
+                if skip_reasons is not None:
+                    skip_reasons["topo_off_pole_n"] = int(len(off_pole))
+                    skip_reasons["topo_near_pole_n"] = int(
+                        max(0, len(topo_anchors) - len(off_pole))
+                    )
+                clear_topo = [
+                    a for a in use
+                    if emit_packing_clear(propose_geom, a, obstacles=obs)
+                ]
+                if clear_topo:
+                    _bump_skip(
+                        skip_reasons, "clear_xy_topo_fallback_clear", len(clear_topo)
+                    )
+                    _bump_skip(
+                        skip_reasons, "clear_xy_topo_fallback", len(clear_topo)
+                    )
+                    anchors = list(clear_topo) + list(anchors)
+                else:
+                    # A2 honest: never prepend unclear; telem stays unclear=0.
+                    _bump_skip(
+                        skip_reasons, "clear_xy_topo_fallback_refuse", len(use)
+                    )
 
     if densify_clear and void_poly is not None and shape_to_place is not None:
         # A0/T0: one fit probe — void inradius + obstacle clearance vs unlock shape.

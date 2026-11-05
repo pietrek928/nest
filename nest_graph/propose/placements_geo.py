@@ -197,8 +197,37 @@ def propose_placements_raycasting(
             dy = ray_len * float(np.sin(r_angle))
             origins.append((float(ax), float(ay)))
             directions.append((dx, dy))
-    # P2: fuse ray hits into a flat hit list, then hit×angle pose rows once.
-    hits_xy: list[tuple[float, float]] = []
+    # P2: fuse ray hits with per-interval span (pair ordered sample_fracs).
+    # sample_fracs=(0.1, 0.5) → span ≈ dist(mouth, mid) / 0.4; mouth = 0.1 hit.
+    n_frac = len(sample_fracs)
+    mouth_frac = float(sample_fracs[0]) if n_frac else 0.1
+    mid_frac = float(sample_fracs[1]) if n_frac >= 2 else mouth_frac
+    frac_den = max(abs(mid_frac - mouth_frac), 1e-9)
+
+    def _append_ray_hits(
+        pts: Sequence[tuple[float, float]],
+        out: list[tuple[float, float, float, int, float]],
+    ) -> None:
+        """Append (x, y, span, is_mouth, attract) using ordered frac pairs."""
+        i = 0
+        n = len(pts)
+        while i < n:
+            if i + 1 < n:
+                x0, y0 = float(pts[i][0]), float(pts[i][1])
+                x1, y1 = float(pts[i + 1][0]), float(pts[i + 1][1])
+                span = math.hypot(x1 - x0, y1 - y0) / frac_den
+                a0 = math.hypot(x0 - attract_x, y0 - attract_y)
+                a1 = math.hypot(x1 - attract_x, y1 - attract_y)
+                out.append((x0, y0, span, 1, a0))
+                out.append((x1, y1, span, 0, a1))
+                i += 2
+            else:
+                x0, y0 = float(pts[i][0]), float(pts[i][1])
+                a0 = math.hypot(x0 - attract_x, y0 - attract_y)
+                out.append((x0, y0, float(ray_len), 1, a0))
+                i += 1
+
+    hits_meta: list[tuple[float, float, float, int, float]] = []
     if origins:
         try:
             coords_flat, offsets = region_g.clip_ray_interior_batch(
@@ -208,10 +237,11 @@ def propose_placements_raycasting(
             for i in range(n_rays):
                 a = int(offsets[i])
                 b = int(offsets[i + 1])
-                for k in range(a, b):
-                    hits_xy.append(
-                        (float(coords_flat[2 * k]), float(coords_flat[2 * k + 1]))
-                    )
+                pts = [
+                    (float(coords_flat[2 * k]), float(coords_flat[2 * k + 1]))
+                    for k in range(a, b)
+                ]
+                _append_ray_hits(pts, hits_meta)
         except Exception:
             for (ox, oy), (dx, dy) in zip(origins, directions, strict=True):
                 try:
@@ -220,17 +250,45 @@ def propose_placements_raycasting(
                     )
                 except Exception:
                     hits = []
-                for x, y in hits:
-                    hits_xy.append((float(x), float(y)))
+                _append_ray_hits(
+                    [(float(x), float(y)) for x, y in hits],
+                    hits_meta,
+                )
 
     pose_list: list[tuple[float, float, float]] = []
     cost_list: list[float] = []
+    span_list: list[float] = []
+    rank_span_list: list[float] = []
+    mouth_list: list[int] = []
     seen: set[tuple[float, float, float]] = set()
     pool_cap = max(top_n * 3, top_n)
-    # Sort hits by attract cost before angle expand (stable top pool).
-    hits_xy.sort(key=lambda xy: math.hypot(xy[0] - attract_x, xy[1] - attract_y))
-    for pt_x, pt_y in hits_xy:
-        hit_cost = math.hypot(pt_x - attract_x, pt_y - attract_y)
+    # Modest expand past pool_cap so short invalid corridors cannot starve clear
+    # mid-chords before filter; lex re-rank valid survivors for top_n.
+    expand_cap = max(pool_cap * 2, top_n * 6)
+    # March is 64 steps along ray_len; spans below ~2 steps are noise (late miss).
+    span_floor = max(float(ray_len) / 32.0, 1e-6)
+    min_span = -1.0
+    short_n = 0
+    med_span = 0.0
+    if hits_meta:
+        spans = [h[2] for h in hits_meta]
+        min_span = float(min(spans))
+        usable = [s for s in spans if s >= span_floor - 1e-12]
+        spans_sorted = sorted(usable) if usable else sorted(spans)
+        med_span = float(spans_sorted[len(spans_sorted) // 2])
+        short_n = sum(
+            1 for s in spans if span_floor - 1e-12 <= s <= med_span + 1e-12
+        )
+
+    def _corridor_rank(span: float) -> int:
+        # 0 = usable corridor band [floor, med]; 1 = noise/fat (demoted).
+        if span_floor - 1e-12 <= span <= med_span + 1e-12:
+            return 0
+        return 1
+
+    # Expand by attract (late-safe mid-chord supply); corridor lex only on clears.
+    hits_meta.sort(key=lambda h: (h[4], _corridor_rank(h[2]), 0 if h[3] else 1))
+    for pt_x, pt_y, span, is_mouth, hit_cost in hits_meta:
         for p_angle in placement_angles:
             coords = (pt_x, pt_y, float(p_angle))
             key = (round(coords[0], 4), round(coords[1], 4), round(coords[2], 4))
@@ -239,16 +297,42 @@ def propose_placements_raycasting(
             seen.add(key)
             pose_list.append(coords)
             cost_list.append(hit_cost)
-            if len(pose_list) >= pool_cap:
+            span_list.append(span)
+            rank_span_list.append(float(_corridor_rank(span)))
+            mouth_list.append(int(is_mouth))
+            if len(pose_list) >= expand_cap:
                 break
-        if len(pose_list) >= pool_cap:
+        if len(pose_list) >= expand_cap:
             break
 
     if not pose_list:
+        propose_geom._last_ray_short_span_kept = 0
+        propose_geom._last_ray_short_span_n = int(short_n)
+        propose_geom._last_ray_min_span = float(min_span)
         return []
     _ray_ms = (time.perf_counter() - t_ray0) * 1000.0
     propose_geom._last_raycast_ms = float(getattr(propose_geom, "_last_raycast_ms", 0.0) or 0.0) + _ray_ms
     cost_map = {c: cost for c, cost in zip(pose_list, cost_list, strict=True)}
+    span_map = {c: sp for c, sp in zip(pose_list, span_list, strict=True)}
+    rank_span_map = {c: rs for c, rs in zip(pose_list, rank_span_list, strict=True)}
+    mouth_map = {c: m for c, m in zip(pose_list, mouth_list, strict=True)}
     valid = filter_candidates_batch(propose_geom, pose_list, pt_push)
-    valid.sort(key=lambda c: cost_map.get(c, 0.0))
-    return valid[:top_n]
+    # Among clears: prefer corridor band, then mouth, then attract (A r4 hybrid).
+    valid.sort(
+        key=lambda c: (
+            rank_span_map.get(c, 1.0),
+            0 if mouth_map.get(c, 0) else 1,
+            cost_map.get(c, 0.0),
+        )
+    )
+    kept = valid[:top_n]
+    short_kept = sum(
+        1
+        for c in kept
+        if span_floor - 1e-12 <= span_map.get(c, 1e9) <= med_span + 1e-12
+    )
+    # Last-call telem (pipeline accumulates into cascade / densify).
+    propose_geom._last_ray_short_span_kept = int(short_kept)
+    propose_geom._last_ray_short_span_n = int(short_n)
+    propose_geom._last_ray_min_span = float(min_span)
+    return kept

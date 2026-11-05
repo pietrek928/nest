@@ -57,6 +57,16 @@ inline std::tuple<int32_t, int32_t, int32_t, int32_t, int32_t> motif_key(const M
     return {ga, gb, std::get<0>(q), std::get<1>(q), std::get<2>(q)};
 }
 
+/** Odd octant = hypotenuse / stair Wang label (1/3/5/7). */
+inline bool wang_odd_octant(int32_t edge_a, int32_t edge_b) {
+    return (edge_a >= 0 && (edge_a % 2) == 1) || (edge_b >= 0 && (edge_b % 2) == 1);
+}
+
+/** Even-pair flush mate (axis-aligned Wang colors). */
+inline bool wang_even_flush_pair(bool flush, int32_t edge_a, int32_t edge_b) {
+    return flush && edge_a >= 0 && edge_b >= 0 && (edge_a % 2) == 0 && (edge_b % 2) == 0;
+}
+
 class MotifBase {
 public:
     /**
@@ -95,6 +105,8 @@ public:
                 return static_cast<int32_t>(i);
             }
         }
+        // A: flush+even coexists with odd stair (do not overwrite hypotenuse).
+        // Inject prefer is tertiary flush tie-break in list_for_inject — not accept steal.
         rec.accept_count = 1;
         if (ttl > 0) {
             rec.ttl_remaining = ttl;

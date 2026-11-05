@@ -85,6 +85,9 @@ class ProposeGeometry:
         self._last_from_shapely_count: int = 0
         self._last_ray_anchor_native_n: int = 0
         self._last_ray_anchor_from_shapely_n: int = 0
+        self._last_ray_short_span_kept: int = 0
+        self._last_ray_min_span: float = -1.0
+        self._last_ray_short_span_n: int = 0
         self._last_region_cache_hit: int = 0
 
     @staticmethod

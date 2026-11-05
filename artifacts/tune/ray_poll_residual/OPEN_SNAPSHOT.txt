@@ -1,0 +1,9 @@
+Open floors (swiss SoT, unchanged):
+Early med/min 0.577 / 0.571
+Late Δ med/min +0.1852 / +0.1758 from void_fill_seed0_iter20.npz +8
+
+HEAD pre-letter early (seeds 0/1/2): 0.546 / 0.584 / 0.555 → med 0.555 min 0.546
+Falsify: bn=graph_to_nest; peak_ray=84 densify ray often 0/0; 3b_try=1 ok=0 rej=lex; large_void/no_trapped
+
+Letter A early r2 (short-span lex): 0.584 / 0.592 / 0.602 → med 0.592 min 0.584 (≥ open)
+Telem: ray_min_span=0.025 ray_short_n>0 densify ray=0/0 peak_ray=3072 bn=graph_to_nest

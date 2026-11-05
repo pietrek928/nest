@@ -106,6 +106,47 @@ TEST_CASE("MotifBase TTL age and list_for_inject", "[motif_base]") {
     REQUIRE(base.size() == 0);
 }
 
+TEST_CASE("MotifBase flush even coexists with odd-octant stair", "[motif_base]") {
+    // A: do not overwrite hypotenuse; flush wins inject via higher gci (+flush boost).
+    MotifBase base;
+    MotifRecord stair;
+    stair.gid_a = 1;
+    stair.gid_b = 2;
+    stair.relative = Se2{1.f, 1.f, 0.4f};
+    stair.gci = 0.5f;
+    stair.compactness = 0.9f;
+    stair.area_a = 1.f;
+    stair.area_b = 1.f;
+    stair.flush = false;
+    wang_edge_pair_from_relative(stair.relative, stair.edge_a, stair.edge_b);
+    REQUIRE(wang_odd_octant(stair.edge_a, stair.edge_b));
+    REQUIRE(base.upsert(stair, 0.f) == 0);
+
+    MotifRecord flush_even;
+    flush_even.gid_a = 1;
+    flush_even.gid_b = 2;
+    flush_even.relative = Se2{1.5f, 0.f, 0.f};
+    flush_even.gci = 0.7f;
+    flush_even.compactness = 0.9f;
+    flush_even.area_a = 1.f;
+    flush_even.area_b = 1.f;
+    flush_even.flush = true;
+    wang_edge_pair_from_relative(
+        flush_even.relative, flush_even.edge_a, flush_even.edge_b
+    );
+    REQUIRE(wang_even_flush_pair(
+        flush_even.flush, flush_even.edge_a, flush_even.edge_b
+    ));
+    REQUIRE(base.upsert(flush_even, 0.f) == 1);
+    REQUIRE(base.size() == 2);
+    REQUIRE(wang_odd_octant(base.at(0).edge_a, base.at(0).edge_b));
+    REQUIRE(base.at(1).flush);
+    REQUIRE(base.at(1).gci > base.at(0).gci);
+    const auto inject = base.list_for_inject(1);
+    REQUIRE(inject.size() == 1);
+    REQUIRE(inject[0] == 1);
+}
+
 TEST_CASE("MotifBase truncate by accept then gci", "[motif_base]") {
     MotifBase base;
     for (int i = 0; i < 5; ++i) {

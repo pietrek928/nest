@@ -4,7 +4,15 @@ from nest_graph.graph import MctsAgent, leaf_reward, FreeKind
 from nest_graph.geometry import nfp_lite_relative
 from nest_graph.pack.runner import MacroMctsRunner
 from nest_graph.graph import BoardSnapshot
-from nest_graph.graph import DecisionArena, MacroAction, MacroRegion, MotifBase, MotifRecord, Se2
+from nest_graph.graph import (
+    DecisionArena,
+    MacroAction,
+    MacroRegion,
+    MotifBase,
+    MotifRecord,
+    Se2,
+    wang_edge_pair_from_relative,
+)
 from nest_graph.geometry import Geometry
 from shapely.geometry import box
 from nest_graph.free_kind_util import is_large_void
@@ -186,6 +194,46 @@ def test_upsert_from_contacts_kissing_pair():
     assert base.size() >= 1
     assert base.at(0).gci > 0.0
     assert base.at(0).compactness >= 0.35
+
+
+def test_motif_base_flush_even_coexists_with_odd_stair():
+    """Letter A: flush+even coexists with odd stair; higher flush gci injects first."""
+    base = MotifBase()
+    stair = MotifRecord()
+    stair.gid_a = 1
+    stair.gid_b = 2
+    stair.relative = Se2(1.0, 1.0, 0.4)
+    stair.gci = 0.5
+    stair.compactness = 0.9
+    stair.area_a = 1.0
+    stair.area_b = 1.0
+    stair.flush = False
+    ea, eb = wang_edge_pair_from_relative(stair.relative)
+    stair.edge_a = int(ea)
+    stair.edge_b = int(eb)
+    assert (int(ea) % 2 == 1) or (int(eb) % 2 == 1)
+    assert base.upsert(stair, 0.0) == 0
+
+    flush_even = MotifRecord()
+    flush_even.gid_a = 1
+    flush_even.gid_b = 2
+    flush_even.relative = Se2(1.5, 0.0, 0.0)
+    flush_even.gci = 0.7
+    flush_even.compactness = 0.9
+    flush_even.area_a = 1.0
+    flush_even.area_b = 1.0
+    flush_even.flush = True
+    fea, feb = wang_edge_pair_from_relative(flush_even.relative)
+    flush_even.edge_a = int(fea)
+    flush_even.edge_b = int(feb)
+    assert int(fea) % 2 == 0 and int(feb) % 2 == 0
+    mid = base.upsert(flush_even, 0.0)
+    assert mid == 1
+    assert base.size() == 2
+    assert (int(base.at(0).edge_a) % 2 == 1) or (int(base.at(0).edge_b) % 2 == 1)
+    assert bool(base.at(1).flush)
+    assert float(base.at(1).gci) > float(base.at(0).gci)
+    assert base.list_for_inject(1) == [1]
 
 
 def test_arena_amaf_is_ucb_and_pick_sot():
