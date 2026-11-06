@@ -1316,6 +1316,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         "path_carved_streak": 0,
         "last_nest_n": int(ckpt_baseline_parts) if resume_ckpt is not None else 0,
         "last_incumbent_hold": 0,
+        "last_graph_to_nest": 0,
         "last_rim_progress": 0.0,
     }
     path_carved_streak = 0
@@ -1619,6 +1620,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         # I1b/D1/P1: probe on plateau or large_void; P1 shrink-runs (beam/4) when
         # place_cohort_ready=0 and tip is not Motif but free_hint. Motif tip → beam/2.
         # P: thrift when path_carved_streak≥2 on hold/plateau (skip ready∧pick_empty).
+        # P0: graph_to_nest hollow → hard (1,1) after idle thrift (not Motif/4).
+        graph_to_nest_hollow = bool(
+            int(mcts_telem.get("last_graph_to_nest", 0) or 0)
+        )
         run_path, path_beam, path_depth = path_probe_budget(
             on_plateau=bool(plateau.on_plateau),
             parent_free_hint=bool(parent_free_hint),
@@ -1634,6 +1639,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 mcts_telem.get("hybrid_pick_trials", 0) or 0
             )
             <= 0,
+            graph_to_nest_hollow=graph_to_nest_hollow,
         )
         if not run_path:
             mcts_telem["path_probe_skip"] = 1
@@ -2419,6 +2425,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         ):
             rid = int(mcts_telem.get("last_rule_id", 0) or 0)
             if 0 <= rid < len(rule_sets):
+                # M1 parked: single-scale plateau mutate dropped early med below H2e.
+                # pick_mutation_preset_scale kept in evolve.py for future AOS wiring.
                 rule_sets = improve_rules(
                     graphs,
                     rule_sets,

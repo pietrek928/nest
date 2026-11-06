@@ -1,0 +1,10 @@
+E1 SKIP — non-uniform void centroid score
+
+Tried: scale apply_void_centroid_score_term by Q118 pole proximity
+1/(1+norm²) and (1+prox) amplify.
+
+Early under H2e (min 0.568–0.577); nest_r flat ~0.03–0.06.
+Root: weighted_greedy score/(1+deg) on hundreds-degree void clique
+erases a centroid scalar before MIS sort (Grok + telem).
+
+Reverted to flat void_term add. Jump E2 residual WeightedGreedy.

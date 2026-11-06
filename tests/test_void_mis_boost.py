@@ -86,3 +86,4 @@ def test_boost_void_island_zero_weight_noop():
     n = _boost_void_island_scores(polys, scores, free, weight=0.0)
     assert n == 0
     assert scores[0] == 1.0
+

@@ -1,0 +1,12 @@
+P0 LOCK — path hollow hard-cap + ray expand thrift
+
+Patch:
+- path_probe_budget: graph_to_nest∧hold∨plateau∧carved≥2 → (1,1) after idle thrift
+  (not Motif tip /4). credit last_graph_to_nest feeds next iter.
+- propose_placements_raycasting: expand_cap top_n×4 (was ≡ top_n×6 via pool_cap×2).
+
+Early (p0u7): 0.603/0.592/0.593 → med/min 0.593/0.592 (CI gate green; med −0.002
+vs H2e 0.595 inside noise; min = H2e). peak_ray 3072→1013; prop_ms ~7.5–9.6.
+Late N=3: +0.1924/+0.2004/+0.1924 med +0.1924 = H2e.
+
+bn still graph_to_nest → E1 non-uniform void centroid score.

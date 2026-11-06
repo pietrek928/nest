@@ -1,0 +1,7 @@
+E4 SKIP — colonize score/(1+deg)
+
+Tried GWMIN key on colonize_blocker_order + pin candidate sort; then blocker-only.
+Early med/min below H2e (0.591/0.577 then 0.584/0.583); nest_r flat 0.03–0.06;
+bn still graph_to_nest. Reverted colonize_blocker_order to unlock-fanout sort.
+
+bn persists → E5 conflict-degree pin / single-blocker refine.

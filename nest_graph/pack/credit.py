@@ -139,6 +139,10 @@ def run_void_leak_and_niche_credit(
     corners = leak_dict["corners"]
     inward = leak_dict.get("inward") or {}
     propose_stats["r0_bottleneck"] = funnel["bottleneck"]
+    # P0: path_probe_budget hollow thrift reads this next iter.
+    mcts_telem["last_graph_to_nest"] = int(
+        str(funnel.get("bottleneck") or "") == "graph_to_nest"
+    )
     if print_funnel:
         print(
             f"r0 bottleneck={funnel['bottleneck']} "

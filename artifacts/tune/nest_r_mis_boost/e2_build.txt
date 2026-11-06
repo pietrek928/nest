@@ -1,0 +1,10 @@
+[  0%] Building CXX object nest_graph/graph/CMakeFiles/graph_core.dir/selection/selection.cc.o
+[  5%] Building CXX object nest_graph/graph/CMakeFiles/graph_core.dir/refine/apply_dfs.cc.o
+[ 52%] Built target nanobind-static
+[ 52%] Linking CXX static library libgraph_core.a
+[ 82%] Built target graph_core
+[ 88%] Building CXX object nest_graph/graph/CMakeFiles/graph.dir/bindings/bind_decision.cc.o
+[ 88%] Building CXX object nest_graph/graph/CMakeFiles/graph.dir/bindings/api.cc.o
+[ 94%] Building CXX object nest_graph/graph/CMakeFiles/graph.dir/bindings/bind_mcts.cc.o
+[ 94%] Linking CXX shared module /home/pietrek/Documents/nest/nest_graph/graph.cpython-314-x86_64-linux-gnu.so
+[100%] Built target graph

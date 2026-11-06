@@ -1,0 +1,11 @@
+   Building nest-graph @ file:///home/pietrek/Documents/nest
+      Built nest-graph @ file:///home/pietrek/Documents/nest
+Uninstalled 1 package in 0.75ms
+Installed 1 package in 1ms
+..................................                                       [100%]
+34 passed, 704 deselected in 0.49s
+[10:40:40] make_polygon_graph Avg: 0.0021s | Calls: 1
+[10:40:40] score_elems Avg: 0.0000s | Calls: 0
+[10:40:40] nest_by_graph Avg: 0.0000s | Calls: 0
+[10:40:40] nest_by_scores Avg: 0.0000s | Calls: 0
+[10:40:40] score_rules Avg: 0.0000s | Calls: 0

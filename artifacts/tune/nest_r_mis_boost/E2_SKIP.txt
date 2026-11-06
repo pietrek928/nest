@@ -1,0 +1,10 @@
+E2 SKIP — residual WeightedGreedy hollow
+
+Tried:
+- Global residual GWMIN on all WeightedGreedy → early med/min below H2e, nest_r flat.
+- Hollow-only residual + lex vs static → seed0 overlap_ok fail; inflated area.
+- Live-deg fix (unmarked-only + remove-best deg update) + packing_independent gate
+  → early 0.568/0.578/0.628 med 0.578 < H2e 0.595; nest_r 0.04–0.06 flat; bn graph_to_nest.
+
+Park residual_degree default false; hollow stays static weighted_greedy (D1).
+bn persists → E3 pole pair from dropped void verts.

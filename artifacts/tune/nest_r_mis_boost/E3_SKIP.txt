@@ -1,0 +1,9 @@
+E3 SKIP — dropped-void pole pair
+
+Tried:
+- Feed void-in-graph∩¬selected into scene_pair_locks_from_indices when cc_g<2.
+  First attempt: vpole stayed 0 (blocked by earlier hollow/join cc_pair_won).
+- Fire E3 even after motif pin: scene grow empty; graph-indep fallback → vpole=1/0
+  (try fires, hybrid win=0). nest_r flat 0.03–0.04. Early med 0.577 < H2e 0.595.
+
+Park: D2 remains cc-pool-only; no drop-pool widen (D2u1 family). bn persists → E4.

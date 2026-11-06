@@ -1,6 +1,7 @@
 #include "selection/selection.h"
 
 #include <algorithm>
+#include <limits>
 #include <stdexcept>
 
 #include "pose/pose_index.h"
@@ -106,12 +107,73 @@ void select_elems_greedy(
     std::vector<Tvertex> &order_buf,
     SelectMode mode,
     const std::vector<Tvertex> &locked_indices,
-    std::vector<bool> &is_locked
+    std::vector<bool> &is_locked,
+    bool residual_degree
 ) {
     marked.assign(static_cast<std::size_t>(n), false);
     selected.clear();
     install_locked_indices(
         collisions, n, locked_indices, marked, selected, is_locked);
+
+    // E2: hollow residual WeightedGreedy — live deg among unmarked (GWMIN).
+    if (mode == SelectMode::WeightedGreedy && residual_degree) {
+        std::vector<int> live(static_cast<std::size_t>(n), 0);
+        for (Tvertex v = 0; v < static_cast<Tvertex>(n); ++v) {
+            if (marked[static_cast<std::size_t>(v)]) {
+                continue;
+            }
+            int deg = 0;
+            for (Tvertex j : collisions[static_cast<std::size_t>(v)]) {
+                if (vertex_in_graph(j, n) && !marked[static_cast<std::size_t>(j)]) {
+                    ++deg;
+                }
+            }
+            live[static_cast<std::size_t>(v)] = deg;
+        }
+        while (true) {
+            Tvertex best = -1;
+            float best_key = -std::numeric_limits<float>::infinity();
+            for (Tvertex v = 0; v < static_cast<Tvertex>(n); ++v) {
+                if (marked[static_cast<std::size_t>(v)]) {
+                    continue;
+                }
+                const float key =
+                    scores[static_cast<std::size_t>(v)] /
+                    (1.0f + static_cast<float>(live[static_cast<std::size_t>(v)]));
+                if (key > best_key) {
+                    best_key = key;
+                    best = v;
+                }
+            }
+            if (best < 0) {
+                break;
+            }
+            // Remove best: decrement live deg of its still-unmarked neighbors, then
+            // remove each neighbor u (decrement live among u's unmarked neighbors).
+            marked[static_cast<std::size_t>(best)] = true;
+            selected.push_back(best);
+            for (Tvertex j : collisions[static_cast<std::size_t>(best)]) {
+                if (!vertex_in_graph(j, n) || marked[static_cast<std::size_t>(j)]) {
+                    continue;
+                }
+                live[static_cast<std::size_t>(j)] =
+                    std::max(0, live[static_cast<std::size_t>(j)] - 1);
+            }
+            for (Tvertex j : collisions[static_cast<std::size_t>(best)]) {
+                if (!vertex_in_graph(j, n) || marked[static_cast<std::size_t>(j)]) {
+                    continue;
+                }
+                for (Tvertex w : collisions[static_cast<std::size_t>(j)]) {
+                    if (vertex_in_graph(w, n) && !marked[static_cast<std::size_t>(w)]) {
+                        live[static_cast<std::size_t>(w)] =
+                            std::max(0, live[static_cast<std::size_t>(w)] - 1);
+                    }
+                }
+                marked[static_cast<std::size_t>(j)] = true;
+            }
+        }
+        return;
+    }
 
     order_buf.resize(static_cast<std::size_t>(n));
     for (Tvertex i = 0; i < static_cast<Tvertex>(n); i++) {
@@ -369,7 +431,7 @@ void select_elems(
 
     select_elems_greedy(
         sorted_collisions, n, scores, marked, selected, order_buf, options.mode,
-        options.locked_indices, is_locked);
+        options.locked_indices, is_locked, options.residual_degree);
     if (options.local_swap) {
         select_elems_local_swap(
             g, sorted_collisions, n, scores, marked, selected, is_locked);

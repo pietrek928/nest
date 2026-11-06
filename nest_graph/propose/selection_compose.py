@@ -368,6 +368,9 @@ def _nest_with_locks(
         # Lex vs greedy_score was floor-noisy; area-scale unify degraded further.
         if hollow_weighted:
             nest_opts.mode = SelectMode.weighted_greedy
+            # E2 parked: residual GWMIN hollow degraded med area (0.568/0.578) and
+            # left nest_r flat; keep static weighted_greedy (D1). residual_degree
+            # stays off (SelectOptions default).
             if not scores:
                 return []
             cand_w = list(nest_by_scores(graph, scores, nest_opts))
@@ -1297,7 +1300,12 @@ def compose_and_nest_selection(
                                     propose_stats["cluster_copy_nest_n"] = int(cc_n2)
                                     propose_stats["motif_lock_source"] = "void_pole_pair"
                                 break
-                    # Q377: when pick=0 on hollow, unlocked re-nest @ 0.88× + void rise.
+                # Q377: when pick=0 on hollow, unlocked re-nest @ 0.88× + void rise.
+                if not cc_pair_won:
+                    a_orig = float(_sel_area(selected_nest, group_id, part_areas))
+                    vf_orig = count_selected_in_free(
+                        polys, selected_nest, free_poly,
+                    )
                     pick_wins = int(pick_telem.get("hybrid_pick_wins", 0) or 0)
                     cc_keys = pk_merged.get("cluster_copy") or set()
                     emit_scores = list(scores)
@@ -1309,7 +1317,7 @@ def compose_and_nest_selection(
                         motif_weight=motif_w,
                         void_term=float(void_term),
                     )
-                    if not cc_pair_won and (n_steer > 0 or pick_wins == 0):
+                    if n_steer > 0 or pick_wins == 0:
                         score_use = emit_scores if n_steer > 0 else scores
                         cc_nest = _nest_with_locks(
                             graph,

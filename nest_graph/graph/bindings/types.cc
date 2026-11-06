@@ -27,7 +27,8 @@ void bind_graph_types(nb::module_ &m) {
         .def_rw("mode", &SelectOptions::mode)
         .def_rw("local_swap", &SelectOptions::local_swap)
         .def_rw("aggregation", &SelectOptions::aggregation)
-        .def_rw("locked_indices", &SelectOptions::locked_indices);
+        .def_rw("locked_indices", &SelectOptions::locked_indices)
+        .def_rw("residual_degree", &SelectOptions::residual_degree);
 
     nb::class_<RefineSelectionOptions>(m, "RefineSelectionOptions")
         .def(nb::init<>())

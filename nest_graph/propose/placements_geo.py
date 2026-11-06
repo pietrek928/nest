@@ -264,7 +264,10 @@ def propose_placements_raycasting(
     pool_cap = max(top_n * 3, top_n)
     # Modest expand past pool_cap so short invalid corridors cannot starve clear
     # mid-chords before filter; lex re-rank valid survivors for top_n.
-    expand_cap = max(pool_cap * 2, top_n * 6)
+    # P0: thrift void densify ray storm. Was max(pool_cap×2, top_n×6) ≡ top_n×6
+    # (peak_ray 3072 / prop_ms~10s). Cap at top_n×4 — attract-sorted head; ×3
+    # under-shot early min vs H2e; not Motif tip /4.
+    expand_cap = max(int(top_n) * 4, int(top_n))
     # March is 64 steps along ray_len; spans below ~2 steps are noise (late miss).
     span_floor = max(float(ray_len) / 32.0, 1e-6)
     min_span = -1.0

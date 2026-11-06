@@ -1,0 +1,7 @@
+..                                                                       [100%]
+2 passed, 736 deselected in 0.40s
+[11:07:27] make_polygon_graph Avg: 0.0000s | Calls: 0
+[11:07:27] score_elems Avg: 0.0000s | Calls: 0
+[11:07:27] nest_by_graph Avg: 0.0000s | Calls: 0
+[11:07:27] nest_by_scores Avg: 0.0000s | Calls: 0
+[11:07:27] score_rules Avg: 0.0000s | Calls: 0

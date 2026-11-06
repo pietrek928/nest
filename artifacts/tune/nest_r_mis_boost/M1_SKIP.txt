@@ -1,0 +1,7 @@
+M1 SKIP — adaptive improve_rules mutation scale
+
+Tried one mutation_presets() entry per Q249 plateau (elite gap / streak).
+Early 0.569/0.608/0.584 med 0.584 < H2e; plat_boost fired. Reverted plateau to
+all three scales. pick_mutation_preset_scale remains in rules/evolve.py unused.
+
+→ M2 densify override child under stable preset id.

@@ -1,0 +1,7 @@
+E5 SKIP — conflict pin / single-blocker refine
+
+E5a void_yield conflict-degree pin reorder: early min 0.569, med below H2e; nest_r flat.
+E5b single-blocker refine_scores bump: early 0.589/0.584/0.606 med 0.589 < H2e;
+nest_r 0.03–0.07; bn still graph_to_nest. Reverted both.
+
+E-series closed (P0 locked; E1–E5 parked). → M1 adaptive improve_rules scale.

@@ -43,3 +43,8 @@ presets:
       motif_lattice_depth: 4
       mid_hole_open: true
     online_ok: false
+  # M2: child densify overrides under stable id; online_ok only when reward beats parent.
+  - id: 7
+    name: void_island_child
+    overrides: {}
+    online_ok: false

@@ -42,6 +42,7 @@ def path_probe_budget(
     path_carved_streak: int = 0,
     incumbent_hold: bool = False,
     pick_empty: bool = False,
+    graph_to_nest_hollow: bool = False,
 ) -> tuple[bool, int, int]:
     """D1/G1/P1/P: run/shrink macro_increase_path from place_cohort_ready + Motif tip.
 
@@ -50,6 +51,8 @@ def path_probe_budget(
     with ready=0 still shrinks beam/2. G1: ready but macros idle → mild shrink.
     P/T: when ``path_carved_streak≥2`` and hold/plateau, further thrift — skip when
     ready∧pick_empty; else shrink beyond P1 (Motif tips thrifted too once streak honest).
+    P0: graph_to_nest + hold∨plateau + carved≥2 → hard (1, 1) after idle thrift
+    (caps path_refine/Attach flood; not Motif tip /4).
     """
     tip_motif = (
         tip_action is not None
@@ -98,11 +101,15 @@ def path_probe_budget(
     if idle_thrift:
         # Letter C: never full-skip — ready∧pick_empty skip left late path_ms≈0
         # with path_ran still set from prior iters; always shrink-run instead.
-        return (
-            True,
-            max(1, int(b) // 2),
-            max(1, int(d) - 1),
-        )
+        b = max(1, int(b) // 2)
+        d = max(1, int(d) - 1)
+    # P0: hollow MIS stall — hard-cap path packs + Attach validate beam.
+    if (
+        bool(graph_to_nest_hollow)
+        and (bool(incumbent_hold) or bool(on_plateau))
+        and int(path_carved_streak) >= 2
+    ):
+        return True, 1, 1
     return bool(run), int(b), int(d)
 
 

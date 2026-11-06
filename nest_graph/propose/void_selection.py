@@ -237,6 +237,24 @@ def _free_buffer_collapsed(
         return True
 
 
+def _void_pole_proximity_factor(
+    poly: BaseGeometry,
+    pole: Point | None,
+    *,
+    diag: float,
+) -> float:
+    """Q118 / E1: inverse-square decay toward void pole (shared with island boost)."""
+    if pole is None or getattr(pole, "is_empty", True) or diag <= 1e-12:
+        return 1.0
+    try:
+        c = poly.centroid
+        dist = float(Point(float(c.x), float(c.y)).distance(pole))
+    except Exception:
+        return 1.0
+    norm = max(dist / float(diag), 0.0)
+    return 1.0 / (1.0 + norm * norm)
+
+
 def apply_void_centroid_score_term(
     polys: Sequence,
     scores: list[float],
@@ -249,6 +267,7 @@ def apply_void_centroid_score_term(
     """Add free-centroid void term to nest/refine scores (L1; one SoT).
 
     Returns number of nodes that received the term.
+    E1 parked: pole proximity multiply erased by score/(1+deg) on void cliques.
     """
     if (
         void_term <= 0.0
@@ -359,13 +378,9 @@ def boost_void_island_scores(
         )
         if not (in_free or near_pole):
             continue
-        if pole is not None:
-            dist = float(c.distance(pole))
-            # Q118: inverse-square decay (steeper than linear) toward void pole.
-            norm = max(dist / diag, 0.0)
-            factor = 1.0 / (1.0 + norm * norm)
-        else:
-            factor = 1.0
+        factor = _void_pole_proximity_factor(
+            poly, pole if pole is not None else None, diag=diag
+        )
         scores[i] = float(sc) + float(weight) * factor
         n += 1
     return n

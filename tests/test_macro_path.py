@@ -299,6 +299,46 @@ def test_path_probe_budget_shrinks_ready_macros_idle():
     assert beam2 == 6 and depth2 == 3
 
 
+def test_path_probe_budget_p0_graph_to_nest_hard_cap():
+    """P0: graph_to_nest + hold + carved≥2 → (1, 1), not Motif tip /4."""
+    from nest_graph.pack.macro_path import path_probe_budget
+    from nest_graph.graph import MacroAction, MacroRegion
+
+    class _Ready:
+        place_cohort_ready = True
+        telem = {"mcts_cohort_macro_n": 4}
+
+    sheet = MacroAction()
+    sheet.region = MacroRegion.Sheet
+    run, beam, depth = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_Ready(),
+        tip_action=sheet,
+        beam=8,
+        max_depth=4,
+        path_carved_streak=2,
+        incumbent_hold=True,
+        graph_to_nest_hollow=True,
+    )
+    assert run is True
+    assert beam == 1 and depth == 1
+    # Without hollow flag, idle thrift only halves (ready full → /2).
+    run2, beam2, depth2 = path_probe_budget(
+        on_plateau=False,
+        parent_free_hint=True,
+        agent=_Ready(),
+        tip_action=sheet,
+        beam=8,
+        max_depth=4,
+        path_carved_streak=2,
+        incumbent_hold=True,
+        graph_to_nest_hollow=False,
+    )
+    assert run2 is True
+    assert beam2 == 4 and depth2 == 3
+
+
 def test_record_to_cluster_pattern_ref_anchor():
     from nest_graph.propose.pattern_archive import (
         note_motif_ref_anchors,

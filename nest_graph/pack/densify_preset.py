@@ -68,8 +68,47 @@ def apply_densify_preset(
     return apply_cfg_overrides(cfg, specs)
 
 
+# M2: predeclared child id (artifacts/tune/densify_presets.yaml); not void_island_high.
+DENSIFY_CHILD_PRESET_ID = 7
+
+
+def maybe_promote_densify_child(
+    presets: list[dict] | None,
+    *,
+    reward: float,
+    parent_reward: float,
+    overrides: dict | None = None,
+    child_id: int = DENSIFY_CHILD_PRESET_ID,
+) -> bool:
+    """Write child overrides and flip online_ok only when reward beats parent.
+
+    Same preset_id AMAF key; Motif tips stay 0. Not D7 blind online of id=1.
+    """
+    if not presets:
+        return False
+    if float(reward) + 1e-12 < float(parent_reward):
+        return False
+    child = None
+    for p in presets:
+        if int(p.get("id", -1) or -1) == int(child_id):
+            child = p
+            break
+    if child is None:
+        return False
+    if bool(child.get("online_ok")) and (child.get("overrides") or {}):
+        return False
+    ov = dict(overrides or {})
+    if not ov:
+        return False
+    child["overrides"] = ov
+    child["online_ok"] = True
+    return True
+
+
 __all__ = [
+    "DENSIFY_CHILD_PRESET_ID",
     "apply_densify_preset",
     "densify_preset_ids",
     "load_densify_presets",
+    "maybe_promote_densify_child",
 ]

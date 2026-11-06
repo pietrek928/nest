@@ -92,6 +92,8 @@ struct SelectOptions {
 
     ScoreAggregation aggregation = ScoreAggregation::Sum;
     std::vector<Tvertex> locked_indices;
+    /** E2: WeightedGreedy residual (live) degree — hollow re-nest only. */
+    bool residual_degree = false;
 };
 
 struct RefineSelectionOptions {

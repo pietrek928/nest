@@ -1,0 +1,12 @@
+M2 LOCK (structural) — densify child preset id=7 offline
+
+Shipped:
+- artifacts/tune/densify_presets.yaml id=7 void_island_child online_ok=false
+- maybe_promote_densify_child in pack/densify_preset.py (reward-beats-parent gate;
+  same preset_id AMAF; not D7 blind online of void_island_high)
+
+Promote hook in build_graph deferred: early dual with live promote 0.577/0.605/0.592
+med below H2e 0.595. Helper + yaml stay for a later letter that proves ≥ H2e + late Δ.
+
+SERIES CLOSE: P0 locked; E1–E5 / M1 parked; M2 structural only.
+P0 remains the quality floor (early med/min ≥ H2e; late Δ med ≥ +0.1924).

@@ -1,5 +1,7 @@
 """Rule-set evolution: mutate, dedupe, truncate, and demo/seed factories."""
 
+from typing import Sequence
+
 import numpy as np
 from shapely.geometry.base import BaseGeometry
 
@@ -210,6 +212,31 @@ def truncate_rule_set(
     for _, rule in weighted[:max_rules]:
         out.append_rule(rule)
     return out
+
+
+def pick_mutation_preset_scale(
+    presets: Sequence[RuleMutationSettings],
+    *,
+    elite_gap: float,
+    streak: int = 0,
+) -> tuple[list[RuleMutationSettings], int]:
+    """M1: one mutation scale per plateau (coarse / mid / fine), not all three.
+
+    Large elite gap or long streak → coarse; tiny gap → fine; else mid.
+    """
+    if not presets:
+        return [], -1
+    if len(presets) == 1:
+        return [presets[0]], 0
+    gap = float(elite_gap)
+    st = int(streak)
+    if gap > 0.05 or st >= 3:
+        idx = 0
+    elif gap < 0.01:
+        idx = len(presets) - 1
+    else:
+        idx = min(1, len(presets) - 1)
+    return [presets[idx]], int(idx)
 
 
 def improve_rules(

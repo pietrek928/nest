@@ -1,0 +1,14 @@
+nest_r MIS boost series close
+
+P0 LOCK — path hollow hard-cap + ray expand×4; early ~0.593/0.592; late Δ med +0.1924
+E1 SKIP — void centroid proximity erased by score/(1+deg)
+E2 SKIP — residual WeightedGreedy hollow degraded / nest_r flat
+E3 SKIP — dropped-void pole pair try=1 win=0; area below H2e
+E4 SKIP — colonize GWMIN order below H2e
+E5 SKIP — conflict pin + single-blocker refine below H2e
+M1 SKIP — single mutation scale on plateau below H2e (helper unused)
+M2 LOCK structural — densify child preset id=7 + maybe_promote_densify_child;
+  live promote hook deferred (early < H2e)
+
+bn remained graph_to_nest; nest_r stayed ~0.03–0.07 through E/M letters.
+Quality SoT: P0 thrift (do not re-try Motif/4 or blind preset online).
