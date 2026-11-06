@@ -1,0 +1,15 @@
+graph_to_nest densify series close
+
+Locked:
+- D1 hollow weighted_greedy MIS dual (nest_weighted_lex)
+- D2 void-pole Scene pair ranking / pre-Q377 pole pair
+
+Skipped (reverted; research loop exhausted or path never hit):
+- D3 free_space_cloud clearance (emit=0 on void_fill)
+- D4 soft void_core refine seed (early min 0.586)
+- D5 block_hole least-contact jostle (win=0; early drop)
+- D6 path_probe_budget hollow Motif thrift (early under H2e)
+- D7 void_island densify preset online (preset=0; ×K dilution)
+
+H2e floors held by D1–D2 tree; bn remains graph_to_nest with nest_r≈0.04.
+No further AMAF surgery. Locale DG configs parked (plan table).

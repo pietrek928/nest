@@ -1,0 +1,9 @@
+D3 SKIP (free_space_cloud clearance rank)
+
+Tried clearance-rank in propose_placements_free_space_cloud.
+void_fill shipped dual: free_space_cloud=0 on all seeds (letter telem absent);
+early min 0.586 < H2e — path never hit. AGENTS: do not gate a letter on a
+tag that never runs the helper. Reverted. densify=void_yield_union dominates;
+cloud last-resort not emitting on this fixture last-iter.
+
+Hand funnel to D4 refine void insert.

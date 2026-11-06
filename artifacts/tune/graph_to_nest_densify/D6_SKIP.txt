@@ -1,0 +1,15 @@
+D6 SKIP (path_probe_budget graph_to_nest hollow shrink)
+
+Hypothesis: when bn=graph_to_nest, thrift Motif-tip path budget (P1 beam/4)
+so path spend does not drown hollow MIS.
+
+Unifies:
+- u0: Motif tip /4 + ready Motif thrift → early 0.593/0.636/0.592 med 0.593
+  < H2e 0.595; pg2n telem present; nest_r still ~0.02–0.05
+- u1: drop ready Motif thrift → early 0.586/0.612/0.587 worse; path_ms↑
+
+Conclusion: large_void already applies P1 beam/4 for non-Motif; further Motif
+thrift under hollow moves attractors under the H2e early floor without nest_r
+gain. Reverted path_probe_budget + call-site wiring.
+
+→ D7: one nest/void densify preset online_ok for AMAF competition.

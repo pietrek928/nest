@@ -1,0 +1,18 @@
+D5 SKIP (block_hole least-contact jostle)
+
+Hypothesis: when 3b lex-misses under large_void, retry with least-contact
+victim (Jostle ruin-replace intent) via maybe_block_hole_renest.
+
+Unifies (all on pick_least_contact_block_victim / maybe_block_hole_renest):
+- u1 hollow flag: lc3b telem absent / GATE FAIL
+- u2 large_void + CC max≤5: early floor-ish but lc3b=0/0 (same victim / no CC)
+- u3 singleton least-contact: lc3b=1/0, early min 0.578 < H2e, 3b_rej=no_emit
+- u4 CC exclude+peel_max + hull0>0 gate: lc3b=1/0 all seeds, early
+  0.579/0.613/0.592 med/min 0.592/0.579 < H2e; win never fires
+
+Conclusion (Grok escalate after 2+ failed unifies): second peel always
+re-emits into the peeled island hull and loses the same lex gate; cost is
+extra propose with win=0. Bottleneck remains graph_to_nest (nest_r≈0.03–0.07)
+upstream of 3b. Reverted block_replace.py to HEAD.
+
+→ D6: path_probe_budget hollow / graph_to_nest shrink (existing large_void branch).

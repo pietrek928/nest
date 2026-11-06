@@ -1,0 +1,32 @@
+DG history AMAF (H2 recency / H1 miss / H2e unify) — series summary
+
+Floors: open early med/min 0.577/0.571; late Δ +0.1852/+0.1758
+        shipped L1–L4 ref ~early 0.593/0.581; late +0.2004/+0.1837
+
+H2 shipped:
+  AmafEntry.last_touch + set_outer_iter; amaf_soft_scale γ=0.25 on free_kind
+  change (arena + cohort_amaf_); note_mcts_free_kind hooks; telem amaf_fk_decay.
+  void_fill rarely flips free_kind → amaf_fk_decay=0 on case (hook live; pytest
+  proves soft-γ). Age-weight UCB tried → early min 0.561 < open → REVERTED.
+
+H2 duals:
+  Early (pre-age): med/min ~0.602–0.616 / 0.577–0.590 (≥ open; ≥ shipped med)
+  Late N=3: Δcov +0.1924/+0.1924/+0.1924 (≥ open med/min)
+
+H1 tried then parked:
+  ucb_score miss w=8/(8+n)·λ — early min 0.561 < open → parked (zeros already
+  in amaf_mean; pick keeps λ miss). Pytest SoT still: pick drops on miss; free_kind
+  soft-γ preserves mean.
+
+H2e shipped (unify GRAVE cohort→arena + mean-only 0.9^age in amaf_pick_score):
+  Early seeds 0 1 2: area 0.592/0.592/0.600 → med/min 0.595/0.592 (≥ open)
+  amaf_fb=5/4/6 (>0 letter telem); amaf_age=0/0 on void_fill cold (age proven in
+  pytest; same-outer last_touch keeps age=0 on this case — not a miss).
+  Late N=3: Δcov +0.1924/+0.2004/+0.1924 (med +0.1924 ≥ open; ≥ H2 late floor).
+  Indep OK.
+
+H2d parked (conditional): early xjoin=0/0/1 — motif_cross_join_se2 not >1;
+  stamp lex unify would not change pick. Skip densify series next if bn stays
+  graph_to_nest.
+
+LOCK H2 + H2e; H1 miss / H2d / UCB age parked. Indep OK throughout.

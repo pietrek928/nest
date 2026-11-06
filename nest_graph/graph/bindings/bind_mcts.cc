@@ -76,6 +76,10 @@ void sync_telem_to_agent(MctsAgent &agent, const nb::dict &telem) {
     t.extend_dropped_n = get_i("extend_dropped_n", t.extend_dropped_n);
     t.conflict_p_soft_n = get_i("conflict_p_soft_n", t.conflict_p_soft_n);
     t.conflict_p_sum = get_f("conflict_p_sum", t.conflict_p_sum);
+    t.amaf_free_kind_decay = get_i("amaf_free_kind_decay", t.amaf_free_kind_decay);
+    t.amaf_cohort_fallback = get_i("amaf_cohort_fallback", t.amaf_cohort_fallback);
+    t.amaf_age_apply = get_i("amaf_age_apply", t.amaf_age_apply);
+    t.amaf_age_max = get_i("amaf_age_max", t.amaf_age_max);
 }
 
 void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
@@ -108,6 +112,16 @@ void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
     if (t.conflict_p_soft_n > 0) {
         telem["conflict_p_soft_n"] = t.conflict_p_soft_n;
         telem["conflict_p_mean"] = t.conflict_p_sum / static_cast<float>(t.conflict_p_soft_n);
+    }
+    if (t.amaf_free_kind_decay > 0) {
+        telem["amaf_free_kind_decay"] = t.amaf_free_kind_decay;
+    }
+    if (t.amaf_cohort_fallback > 0) {
+        telem["amaf_cohort_fallback"] = t.amaf_cohort_fallback;
+    }
+    if (t.amaf_age_apply > 0) {
+        telem["amaf_age_apply"] = t.amaf_age_apply;
+        telem["amaf_age_max"] = t.amaf_age_max;
     }
 }
 
@@ -519,6 +533,21 @@ void bind_graph_mcts(nb::module_ &m) {
                 h.push_state();
             },
             nb::arg("action") = nb::none())
+        .def(
+            "set_outer_iter",
+            [](MctsAgentHolder &h, int32_t outer_iter) {
+                h.agent.set_outer_iter(outer_iter);
+            },
+            nb::arg("outer_iter"))
+        .def(
+            "note_free_kind",
+            [](MctsAgentHolder &h, FreeKind kind, float gamma) {
+                h.pull_state();
+                h.agent.note_free_kind(kind, gamma);
+                h.push_state();
+            },
+            nb::arg("kind"),
+            nb::arg("gamma") = MCTS_AMAF_FREE_KIND_GAMMA)
         .def(
             "best_child",
             [](MctsAgentHolder &h, nb::object node_id) {

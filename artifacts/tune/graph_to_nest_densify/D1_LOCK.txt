@@ -1,0 +1,16 @@
+D1 LOCK (hollow locked MIS → weighted_greedy)
+
+Patch: `_nest_with_locks(..., hollow_weighted=True)` uses SelectMode.weighted_greedy
+only (locks stay, local_swap=False). Wired on post-hollow lock re-nest sites.
+Telem: nest_weighted_lex (diag wlex=).
+
+Duals:
+  Early seeds 0 1 2: 0.600/0.628/0.592 → med/min 0.600/0.592 (≥ H2e 0.595/0.592)
+  Late N=3: Δcov +0.1924/+0.1924/+0.1924 (≥ H2e +0.1924)
+  Indep OK; wlex>0 on hollow.
+
+Parked unifies: area-scale scores (GATE FAIL); widen weighted to seed_lock+beam
+under large_void (GATE FAIL min 0.578).
+
+Conclusion: weighted vs greedy only reorders outside installed lock neighborhood;
+nest_r still ~0.01–0.04, bn=graph_to_nest → hand funnel to D2 (void-pole seq pair).

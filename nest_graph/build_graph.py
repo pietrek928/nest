@@ -159,6 +159,7 @@ from nest_graph.pack.execute import (
     make_execute_fn,
     prep_selection_free,
     prep_selection_freeze,
+    note_mcts_free_kind,
     record_mcts_expand,
     record_outer_iter_expand,
     run_mcts_multi_sim,
@@ -1378,6 +1379,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     last_parts = int(ckpt_baseline_parts) if resume_ckpt is not None else 0
 
     for _it in pbar:
+        if mcts_runner.agent is not None:
+            set_oi = getattr(mcts_runner.agent, "set_outer_iter", None)
+            if set_oi is not None:
+                set_oi(int(_it))
         # Q69: last leaf = full DFS + post_pack; mid = dfs_passes=1 finalize_end.
         # Hybrid: parent free_kind hints mid+large_void 3b; refreshed after compose.
         is_last_leaf = int(_it) == int(iters[-1]) if iters else True
@@ -1539,6 +1544,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 nest_state=nest_state,
                 part_by_group={0: p1, 1: p2},
             )
+            note_mcts_free_kind(mcts_runner.agent, fk)
             if is_large_void(fk) and not parent_free_hint:
                 parent_free_hint = True
                 polish_budget = polish_budget_for_iter(
@@ -2026,6 +2032,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 parent_snap.free_kind = free_kind_from_any(
                     getattr(fk_prep.free_info, "kind", FreeKind.Empty)
                 )
+                note_mcts_free_kind(mcts_runner.agent, parent_snap.free_kind)
             except Exception:
                 pass
         preset_ids = [0]

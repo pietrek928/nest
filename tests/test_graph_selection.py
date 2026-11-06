@@ -72,6 +72,46 @@ def test_weighted_greedy_picks_high_score_ends():
     assert set(selected) == {0, 2}
 
 
+def test_nest_with_locks_hollow_weighted_lex():
+    """D1: locked hollow dual may prefer weighted_greedy via lex."""
+    from nest_graph.propose.selection_compose import _nest_with_locks
+
+    g = PoseGraph()
+    # High-degree hub 0 collides with 1 and 2; ends 1–2 free of each other.
+    for i, x in enumerate((0.0, 1.0, -1.0, 2.0)):
+        _append_elem(g, i % 2, float(x), 0.0)
+    g.add_collision_pair(0, 1)
+    g.add_collision_pair(0, 2)
+    g.add_collision_pair(0, 3)
+    scores = [100.0, 10.0, 10.0, 9.0]
+    group_id = [0, 1, 0, 1]
+    part_areas = [1.0, 1.0]
+    telem: dict = {}
+    # Lock node 1; greedy_score may keep hub+lock collapse differently than weighted.
+    out = _nest_with_locks(
+        g,
+        scores,
+        [1],
+        group_id=group_id,
+        part_areas=part_areas,
+        hollow_weighted=True,
+        propose_stats=telem,
+    )
+    assert 1 in out
+    assert "nest_weighted_lex" in telem
+    # Unlocked dual path unchanged: hollow_weighted ignored without locks.
+    unlocked = _nest_with_locks(
+        g,
+        scores,
+        [],
+        group_id=group_id,
+        part_areas=part_areas,
+        dual=False,
+        hollow_weighted=True,
+    )
+    assert unlocked
+
+
 def test_score_rules_fitness_prefers_high_sum():
     g, scores_list = _path_graph_scores()
     rules_low = PlacementRuleSet()

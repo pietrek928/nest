@@ -75,6 +75,12 @@ Native sources are listed in `tool.uv.cache-keys`.
   `git checkout HEAD -- <paths>` or `git checkout -- .`. Checkout discards uncommitted work;
   stash keeps it recoverable. Never path-checkout dirty propose/pack/geometry files “just to
   compare.”
+- **Inspect before revert.** Before `git checkout HEAD -- <path>`, `git restore`, or any wholesale
+  discard of a dirty file: run `git diff HEAD -- <path>` (and skim `git status`) and confirm the
+  uncommitted delta is **only this letter / this session’s edits**. If the file also carries
+  pre-existing WIP (prior letter, H2e/AMAF, unrelated stash residue), do **not** path-checkout —
+  reverse or edit out only your hunks, or `git stash push -m '<label>' -- <path>` first. Mixing
+  “letter skip revert” with a full checkout silently deletes earlier uncommitted work.
 
 ## Planning
 

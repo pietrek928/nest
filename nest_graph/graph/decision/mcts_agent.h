@@ -21,6 +21,12 @@
 #include "se2.h"
 
 constexpr float MCTS_LAMBDA_MISS = 0.5f;
+/** H2: soft-γ on AMAF + cohort_amaf when free_kind changes. */
+constexpr float MCTS_AMAF_FREE_KIND_GAMMA = 0.25f;
+/** H2e: GRAVE — use arena AMAF while cohort slot visits below ref (incl 0). */
+constexpr int32_t MCTS_AMAF_COHORT_REF = 4;
+/** H2e: mean-only MAST age per outer-iter since last_touch. */
+constexpr float MCTS_AMAF_AGE_GAMMA = 0.9f;
 constexpr float MCTS_NEG_INF = -1e30f;
 constexpr float MCTS_POS_INF_THRESH = 1e30f;
 
@@ -54,6 +60,10 @@ struct MctsTelem {
     int32_t extend_dropped_n = 0;
     int32_t conflict_p_soft_n = 0;
     float conflict_p_sum = 0.f;
+    int32_t amaf_free_kind_decay = 0;  // H2: times soft-γ fired
+    int32_t amaf_cohort_fallback = 0;  // H2e: cohort cold → arena AMAF
+    int32_t amaf_age_apply = 0;        // H2e: picks where mean aged
+    int32_t amaf_age_max = 0;          // H2e: max age applied
 };
 
 struct MotifCohortEntry {
@@ -129,6 +139,7 @@ struct CohortAmafSlot {
     int32_t visits = 0;
     float reward = 0.f;
     int32_t misses = 0;
+    int32_t last_touch = 0;
 };
 
 inline MctsRealized empty_mcts_realized() {
@@ -329,10 +340,69 @@ public:
         if (miss) {
             slot.misses += 1;
         }
+        if (arena != nullptr) {
+            slot.last_touch = arena->amaf_outer_iter();
+        }
         telem.cohort_sig_amaf_visits = std::max(
             telem.cohort_sig_amaf_visits,
             slot.visits
         );
+    }
+
+    void set_outer_iter(int32_t outer_iter) {
+        if (arena != nullptr) {
+            arena->set_amaf_outer_iter(outer_iter);
+        }
+    }
+
+    /**
+     * H2: on BoardSnapshot.free_kind change, soft-scale arena AMAF + cohort_amaf_.
+     * Empty kind ignored (unset / inherit). First non-empty seeds without decay.
+     */
+    void note_free_kind(
+        FreeKind kind,
+        float gamma = MCTS_AMAF_FREE_KIND_GAMMA
+    ) {
+        if (kind == FreeKind::Empty) {
+            return;
+        }
+        if (have_last_free_kind_ && kind != last_free_kind_) {
+            if (arena != nullptr) {
+                arena->amaf_soft_scale(gamma);
+            }
+            for (auto &kv : cohort_amaf_) {
+                CohortAmafSlot &e = kv.second;
+                if (e.visits <= 0) {
+                    continue;
+                }
+                const float mean = e.reward / static_cast<float>(e.visits);
+                const float miss_rate =
+                    static_cast<float>(e.misses) / static_cast<float>(e.visits);
+                const int32_t nv = static_cast<int32_t>(
+                    std::lround(static_cast<float>(e.visits) * gamma)
+                );
+                if (nv <= 0) {
+                    e.visits = 0;
+                    e.reward = 0.f;
+                    e.misses = 0;
+                    continue;
+                }
+                e.visits = nv;
+                e.reward = mean * static_cast<float>(nv);
+                e.misses = std::max(
+                    0,
+                    static_cast<int32_t>(
+                        std::lround(miss_rate * static_cast<float>(nv))
+                    )
+                );
+                if (e.misses > e.visits) {
+                    e.misses = e.visits;
+                }
+            }
+            telem.amaf_free_kind_decay += 1;
+        }
+        last_free_kind_ = kind;
+        have_last_free_kind_ = true;
     }
 
     bool is_tombstoned(int32_t node_id) const {
@@ -628,16 +698,30 @@ public:
         int32_t visits = arena->amaf_visits(region_i, rule_id, motif_id, preset_id);
         float mean = 0.f;
         int32_t misses = 0;
+        int32_t last_touch = 0;
         if (key.cohort.active()) {
             auto it = cohort_amaf_.find(key);
-            if (it != cohort_amaf_.end() && it->second.visits > 0) {
-                visits = it->second.visits;
+            const int32_t cohort_visits =
+                (it != cohort_amaf_.end() && it->second.visits > 0)
+                    ? it->second.visits
+                    : 0;
+            if (cohort_visits >= MCTS_AMAF_COHORT_REF) {
+                visits = cohort_visits;
                 mean = it->second.reward / static_cast<float>(visits);
                 misses = it->second.misses;
+                last_touch = it->second.last_touch;
                 telem.cohort_sig_amaf_visits = std::max(
                     telem.cohort_sig_amaf_visits,
                     visits
                 );
+            } else if (visits > 0) {
+                // H2e GRAVE: cold/thin cohort → arena AMAF for same 4-tuple.
+                mean = arena->amaf_mean(region_i, rule_id, motif_id, preset_id);
+                misses = arena->amaf_misses(region_i, rule_id, motif_id, preset_id);
+                last_touch = arena->amaf_last_touch(
+                    region_i, rule_id, motif_id, preset_id
+                );
+                telem.amaf_cohort_fallback += 1;
             } else {
                 visits = 0;
             }
@@ -646,6 +730,20 @@ public:
         } else {
             mean = arena->amaf_mean(region_i, rule_id, motif_id, preset_id);
             misses = arena->amaf_misses(region_i, rule_id, motif_id, preset_id);
+            last_touch = arena->amaf_last_touch(
+                region_i, rule_id, motif_id, preset_id
+            );
+        }
+        // H2e: mean-only MAST age (do not scale miss_term / pb / additives).
+        if (visits > 0) {
+            const int32_t age = std::max(0, arena->amaf_outer_iter() - last_touch);
+            if (age > 0) {
+                mean *= std::pow(
+                    MCTS_AMAF_AGE_GAMMA, static_cast<float>(age)
+                );
+                telem.amaf_age_apply += 1;
+                telem.amaf_age_max = std::max(telem.amaf_age_max, age);
+            }
         }
         const float c = ucb_c;
         const float pb = c / std::sqrt(static_cast<float>(parent_visits) + 1.f);
@@ -881,10 +979,17 @@ public:
         }
         telem.amaf_pick += 1;
         const ActionKey best_key = action_key(*best);
-        if (arena->amaf_visits(
+        bool amaf_hit = arena->amaf_visits(
                 best_key.region_i, best_key.rule_id, best_key.motif_id, best_key.preset_id
             )
-            > 0) {
+            > 0;
+        if (!amaf_hit && best_key.cohort.active()) {
+            auto cit = cohort_amaf_.find(best_key);
+            if (cit != cohort_amaf_.end() && cit->second.visits > 0) {
+                amaf_hit = true;
+            }
+        }
+        if (amaf_hit) {
             telem.amaf_hits += 1;
         }
         fallback = *best;
@@ -896,4 +1001,6 @@ private:
     std::unordered_map<int32_t, int32_t> idle_age_;
     std::vector<BoardSnapshot> related_snaps_;
     std::unordered_map<ActionKey, CohortAmafSlot, ActionKeyHash> cohort_amaf_;
+    FreeKind last_free_kind_ = FreeKind::Empty;
+    bool have_last_free_kind_ = false;
 };

@@ -758,10 +758,13 @@ def scene_pair_locks_from_indices(
     min_dist: float,
     scores: Sequence[float] | None = None,
     max_pairs: int = 3,
+    pole: Point | None = None,
+    polys: Sequence | None = None,
 ) -> list[list[int]]:
     """Independent index pairs that pass motif grow clear (W1 hybrid accept).
 
     Callers pass hard-packed obstacles (P2: seed ∪ unmapped) as ``packed_geoms``.
+    D2: optional ``pole`` + ``polys`` ranks nearest-to-void-pole first, then −score.
     """
     idxs = sorted({int(i) for i in indices if int(i) >= 0})
     if len(idxs) < 2:
@@ -771,8 +774,11 @@ def scene_pair_locks_from_indices(
     scene_accept = _motif_grow_accept_factory(
         void_geoms, min_dist, packed_penetrating=True,
     )
+    pole_xy: tuple[float, float] | None = None
+    if pole is not None and not getattr(pole, "is_empty", True):
+        pole_xy = (float(pole.x), float(pole.y))
 
-    ranked: list[tuple[float, list[int]]] = []
+    ranked: list[tuple[float, float, list[int]]] = []
     for ai, a in enumerate(idxs):
         for b in idxs[ai + 1 :]:
             if collisions is not None:
@@ -788,10 +794,31 @@ def scene_pair_locks_from_indices(
                 for ix in pair_idxs:
                     if 0 <= int(ix) < len(scores):
                         pair_score += float(scores[int(ix)])
-            ranked.append((-pair_score, [int(i) for i in pair_idxs]))
-    ranked.sort(key=lambda x: x[0])
+            dist = 0.0
+            if pole_xy is not None and polys is not None:
+                best = float("inf")
+                for ix in pair_idxs:
+                    ii = int(ix)
+                    if ii < 0 or ii >= len(polys):
+                        continue
+                    geom = polys[ii]
+                    if geom is None:
+                        continue
+                    try:
+                        c = geom.centroid
+                        d = (float(c.x) - pole_xy[0]) ** 2 + (
+                            float(c.y) - pole_xy[1]
+                        ) ** 2
+                    except Exception:
+                        continue
+                    if d < best:
+                        best = d
+                if best < float("inf"):
+                    dist = best
+            ranked.append((dist, -pair_score, [int(i) for i in pair_idxs]))
+    ranked.sort(key=lambda x: (x[0], x[1]))
     cap = max(int(max_pairs), 0)
-    return [pair for _sc, pair in ranked[:cap]]
+    return [pair for _d, _sc, pair in ranked[:cap]]
 
 
 def hollow_pattern_lock_sets(
@@ -893,6 +920,8 @@ def hollow_pattern_lock_sets(
                 min_dist=min_dist,
                 scores=scores,
                 max_pairs=1,
+                pole=pole,
+                polys=candidate_geoms,
             ):
                 _append_lock_set(lock_sets, seen, pair, scene_max=scene_max)
         if len(lock_sets) >= cap:
@@ -908,6 +937,8 @@ def hollow_pattern_lock_sets(
             min_dist=min_dist,
             scores=scores,
             max_pairs=cap,
+            pole=pole,
+            polys=candidate_geoms,
         )
         for pair in flat:
             _append_lock_set(lock_sets, seen, pair, scene_max=scene_max)

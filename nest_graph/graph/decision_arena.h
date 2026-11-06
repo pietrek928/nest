@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -200,6 +201,10 @@ public:
         return static_cast<float>(children) < cap;
     }
 
+    /** Outer-iter clock for AmafEntry.last_touch (H2 recency). */
+    void set_amaf_outer_iter(int32_t outer_iter) { amaf_outer_iter_ = outer_iter; }
+    int32_t amaf_outer_iter() const { return amaf_outer_iter_; }
+
     /** C0/DgPreset: AMAF ledger key = (region, rule_id, motif_id, preset_id). */
     void amaf_record(
         int32_t region,
@@ -216,6 +221,58 @@ public:
         if (miss) {
             e.misses += 1;
         }
+        e.last_touch = amaf_outer_iter_;
+    }
+
+    /**
+     * H2: soft-multiply AMAF mass (preserve mean + miss-rate; shrink β confidence).
+     * Used on free_kind phase change — not MotifBase TTL.
+     */
+    void amaf_soft_scale(float gamma) {
+        if (!(gamma > 0.f) || !(gamma < 1.f)) {
+            return;
+        }
+        for (auto &kv : amaf_) {
+            AmafEntry &e = kv.second;
+            if (e.visits <= 0) {
+                continue;
+            }
+            const float mean = e.total_reward / static_cast<float>(e.visits);
+            const float miss_rate =
+                static_cast<float>(e.misses) / static_cast<float>(e.visits);
+            const int32_t nv = static_cast<int32_t>(
+                std::lround(static_cast<float>(e.visits) * gamma)
+            );
+            if (nv <= 0) {
+                e.visits = 0;
+                e.total_reward = 0.f;
+                e.misses = 0;
+                continue;
+            }
+            e.visits = nv;
+            e.total_reward = mean * static_cast<float>(nv);
+            e.misses = std::max(
+                0,
+                static_cast<int32_t>(std::lround(miss_rate * static_cast<float>(nv)))
+            );
+            if (e.misses > e.visits) {
+                e.misses = e.visits;
+            }
+        }
+    }
+
+    int32_t amaf_last_touch(
+        int32_t region,
+        int32_t rule_id,
+        int32_t motif_id,
+        int32_t preset_id = 0
+    ) const {
+        const auto key = std::make_tuple(region, rule_id, motif_id, preset_id);
+        auto it = amaf_.find(key);
+        if (it == amaf_.end()) {
+            return -1;
+        }
+        return it->second.last_touch;
     }
 
     float amaf_mean(
@@ -283,6 +340,8 @@ public:
                         region, n.action.rule_id, n.action.motif_id, n.action.preset_id
                     )
                 + (1.f - beta) * mean;
+            // H1 miss-in-UCB parked: dual min < open (0.561 < 0.571); zeros
+            // already dilute amaf_mean via note_macro_miss. Pick keeps λ miss.
         }
         return mean + explore;
     }
@@ -292,9 +351,11 @@ private:
         int32_t visits = 0;
         float total_reward = 0.f;
         int32_t misses = 0;
+        int32_t last_touch = 0;  // H2: outer-iter stamp
     };
 
     std::vector<DecisionNode> arena_;
     std::vector<BoardSnapshot> snapshots_;
     std::map<std::tuple<int32_t, int32_t, int32_t, int32_t>, AmafEntry> amaf_;
+    int32_t amaf_outer_iter_ = 0;
 };

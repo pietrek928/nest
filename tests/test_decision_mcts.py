@@ -252,10 +252,12 @@ def test_arena_amaf_is_ucb_and_pick_sot():
     a.rule_id = 0
     a.motif_id = -1
     cid = arena.add_node(arena.root_id(), a)
+    agent.set_outer_iter(3)
     agent.backprop(cid, 0.8)
     region_i = int(getattr(a.region, "value", a.region))
     assert int(arena.amaf_visits(region_i, 0, -1)) >= 1
     assert abs(float(arena.amaf_mean(region_i, 0, -1)) - 0.8) < 1e-5
+    assert int(arena.amaf_last_touch(region_i, 0, -1)) == 3
     score = agent._ucb(cid, parent_visits=2)
     assert math.isfinite(score)
     assert int(agent.telem["amaf_hits"]) >= 1
@@ -267,6 +269,44 @@ def test_arena_amaf_is_ucb_and_pick_sot():
     assert int(arena.amaf_misses(region_i, 0, -1)) == 1
     pick_miss = agent._amaf_pick_score(key, 0)
     assert pick_miss < pick
+    # H2: free_kind change soft-scales AMAF mass (mean preserved).
+    v0 = int(arena.amaf_visits(region_i, 0, -1))
+    mean0 = float(arena.amaf_mean(region_i, 0, -1))
+    agent.note_free_kind(FreeKind.LargeVoid)
+    agent.note_free_kind(FreeKind.SwissCheese)
+    assert int(agent.telem.get("amaf_free_kind_decay", 0) or 0) >= 1
+    v1 = int(arena.amaf_visits(region_i, 0, -1))
+    assert v1 < v0
+    assert abs(float(arena.amaf_mean(region_i, 0, -1)) - mean0) < 1e-4
+
+
+def test_h2e_cohort_fallback_and_mean_age():
+    """H2e: Motif keys are cohort-active; visits<ref → arena; mean *= 0.9^age."""
+    arena = DecisionArena()
+    agent = MctsAgent(arena=arena, motif_base=MotifBase())
+    a = MacroAction()
+    a.region = MacroRegion.Motif
+    a.rule_id = 0
+    a.motif_id = 1
+    a.preset_id = 0
+    a.part_gid = 3
+    agent.set_outer_iter(0)
+    cid = arena.add_node(arena.root_id(), a)
+    agent.backprop(cid, 0.8)
+    region_i = int(getattr(a.region, "value", a.region))
+    assert int(arena.amaf_visits(region_i, 0, 1, 0)) >= 1
+    # motif_id>=0 ⇒ cohort.active(); one backprop ⇒ cohort visits=1 < ref=4 → fallback.
+    agent.set_outer_iter(2)
+    key = agent._action_key(a)
+    pick0 = float(agent._amaf_pick_score(key, 0))
+    assert int(agent.telem.get("amaf_cohort_fallback", 0) or 0) >= 1
+    assert int(agent.telem.get("amaf_age_apply", 0) or 0) >= 1
+    assert int(agent.telem.get("amaf_age_max", 0) or 0) >= 2
+    assert math.isfinite(pick0)
+    # Miss lowers pick further; age does not scale miss_term.
+    agent.note_macro_miss(a)
+    pick_miss = float(agent._amaf_pick_score(key, 0))
+    assert pick_miss < pick0
 
 
 def test_stamp_arena_amaf_sets_hits():

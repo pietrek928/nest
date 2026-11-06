@@ -1,0 +1,11 @@
+D2 LOCK (void-pole Scene pair ranking + pre-Q377 one-shot)
+
+Patch:
+- scene_pair_locks_from_indices optional pole+polys → nearest void pole then −score
+- hollow_pattern_lock_sets passes pole into pair fallback
+- pre-Q377: if cc_g≥2 and cc_n==0, one pole pair → _nest_with_locks hollow_weighted
+
+Early (d2_early): 0.603/0.605/0.597 → med/min 0.603/0.597 ≥ H2e
+Late N=3: +0.1924/+0.2004/+0.1924 med +0.1924 ≥ H2e
+nest_r ~0.05 still bn=graph_to_nest → D3 cloud clearance.
+Parked: widen gate to pool-size (u1) — early min 0.586 < floor.

@@ -364,6 +364,22 @@ void bind_graph_decision(nb::module_ &m) {
             nb::arg("motif_id"),
             nb::arg("preset_id") = 0)
         .def(
+            "amaf_last_touch",
+            &DecisionArena::amaf_last_touch,
+            nb::arg("region"),
+            nb::arg("rule_id"),
+            nb::arg("motif_id"),
+            nb::arg("preset_id") = 0)
+        .def(
+            "set_amaf_outer_iter",
+            &DecisionArena::set_amaf_outer_iter,
+            nb::arg("outer_iter"))
+        .def("amaf_outer_iter", &DecisionArena::amaf_outer_iter)
+        .def(
+            "amaf_soft_scale",
+            &DecisionArena::amaf_soft_scale,
+            nb::arg("gamma"))
+        .def(
             "ucb_score",
             &DecisionArena::ucb_score,
             nb::arg("node_id"),

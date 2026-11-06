@@ -48,11 +48,13 @@ from nest_graph.propose.motif_lock import (
     hollow_cc_score_steer,
     motif_join_lock_sets,
     pin_if_in_nest,
+    scene_pair_locks_from_indices,
     stamp_cross_cohort_motif_joins,
     _sort_lock_sets_bonded,
 )
 from nest_graph.propose.first_pass_border import border_kiss_indices
 from nest_graph.propose.motif_keys import (
+    cluster_copy_lock_pool,
     ensure_fringe_swap_cohort,
     ensure_locked_motif_cohort,
     merge_motif_cohorts,
@@ -352,12 +354,28 @@ def _nest_with_locks(
     group_id: Sequence[int] | None = None,
     part_areas: Sequence[float] | None = None,
     dual: bool = True,
+    hollow_weighted: bool = False,
+    propose_stats: dict | None = None,
 ) -> list[int]:
     nest_opts = SelectOptions()
     if locked:
         nest_opts.local_swap = False
         nest_opts.mode = SelectMode.greedy_score
         nest_opts.locked_indices = [int(i) for i in locked]
+        if not scores:
+            return []
+        # D1 unify2: hollow locked MIS uses weighted_greedy only (locks stay).
+        # Lex vs greedy_score was floor-noisy; area-scale unify degraded further.
+        if hollow_weighted:
+            nest_opts.mode = SelectMode.weighted_greedy
+            if not scores:
+                return []
+            cand_w = list(nest_by_scores(graph, scores, nest_opts))
+            if propose_stats is not None:
+                propose_stats["nest_weighted_lex"] = int(
+                    propose_stats.get("nest_weighted_lex", 0) or 0
+                ) + 1
+            return cand_w
         return list(nest_by_scores(graph, scores, nest_opts)) if scores else []
     # Q105: dual=False → cheap local_swap=False; dual=True → lex on/off (heavy OR large_void).
     if not dual:
@@ -905,6 +923,8 @@ def compose_and_nest_selection(
             propose_stats["nest_void_ratio"] = float(nest_void_ratio)
             propose_stats["graph_to_nest_hollow"] = int(graph_to_nest_hollow)
             propose_stats["graph_void_n"] = int(n_void_graph_pre)
+            if graph_to_nest_hollow and "nest_weighted_lex" not in propose_stats:
+                propose_stats["nest_weighted_lex"] = 0
         if pk_merged:
             cc_g, cc_n = count_proposer_on_selection(
                 group_id,
@@ -1026,6 +1046,8 @@ def compose_and_nest_selection(
                             group_id=group_id,
                             part_areas=part_areas,
                             dual=bool(dual_nest),
+                            hollow_weighted=True,
+                            propose_stats=propose_stats,
                         )
                         _cg2_u, cc_n2_u = count_proposer_on_selection(
                             group_id, transform, cc_nest_u, pk_merged, "cluster_copy",
@@ -1109,6 +1131,8 @@ def compose_and_nest_selection(
                         group_id=group_id,
                         part_areas=part_areas,
                         dual=bool(dual_nest),
+                        hollow_weighted=True,
+                        propose_stats=propose_stats,
                     )
                     _cg2, cc_n2 = count_proposer_on_selection(
                         group_id, transform, cc_nest, pk_merged, "cluster_copy",
@@ -1180,6 +1204,99 @@ def compose_and_nest_selection(
                             cc_pair_won = True
                             break
                 if not cc_pair_won:
+                    # D2: one void-pole Scene-clear cc pair before Q377 unlocked.
+                    if (
+                        int(cc_g) >= 2
+                        and int(cc_n) == 0
+                        and candidate_geoms is not None
+                    ):
+                        cc_pool = cluster_copy_lock_pool(
+                            group_id,
+                            transform,
+                            pk_merged,
+                            merged_cohorts,
+                            key_to_ix,
+                        )
+                        pole_pt = getattr(free_info, "target_pt", None)
+                        pole_pairs = scene_pair_locks_from_indices(
+                            graph=graph,
+                            indices=cc_pool,
+                            candidate_geoms=candidate_geoms,
+                            void_geoms=void_geoms_list,
+                            packed_geoms=packed_geoms,
+                            min_dist=float(min_dist),
+                            scores=scores,
+                            max_pairs=1,
+                            pole=pole_pt,
+                            polys=candidate_geoms,
+                        )
+                        if propose_stats is not None and pole_pairs:
+                            propose_stats["hollow_void_pole_pair_try"] = 1
+                        for lock in pole_pairs:
+                            score_use = list(scores)
+                            if void_scene_locks and void_term > 0.0:
+                                for i in lock:
+                                    ix = int(i)
+                                    if 0 <= ix < len(score_use):
+                                        score_use[ix] = float(score_use[ix]) + float(
+                                            void_term
+                                        )
+                            cc_nest = _nest_with_locks(
+                                graph,
+                                score_use,
+                                lock,
+                                group_id=group_id,
+                                part_areas=part_areas,
+                                dual=bool(dual_nest),
+                                hollow_weighted=True,
+                                propose_stats=propose_stats,
+                            )
+                            _cg2, cc_n2 = count_proposer_on_selection(
+                                group_id,
+                                transform,
+                                cc_nest,
+                                pk_merged,
+                                "cluster_copy",
+                                key_to_verts=key_to_verts,
+                            )
+                            a_cc = float(_sel_area(cc_nest, group_id, part_areas))
+                            vf_cc = count_selected_in_free(
+                                polys, cc_nest, free_poly,
+                            )
+                            lex_win = _lex_pick_better(
+                                best=selected_nest,
+                                cand=cc_nest,
+                                group_id=group_id,
+                                part_areas=part_areas,
+                            )
+                            pole_telem: dict = {}
+                            if hybrid_compose_pick(
+                                graph=graph,
+                                lock=lock,
+                                area_cand=a_cc,
+                                area_orig=a_orig,
+                                void_cand=int(vf_cc),
+                                void_orig=int(vf_orig),
+                                cc_n2=int(cc_n2),
+                                lex_better=lex_win,
+                                telem=pole_telem,
+                                join_prefer=True,
+                                void_scene=True,
+                                count_cand=len(cc_nest),
+                                count_orig=len(selected_nest),
+                                motif_complete=True,
+                                survive_mid=survive_mid_n,
+                            ):
+                                selected_nest = cc_nest
+                                locked_motif = list(lock)
+                                cc_pair_won = True
+                                if propose_stats is not None:
+                                    propose_stats.update(pole_telem)
+                                    propose_stats["hollow_void_pole_pair_win"] = 1
+                                    propose_stats["cluster_copy_pair_lock"] = 1
+                                    propose_stats["cluster_copy_nest_n"] = int(cc_n2)
+                                    propose_stats["motif_lock_source"] = "void_pole_pair"
+                                break
                     # Q377: when pick=0 on hollow, unlocked re-nest @ 0.88× + void rise.
                     pick_wins = int(pick_telem.get("hybrid_pick_wins", 0) or 0)
                     cc_keys = pk_merged.get("cluster_copy") or set()
@@ -1192,7 +1309,7 @@ def compose_and_nest_selection(
                         motif_weight=motif_w,
                         void_term=float(void_term),
                     )
-                    if n_steer > 0 or pick_wins == 0:
+                    if not cc_pair_won and (n_steer > 0 or pick_wins == 0):
                         score_use = emit_scores if n_steer > 0 else scores
                         cc_nest = _nest_with_locks(
                             graph,

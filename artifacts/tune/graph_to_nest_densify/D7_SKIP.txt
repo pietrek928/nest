@@ -1,0 +1,14 @@
+D7 SKIP (void_island_high densify preset online_ok)
+
+Hypothesis: flip offline void_island_score_boost preset (id=1) online_ok so
+H2e amaf_pick_score can compete under enable_mcts_densify_presets.
+
+Dual early (d7_early): 0.579/0.591/0.578 → GATE FAIL area; med/min ≪ H2e
+0.595/0.592. Letter telem preset=0 on all seeds (AMAF never selected id=1);
+×K macro expansion dilutes expand. nest_r still ~0.03–0.05; bn=graph_to_nest.
+
+Knob retune would not help while preset_id stays 0 (cost is PW arm count, not
+override magnitude). Reverted online_ok=false.
+
+Series close: D1–D2 locked; D3–D7 skipped. Remaining funnel is graph_to_nest
+MIS/compose (nest_r≈0.04); further AMAF/path/3b/preset arms failed dual.

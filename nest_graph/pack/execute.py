@@ -22,6 +22,18 @@ from nest_graph.propose.heavy_polish import (
 )
 
 
+def note_mcts_free_kind(agent: Any, free_kind: Any) -> None:
+    """H2: soft-γ AMAF when BoardSnapshot.free_kind changes (one-gate)."""
+    if agent is None:
+        return
+    kind = free_kind_from_any(free_kind)
+    if kind == FreeKind.Empty:
+        return
+    note = getattr(agent, "note_free_kind", None)
+    if note is not None:
+        note(kind)
+
+
 def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -> float:
     """D1: 1.0 if fits_part else 0.0; missing → default (unknown = no void boost)."""
     if not isinstance(propose_stats, dict):
@@ -373,6 +385,7 @@ def record_mcts_expand(
     )
     if agent is None:
         return int(parent_id)
+    note_mcts_free_kind(agent, getattr(child_snap, "free_kind", FreeKind.Empty))
     if agent.may_expand_node(parent_id):
         child_id = agent.expand(parent_id, action, reward)
         mcts_telem["pw_expand"] = int(mcts_telem["pw_expand"]) + 1

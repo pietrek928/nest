@@ -1555,6 +1555,13 @@ class NestingPipelineEvaluator:
                 "hollow_renest",
                 "cluster_copy_graph_n",
                 "cluster_copy_nest_n",
+                "nest_weighted_lex",
+                "hollow_void_pole_pair_try",
+                "hollow_void_pole_pair_win",
+                "void_core_hollow_soft",
+                "void_core_accepted",
+                "block_hole_least_contact_try",
+                "block_hole_least_contact_win",
             ):
                 last_void_leak[dk] = max(
                     int(last_void_leak.get(dk, 0) or 0),

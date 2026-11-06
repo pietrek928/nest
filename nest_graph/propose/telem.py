@@ -916,6 +916,38 @@ def merge_phase_gate_telem(
             mt.get("mcts_preset_id", leak.get("mcts_preset_id", 0)) or 0
         )
         leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
+        leak["amaf_free_kind_decay"] = int(
+            mt.get(
+                "amaf_free_kind_decay",
+                propose_stats.get(
+                    "amaf_free_kind_decay", leak.get("amaf_free_kind_decay", 0)
+                ),
+            )
+            or 0
+        )
+        leak["amaf_cohort_fallback"] = int(
+            mt.get(
+                "amaf_cohort_fallback",
+                propose_stats.get(
+                    "amaf_cohort_fallback", leak.get("amaf_cohort_fallback", 0)
+                ),
+            )
+            or 0
+        )
+        leak["amaf_age_apply"] = int(
+            mt.get(
+                "amaf_age_apply",
+                propose_stats.get("amaf_age_apply", leak.get("amaf_age_apply", 0)),
+            )
+            or 0
+        )
+        leak["amaf_age_max"] = int(
+            mt.get(
+                "amaf_age_max",
+                propose_stats.get("amaf_age_max", leak.get("amaf_age_max", 0)),
+            )
+            or 0
+        )
         leak["extend_scaled_n"] = int(
             mt.get(
                 "extend_scaled_n",
@@ -1719,12 +1751,36 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         if ctx.mcts_telem is not None:
             ctx.mcts_telem["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
             ctx.mcts_telem["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+            ctx.mcts_telem["amaf_free_kind_decay"] = int(
+                agent.telem.get("amaf_free_kind_decay", 0) or 0
+            )
+            ctx.mcts_telem["amaf_cohort_fallback"] = int(
+                agent.telem.get("amaf_cohort_fallback", 0) or 0
+            )
+            ctx.mcts_telem["amaf_age_apply"] = int(
+                agent.telem.get("amaf_age_apply", 0) or 0
+            )
+            ctx.mcts_telem["amaf_age_max"] = int(
+                agent.telem.get("amaf_age_max", 0) or 0
+            )
             # G0: current-iter overwrite (match C++ / propose_stats).
             ctx.mcts_telem["mcts_cohort_macro_n"] = int(
                 agent.telem.get("mcts_cohort_macro_n", 0) or 0
             )
         propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
         propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
+        propose_stats["amaf_free_kind_decay"] = int(
+            agent.telem.get("amaf_free_kind_decay", 0) or 0
+        )
+        propose_stats["amaf_cohort_fallback"] = int(
+            agent.telem.get("amaf_cohort_fallback", 0) or 0
+        )
+        propose_stats["amaf_age_apply"] = int(
+            agent.telem.get("amaf_age_apply", 0) or 0
+        )
+        propose_stats["amaf_age_max"] = int(
+            agent.telem.get("amaf_age_max", 0) or 0
+        )
         propose_stats["mcts_cohort_macro_n"] = int(
             agent.telem.get("mcts_cohort_macro_n", 0) or 0
         )
@@ -2153,6 +2209,19 @@ def build_run_diagnostics(
         "best_pack_final_cov": float(leak.get("best_pack_final_cov", 0.0) or 0.0),
         "cluster_copy_graph_n": int(leak.get("cluster_copy_graph_n", 0) or 0),
         "cluster_copy_nest_n": int(leak.get("cluster_copy_nest_n", 0) or 0),
+        "nest_weighted_lex": int(leak.get("nest_weighted_lex", 0) or 0),
+        "hollow_void_pole_pair_try": int(
+            leak.get("hollow_void_pole_pair_try", 0) or 0
+        ),
+        "hollow_void_pole_pair_win": int(
+            leak.get("hollow_void_pole_pair_win", 0) or 0
+        ),
+        "block_hole_least_contact_try": int(
+            leak.get("block_hole_least_contact_try", 0) or 0
+        ),
+        "block_hole_least_contact_win": int(
+            leak.get("block_hole_least_contact_win", 0) or 0
+        ),
         "lock_n_compose": int(leak.get("lock_n_compose", 0) or 0),
         "lock_n_refine": int(leak.get("lock_n_refine", 0) or 0),
         "lock_n_materialize": int(leak.get("lock_n_materialize", 0) or 0),

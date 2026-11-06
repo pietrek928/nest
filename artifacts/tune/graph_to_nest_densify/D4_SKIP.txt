@@ -1,0 +1,7 @@
+D4 SKIP (refine void insert / soft void_core)
+
+Tried soft hollow void_core accept (vf≥rim+2 @ ≥0.80× area). Early
+0.586/0.663/0.620 → min 0.586 < H2e 0.592; soft telem not clearly in
+letter line. Full C++ priority_vertices on refine_dfs deferred (rebuild +
+Q163/Q171 risk). Reverted soft gate. Hand residual bn=graph_to_nest to D5
+block_hole jostle (3b already fires; extend victim / extra pass).
