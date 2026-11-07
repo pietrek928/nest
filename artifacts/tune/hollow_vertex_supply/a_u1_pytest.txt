@@ -1,0 +1,7 @@
+.                                                                        [100%]
+1 passed in 0.13s
+[14:27:14] nest_by_graph Avg: 0.0000s | Calls: 0
+[14:27:14] nest_by_scores Avg: 0.0000s | Calls: 0
+[14:27:14] score_elems Avg: 0.0000s | Calls: 0
+[14:27:14] score_rules Avg: 0.0000s | Calls: 0
+[14:27:14] make_polygon_graph Avg: 0.0000s | Calls: 0

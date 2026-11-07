@@ -228,9 +228,14 @@ def run_improve_rules_rounds(
     rule_score_penalty: float = 0.03,
     max_rules_per_set: int = 24,
     seed_offset: int = 0,
+    slot_scale_out: list | None = None,
+    slot_weights_inout: list | None = None,
+    mut_fp_scale_out: dict | None = None,
+    working_head: bool = False,
 ) -> list:
     """Single improve_rules loop (first-pass and mid-pack share this)."""
     for round_idx in range(int(sel_iter.improve_rules_rounds)):
+        round_slots: list[int] = []
         rule_sets = improve_rules_fn(
             graphs,
             rule_sets,
@@ -242,7 +247,14 @@ def run_improve_rules_rounds(
             seed=int(rng.integers(0, 2**31)) + round_idx + int(seed_offset),
             score_options=score_options,
             max_rules_per_set=max_rules_per_set,
+            slot_scale_out=round_slots,
+            slot_weights_inout=slot_weights_inout,
+            mut_fp_scale_out=mut_fp_scale_out,
+            working_head=working_head,
         )
+        if slot_scale_out is not None:
+            slot_scale_out.clear()
+            slot_scale_out.extend(round_slots)
     return rule_sets
 
 

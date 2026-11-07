@@ -1124,17 +1124,32 @@ def colonize_void_onto_base(
     if stats_out is not None:
         stats_out["colonize_prefer"] = 0
         stats_out["colonize_cohort_prefer"] = 0
-    # F1: Scene-cohort members first (sticky-lock fuel), then prefer_core / scores.
+    # F1/J: front only prefer∩candidates that pin-clear vs base (idle if add=0).
+    # Full prefer_cohort stays at hold / pin_if_in_nest callers — not rewritten here.
     cohort_front: list[int] = []
     if prefer_idxs and candidates:
         pref_set = {int(i) for i in prefer_idxs if int(i) >= 0}
         if pref_set:
-            cohort_front = [i for i in candidates if int(i) in pref_set]
-            if cohort_front:
-                rest = [i for i in candidates if int(i) not in pref_set]
-                candidates = rest
-                if stats_out is not None:
-                    stats_out["colonize_cohort_prefer"] = int(len(cohort_front))
+            cohort_probe = [i for i in candidates if int(i) in pref_set]
+            if cohort_probe:
+                base_snap = set(out_set)
+                probe = list(out)
+                probe_set = set(out_set)
+                _, _, add, _ = colonize_pin_clear(
+                    cohort_probe, collisions, probe, probe_set
+                )
+                if add > 0:
+                    cohort_front = [
+                        i
+                        for i in cohort_probe
+                        if int(i) in probe_set and int(i) not in base_snap
+                    ]
+                if cohort_front:
+                    pref_keep = {int(i) for i in cohort_front}
+                    rest = [i for i in candidates if int(i) not in pref_keep]
+                    candidates = rest
+                    if stats_out is not None:
+                        stats_out["colonize_cohort_prefer"] = int(len(cohort_front))
     if prefer_core and candidates:
         core_first = [
             i for i in candidates

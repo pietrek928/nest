@@ -1,0 +1,8 @@
+Letter C SKIP — hollow CC gap after nest
+
+Tried: allow resolve_hollow_cc_lock_sets when cc_nest_n>0 if lock pool ≥2.
+On void_fill dual, emit cc stayed 0/0 so pool abort still dominates; gap path
+never armed. Early med 0.590 min 0.569 < H2e. Reverted gate to
+`not hollow or cc_nest_n>0` abort.
+
+Depends on B supply (cluster_copy on graph). B skipped → C parked.

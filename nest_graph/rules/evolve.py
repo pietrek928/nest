@@ -22,6 +22,98 @@ from nest_graph.graph import (
 )
 from nest_graph.propose.heavy_polish import apply_dfs_refinement
 
+# Fields that differ across coarse/mid/fine and stay ordered coarse≥mid≥fine.
+_MUT_BLEND_KEYS = ("dpos", "dw", "da", "insert_p")
+
+
+def credit_mut_slot_amaf_deltas(mcts_telem: dict) -> list[float]:
+    """Spend prior-iter rule_id_amaf visit deltas onto mut_slot_scale ranks.
+
+    ``rule_id`` is a rank slot in the current pool; credit the preset that
+    birthed the set that earned those visits (stored in ``mut_slot_scale``).
+    """
+    weights = mcts_telem.get("mut_slot_weights")
+    if not isinstance(weights, list) or len(weights) < 3:
+        weights = [0.0, 0.0, 0.0]
+    else:
+        weights = [float(w) * 0.5 for w in weights[:3]]
+    cursor = mcts_telem.get("mut_amaf_cursor")
+    if not isinstance(cursor, list) or len(cursor) < 3:
+        cursor = [0, 0, 0]
+    else:
+        cursor = [int(c) for c in cursor[:3]]
+    slot_scale = mcts_telem.get("mut_slot_scale")
+    if not isinstance(slot_scale, list):
+        slot_scale = []
+    for rid in range(3):
+        visits = int(mcts_telem.get(f"rule_id_amaf_{rid}", 0) or 0)
+        delta = max(0, visits - int(cursor[rid]))
+        cursor[rid] = visits
+        if delta <= 0 or rid >= len(slot_scale):
+            continue
+        sc = int(slot_scale[rid])
+        if 0 <= sc <= 2:
+            weights[sc] = float(weights[sc]) + float(delta)
+    mcts_telem["mut_slot_weights"] = weights
+    mcts_telem["mut_amaf_cursor"] = cursor
+    return weights
+
+
+def blend_live_mutation_presets(
+    live: Sequence[RuleMutationSettings],
+    weights: Sequence[float],
+    anchors: Sequence[RuleMutationSettings],
+    *,
+    alpha: float = 0.2,
+) -> None:
+    """Soft-shift all three live slots toward the weight hull; keep coarse≥mid≥fine."""
+    n = min(3, len(live), len(anchors))
+    if n < 1:
+        return
+    raw = [max(0.0, float(w)) for w in list(weights)[:n]]
+    total = float(sum(raw))
+    if total <= 1e-12:
+        probs = [1.0 / float(n)] * n
+    else:
+        probs = [w / total for w in raw]
+    a = min(1.0, max(0.0, float(alpha)))
+    for key in _MUT_BLEND_KEYS:
+        target = sum(
+            float(probs[i]) * float(getattr(anchors[i], key)) for i in range(n)
+        )
+        lo = min(float(getattr(anchors[i], key)) for i in range(n))
+        hi = max(float(getattr(anchors[i], key)) for i in range(n))
+        vals: list[float] = []
+        for i in range(n):
+            cur = float(getattr(live[i], key))
+            nxt = (1.0 - a) * cur + a * target
+            vals.append(min(hi, max(lo, nxt)))
+        # Coarse (0) stays largest, fine (n-1) smallest.
+        vals.sort(reverse=True)
+        for i in range(n):
+            setattr(live[i], key, float(vals[i]))
+
+
+def write_mut_live_telem(
+    mcts_telem: dict,
+    live: Sequence[RuleMutationSettings],
+    weights: Sequence[float] | None = None,
+) -> None:
+    """Expose live dpos/insert_p + weights for letter SCORECARD (mut_dpos_0/1/2)."""
+    for i, preset in enumerate(list(live)[:3]):
+        mcts_telem[f"mut_dpos_{i}"] = float(getattr(preset, "dpos", 0.0) or 0.0)
+        mcts_telem[f"mut_insert_p_{i}"] = float(
+            getattr(preset, "insert_p", 0.0) or 0.0
+        )
+    if weights is not None:
+        for i, w in enumerate(list(weights)[:3]):
+            mcts_telem[f"mut_w_{i}"] = float(w)
+    # Compat aliases used by early dual letter line.
+    if live:
+        mid = live[min(1, len(live) - 1)]
+        mcts_telem["working_dpos"] = float(getattr(mid, "dpos", 0.0) or 0.0)
+        mcts_telem["working_dw"] = float(getattr(mid, "dw", 0.0) or 0.0)
+
 
 def rule_region(board: BaseGeometry) -> Circle:
     xmin, ymin, xmax, ymax = board.bounds
@@ -251,7 +343,13 @@ def improve_rules(
     seed: int = 0,
     score_options: ScoreRulesOptions | None = None,
     max_rules_per_set: int = 24,
+    slot_scale_out: list[int] | None = None,
+    slot_weights_inout: list[float] | None = None,
+    # Compat no-ops for older call sites (fp map parked — slots are SoT).
+    mut_fp_scale_out: dict | None = None,
+    working_head: bool = False,
 ):
+    del mut_fp_scale_out, working_head
     if mutation_presets is None:
         region = rule_region(board) if board is not None else Circle.from_bounds(0, 0, 1.2, 1.1)
         ng = 2
@@ -277,13 +375,14 @@ def improve_rules(
 
     parents = list(rules)
     elites = parents
+    parent_scores: list[float] = []
     if graphs and parents:
         rank_opts = ScoreRulesOptions()
         rank_opts.latest_graph_only = score_options.latest_graph_only
         rank_opts.count_weight = score_options.count_weight
         rank_opts.rule_complexity_penalty = score_options.rule_complexity_penalty
         rank_opts.select = score_options.select
-        parent_scores = score_rules(graphs, parents, rank_opts)
+        parent_scores = list(score_rules(graphs, parents, rank_opts))
         ranked = sorted(
             zip(parent_scores, parents),
             key=lambda item: item[0],
@@ -293,6 +392,7 @@ def improve_rules(
         elites = [rs for _, rs in ranked[:k]]
 
     pool: list[PlacementRuleSet] = list(parents)
+    pool_scale: list[int] = [-1] * len(parents)
     # L3: one either/or child from top-two elites before mutate scales (2412.17104).
     if len(elites) >= 2:
         xo = either_or_recombine_rule_sets(
@@ -300,23 +400,56 @@ def improve_rules(
         )
         if xo.size() > 0:
             pool.append(xo)
+            pool_scale.append(-1)
     for preset_idx, preset in enumerate(mutation_presets):
         mutate_seed = (int(seed) + preset_idx * 10007) & 0xFFFFFFFF
         children = augment_rules(elites, preset, seed=mutate_seed)
-        pool.extend(children)
+        # Live bank slots 0..2; extras clamp to 2.
+        scale = min(int(preset_idx), 2)
+        for child in children:
+            pool.append(child)
+            pool_scale.append(int(scale))
 
-    pool = dedupe_rule_sets(pool)
+    # First-wins dedupe with parallel scale column (same SoT as dedupe_rule_sets).
+    seen: set[tuple] = set()
+    deduped: list[PlacementRuleSet] = []
+    deduped_scale: list[int] = []
+    for rs, sc in zip(pool, pool_scale):
+        key = _fingerprint_rule_set(rs)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(rs)
+        deduped_scale.append(int(sc))
+    pool = deduped
+    pool_scale = deduped_scale
     if max_rules_per_set > 0:
         pool = [truncate_rule_set(rs, max_rules_per_set) for rs in pool]
     if not pool:
+        if slot_scale_out is not None:
+            slot_scale_out.clear()
         return []
 
     fitness = score_rules(graphs, pool, score_options)
+    best_parent = max((float(s) for s in parent_scores), default=0.0)
+    if slot_weights_inout is not None:
+        while len(slot_weights_inout) < 3:
+            slot_weights_inout.append(0.0)
+        for fit, sc in zip(fitness, pool_scale):
+            if 0 <= int(sc) <= 2:
+                # Beat-parent gain, plus a presence vote so cold AMAF still drifts.
+                gain = max(float(fit) - float(best_parent), 0.0) + 0.1
+                slot_weights_inout[int(sc)] = float(slot_weights_inout[int(sc)]) + gain
     scored = list(zip(fitness, pool))
     # D0 in near-tie band: ≤ count_weight so one extra selected part cannot invert.
     cw = float(getattr(score_options, "count_weight", 0.02) or 0.02)
     d0 = min(cw, 0.02)
-    return diversify_survivor_select(scored, n, d0=d0)
+    survivors = diversify_survivor_select(scored, n, d0=d0)
+    if slot_scale_out is not None:
+        id_to_scale = {id(rs): int(sc) for rs, sc in zip(pool, pool_scale)}
+        slot_scale_out.clear()
+        slot_scale_out.extend(int(id_to_scale.get(id(rs), -1)) for rs in survivors)
+    return survivors
 
 
 def score_rule_sets_with_dfs(

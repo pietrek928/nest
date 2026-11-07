@@ -988,6 +988,39 @@ def merge_phase_gate_telem(
         leak["cheap_outer_reward_delta"] = float(
             mt.get("cheap_outer_reward_delta", leak.get("cheap_outer_reward_delta", 0.0)) or 0.0
         )
+        # K: live bank dpos drift + mid aliases for letter SCORECARD.
+        leak["working_dpos"] = float(
+            mt.get(
+                "working_dpos",
+                propose_stats.get("working_dpos", leak.get("working_dpos", 0.0)),
+            )
+            or 0.0
+        )
+        leak["working_dw"] = float(
+            mt.get(
+                "working_dw",
+                propose_stats.get("working_dw", leak.get("working_dw", 0.0)),
+            )
+            or 0.0
+        )
+        leak["working_mut_updates"] = int(
+            mt.get(
+                "working_mut_updates",
+                propose_stats.get(
+                    "working_mut_updates", leak.get("working_mut_updates", 0)
+                ),
+            )
+            or 0
+        )
+        for _i in range(3):
+            key = f"mut_dpos_{_i}"
+            leak[key] = float(
+                mt.get(key, propose_stats.get(key, leak.get(key, 0.0))) or 0.0
+            )
+            wkey = f"mut_w_{_i}"
+            leak[wkey] = float(
+                mt.get(wkey, propose_stats.get(wkey, leak.get(wkey, 0.0))) or 0.0
+            )
         leak["macro_path_accept"] = int(
             mt.get("macro_path_accept", leak.get("macro_path_accept", 0)) or 0
         )

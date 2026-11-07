@@ -1,0 +1,14 @@
+Hollow vertex supply series close
+
+Diagnosis held: nest_r MIS reorders fail; need compatible vertices. Supply
+letters could not raise void_props / cluster_copy_graph without area miss.
+
+A SKIP — sniper proposals-niche front; void_props stayed 0–2 (not free-anchor)
+B SKIP — follower mix stamp + lock-pool-as-cc_g; overlap/area miss; cc emit 0/0
+C SKIP — hollow gap after nest; no-op without B supply (cc=0/0)
+D SKIP — colonize prefer ← CC pool; area/overlap miss
+E SKIP — no measured A–D winner for id=7 overrides; M2 promote stays deferred
+
+Kept telem only: last_graph_to_nest_hollow (credit → propose_stats) for future
+hollow-gated work. Quality SoT remains P0 / H2e (early 0.595/0.592, late Δ
++0.1924). bn remains graph_to_nest; nest_r ~0.03–0.07.

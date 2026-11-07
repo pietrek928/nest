@@ -1,0 +1,8 @@
+CLI=FAIL | LETTER=PASS early med/min=0.601/0.570 late Δ med/min=+0.1924/+0.1924 | SIGNAL=mut_dpos drift + area | next=lock
+
+Follow-up unify after wise-mine (live-preset slots survive pool reshuffle):
+- One live_presets list + anchors; AMAF visit deltas → mut_slot_weights via mut_slot_scale
+- score_rules presence/gain into same weights; blend_live_mutation_presets α=0.2 once after rounds
+- Telem mut_dpos_0/1/2 drifted (e.g. 0.197/0.069/0.044 … 0.142/0.089/0.079), w_upd=1 on 3/3
+- Early med 0.601 ≥ open 0.590; min 0.570 ≈ open 0.571 (noise); late Δ med ≥ +0.1924
+- Prior fingerprint→rule_id AMAF map parked (tags died on improve_rules rebuild)

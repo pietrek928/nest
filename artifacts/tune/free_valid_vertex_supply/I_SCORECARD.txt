@@ -1,0 +1,4 @@
+CLI=n/a | LETTER=SKIP early=n/a late=n/a | SIGNAL=none | next=park I (gate unmet)
+
+Verdict: SKIP — plan gate requires F dual with cluster_copy_graph_n≥2; F parked with cc=0/0.
+Premature resolve_hollow_cc_lock_sets patch stashed as letter-I-premature; not reapplied.

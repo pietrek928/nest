@@ -1,0 +1,6 @@
+Letter E SKIP — densify child id=7 promote
+
+No A–D letter locked ≥ H2e floors with a measured nest_r knob. maybe_promote
+requires non-empty overrides; wiring with {} is a no-op. M2 structural
+(id=7 + helper) stays; live promote hook remains deferred (same as nest_r
+series close). Not M1 scale; not blind void_island_high online.

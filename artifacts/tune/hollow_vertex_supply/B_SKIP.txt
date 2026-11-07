@@ -1,0 +1,12 @@
+Letter B SKIP — motif follower stamp / lock-pool-as-cc_g
+
+Tried:
+1. _ensure_archive_pin_pairs selection-leader follower stamp → area/overlap miss;
+   cc stayed 0/0 (MPG drops invalid stamps).
+2. Point cluster_copy_graph_n at cluster_copy_lock_pool → cc=4–7 but armed
+   hollow motif locks via cc_graph_n control flow → med 0.589 < H2e.
+3. Telem-only lock_pool_n → still below floors in noise (med 0.592 min 0.570).
+
+Park: revert stamp; keep emit-only cc_graph_n SoT; Q340 pair restore untouched.
+C may still use cluster_copy_lock_pool inside resolve_hollow_cc_lock_sets (already
+builds cc_pool) without rewriting cluster_copy_graph_n.

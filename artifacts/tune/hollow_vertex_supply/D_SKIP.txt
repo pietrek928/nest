@@ -1,0 +1,7 @@
+Letter D SKIP — colonize prefer_idxs ← CC pool
+
+Tried: insert cluster_copy_lock_pool into prefer_cohort cands under hollow.
+Early med 0.584 min 0.569 < H2e; GATE overlap_ok. Reverted.
+
+Depends on B/C CC pool supply; without nest_r move, prefer front only adds
+trajectory noise. Leave colonize_blocker_order untouched (E4 park).

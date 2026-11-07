@@ -27,6 +27,11 @@ from nest_graph.build_graph import (
     nest_state_extra_voids,
     void_elite_tuple_from_archive,
 )
+from nest_graph.rules.evolve import (
+    blend_live_mutation_presets,
+    credit_mut_slot_amaf_deltas,
+    write_mut_live_telem,
+)
 from nest_graph.graph import region_to_zone, BoardSnapshot, MacroRegion
 from nest_graph.pack.cheap import (
     pack_execute_snapshot,
@@ -555,13 +560,17 @@ class NestingPipelineEvaluator:
         )
 
         graphs = [graph]
+        # K: seed improve uses live_presets (slot column starts empty until pack).
+        if not getattr(self, "_k_live_presets", None):
+            self._k_live_presets = self.cfg.rules.mutation_presets()
+            self._k_anchor_presets = self.cfg.rules.mutation_presets()
         for round_idx in range(sel.improve_rules_rounds):
             rule_sets = improve_rules(
                 graphs,
                 rule_sets,
                 sel.rules_kept,
                 self.case.board,
-                mutation_presets=self.cfg.rules.mutation_presets(),
+                mutation_presets=self._k_live_presets,
                 rule_score_penalty=sel.rule_score_penalty,
                 elite_count=sel.improve_rules_elite_count,
                 seed=int(rng.integers(0, 2**31)) + round_idx,
@@ -1213,6 +1222,14 @@ class NestingPipelineEvaluator:
             )
 
             graphs = [graph]
+            # K: live_presets + slot AMAF/fitness credit (early dual SoT).
+            if not getattr(self, "_k_live_presets", None):
+                self._k_live_presets = self.cfg.rules.mutation_presets()
+                self._k_anchor_presets = self.cfg.rules.mutation_presets()
+            live_presets = self._k_live_presets
+            anchor_presets = self._k_anchor_presets
+            slot_weights = credit_mut_slot_amaf_deltas(mcts_telem)
+            slot_scale: list[int] = []
             rule_sets = run_improve_rules_rounds(
                 improve_rules,
                 graphs=graphs,
@@ -1221,11 +1238,44 @@ class NestingPipelineEvaluator:
                 sel_iter=sel_iter,
                 rng=rng,
                 score_options=score_rules_options(sel_iter),
-                mutation_presets=self.cfg.rules.mutation_presets(),
+                mutation_presets=live_presets,
                 rule_score_penalty=sel_iter.rule_score_penalty,
                 max_rules_per_set=self.cfg.rules.max_rules_per_set,
                 seed_offset=17 * iter_idx,
+                slot_scale_out=slot_scale,
+                slot_weights_inout=slot_weights,
             )
+            mcts_telem["mut_slot_scale"] = list(slot_scale)
+            mcts_telem["mut_slot_weights"] = list(slot_weights)
+            if sum(float(w) for w in slot_weights) > 1e-12:
+                blend_live_mutation_presets(
+                    live_presets, slot_weights, anchor_presets, alpha=0.2
+                )
+                mcts_telem["working_mut_updates"] = int(
+                    mcts_telem.get("working_mut_updates", 0) or 0
+                ) + 1
+            write_mut_live_telem(mcts_telem, live_presets, slot_weights)
+            propose_stats["working_dpos"] = float(
+                mcts_telem.get("working_dpos", 0.0) or 0.0
+            )
+            propose_stats["working_dw"] = float(
+                mcts_telem.get("working_dw", 0.0) or 0.0
+            )
+            propose_stats["working_mut_updates"] = int(
+                mcts_telem.get("working_mut_updates", 0) or 0
+            )
+            for _i in range(3):
+                propose_stats[f"mut_dpos_{_i}"] = float(
+                    mcts_telem.get(f"mut_dpos_{_i}", 0.0) or 0.0
+                )
+            if isinstance(last_void_leak, dict):
+                last_void_leak["working_dpos"] = propose_stats["working_dpos"]
+                last_void_leak["working_dw"] = propose_stats["working_dw"]
+                last_void_leak["working_mut_updates"] = propose_stats[
+                    "working_mut_updates"
+                ]
+                for _i in range(3):
+                    last_void_leak[f"mut_dpos_{_i}"] = propose_stats[f"mut_dpos_{_i}"]
 
             active_rules = active_rule_set(rule_sets)
             scores = list(score_elems(graph, active_rules))
@@ -1679,6 +1729,7 @@ class NestingPipelineEvaluator:
                     motif_max_keep=int(
                         getattr(self.cfg.propose, "accepted_pattern_max", 4) or 4
                     ),
+                    rule_sets=rule_sets,
                 )
                 del _child_snap
                 if isinstance(last_void_leak, dict):

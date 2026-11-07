@@ -1,0 +1,16 @@
+Letter A SKIP — hollow sniper proposals-niche front
+
+Tried:
+- Front pocket_fit/cluster_copy/corridor rows already in proposal_pins into
+  subsample_transforms_stratified proposals niche when prior hollow.
+- Gates: last_graph_to_nest (bn) → last_graph_to_nest_hollow; pocket-only keys;
+  no orphan-key invent.
+
+Dual: med/min stayed below H2e 0.595/0.592 (best u2 med 0.594 min 0.569).
+void_props stayed 0–2; nest_r flat ~0.03–0.05. Sniper rows fail
+FreeCentroidPredicate.covers_anchor — niche order cannot raise void_props.
+Reorder only swaps a thin tail after selection niche → trajectory noise.
+
+Park: revert _hollow_front_sniper_proposals. Keep last_graph_to_nest_hollow
+telem for B/C. Supply path moves to Letter B (motif follower via cluster_copy).
+Bn remains graph_to_nest.

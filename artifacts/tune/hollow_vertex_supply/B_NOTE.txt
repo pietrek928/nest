@@ -1,0 +1,10 @@
+Letter B — mix stamp SKIP; lock-pool count SoT
+
+Tried: _ensure_archive_pin_pairs selection-leader follower stamp into mix.
+B0 med0.598 min0.562 FAIL (overlap); B u1 hollow-gate med0.578 FAIL.
+cc stayed 0/0 — stamped keys dropped by MPG / not in key_map; f_miss flat.
+
+Park stamp (reverted to Q340-only). Unify: cluster_copy_graph_n /
+cluster_copy_nest_n from cluster_copy_lock_pool (emit ∪ motif cohort
+in-graph members) so hollow CC path sees pairs motif_graph_hits already found.
+No new mix rows → quality SoT stays P0 trajectory family.

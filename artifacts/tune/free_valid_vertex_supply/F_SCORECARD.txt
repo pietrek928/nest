@@ -1,0 +1,8 @@
+CLI=FAIL | LETTER=SKIP early med/min=0.583/0.569 (clean post-revert; open 0.590/0.571 noise) late Δ=n/a | SIGNAL=none | next=park F
+
+Verdict: SKIP/park after degrade→wise-mine (grok-4.7-high ×2).
+- se2_centroid_at_target on normalize_poly parts is ≈identity; append/replace SE2 flooded funnel, min/nest_r dropped, cc stayed 0/0.
+- Open already emits cluster_copy~32–41 with cc=0/0; more anchors cannot raise nest_r if mix kills stamps before graph.
+- No remaining one-helper unify (early R4/clear-XY/keep-set/NFP) without funnel flood or third ledger.
+- Code restored to HEAD propose (F SE2 + part_for_pocket early reverted). Hollow telem wiring kept.
+- I gated on F cc_graph_n≥2 → also SKIP (stash letter-I-premature not reapplied).

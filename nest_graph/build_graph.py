@@ -89,6 +89,8 @@ from nest_graph.pack.stages import (
     run_post_pack_stage,
 )
 from nest_graph.rules.evolve import (
+    blend_live_mutation_presets,
+    credit_mut_slot_amaf_deltas,
     dedupe_rule_sets,
     improve_rules,
     make_demo_rule_set as _make_demo_rule_set,
@@ -97,6 +99,7 @@ from nest_graph.rules.evolve import (
     rule_region as _rule_region,
     score_rule_sets_with_dfs,
     truncate_rule_set,
+    write_mut_live_telem,
 )
 from .propose.heavy_polish import (
     apply_dfs_refinement,
@@ -2272,6 +2275,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         propose_stats["dg_force_zone"] = mcts_force_zone
         propose_stats["last_graph_n"] = int(mcts_telem.get("last_graph_n", 0) or 0)
         propose_stats["last_nest_n"] = int(mcts_telem.get("last_nest_n", 0) or 0)
+        propose_stats["last_graph_to_nest_hollow"] = int(
+            mcts_telem.get("last_graph_to_nest_hollow", 0) or 0
+        )
         # K: hand path_carved into propose stamp densify_clear unlock.
         propose_stats["path_carved"] = int(mcts_telem.get("path_carved", 0) or 0)
         if mcts_force_zone:
@@ -2418,26 +2424,37 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         seed_rules = active_rule_set(_make_seed_rule_sets(cfg))
         free_info = None
         # Ua: one improve call above first_pass / mid-pack fork.
-        if (
+        # K: one live_presets list across iters; credit preset slots via AMAF
+        # deltas + score_rules gains; soft-shift all three after rounds.
+        if "live_presets" not in mcts_telem or not mcts_telem.get("live_presets"):
+            mcts_telem["live_presets"] = cfg.rules.mutation_presets()
+            mcts_telem["anchor_presets"] = cfg.rules.mutation_presets()
+        live_presets = mcts_telem["live_presets"]
+        anchor_presets = mcts_telem["anchor_presets"]
+        slot_weights = credit_mut_slot_amaf_deltas(mcts_telem)
+        slot_scale: list[int] = []
+        plateau_boost = (
             plateau.on_plateau
             and int(mcts_telem.get("plateau_rule_boost", 0) or 0) > 0
             and rule_sets
-        ):
+        )
+        if plateau_boost:
             rid = int(mcts_telem.get("last_rule_id", 0) or 0)
             if 0 <= rid < len(rule_sets):
-                # M1 parked: single-scale plateau mutate dropped early med below H2e.
-                # pick_mutation_preset_scale kept in evolve.py for future AOS wiring.
+                # M1 parked: exclusive single-scale; K soft-shifts all three.
                 rule_sets = improve_rules(
                     graphs,
                     rule_sets,
                     sel_iter.rules_kept,
                     p_sheet,
-                    mutation_presets=cfg.rules.mutation_presets(),
+                    mutation_presets=live_presets,
                     rule_score_penalty=sel_iter.rule_score_penalty,
                     elite_count=max(int(sel_iter.improve_rules_elite_count), 1),
                     seed=int(rng.integers(0, 2**31)) + int(rid) * 997,
                     score_options=score_rules_options(sel_iter),
                     max_rules_per_set=cfg.rules.max_rules_per_set,
+                    slot_scale_out=slot_scale,
+                    slot_weights_inout=slot_weights,
                 )
                 mcts_telem["rules_macro_ran"] = int(
                     mcts_telem.get("rules_macro_ran", 0) or 0
@@ -2451,10 +2468,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             sel_iter=sel_iter,
             rng=rng,
             score_options=score_rules_options(sel_iter),
-            mutation_presets=cfg.rules.mutation_presets(),
+            mutation_presets=live_presets,
             rule_score_penalty=sel_iter.rule_score_penalty,
             max_rules_per_set=cfg.rules.max_rules_per_set,
+            slot_scale_out=slot_scale,
+            slot_weights_inout=slot_weights,
         )
+        mcts_telem["mut_slot_scale"] = list(slot_scale)
+        mcts_telem["mut_slot_weights"] = list(slot_weights)
+        if sum(float(w) for w in slot_weights) > 1e-12:
+            blend_live_mutation_presets(
+                live_presets, slot_weights, anchor_presets, alpha=0.2
+            )
+            mcts_telem["working_mut_updates"] = int(
+                mcts_telem.get("working_mut_updates", 0) or 0
+            ) + 1
+        write_mut_live_telem(mcts_telem, live_presets, slot_weights)
+        propose_stats["working_dpos"] = float(mcts_telem.get("working_dpos", 0.0) or 0.0)
+        propose_stats["working_dw"] = float(mcts_telem.get("working_dw", 0.0) or 0.0)
+        propose_stats["working_mut_updates"] = int(
+            mcts_telem.get("working_mut_updates", 0) or 0
+        )
+        for _i in range(3):
+            propose_stats[f"mut_dpos_{_i}"] = float(
+                mcts_telem.get(f"mut_dpos_{_i}", 0.0) or 0.0
+            )
         if first_pass and cfg.propose.first_pass_border_pack:
             fp_ctx = PackIterCtx(
                 graph=graph,
@@ -3213,6 +3251,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     getattr(cfg.propose, "accepted_pattern_max", 4) or 4
                 ),
                 rule_ids=_mcts_rule_ids(rule_sets),
+                rule_sets=rule_sets,
             )
             if child_snap is not None and mcts_action is not None:
                 realized = getattr(

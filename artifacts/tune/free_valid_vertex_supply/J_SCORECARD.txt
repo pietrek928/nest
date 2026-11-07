@@ -1,0 +1,6 @@
+CLI=FAIL | LETTER=PASS early med/min=0.614/0.584 late Δ med/min=+0.2004/+0.1924 | SIGNAL=area+0.024 | next=lock
+
+J: prefer_idxs ← colonize_pin_clear(prefer∩cands) only when add>0; else no cohort front.
+Early ≥ open (0.590/0.571); late Δ med ≥ +0.1924.
+col_pref=*/0/0 on late (cohort_prefer often idle / add=0) — quality gain from not fronting uncleared prefer.
+colonize_rim_drop not worsened vs open floors (indep OK, area up).

@@ -143,6 +143,10 @@ def run_void_leak_and_niche_credit(
     mcts_telem["last_graph_to_nest"] = int(
         str(funnel.get("bottleneck") or "") == "graph_to_nest"
     )
+    # Hollow basin flag for next-iter telem (not bn==graph_to_nest alone).
+    mcts_telem["last_graph_to_nest_hollow"] = int(
+        propose_stats.get("graph_to_nest_hollow", 0) or 0
+    )
     if print_funnel:
         print(
             f"r0 bottleneck={funnel['bottleneck']} "

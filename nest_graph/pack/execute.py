@@ -366,6 +366,7 @@ def record_mcts_expand(
     motif_ttl: int = 4,
     motif_max_keep: int = 0,
     upsert_contacts: bool = True,
+    rule_sets: Sequence | None = None,
 ) -> int:
     """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id.
 
@@ -465,6 +466,8 @@ def record_mcts_expand(
             mcts_telem[f"preset_amaf_{pid}"] = visits
             propose_stats[f"preset_amaf_{pid}"] = visits
     # Sync mcts dict after rid/preset AMAF keys (assemble_void_leak reads mt).
+    # K credits AMAF deltas next iter via credit_mut_slot_amaf_deltas (slot_scale).
+    _ = rule_sets
     propose_stats["mcts"] = dict(mcts_telem)
     propose_stats["mcts"]["arena_size"] = int(runner.arena.size())
     propose_stats["mcts"]["motif_library"] = int(runner.motif_base.size())
@@ -573,6 +576,7 @@ def record_outer_iter_expand(
     motif_ttl: int = 0,
     motif_max_keep: int = 4,
     rule_ids: tuple[int, ...] = (0,),
+    rule_sets: Sequence | None = None,
 ) -> tuple[int, BoardSnapshot | None]:
     """Outer-leaf expand: snapshot + record_mcts_expand + void_leak upsert telem (Q144)."""
     rule_ids = tuple(int(r) for r in (rule_ids or (0,)))
@@ -626,6 +630,7 @@ def record_outer_iter_expand(
         motif_min_compactness=float(motif_min_compactness),
         motif_ttl=int(motif_ttl),
         motif_max_keep=int(motif_max_keep),
+        rule_sets=rule_sets,
     )
     parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
     agent._ucb(int(new_id), parent_visits)

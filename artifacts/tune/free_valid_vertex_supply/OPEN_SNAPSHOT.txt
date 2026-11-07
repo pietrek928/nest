@@ -1,0 +1,22 @@
+Free-valid vertex supply — open snapshot (preflight)
+
+Early void_fill seeds 0 1 2 (OMP=1, shipped, --gate):
+  seed0: area=0.584 parts=59 indep=True nest_r=0.03 nvr_min=0.09 cc=0/0
+  seed1: area=0.614 parts=60 indep=True nest_r=0.04 nvr_min=0.10 cc=0/0
+  seed2: area=0.571 parts=60 indep=True nest_r=0.04 nvr_min=0.07 cc=0/0
+  med area=0.590  min area=0.571  mean parts=59.7
+  CLI GATE FAIL area_coverage on seed0 floors (hygiene only)
+
+Late resume void_fill_seed0_iter20.npz +8 iters (N repeats):
+  late1: Δcov=+0.1924 Δparts=+26
+  late2: Δcov=+0.1924 Δparts=+26
+  late3: Δcov=+0.1924 Δparts=+26
+  late Δ med=+0.1924 min=+0.1924
+
+Letter SoT vs this open: early med≥0.590 min≥0.571; late Δ med≥+0.1924
+Historical H2e reference 0.595/0.592 remains aspirational; do not lock below open.
+
+Hollow telem: last_graph_to_nest_hollow wired credit.py → build_graph propose_stats.
+
+SCORECARD line template:
+CLI={PASS|FAIL} | LETTER={PASS|FAIL} early med/min=…/… late Δ med/min=…/… | SIGNAL={none|…} | next={lock|…}
