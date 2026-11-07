@@ -1,0 +1,6 @@
+CLI=PASS | LETTER=PASS early med/min=0.601/0.594 (pre-patch) ship 0.600/0.577 late Δ med/min=+0.1924/+0.1924 | SIGNAL=coupling telem | next=lock
+
+A0 coupling audit:
+- void_fill zones dominated by void_seek / void_seek→void_seek; densify=void_yield_union; amaf_hits live; mcts_preset often 0
+- Telem added: densify_on_primary_void, pack_preset_id, carve_preset_pack_only, void_hijack_over_mcts, dg_force_zone, mcts_region on void_leak merge
+- Routes: A/B/P1/C/P3 quality letters parked after dual miss; P2 cache pack_preset shipped

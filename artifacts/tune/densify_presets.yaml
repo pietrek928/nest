@@ -36,6 +36,14 @@ presets:
       attract_kiss_band_scale: 3.0
       attract_max_degree: 10
     online_ok: true
+  # Letter C child: emit-moving VoidSeek knobs; online only via maybe_promote_densify_child.
+  - id: 8
+    name: void_emit_boost
+    overrides:
+      raycast_num_rays: 16
+      free_space_cloud_samples: 96
+      pocket_fit_max_targets: 12
+    online_ok: false
   - id: 6
     name: grain_family
     overrides:

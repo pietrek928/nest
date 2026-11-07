@@ -626,6 +626,9 @@ def _void_seek_densify(
     if not need_densify:
         return arr, zone_label, False, False, None, telem
 
+    # P1 park: hard skip of primary-void densify dumped late Δ vs open (+0.176
+    # vs +0.1924). Keep densify_on_primary_void telem only; revisit with softer gate.
+
     densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
     densify_rank = (
         RankingMode.CONTACT_HYBRID if propose_cfg.use_pocket_fit else RankingMode.CLEARANCE
@@ -1723,6 +1726,8 @@ def _collect_expand_candidates(
         # Light emit — mixer still adds a thin expand remainder.
         # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         # Stratified cap: half coarse-first, half interleaved fine (one expand SoT).
+        # Light emit — mixer still adds a thin expand remainder.
+        # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         n = 1
         pool_div = 16 if is_void_seek(state.cascade_zone) else 4
         sel_cap = max(4, cfg.candidate_pool // pool_div)
@@ -3242,6 +3247,7 @@ def proposed_transforms_for_groups(
     motif_coemit_by_gid: dict[int, list] = {}
     densify_fired = 0
     densify_accepted = 0
+    densify_on_primary_void = 0
     densify_reasons: list[str] = []
     densify_stats_union_old: int | None = None
     densify_stats_union_new: int | None = None
@@ -3850,6 +3856,9 @@ def proposed_transforms_for_groups(
         )
         if fired:
             densify_fired += 1
+            # A0: second void collect while primary already void_seek (process telem).
+            if is_void_seek(zone):
+                densify_on_primary_void += 1
             if accepted:
                 densify_accepted += 1
             if densify_reason is not None:
@@ -3950,6 +3959,7 @@ def proposed_transforms_for_groups(
         densify_stats_out.clear()
         densify_stats_out["fired"] = densify_fired
         densify_stats_out["accepted"] = densify_accepted
+        densify_stats_out["densify_on_primary_void"] = int(densify_on_primary_void)
         densify_stats_out["void_hijack_over_mcts"] = int(void_hijack_over_mcts)
         densify_stats_out["densify_reason"] = (
             densify_reasons[-1] if densify_reasons else None

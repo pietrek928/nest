@@ -1586,8 +1586,8 @@ def apply_proposer_pool_scales(
         1.0,
         max(0.05, propose_cfg.neighbor_slide_pool_fraction * ns),
     )
-    # Generalize: scale candidate_pool / max_proposals by mean of active scales,
-    # and per-emitter sample budgets where named.
+    # Mean pool/prop scale kept (Letter B unfloored-only dumped early med).
+    # Under void_seek, floor_void_seek_budgets still restores pool floors after.
     scales = [float(v) for k, v in pool_scales.items() if not str(k).startswith("_")]
     if scales:
         mean_s = sum(scales) / len(scales)

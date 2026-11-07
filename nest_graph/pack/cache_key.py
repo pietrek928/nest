@@ -33,8 +33,13 @@ def cheap_pack_cache_key(
     compose_sz: int = 0,
     cohort_sig: int = 0,
     lock_fp: int = 0,
+    pack_preset_id: int | None = None,
 ) -> tuple[str, int, int, int, int, int, int, int]:
-    """Q143/S2a + Q369 + M2a + P5 + DgPreset + B: zone+motif+rule+compose+cohort+lock+preset+part_gid."""
+    """Q143/S2a + Q369 + M2a + P5 + DgPreset + B: zone+motif+rule+compose+cohort+lock+preset+part_gid.
+
+    P2: ``pack_preset_id`` overrides tip ``action.preset_id`` when Motif carve
+    packs a densify preset while AMAF tip stays 0.
+    """
     motif_id = -1
     rule_id = 0
     preset_id = 0
@@ -52,6 +57,8 @@ def cheap_pack_cache_key(
             part_gid = 0
         if cohort_sig == 0:
             cohort_sig = int(getattr(action, "cohort_sig", 0) or 0)
+    if pack_preset_id is not None:
+        preset_id = int(pack_preset_id)
     return (
         place_zone_token(zone) or "",
         motif_id,

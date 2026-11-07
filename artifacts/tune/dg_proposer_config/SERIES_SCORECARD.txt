@@ -1,0 +1,24 @@
+Open SoT: early med/min 0.590/0.571 | late Δ med ≥+0.1924
+
+SHIP early med/min=0.600/0.577 late Δ med/min=+0.1924/+0.1924 indep OK
+
+Shipped:
+- A0 telem (densify_on_primary_void, pack_preset_id, void_hijack_over_mcts, dg_force_zone, mcts_region, zone_graph_yields wiring)
+- P2 cheap_pack_cache_key / compose / maybe_invalidate on pack_preset_id (Motif carve path)
+- zone= into ProposeFeedbackState.record_iteration (EMA still default off)
+
+Parked after dual miss (early dump or late Δ < open):
+- A honest AMAF rewrite / dual-credit (early med 0.575)
+- B EMA default on + unfloored-only pool scales
+- P1 hard skip primary-void densify (late Δ +0.176)
+- P3 always tip-install on path adopt
+- C online emit-boost presets (id 8 offline child reserved in densify_presets.yaml)
+- D Motif inject deepen — SKIP (no twin-tip signal requiring change)
+- E Q126 Rim densify-floor — SKIP (A parked; hijack kept)
+
+Reopen recipe from [Grok process opt advice](be11fa8d-d4f4-43a9-b790-ae4cb596e2c3) (no re-letter until A0 telem names the miss):
+- Order: fused hijack (E densify-floor Rim + A credit) → C → B raise-only; never A-then-E alone.
+- A: retarget existing leaf `amaf_record` / `niche_amaf_key` on hijack∧(Sheet|Rim) — not a second ledger, not Motif (Q104).
+- C: re-apply emit overrides after `for_place(VoidSeek)` in `_void_seek_densify`; gate `emitted_by_proposer`≠preset0. Soft P1 = existing `need_densify` early return when primary meets floor.
+- B: raise-only ray/pocket (floor 1.0) after C; EMA shrink fights C.
+- P3: on `path_nest_adopt` set `mcts_action` from alt. D: feed multi-sim `motif_tip` id into `motif_patterns_for_inject`.

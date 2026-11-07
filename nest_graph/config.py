@@ -723,7 +723,11 @@ class ProposeConfig(BaseModel):
     """Iterative polylabel spine for large remnants (topology + explorers)."""
     multi_pole_max_poles: int = 4
     use_ema_proposer_scales: bool = False
-    """Update place_proposer_pool_scales from refine survival (α=0.15, floor 0.05)."""
+    """Update place_proposer_pool_scales from refine survival (α=0.15, floor 0.05).
+
+    Letter B: enable via cfg when dual-proven; default off after late Δ miss with
+    True (open late +0.1924). Unfloored ``apply_proposer_pool_scales`` still ships.
+    """
     ema_proposer_alpha: float = 0.15
     ema_proposer_floor: float = 0.05
     # OOS-3: keep use_point_cloud/use_guidance_walk False unless props_pole≈0 after OOS-1+4.

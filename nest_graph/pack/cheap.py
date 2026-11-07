@@ -83,12 +83,14 @@ def proven_compose_row(pack_cache: dict, action) -> dict | None:
         ps = pack_cache.get("propose_stats")
         if isinstance(ps, dict):
             cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
+    pack_pid = pack_cache.get("pack_preset_id")
     key = cheap_pack_cache_key(
         place_zone_token(region_to_zone(getattr(action, "region", None))),
         action,
         compose_sz=compose_sz,
         cohort_sig=int(cohort_sig),
         lock_fp=cheap_lock_fingerprint(pack_cache.get("motif_locked")),
+        pack_preset_id=int(pack_pid) if pack_pid is not None else None,
     )
     cheap_map = pack_cache.get("cheap_compose_by_key")
     if not isinstance(cheap_map, dict):
@@ -127,9 +129,13 @@ def compose_cached_selection(
     cfg_c = pack_cache["cfg"]
     presets = pack_cache.get("densify_presets")
     if action is not None and presets is not None:
+        # P2: prefer pack densify preset (Motif tip may stay 0 under carve).
+        pack_pid = pack_cache.get("pack_preset_id")
+        if pack_pid is None:
+            pack_pid = int(getattr(action, "preset_id", 0) or 0)
         cfg_c = apply_densify_preset(
             cfg_c,
-            int(getattr(action, "preset_id", 0) or 0),
+            int(pack_pid),
             presets,
         )
     free_info_c = pack_cache.get("free_info")
@@ -371,12 +377,14 @@ def pack_execute_snapshot(
     pack_cache["cache_key_cohort_sig"] = int(cohort_sig)
     lock_fp = cheap_lock_fingerprint(pack_cache.get("motif_locked"))
     pack_cache["cache_key_lock_fp"] = int(lock_fp)
+    pack_pid = pack_cache.get("pack_preset_id")
     cache_key = cheap_pack_cache_key(
         zone,
         action,
         compose_sz=compose_sz,
         cohort_sig=cohort_sig,
         lock_fp=lock_fp,
+        pack_preset_id=int(pack_pid) if pack_pid is not None else None,
     )
     # Mirror key dims into propose_stats for void_leak / letter telem (Q271/P5).
     ps = pack_cache.get("propose_stats")
@@ -601,8 +609,19 @@ def maybe_invalidate_cheap_cache(
     archive_elite_n: int | None = None,
     compose_sz: int | None = None,
     cohort_sig: int | None = None,
+    pack_preset_id: int | None = None,
 ) -> None:
-    """D0 staleness guard: invalidate when pool/elite/lock context shifts."""
+    """D0 staleness guard: invalidate when pool/elite/lock/preset context shifts."""
+    if pack_preset_id is not None:
+        prev_pid = pack_cache.get("last_pack_preset_id")
+        cur_pid = int(pack_preset_id)
+        if prev_pid is not None and int(prev_pid) != cur_pid:
+            invalidate_cheap_cache(pack_cache, reason="pack_preset_id")
+            pack_cache["cache_invalidate_preset"] = 1
+            ps = pack_cache.get("propose_stats")
+            if isinstance(ps, dict):
+                ps["cache_invalidate_preset"] = 1
+        pack_cache["last_pack_preset_id"] = cur_pid
     if remaining_gids is not None:
         rem_key = tuple(sorted(int(g) for g in remaining_gids))
         prev_rem = pack_cache.get("last_remaining_gids")

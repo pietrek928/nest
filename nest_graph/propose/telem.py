@@ -397,6 +397,12 @@ def build_void_leak_dict(
         "small_part_boost_hits": small_hits,
         "densify_fired": densify_f,
         "densify_accepted": densify_a,
+        "densify_on_primary_void": int(
+            densify.get("densify_on_primary_void", 0) or 0
+        ),
+        "void_hijack_over_mcts": int(
+            densify.get("void_hijack_over_mcts", 0) or 0
+        ),
         "densify_reason": densify_reason,
         "densify_xy_in": int(densify.get("densify_xy_in", 0) or 0),
         "void_yield_tag": str(
@@ -914,6 +920,66 @@ def merge_phase_gate_telem(
         leak["mcts_rule_id"] = int(mt.get("mcts_rule_id", leak.get("mcts_rule_id", 0)) or 0)
         leak["mcts_preset_id"] = int(
             mt.get("mcts_preset_id", leak.get("mcts_preset_id", 0)) or 0
+        )
+        leak["pack_preset_id"] = int(
+            mt.get("pack_preset_id", leak.get("pack_preset_id", 0)) or 0
+        )
+        leak["carve_preset_pack_only"] = int(
+            mt.get(
+                "carve_preset_pack_only",
+                leak.get("carve_preset_pack_only", 0),
+            )
+            or 0
+        )
+        leak["cache_invalidate_preset"] = int(
+            mt.get(
+                "cache_invalidate_preset",
+                leak.get("cache_invalidate_preset", 0),
+            )
+            or 0
+        )
+        leak["void_hijack_over_mcts"] = int(
+            mt.get(
+                "void_hijack_over_mcts",
+                propose_stats.get(
+                    "void_hijack_over_mcts", leak.get("void_hijack_over_mcts", 0)
+                ),
+            )
+            or 0
+        )
+        leak["amaf_hijack_void_credit"] = int(
+            mt.get(
+                "amaf_hijack_void_credit",
+                leak.get("amaf_hijack_void_credit", 0),
+            )
+            or 0
+        )
+        densify_ps = propose_stats.get("densify_stats") or {}
+        if isinstance(densify_ps, dict):
+            leak["densify_on_primary_void"] = int(
+                densify_ps.get(
+                    "densify_on_primary_void",
+                    leak.get("densify_on_primary_void", 0),
+                )
+                or 0
+            )
+            if int(leak.get("void_hijack_over_mcts", 0) or 0) <= 0:
+                leak["void_hijack_over_mcts"] = int(
+                    densify_ps.get("void_hijack_over_mcts", 0) or 0
+                )
+        leak["dg_force_zone"] = str(
+            mt.get(
+                "dg_force_zone",
+                propose_stats.get(
+                    "dg_force_zone",
+                    propose_stats.get("mcts_zone", leak.get("dg_force_zone", "")),
+                ),
+            )
+            or ""
+        )
+        leak["mcts_region"] = mt.get(
+            "mcts_region",
+            propose_stats.get("mcts_region", leak.get("mcts_region")),
         )
         leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
         leak["amaf_free_kind_decay"] = int(

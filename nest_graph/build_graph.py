@@ -1832,6 +1832,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         agent.note_macro_miss(alt_action)
                     cheap_by_key = _pack_cache.get("cheap_compose_by_key")
                     if isinstance(cheap_by_key, dict):
+                        _ppid = _pack_cache.get("pack_preset_id")
                         cheap_by_key.pop(
                             cheap_pack_cache_key(
                                 place_zone_token(
@@ -1848,6 +1849,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                                 ),
                                 lock_fp=cheap_lock_fingerprint(
                                     _pack_cache.get("motif_locked")
+                                ),
+                                pack_preset_id=(
+                                    int(_ppid) if _ppid is not None else None
                                 ),
                             ),
                             None,
@@ -1956,6 +1960,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                             mcts_telem.get("macro_path_accept", 0) or 0
                         ) + 1
                         # S2: non-Motif adopt skips force_zone; Motif soft tip kept.
+                        # P3 parked: always-install dumped late Δ; enable only when
+                        # A0 shows path_nest_adopt vs dg_force_zone mismatch hurt.
                         if not adopted or bool(decision.get("motif_soft")):
                             mcts_action = alt_action
                         mcts_telem["path_carved"] = int(
@@ -2105,10 +2111,17 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_telem["mcts_preset_id"] = int(mcts_preset_id)
         mcts_telem["pack_preset_id"] = int(pack_preset_id)
         pack_cfg = apply_densify_preset(cfg, pack_preset_id, _densify_presets)
-        # P: cheap_pack_cache_key uses pack densify preset (may differ from tip).
+        # P2: cheap cache keys/invalidates on pack densify preset (may differ from tip).
+        _pack_cache["pack_preset_id"] = int(pack_preset_id)
+        _pack_cache["densify_presets"] = _densify_presets
         if int(pack_preset_id) != int(_last_mcts_preset_id):
-            mcts_telem["cache_invalidate_preset"] = 0
             mcts_telem["cache_preset_key_only"] = 1
+            maybe_invalidate_cheap_cache(
+                _pack_cache, pack_preset_id=int(pack_preset_id),
+            )
+            mcts_telem["cache_invalidate_preset"] = int(
+                _pack_cache.get("cache_invalidate_preset", 0) or 0
+            )
         _last_mcts_preset_id = int(pack_preset_id)
         if mcts_action is not None:
             mcts_force_zone = place_zone_token(region_to_zone(mcts_action.region))
@@ -2810,6 +2823,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 proposer_counts=proposer_counts,
                 graph_yield=gy,
                 proposal_yield=py,
+                zone=(
+                    place_zone_token(propose_stats.get("dg_force_zone"))
+                    or place_zone_token(propose_stats.get("mcts_zone"))
+                    or (
+                        str((propose_stats.get("zones_used") or [None])[0])
+                        if propose_stats.get("zones_used")
+                        else None
+                    )
+                ),
                 refine_by_proposer=refine_bp,
                 emitted_by_proposer=emitted_bp,
                 use_ema=True,
@@ -2824,6 +2846,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                         ),
                     }),
                 })
+            # Letter B telem: zone_graph_yields now live via zone= above.
+            if propose_feedback.zone_graph_yields:
+                propose_stats["zone_graph_yields"] = {
+                    z: list(vs[-4:])
+                    for z, vs in propose_feedback.zone_graph_yields.items()
+                }
+                mcts_telem["zone_yield_n"] = int(
+                    sum(len(v) for v in propose_feedback.zone_graph_yields.values())
+                )
         n_graph = int(graph.size()) if hasattr(graph, "size") else len(graph.elems)
         assert selection_is_independent(
             graph, [i for i in selected_polys if 0 <= int(i) < n_graph],
