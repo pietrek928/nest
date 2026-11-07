@@ -445,6 +445,20 @@ def test_for_place_preserves_base_false():
     assert cfg.use_cluster_copy is False
 
 
+def test_for_place_void_seek_ray_max_base():
+    """C: max(base, profile) — lean stays 8; non-lean high base preserved."""
+    lean = ProposeConfig().with_complexity_lean(seeded=True)
+    assert lean.raycast_num_rays <= 8
+    assert ProposeConfig.for_place("void_seek", base=lean).raycast_num_rays == 8
+    assert (
+        ProposeConfig.for_place(
+            "void_seek", base=ProposeConfig(raycast_num_rays=16)
+        ).raycast_num_rays
+        == 16
+    )
+    assert ProposeConfig.for_place("void_seek").raycast_num_rays == 12
+
+
 def test_for_place_border_gap_caps_samples():
     cfg = ProposeConfig.for_place("border_gap")
     assert cfg.board_edge_samples_per_edge <= 12

@@ -559,13 +559,18 @@ def _void_seek_densify(
         "motif_skip": {},
         "pocket_skips": [],
     }
+    # P1 soft: primary void_seek with arr already ≥ floor does not arm need_densify
+    # from is_void_seek alone (void_hijack_from still densifies). Keep v5 + clearance.
     hijack_densify = (
         bool(propose_cfg.densify_on_void_hijack)
         and placed
         and not border_only_propose
         and (
             void_hijack_from is not None
-            or is_void_seek(zone)
+            or (
+                is_void_seek(zone)
+                and arr.shape[0] < densify_count_floor
+            )
         )
         and (
             group_pocket_emitted == 0
@@ -625,9 +630,6 @@ def _void_seek_densify(
             need_densify = True
     if not need_densify:
         return arr, zone_label, False, False, None, telem
-
-    # P1 park: hard skip of primary-void densify dumped late Δ vs open (+0.176
-    # vs +0.1924). Keep densify_on_primary_void telem only; revisit with softer gate.
 
     densify_cfg = ProposeConfig.for_place("void_seek", base=propose_cfg)
     densify_rank = (

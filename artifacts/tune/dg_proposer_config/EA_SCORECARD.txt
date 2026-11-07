@@ -1,0 +1,6 @@
+CLI=n/a | LETTER=SKIP | early amaf_void=0 hijack_mcts=0 dg_zone=void_seek | SIGNAL=tip already Void — retarget never fires
+
+EA:
+- Implemented leaf amaf_record Sheet|Rim→Void; dual showed counter 0
+- Reverted per plan (do not block B/P1)
+- next=B raise-only

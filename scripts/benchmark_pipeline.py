@@ -404,48 +404,78 @@ def main() -> None:
                             "void_refine": int(metrics.void_selected_refine),
                             "free_kind": str(metrics.free_kind or ""),
                             "void_leak": {
-                                k: leak.get(k)
-                                for k in (
-                                    "niche_pos",
-                                    "densify_reason",
-                                    "mcts_rule_id",
-                                    "mcts_preset_id",
-                                    "pack_preset_id",
-                                    "carve_preset_pack_only",
-                                    "void_hijack_over_mcts",
-                                    "densify_on_primary_void",
-                                    "dg_force_zone",
-                                    "mcts_region",
-                                    "preset_amaf_visits",
-                                    "amaf_hits",
-                                    "kiss_pairs",
-                                    "free_space_cloud_emitted",
-                                    "on_plateau",
-                                    "motif_compose_accepted_size",
-                                    "member_hits",
-                                    "join_n",
-                                    "materialized_motif",
-                                    "lattice_anchors_added",
-                                    "lattice_anchors_kept",
-                                    "cluster_copy_emitted",
-                                    "cluster_copy_nest_n",
-                                    "lock_n_compose",
-                                    "lock_n_refine",
-                                    "lock_n_materialize",
-                                    "motif_sequential_full",
-                                    "motif_sequential_clear",
-                                    "hollow_pattern_locks",
-                                    "incumbent_hold",
-                                    "void_override",
-                                    "cohorts_n",
-                                    "motif_union_n",
-                                    "hybrid_pick_wins",
-                                    "hybrid_pick_reject_indep",
-                                    "hybrid_pick_reject_area",
-                                    "hybrid_pick_adj_soft",
-                                    "motif_adj_hits",
-                                )
-                                if k in leak
+                                **{
+                                    k: leak.get(k)
+                                    for k in (
+                                        "niche_pos",
+                                        "densify_reason",
+                                        "mcts_rule_id",
+                                        "mcts_preset_id",
+                                        "preset_amaf_visits",
+                                        "amaf_hits",
+                                        "kiss_pairs",
+                                        "free_space_cloud_emitted",
+                                        "on_plateau",
+                                        "motif_compose_accepted_size",
+                                        "member_hits",
+                                        "join_n",
+                                        "materialized_motif",
+                                        "lattice_anchors_added",
+                                        "lattice_anchors_kept",
+                                        "cluster_copy_emitted",
+                                        "cluster_copy_nest_n",
+                                        "lock_n_compose",
+                                        "lock_n_refine",
+                                        "lock_n_materialize",
+                                        "motif_sequential_full",
+                                        "motif_sequential_clear",
+                                        "hollow_pattern_locks",
+                                        "incumbent_hold",
+                                        "void_override",
+                                        "cohorts_n",
+                                        "motif_union_n",
+                                        "hybrid_pick_wins",
+                                        "hybrid_pick_reject_indep",
+                                        "hybrid_pick_reject_area",
+                                        "hybrid_pick_adj_soft",
+                                        "motif_adj_hits",
+                                    )
+                                    if k in leak
+                                },
+                                # R0: always emit A0 coupling keys (0 / "" OK).
+                                "pack_preset_id": int(
+                                    leak.get("pack_preset_id", 0) or 0
+                                ),
+                                "carve_preset_pack_only": int(
+                                    leak.get("carve_preset_pack_only", 0) or 0
+                                ),
+                                "void_hijack_over_mcts": int(
+                                    leak.get("void_hijack_over_mcts", 0) or 0
+                                ),
+                                "densify_on_primary_void": int(
+                                    leak.get("densify_on_primary_void", 0) or 0
+                                ),
+                                "path_nest_adopt": int(
+                                    leak.get("path_nest_adopt", 0) or 0
+                                ),
+                                "amaf_hijack_void_credit": int(
+                                    leak.get(
+                                        "amaf_hijack_void_credit",
+                                        leak.get("amaf_credit_void", 0),
+                                    )
+                                    or 0
+                                ),
+                                "amaf_credit_void": int(
+                                    leak.get(
+                                        "amaf_credit_void",
+                                        leak.get("amaf_hijack_void_credit", 0),
+                                    )
+                                    or 0
+                                ),
+                                "dg_force_zone": str(
+                                    leak.get("dg_force_zone", "") or ""
+                                ),
+                                "mcts_region": leak.get("mcts_region"),
                             },
                         }
                         args.jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -521,6 +551,13 @@ def main() -> None:
                             f"{int(leak.get('nfp_lite_keep', 0) or 0)} "
                             f"ipol={int(leak.get('inject_polish', 0) or 0)} "
                             f"preset={int(leak.get('mcts_preset_id', 0) or 0)} "
+                            f"pack_preset={int(leak.get('pack_preset_id', 0) or 0)} "
+                            f"pvf_densify={int(leak.get('densify_on_primary_void', 0) or 0)} "
+                            f"hijack_mcts={int(leak.get('void_hijack_over_mcts', 0) or 0)} "
+                            f"dg_zone={leak.get('dg_force_zone') or '-'} "
+                            f"mcts_reg={leak.get('mcts_region')} "
+                            f"adopt={int(leak.get('path_nest_adopt', 0) or 0)} "
+                            f"amaf_void={int(leak.get('amaf_credit_void', leak.get('amaf_hijack_void_credit', 0)) or 0)} "
                             f"amaf_k={int(leak.get('niche_amaf_region', -1) or -1)}/"
                             f"{int(leak.get('niche_amaf_rule', 0) or 0)}/"
                             f"{int(leak.get('niche_amaf_motif', -1) or -1)} "

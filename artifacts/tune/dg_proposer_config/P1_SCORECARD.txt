@@ -1,0 +1,6 @@
+CLI=PASS | LETTER=PASS soft densify arm | early med/min=0.613/0.569 late Δ med=+0.1924 (N=3) | SIGNAL=is_void_seek arm requires arr<floor; hijack/v5/clearance kept; pvf_densify still 2 via other arms
+
+P1:
+- hijack_densify: is_void_seek alone only when arr < densify_count_floor
+- void_hijack_from / v5 / clearance arms unchanged
+- late held +0.1924 (hard P1 previously +0.176)

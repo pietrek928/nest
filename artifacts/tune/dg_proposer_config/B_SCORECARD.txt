@@ -1,0 +1,6 @@
+CLI=PASS | LETTER=PASS raise-only | early med/min=0.598/0.584 late Δ=+0.1924 | SIGNAL=scale<1 no longer shrinks ray/pocket; EMA stays off
+
+B:
+- apply_proposer_pool_scales: ray/pocket only when scale > 1.0
+- mean pool blend kept; use_ema=False
+- next=P1 soft densify arm

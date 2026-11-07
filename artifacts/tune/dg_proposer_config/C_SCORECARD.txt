@@ -1,0 +1,7 @@
+CLI=PASS | LETTER=PASS soft max(base,profile) | early c1 med/min≈0.600/0.570 (noise) | c2 floor-12 FAIL med=0.566 REVERT floor | SIGNAL=lean keeps void at 8; B raise-only next
+
+C:
+- for_place VoidSeek: raycast_num_rays = max(base, profile)
+- Hard floor 12 dumped early (0.554/0.561/0.584) — parked
+- Under complexity lean, void_fill stays ray=8 (no-op vs ship); preset base>8 preserved
+- next=EA leaf AMAF (skip if hijack/counter 0)

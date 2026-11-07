@@ -950,23 +950,43 @@ def merge_phase_gate_telem(
         leak["amaf_hijack_void_credit"] = int(
             mt.get(
                 "amaf_hijack_void_credit",
-                leak.get("amaf_hijack_void_credit", 0),
+                mt.get(
+                    "amaf_credit_void",
+                    leak.get(
+                        "amaf_hijack_void_credit",
+                        leak.get("amaf_credit_void", 0),
+                    ),
+                ),
+            )
+            or 0
+        )
+        leak["amaf_credit_void"] = int(
+            mt.get(
+                "amaf_credit_void",
+                leak.get(
+                    "amaf_credit_void",
+                    leak.get("amaf_hijack_void_credit", 0),
+                ),
             )
             or 0
         )
         densify_ps = propose_stats.get("densify_stats") or {}
-        if isinstance(densify_ps, dict):
-            leak["densify_on_primary_void"] = int(
-                densify_ps.get(
-                    "densify_on_primary_void",
-                    leak.get("densify_on_primary_void", 0),
-                )
-                or 0
+        if not isinstance(densify_ps, dict):
+            densify_ps = {}
+        leak["densify_on_primary_void"] = int(
+            densify_ps.get(
+                "densify_on_primary_void",
+                leak.get("densify_on_primary_void", 0),
             )
-            if int(leak.get("void_hijack_over_mcts", 0) or 0) <= 0:
-                leak["void_hijack_over_mcts"] = int(
-                    densify_ps.get("void_hijack_over_mcts", 0) or 0
-                )
+            or 0
+        )
+        if int(leak.get("void_hijack_over_mcts", 0) or 0) <= 0:
+            leak["void_hijack_over_mcts"] = int(
+                densify_ps.get("void_hijack_over_mcts", 0) or 0
+            )
+        # Always present for R0 jsonl / letter telem (zeros OK).
+        leak.setdefault("path_nest_adopt", int(mt.get("path_nest_adopt", 0) or 0))
+        leak.setdefault("pack_preset_id", int(mt.get("pack_preset_id", 0) or 0))
         leak["dg_force_zone"] = str(
             mt.get(
                 "dg_force_zone",

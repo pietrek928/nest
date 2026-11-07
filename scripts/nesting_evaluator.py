@@ -1612,11 +1612,40 @@ class NestingPipelineEvaluator:
                 "void_core_accepted",
                 "block_hole_least_contact_try",
                 "block_hole_least_contact_win",
+                # R0: A0 DG→propose coupling peaks (jsonl / letter telem).
+                "densify_on_primary_void",
+                "void_hijack_over_mcts",
+                "pack_preset_id",
+                "carve_preset_pack_only",
+                "path_nest_adopt",
+                "amaf_hijack_void_credit",
+                "amaf_credit_void",
             ):
+                densify_ps = propose_stats.get("densify_stats") or {}
+                cur = int(
+                    propose_stats.get(dk, 0)
+                    or last_void_leak.get(dk, 0)
+                    or densify_ps.get(dk, 0)
+                    or (mcts_telem or {}).get(dk, 0)
+                    or 0
+                )
                 last_void_leak[dk] = max(
                     int(last_void_leak.get(dk, 0) or 0),
-                    int(propose_stats.get(dk, 0) or 0),
+                    cur,
                 )
+            # String SoT from last iter (not peak).
+            _dgz = (
+                (mcts_telem or {}).get("dg_force_zone")
+                or propose_stats.get("dg_force_zone")
+                or propose_stats.get("mcts_zone")
+                or last_void_leak.get("dg_force_zone")
+                or ""
+            )
+            last_void_leak["dg_force_zone"] = str(_dgz or "")
+            _mreg = (mcts_telem or {}).get("mcts_region")
+            if _mreg is None:
+                _mreg = propose_stats.get("mcts_region", last_void_leak.get("mcts_region"))
+            last_void_leak["mcts_region"] = _mreg
             prop_n = int(propose_stats.get("proposal_count", 0))
             if prop_n > 0:
                 last_proposal_yield = min(1.0, n_void_graph / prop_n) if n_void_graph else (

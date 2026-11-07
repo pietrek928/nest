@@ -899,6 +899,17 @@ class ProposeConfig(BaseModel):
             for key, val in list(patch.items()):
                 if key in root and root[key] is False and val is True:
                     del patch[key]
+        # C: preserve higher base/preset rays; profile 8 must not clobber.
+        # Do NOT floor at 12 here — that undoes lean and dumped early med 0.566
+        # (c2_early). Under lean base=8 this is a no-op; B raise-only can lift rays.
+        if (
+            zone == place_zone_token(PlaceZone.VoidSeek)
+            and "raycast_num_rays" in patch
+        ):
+            base_rays = int(root.get("raycast_num_rays", 12) or 12)
+            patch["raycast_num_rays"] = max(
+                base_rays, int(patch.get("raycast_num_rays", 8) or 8)
+            )
         root.update(patch)
         cfg = cls(**root)
         if zone == place_zone_token(PlaceZone.VoidSeek):

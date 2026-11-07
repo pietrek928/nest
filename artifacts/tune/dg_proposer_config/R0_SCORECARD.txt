@@ -1,0 +1,6 @@
+CLI=PASS | LETTER=PASS telem surface | early med/min=0.577/0.571 (noise vs ship 0.600/0.577; telem-only) | SIGNAL=A0 keys in jsonl+print
+
+R0:
+- densify_on_primary_void / void_hijack_over_mcts / pack_preset_id / dg_force_zone / path_nest_adopt / amaf_credit_void always in early jsonl
+- letter print: pvf_densify=2 hijack_mcts=0 dg_zone=void_seek adopt=0 amaf_void=0
+- next=C for_place ray max(base,8)

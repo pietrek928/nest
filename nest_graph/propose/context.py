@@ -1599,15 +1599,16 @@ def apply_proposer_pool_scales(
         data["group_edge_samples_per_edge"] = max(
             2, int(round(propose_cfg.group_edge_samples_per_edge * min(2.0, max(0.05, gf)))),
         )
+    # B: raise-only ray/pocket — scale < 1 leaves post-C / lean value (floor 1.0).
     rc = float(pool_scales.get("raycasting", 1.0))
-    if rc != 1.0:
+    if rc > 1.0:
         data["raycast_num_rays"] = max(
-            4, int(round(propose_cfg.raycast_num_rays * min(2.0, max(0.05, rc)))),
+            4, int(round(propose_cfg.raycast_num_rays * min(2.0, rc))),
         )
     pf = float(pool_scales.get("pocket_fit", 1.0))
-    if pf != 1.0:
+    if pf > 1.0:
         data["pocket_fit_max_targets"] = max(
-            1, int(round(propose_cfg.pocket_fit_max_targets * min(2.0, max(0.05, pf)))),
+            1, int(round(propose_cfg.pocket_fit_max_targets * min(2.0, pf))),
         )
     return ProposeConfig(**data)
 
