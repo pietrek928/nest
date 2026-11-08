@@ -1,0 +1,7 @@
+V0 PASS (telem smoke)
+- Keys always in jsonl + letter print: pw_expand, multi_sim, selection_expand_emitted,
+  history_expand_emitted, free_space_cloud_emitted, densify_on_primary_void, mcts_preset_id
+- Early v0b: areas 0.569/0.600/0.600 med~0.600 min 0.569 (seed0 same attractor as P1);
+  indep OK; telem: sel_expand=192 history=96 pw_expand=5 multi_sim=0 cloud=0 pvf_densify=2 preset=0
+- Open bar med≥0.600 min≥0.577: med held; min seed0 noise vs ship min 0.577 (P1 also 0.569)
+- Conclusion: diversity telem live; cloud=0 and multi_sim=0 on last leaf are V4/V1 levers

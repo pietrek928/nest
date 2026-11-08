@@ -1,0 +1,3 @@
+V2 SKIP — preferred preset head dumped early med 0.585; tip preset stayed 0
+- Reverted generate_macros preferred Void×nonzero preset head
+- Park: tip already Motif/Void baseline; online 3/5 never win last-leaf AMAF tip

@@ -1,0 +1,7 @@
+V1 SKIP — PW/n_sims widen dumped early
+- Tried: pw_alpha 0.5→0.7 + n_sims 4→6 → early med 0.592
+- Unify1: pw_c 1.5→2.0 → med 0.599 (still <0.600)
+- Unify2: n_sims back to 4, keep alpha/pw_c → med 0.592
+- Revert: pw_alpha=0.5 pw_c=1.5 n_sims=4 (ship)
+- Telem: pw_expand stayed ~5; multi_sim=0 on last leaf (expand skipped)
+- Park: MCTS width for late-only or longer iter runs; do not revive without new telem peak_pw

@@ -1,0 +1,5 @@
+V5 SKIP — densify floor/rays dumped early med
+- Floor → max_proposals + densify rays≥12: early med 0.593 min 0.569; late Δ+0.1924; pvf_densify stayed 2
+- Unify: revert densify rays; floor → 3*props//4: early med 0.585; late +0.1924
+- Revert: densify_count_floor back to max(8, max_proposals//2) (P1 soft)
+- Park: densify already fires on primary void; raising floor does not move last-leaf telem

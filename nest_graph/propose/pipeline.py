@@ -1728,8 +1728,6 @@ def _collect_expand_candidates(
         # Light emit — mixer still adds a thin expand remainder.
         # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         # Stratified cap: half coarse-first, half interleaved fine (one expand SoT).
-        # Light emit — mixer still adds a thin expand remainder.
-        # D1b/G6: void_seek expand often nests ~0 — tighter max_items.
         n = 1
         pool_div = 16 if is_void_seek(state.cascade_zone) else 4
         sel_cap = max(4, cfg.candidate_pool // pool_div)

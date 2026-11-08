@@ -987,6 +987,26 @@ def merge_phase_gate_telem(
         # Always present for R0 jsonl / letter telem (zeros OK).
         leak.setdefault("path_nest_adopt", int(mt.get("path_nest_adopt", 0) or 0))
         leak.setdefault("pack_preset_id", int(mt.get("pack_preset_id", 0) or 0))
+        # V0: population / variance diversity keys (zeros OK).
+        leak["pw_expand"] = int(mt.get("pw_expand", leak.get("pw_expand", 0)) or 0)
+        leak["multi_sim"] = int(mt.get("multi_sim", leak.get("multi_sim", 0)) or 0)
+        ebp_div = leak.get("emitted_by_proposer") or {}
+        if not isinstance(ebp_div, dict):
+            ebp_div = {}
+        leak["selection_expand_emitted"] = int(
+            ebp_div.get(
+                "selection_expand",
+                leak.get("selection_expand_emitted", 0),
+            )
+            or 0
+        )
+        leak["history_expand_emitted"] = int(
+            ebp_div.get(
+                "history_expand",
+                leak.get("history_expand_emitted", 0),
+            )
+            or 0
+        )
         leak["dg_force_zone"] = str(
             mt.get(
                 "dg_force_zone",

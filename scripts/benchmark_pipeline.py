@@ -476,6 +476,33 @@ def main() -> None:
                                     leak.get("dg_force_zone", "") or ""
                                 ),
                                 "mcts_region": leak.get("mcts_region"),
+                                # V0: always emit diversity keys (0 OK).
+                                "mcts_preset_id": int(
+                                    leak.get("mcts_preset_id", 0) or 0
+                                ),
+                                "free_space_cloud_emitted": int(
+                                    leak.get("free_space_cloud_emitted", 0) or 0
+                                ),
+                                "pw_expand": int(leak.get("pw_expand", 0) or 0),
+                                "multi_sim": int(leak.get("multi_sim", 0) or 0),
+                                "selection_expand_emitted": int(
+                                    leak.get(
+                                        "selection_expand_emitted",
+                                        (leak.get("emitted_by_proposer") or {}).get(
+                                            "selection_expand", 0
+                                        ),
+                                    )
+                                    or 0
+                                ),
+                                "history_expand_emitted": int(
+                                    leak.get(
+                                        "history_expand_emitted",
+                                        (leak.get("emitted_by_proposer") or {}).get(
+                                            "history_expand", 0
+                                        ),
+                                    )
+                                    or 0
+                                ),
                             },
                         }
                         args.jsonl.parent.mkdir(parents=True, exist_ok=True)
@@ -503,6 +530,10 @@ def main() -> None:
                         or leak.get("free_space_cloud_emitted")
                         or leak.get("cluster_copy_emitted")
                         or ebp.get("history_expand")
+                        or leak.get("pw_expand")
+                        or leak.get("multi_sim")
+                        or leak.get("selection_expand_emitted")
+                        or leak.get("densify_on_primary_void") is not None
                         or leak.get("rim_progress") is not None
                         or inward
                     ):
@@ -513,7 +544,10 @@ def main() -> None:
                             f"pin={leak.get('pin_added', 0)}/{leak.get('pin_candidates', 0)} "
                             f"dfs_passes={leak.get('dfs_passes', 0)} "
                             f"refine_ms={float(leak.get('refine_ms', 0.0) or 0.0):.1f} "
-                            f"history_expand={int(ebp.get('history_expand', 0) or 0)} "
+                            f"history_expand={int(leak.get('history_expand_emitted', ebp.get('history_expand', 0)) or 0)} "
+                            f"sel_expand={int(leak.get('selection_expand_emitted', ebp.get('selection_expand', 0)) or 0)} "
+                            f"pw_expand={int(leak.get('pw_expand', 0) or 0)} "
+                            f"multi_sim={int(leak.get('multi_sim', 0) or 0)} "
                             f"cluster_copy={int(leak.get('cluster_copy_emitted', ebp.get('cluster_copy', 0)) or 0)} "
                             f"free_space_cloud={int(leak.get('free_space_cloud_emitted', ebp.get('free_space_cloud', 0)) or 0)} "
                             f"rim={float(leak.get('rim_progress', 0.0) or 0.0):.3f} "

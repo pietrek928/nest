@@ -1,0 +1,5 @@
+V4 SKIP — cloud/pocket bake dumped early; cloud telem stayed 0
+- Profile samples 96/angles 12/pocket 12: early med 0.587; late Δ+0.1924 held
+- Unify: densify last-resort densify_cfg+cloud flag; drop pocket — early worse (0.548 min); cloud still 0
+- Revert: VoidSeek profile + densify cloud_cfg path to ship
+- Park: last-leaf free_space_cloud_emitted=0 needs deeper free_space/target_poly research

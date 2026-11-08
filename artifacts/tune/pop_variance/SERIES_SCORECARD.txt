@@ -1,0 +1,18 @@
+Population size + variance boost series
+
+Open SoT: early med/min ≥0.600/0.577 | late Δ med ≥+0.1924
+Ship baseline: early ~0.600/0.577 late Δ +0.1924
+
+V0 PASS — diversity telem always in jsonl + letter print
+  (pw_expand, multi_sim, sel_expand, history_expand, cloud, densify_on_primary_void, preset)
+V1 SKIP — pw_alpha 0.7 / n_sims 6 (+ pw_c unify) dumped early; reverted
+V2 SKIP — preferred nonzero preset head dumped early; tip preset stayed 0; reverted
+V3 SKIP — expand div 8/16 then 12/24 dumped late Δ ~+0.1765; reverted 16/32
+V4 SKIP — cloud samples/angles (+ densify cloud_cfg unify) dumped early; cloud telem 0; reverted
+V5 SKIP — densify floor full/3/4 + densify rays dumped early; reverted to P1 half floor
+
+Shipped delta from this series: V0 telem surface only.
+Conclusion: void pool already 1024/512; widen PW/expand/cloud/densify-floor
+moves combination count but regresses early or late Δ vs open SoT.
+Next research: peak free_space_cloud across iters (not last-leaf only);
+late-only MCTS width behind a flag; do not blind-raise emit caps.

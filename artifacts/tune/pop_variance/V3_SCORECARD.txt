@@ -1,0 +1,5 @@
+V3 SKIP — expand divisor widen dumped late Δ
+- 16→8 / 32→16: early med 0.606 OK; late N=3 all Δ+0.1765 (< +0.1924)
+- Unify 12/24: late still +0.1765/+0.1780; early noisy + overlap_ok gate flag
+- Revert: void pool_div=16 hist_div=32 (ship)
+- Telem moved (sel 192→384) but late densify path regresses — park expand widen
