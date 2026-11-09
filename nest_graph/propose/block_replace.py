@@ -36,10 +36,22 @@ from nest_graph.propose.placements_pattern import (
     wedge_edge_grain_angles,
 )
 from nest_graph.propose.motif_keys import cohort_member_indices
+from nest_graph.propose.placements_pocket import pocket_target
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly
 from nest_graph.free_kind_util import is_large_void, void_phantom
+
+
+def _pocket_pole_for_3b(void_poly, *, min_dist: float, fallback: Point | None) -> Point | None:
+    """Same pocket SoT as emit_pocket_fit_coords; fall back to free target_pt."""
+    if void_poly is not None and not getattr(void_poly, "is_empty", True):
+        tgt = pocket_target(void_poly, min_dist=float(min_dist))
+        if tgt is not None:
+            return tgt[0]
+    if fallback is not None and not getattr(fallback, "is_empty", True):
+        return fallback
+    return None
 
 _HOLE_PROPOSERS = frozenset({ProposerName.CLUSTER_COPY, ProposerName.POCKET_FIT})
 _HOLE_EMIT_CAP = 128
@@ -284,8 +296,9 @@ def pick_block_hole_victim(
 
     W3: when ``prefer_strip``, interior CCs with MRR aspect≥2 beat nearer round
     blobs (strip re-tile for lattice emit + lex).
-    L1: when ``prefer_void_facing``, interior CCs with any ``part_void_adj`` beat
-    non-void-facing strips; among same class keep aspect-then-distance.
+    L1 ranking park: pure distance-first and clear_ratio hybrid both dual-missed
+    early; production keeps W3 strip lex. Pocket pole SoT is wired at the 3b
+    call site via ``pocket_target``. ``prefer_void_facing`` API retained for tests.
     """
     sel = [int(i) for i in selected if 0 <= int(i) < len(polys)]
     placed = [polys[i] for i in sel]
@@ -717,6 +730,17 @@ def try_block_hole_renest(
         return sel, polys, transforms, group_id, candidate_geoms, telem
     telem["block_hole_victim"] = list(victim)
     telem["block_hole_tried"] = 1
+    if pole is not None and not getattr(pole, "is_empty", True):
+        v_members = [
+            polys[i] for i in victim
+            if 0 <= i < len(polys) and polys[i] is not None and not polys[i].is_empty
+        ]
+        if v_members:
+            v_blob = unary_union(v_members) if len(v_members) > 1 else v_members[0]
+            if v_blob is not None and not v_blob.is_empty:
+                telem["block_hole_victim_pole_d"] = float(
+                    v_blob.centroid.distance(pole)
+                )
     victim_set = set(victim)
     kept = [i for i in sel if i not in victim_set]
     kept_geoms = [
@@ -961,13 +985,17 @@ def maybe_block_hole_renest(
 
     # L1 park: void-facing peel lex dumped late Δ min (+0.1678 < open +0.1758)
     # and early min under always-on; densify still void_clear_rate=0 / 3b no_gain|lex.
-    # Keep prefer_void_facing API + unit tests; production stays W3 strip lex.
+    # Keep prefer_void_facing API + unit tests; production stays prefer_void_facing=False.
+    # L1 dual-miss: distance-first / clear_ratio hybrid / pocket_target pole all
+    # dumped early med below open — keep free target_pt + W3 strip lex; ship
+    # victim_pole_d telem + _pocket_pole_for_3b helper for post-wise evidence.
     fit_r = 1.0 if bool(getattr(free_info, "fits_part", True)) else 0.0
     sterile = densify_void_clear_sterile(propose_stats)
     phantom = void_phantom(free_info, fit_r)
     propose_stats["prefer_void_facing"] = 0
     propose_stats["prefer_void_facing_sterile"] = int(sterile)
     propose_stats["prefer_void_facing_phantom"] = int(phantom)
+    pole_3b = getattr(free_info, "target_pt", None)
     cohort = begin_repair_cohort(
         selected,
         list(polys),
@@ -975,7 +1003,7 @@ def maybe_block_hole_renest(
         list(transforms),
         min_dist=float(min_dist),
         sheet=sheet,
-        pole=getattr(free_info, "target_pt", None),
+        pole=pole_3b,
         void_poly=free_poly,
         archived=list(cluster_patterns or ()),
         max_patterns=int(getattr(propose_cfg, "cluster_copy_max_patterns", 8) or 8),
@@ -1005,7 +1033,7 @@ def maybe_block_hole_renest(
         sheet=sheet,
         min_dist=min_dist,
         propose_cfg=propose_cfg,
-        pole=getattr(free_info, "target_pt", None),
+        pole=pole_3b,
         void_poly=free_poly,
         void_geoms=void_geoms,
         cluster_patterns=patterns_for_emit,

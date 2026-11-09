@@ -4,9 +4,10 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from nest_graph.graph import MacroRegion
+from nest_graph.graph import FreeKind, MacroAction, MacroRegion
 from nest_graph.pack.ctx import VoidLeakOrchResult
 from nest_graph.pack.epoch import realize_selection
+from nest_graph.pack.execute import note_mcts_multi_pole
 from nest_graph.pack.motif_credit import (
     credit_motif_on_nest_survival,
     credit_void_niche_from_iter,
@@ -229,6 +230,8 @@ def run_void_leak_and_niche_credit(
     if hole_gain or cohort_gain:
         hollow = False
         propose_stats["hollow_miss"] = False
+    # Post-wise niche GLS (3b lex|no_gain → note_macro_miss/append_negative)
+    # dual-missed early med 0.582 — parked; gainful 3a/3b still clear hollow.
     if hollow and mcts_runner.agent is not None:
         mcts_runner.agent.note_macro_miss(mcts_action)
         if (
@@ -368,6 +371,35 @@ def finalize_iter_mcts(
                 runner.agent.realized["macro_survive_n"] = int(kind[ri])
             else:
                 runner.agent.realized["macro_survive_n"] = 0
+        # L2: after kind credit, refresh poles from stats + touch Void AMAF pick
+        # so floor telem lands when expand skipped pick. No forced pole invent.
+        note_mcts_multi_pole(runner.agent, propose_stats=propose_stats)
+        if int(getattr(runner.agent, "multi_pole_n", 0) or 0) < 2:
+            n_poles = int(propose_stats.get("multi_pole_count", 0) or 0)
+            if n_poles < 2 and isinstance(propose_stats.get("void_leak"), dict):
+                n_poles = int(
+                    propose_stats["void_leak"].get("multi_pole_count", 0) or 0
+                )
+            if n_poles >= 2:
+                setter = getattr(runner.agent, "set_multi_pole_n", None)
+                if setter is not None:
+                    setter(int(n_poles))
+        if int(getattr(runner.agent, "multi_pole_n", 0) or 0) >= 2:
+            touch = MacroAction()
+            touch.region = MacroRegion.Void
+            touch.rule_id = 0
+            touch.motif_id = -1
+            key = runner.agent._action_key(touch)
+            runner.agent._amaf_pick_score(
+                key, 0, free_kind=FreeKind.Empty
+            )
+            floor_n = int(runner.agent.telem.get("amaf_pole_floor", 0) or 0)
+            if mcts_telem is not None:
+                mcts_telem["amaf_pole_floor"] = floor_n
+                mcts_telem["multi_pole_n"] = int(
+                    getattr(runner.agent, "multi_pole_n", 0) or 0
+                )
+            propose_stats["amaf_pole_floor"] = floor_n
     if isinstance(propose_stats.get("void_leak"), dict):
         leak = propose_stats["void_leak"]
         leak["kind_survive"] = int(propose_stats.get("kind_survive", 0) or 0)

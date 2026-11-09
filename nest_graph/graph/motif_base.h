@@ -194,8 +194,14 @@ public:
         return true;
     }
 
-    /** Truncate to max_keep by accept_count then gci (Q92). Alive TTL preferred. */
+    /**
+     * Truncate to max_keep by accept_count then gci (Q92).
+     * L3: when max_keep≥2, reserve one slot for an alive outsider whose gid
+     * pair is not among the top accept/gci pairs (still one MotifBase).
+     */
     void truncate(int32_t max_keep) {
+        // L3 outsider-reserve dual-unstable on early med after lock — restore
+        // accept→gci top-k (inject diversify also parked).
         if (max_keep <= 0 || static_cast<int32_t>(motifs_.size()) <= max_keep) {
             return;
         }

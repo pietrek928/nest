@@ -452,6 +452,19 @@ def apply_post_pack_and_telem(
         }
         void_leak_stats["relocate"] = pack_stats.get("relocate") or {}
         void_leak_stats["local_se2"] = pack_stats.get("local_se2") or {}
+        reloc_flat = void_leak_stats["relocate"] or {}
+        void_leak_stats["relocate_attempted"] = int(
+            reloc_flat.get("attempted", 0) or 0
+        )
+        void_leak_stats["relocate_accepted"] = int(
+            reloc_flat.get("accepted", 0) or 0
+        )
+        void_leak_stats["relocate_moved"] = int(reloc_flat.get("moved", 0) or 0)
+        se2_flat = void_leak_stats["local_se2"] or {}
+        void_leak_stats["local_se2_attempted"] = int(
+            se2_flat.get("attempted", 0) or 0
+        )
+        void_leak_stats["local_se2_moved"] = int(se2_flat.get("moved", 0) or 0)
         void_leak_stats["repack_attempted"] = int(
             (void_leak_stats["repack"] or {}).get("attempted", 0) or 0
         )

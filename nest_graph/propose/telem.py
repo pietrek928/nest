@@ -459,6 +459,15 @@ def build_void_leak_dict(
             or (propose_stats.get("mcts") or {}).get("kind_survive", 0)
             or 0
         ),
+        # L0: Rim/Void/Sheet/Motif survive hist (sum alone hides basin collapse).
+        "kind_survive_hist": [
+            int(x)
+            for x in (
+                propose_stats.get("kind_survive_hist")
+                or (propose_stats.get("mcts") or {}).get("kind_survive_hist")
+                or [0, 0, 0, 0]
+            )
+        ][:4],
         "motif_nest_credit": int(propose_stats.get("motif_nest_credit", 0)),
         "amaf_hits": int(
             propose_stats.get("amaf_hits", 0)
@@ -485,6 +494,9 @@ def build_void_leak_dict(
         "block_hole_darea": float(propose_stats.get("block_hole_darea", 0.0) or 0.0),
         "block_hole_reject_reason": str(
             propose_stats.get("block_hole_reject_reason", "") or ""
+        ),
+        "block_hole_victim_pole_d": float(
+            propose_stats.get("block_hole_victim_pole_d", -1.0) or -1.0
         ),
         # H0: niche AMAF key beside 3a/3b for path/expand lag census.
         "niche_amaf_region": int(propose_stats.get("niche_amaf_region", -1) or -1),
@@ -549,6 +561,38 @@ def build_void_leak_dict(
             (propose_stats.get("repack") or {}).get("attempted", 0)
             or propose_stats.get("repack_attempted", 0)
             or 0
+        ),
+        # L0: flatten relocate / se2 (nested dicts already written by post_pack).
+        "relocate_attempted": int(
+            (propose_stats.get("relocate") or {}).get("attempted", 0)
+            or propose_stats.get("relocate_attempted", 0)
+            or 0
+        ),
+        "relocate_accepted": int(
+            (propose_stats.get("relocate") or {}).get("accepted", 0)
+            or propose_stats.get("relocate_accepted", 0)
+            or 0
+        ),
+        "relocate_moved": int(
+            (propose_stats.get("relocate") or {}).get("moved", 0)
+            or propose_stats.get("relocate_moved", 0)
+            or 0
+        ),
+        "local_se2_attempted": int(
+            (propose_stats.get("local_se2") or {}).get("attempted", 0)
+            or propose_stats.get("local_se2_attempted", 0)
+            or 0
+        ),
+        "local_se2_moved": int(
+            (propose_stats.get("local_se2") or {}).get("moved", 0)
+            or propose_stats.get("local_se2_moved", 0)
+            or 0
+        ),
+        "motif_sequential_partial": int(
+            propose_stats.get("motif_sequential_partial", 0) or 0
+        ),
+        "motif_sequential_rcl": int(
+            propose_stats.get("motif_sequential_rcl", 0) or 0
         ),
     }
 
@@ -1031,6 +1075,15 @@ def merge_phase_gate_telem(
             )
             or 0
         )
+        leak["amaf_pole_floor"] = int(
+            mt.get(
+                "amaf_pole_floor",
+                propose_stats.get(
+                    "amaf_pole_floor", leak.get("amaf_pole_floor", 0)
+                ),
+            )
+            or 0
+        )
         leak["amaf_cohort_fallback"] = int(
             mt.get(
                 "amaf_cohort_fallback",
@@ -1279,6 +1332,9 @@ def merge_phase_gate_telem(
         )
         leak["inject_n"] = int(
             propose_stats.get("inject_n", leak.get("inject_n", 0)) or 0
+        )
+        leak["inject_pair_n"] = int(
+            propose_stats.get("inject_pair_n", leak.get("inject_pair_n", 0)) or 0
         )
         leak["pair_contact_n"] = int(
             propose_stats.get("pair_contact_n", leak.get("pair_contact_n", 0)) or 0
@@ -1564,6 +1620,56 @@ def merge_phase_gate_telem(
     leak["motif_sequential_packing_clear"] = max(
         int(leak.get("motif_sequential_packing_clear", 0) or 0),
         int(propose_stats.get("motif_sequential_packing_clear", 0) or 0),
+    )
+    leak["motif_sequential_partial"] = max(
+        int(leak.get("motif_sequential_partial", 0) or 0),
+        int(propose_stats.get("motif_sequential_partial", 0) or 0),
+    )
+    leak["motif_sequential_rcl"] = max(
+        int(leak.get("motif_sequential_rcl", 0) or 0),
+        int(propose_stats.get("motif_sequential_rcl", 0) or 0),
+    )
+    hist = (
+        propose_stats.get("kind_survive_hist")
+        or (propose_stats.get("mcts") or {}).get("kind_survive_hist")
+        or leak.get("kind_survive_hist")
+        or [0, 0, 0, 0]
+    )
+    if isinstance(hist, (list, tuple)):
+        leak["kind_survive_hist"] = [int(x) for x in list(hist)[:4]]
+        while len(leak["kind_survive_hist"]) < 4:
+            leak["kind_survive_hist"].append(0)
+    reloc = propose_stats.get("relocate") or leak.get("relocate") or {}
+    if isinstance(reloc, dict):
+        leak["relocate_attempted"] = max(
+            int(leak.get("relocate_attempted", 0) or 0),
+            int(reloc.get("attempted", 0) or 0),
+        )
+        leak["relocate_accepted"] = max(
+            int(leak.get("relocate_accepted", 0) or 0),
+            int(reloc.get("accepted", 0) or 0),
+        )
+        leak["relocate_moved"] = max(
+            int(leak.get("relocate_moved", 0) or 0),
+            int(reloc.get("moved", 0) or 0),
+        )
+    se2 = propose_stats.get("local_se2") or leak.get("local_se2") or {}
+    if isinstance(se2, dict):
+        leak["local_se2_attempted"] = max(
+            int(leak.get("local_se2_attempted", 0) or 0),
+            int(se2.get("attempted", 0) or 0),
+        )
+        leak["local_se2_moved"] = max(
+            int(leak.get("local_se2_moved", 0) or 0),
+            int(se2.get("moved", 0) or 0),
+        )
+    leak["multi_pole_count"] = max(
+        int(leak.get("multi_pole_count", 0) or 0),
+        int(
+            (propose_stats.get("densify_stats") or {}).get("multi_pole_count", 0)
+            or propose_stats.get("multi_pole_count", 0)
+            or 0
+        ),
     )
     leak["archive_pin_pair_restore_n"] = max(
         int(leak.get("archive_pin_pair_restore_n", 0) or 0),
@@ -1893,6 +1999,9 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
             ctx.mcts_telem["amaf_free_kind_decay"] = int(
                 agent.telem.get("amaf_free_kind_decay", 0) or 0
             )
+            ctx.mcts_telem["amaf_pole_floor"] = int(
+                agent.telem.get("amaf_pole_floor", 0) or 0
+            )
             ctx.mcts_telem["amaf_cohort_fallback"] = int(
                 agent.telem.get("amaf_cohort_fallback", 0) or 0
             )
@@ -1910,6 +2019,9 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
         propose_stats["amaf_free_kind_decay"] = int(
             agent.telem.get("amaf_free_kind_decay", 0) or 0
+        )
+        propose_stats["amaf_pole_floor"] = int(
+            agent.telem.get("amaf_pole_floor", 0) or 0
         )
         propose_stats["amaf_cohort_fallback"] = int(
             agent.telem.get("amaf_cohort_fallback", 0) or 0

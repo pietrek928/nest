@@ -204,6 +204,36 @@ def test_upsert_from_contacts_kissing_pair():
     assert base.at(0).compactness >= 0.35
 
 
+def test_upsert_from_contacts_mask_any_endpoint():
+    """One-endpoint mask keeps basin↔neighbor kiss; both-endpoint drops it."""
+    from nest_graph.pack.slave_pack import upsert_from_contacts
+
+    a = Geometry.from_shapely(box(0, 0, 1, 1))
+    b = Geometry.from_shapely(box(1.0, 0, 2.0, 1))
+    both = MotifBase()
+    n_both = upsert_from_contacts(
+        both,
+        [a, b],
+        [1, 2],
+        [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+        gap=0.1,
+        selection_mask=[True, False],
+        mask_any_endpoint=False,
+    )
+    assert n_both == 0
+    any_ep = MotifBase()
+    n_any = upsert_from_contacts(
+        any_ep,
+        [a, b],
+        [1, 2],
+        [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+        gap=0.1,
+        selection_mask=[True, False],
+        mask_any_endpoint=True,
+    )
+    assert n_any >= 1
+
+
 def test_motif_base_flush_even_coexists_with_odd_stair():
     """Letter A: flush+even coexists with odd stair; higher flush gci injects first."""
     base = MotifBase()
@@ -384,6 +414,76 @@ def test_amaf_pick_reads_realized_kind_attach():
     assert agent.realized["kind"][1] == 4
     boosted = agent._amaf_pick_score(key, 0, free_kind=FreeKind.Empty)
     assert boosted > base
+
+
+def test_amaf_multi_pole_floor_boosts_trailing_region():
+    """L2: trailing Kind gets soft floor when multi_pole_n≥2 and one Kind dominates."""
+    from nest_graph.pack.motif_credit import credit_motif_on_nest_survival
+
+    arena = DecisionArena()
+    agent = MctsAgent(arena=arena, motif_base=MotifBase())
+    a_void = MacroAction()
+    a_void.region = MacroRegion.Void
+    a_void.rule_id = 0
+    a_void.motif_id = -1
+    a_rim = MacroAction()
+    a_rim.region = MacroRegion.Rim
+    a_rim.rule_id = 0
+    a_rim.motif_id = -1
+    key_void = agent._action_key(a_void)
+    key_rim = agent._action_key(a_rim)
+    credit_motif_on_nest_survival(
+        agent.motif_base,
+        selected_polys=[0, 1, 2, 3],
+        group_id=[0, 1, 2, 3],
+        transform=[
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (3.0, 0.0, 0.0),
+        ],
+        motif_keys=None,
+        ttl=4,
+        telem={},
+        realized_out=agent.realized,
+        # Rim-dominated kind mass; Void share 0 (sel_n can be >> kind sum).
+        kind_survive=(4, 0, 0, 0),
+        materialized_attach=0,
+        member_hits=0,
+    )
+    assert agent.realized["kind"][0] == 4
+    cold = float(agent._amaf_pick_score(key_void, 0, free_kind=FreeKind.Empty))
+    agent.set_multi_pole_n(2)
+    assert int(agent.multi_pole_n) == 2
+    floored = float(agent._amaf_pick_score(key_void, 0, free_kind=FreeKind.Empty))
+    assert floored > cold
+    assert int(agent.telem.get("amaf_pole_floor", 0) or 0) >= 1
+    # Leader Rim must not receive the trailing floor.
+    rim_before = int(agent.telem.get("amaf_pole_floor", 0) or 0)
+    agent._amaf_pick_score(key_rim, 0, free_kind=FreeKind.Empty)
+    assert int(agent.telem.get("amaf_pole_floor", 0) or 0) == rim_before
+    # Sparse Motif hist vs large sel_n still floors trailing Void.
+    arena2 = DecisionArena()
+    base2 = MotifBase()
+    agent2 = MctsAgent(arena=arena2, motif_base=base2)
+    credit_motif_on_nest_survival(
+        agent2.motif_base,
+        selected_polys=list(range(20)),
+        group_id=list(range(20)),
+        transform=[(float(i), 0.0, 0.0) for i in range(20)],
+        motif_keys=None,
+        ttl=4,
+        telem={},
+        realized_out=agent2.realized,
+        kind_survive=(0, 0, 0, 2),
+        materialized_attach=0,
+        member_hits=0,
+    )
+    agent2.set_multi_pole_n(4)
+    key_v2 = agent2._action_key(a_void)
+    before = float(agent2._amaf_pick_score(key_v2, 0, free_kind=FreeKind.Empty))
+    assert math.isfinite(before)
+    assert int(agent2.telem.get("amaf_pole_floor", 0) or 0) >= 1
 
 
 def test_run_mcts_multi_sim_does_not_upsert_contacts():

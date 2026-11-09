@@ -77,6 +77,11 @@ void sync_telem_to_agent(MctsAgent &agent, const nb::dict &telem) {
     t.conflict_p_soft_n = get_i("conflict_p_soft_n", t.conflict_p_soft_n);
     t.conflict_p_sum = get_f("conflict_p_sum", t.conflict_p_sum);
     t.amaf_free_kind_decay = get_i("amaf_free_kind_decay", t.amaf_free_kind_decay);
+    t.amaf_pole_floor = get_i("amaf_pole_floor", t.amaf_pole_floor);
+    t.multi_pole_n = get_i("multi_pole_n", t.multi_pole_n);
+    if (t.multi_pole_n > 0) {
+        agent.set_multi_pole_n(t.multi_pole_n);
+    }
     t.amaf_cohort_fallback = get_i("amaf_cohort_fallback", t.amaf_cohort_fallback);
     t.amaf_age_apply = get_i("amaf_age_apply", t.amaf_age_apply);
     t.amaf_age_max = get_i("amaf_age_max", t.amaf_age_max);
@@ -113,6 +118,10 @@ void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
         telem["conflict_p_soft_n"] = t.conflict_p_soft_n;
         telem["conflict_p_mean"] = t.conflict_p_sum / static_cast<float>(t.conflict_p_soft_n);
     }
+    if (t.amaf_pole_floor > 0) {
+        telem["amaf_pole_floor"] = t.amaf_pole_floor;
+    }
+    telem["multi_pole_n"] = t.multi_pole_n > 0 ? t.multi_pole_n : agent.multi_pole_n();
     if (t.amaf_free_kind_decay > 0) {
         telem["amaf_free_kind_decay"] = t.amaf_free_kind_decay;
     }
@@ -548,6 +557,16 @@ void bind_graph_mcts(nb::module_ &m) {
             },
             nb::arg("kind"),
             nb::arg("gamma") = MCTS_AMAF_FREE_KIND_GAMMA)
+        .def(
+            "set_multi_pole_n",
+            [](MctsAgentHolder &h, int32_t n) {
+                h.agent.set_multi_pole_n(n);
+                h.telem["multi_pole_n"] = h.agent.multi_pole_n();
+            },
+            nb::arg("n"))
+        .def_prop_ro(
+            "multi_pole_n",
+            [](MctsAgentHolder &h) { return h.agent.multi_pole_n(); })
         .def(
             "best_child",
             [](MctsAgentHolder &h, nb::object node_id) {

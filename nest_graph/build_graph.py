@@ -163,6 +163,8 @@ from nest_graph.pack.execute import (
     prep_selection_free,
     prep_selection_freeze,
     note_mcts_free_kind,
+    note_mcts_multi_pole,
+    multi_pole_n_from_free,
     record_mcts_expand,
     record_outer_iter_expand,
     run_mcts_multi_sim,
@@ -295,6 +297,8 @@ def _path_accept_contact_upsert(
     mask = [int(g) in allow_gids for g in gids_ok]
     if not any(mask):
         return 0
+    # Post-wise: mask_any_endpoint=True dual-missed early med (0.592 < 0.600);
+    # keep both-endpoints. Flag remains on upsert_from_contacts for evidence retries.
     n_up = upsert_from_contacts(
         runner.motif_base,
         geoms,
@@ -306,6 +310,7 @@ def _path_accept_contact_upsert(
         max_keep=int(motif_max_keep),
         telem=telem,
         selection_mask=mask,
+        mask_any_endpoint=False,
     )
     note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
     telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(
@@ -2022,34 +2027,59 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             path_carved_streak += 1
             mcts_telem["path_carved_streak"] = int(path_carved_streak)
         # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
-        if free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty)) == FreeKind.Empty:
+        # L2: always arm multi_pole_n when agent present (Empty path computes;
+        # already-LargeVoid falls back to prior telem or max_poles staging).
+        if mcts_runner.agent is not None:
             try:
                 md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
-                packed_fk = []
-                if nest_state is not None and nest_state.selected_indices:
-                    seed_n = int(nest_state.seed_count or 0)
-                    for i in nest_state.selected_indices:
-                        if int(i) < seed_n:
-                            continue
-                        if int(i) < len(nest_state.polys):
-                            packed_fk.append(nest_state.polys[i])
-                rem_fk = getattr(parent_snap, "remaining_gids", None)
-                fk_prep = prep_selection_free(
-                    sheet=p_sheet,
-                    part_areas=part_areas,
-                    min_dist=md_fk,
-                    cfg_propose=cfg.propose,
-                    packed_shapely=packed_fk,
-                    pack_geoms=None,
-                    part_by_group={0: p1, 1: p2},
-                    remaining_gids=list(rem_fk) if rem_fk is not None else None,
+                use_mp = bool(getattr(cfg.propose, "use_multi_pole_void", True))
+                max_mp = int(getattr(cfg.propose, "multi_pole_max_poles", 4) or 4)
+                n_poles = int(mcts_telem.get("multi_pole_count", 0) or 0)
+                fk_now = free_kind_from_any(
+                    getattr(parent_snap, "free_kind", FreeKind.Empty)
                 )
-                parent_snap.free_kind = free_kind_from_any(
-                    getattr(fk_prep.free_info, "kind", FreeKind.Empty)
-                )
-                note_mcts_free_kind(mcts_runner.agent, parent_snap.free_kind)
+                if fk_now == FreeKind.Empty or n_poles < 2:
+                    packed_fk = []
+                    if nest_state is not None and nest_state.selected_indices:
+                        seed_n = int(nest_state.seed_count or 0)
+                        for i in nest_state.selected_indices:
+                            if int(i) < seed_n:
+                                continue
+                            if int(i) < len(nest_state.polys):
+                                packed_fk.append(nest_state.polys[i])
+                    rem_fk = getattr(parent_snap, "remaining_gids", None)
+                    fk_prep = prep_selection_free(
+                        sheet=p_sheet,
+                        part_areas=part_areas,
+                        min_dist=md_fk,
+                        cfg_propose=cfg.propose,
+                        packed_shapely=packed_fk,
+                        pack_geoms=None,
+                        part_by_group={0: p1, 1: p2},
+                        remaining_gids=list(rem_fk) if rem_fk is not None else None,
+                    )
+                    if fk_now == FreeKind.Empty:
+                        parent_snap.free_kind = free_kind_from_any(
+                            getattr(fk_prep.free_info, "kind", FreeKind.Empty)
+                        )
+                        note_mcts_free_kind(
+                            mcts_runner.agent, parent_snap.free_kind
+                        )
+                        fk_now = free_kind_from_any(parent_snap.free_kind)
+                    n_poles = multi_pole_n_from_free(
+                        getattr(fk_prep.free_info, "target_poly", None),
+                        min_dist=float(md_fk),
+                        max_poles=max_mp,
+                        use_multi_pole=use_mp,
+                    )
+                if n_poles < 2 and use_mp and is_large_void(fk_now):
+                    n_poles = max(2, max_mp)
+                note_mcts_multi_pole(mcts_runner.agent, n_poles)
+                mcts_telem["multi_pole_count"] = int(n_poles)
             except Exception:
-                pass
+                note_mcts_multi_pole(
+                    mcts_runner.agent, propose_stats=mcts_telem
+                )
         preset_ids = [0]
         densify_hold = bool(
             int(mcts_telem.get("last_incumbent_hold", 0) or 0)

@@ -220,12 +220,17 @@ def upsert_from_contacts(
     max_keep: int = 0,
     telem: dict | None = None,
     selection_mask: Sequence[bool] | None = None,
+    mask_any_endpoint: bool = False,
     patterns: Sequence | None = None,
 ) -> int:
     """ContactGRG → MotifBase via bound ContactEdge + gci_surrogate (C1).
 
     Distance query stays Python (Geometry module); GCI/score use C++ ContactGRG
     helpers; Motif upsert via ``upsert_contact``.
+
+    ``mask_any_endpoint`` (path accept): keep a kiss if either endpoint is in
+    the selection mask — basin↔neighbor pairs for MotifBase truncate reserve.
+    Default both-endpoints keeps prior ContactGRG behavior.
     """
     from nest_graph.geometry import find_polygon_distances
 
@@ -269,7 +274,12 @@ def upsert_from_contacts(
         if selection_mask is not None:
             if i >= len(selection_mask) or j >= len(selection_mask):
                 continue
-            if not (bool(selection_mask[i]) and bool(selection_mask[j])):
+            a_ok = bool(selection_mask[i])
+            b_ok = bool(selection_mask[j])
+            if mask_any_endpoint:
+                if not (a_ok or b_ok):
+                    continue
+            elif not (a_ok and b_ok):
                 continue
         dist = 0.0 if bool(r.intersect) else float(r.distance)
         if (not bool(r.intersect)) and dist > contact_eps:

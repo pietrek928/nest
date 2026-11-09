@@ -64,6 +64,8 @@ struct MctsTelem {
     int32_t amaf_cohort_fallback = 0;  // H2e: cohort cold → arena AMAF
     int32_t amaf_age_apply = 0;        // H2e: picks where mean aged
     int32_t amaf_age_max = 0;          // H2e: max age applied
+    int32_t amaf_pole_floor = 0;       // L2: multi-pole trailing-region floor fires
+    int32_t multi_pole_n = 0;          // L2: mirrored for telem pull/push persistence
 };
 
 struct MotifCohortEntry {
@@ -354,6 +356,14 @@ public:
             arena->set_amaf_outer_iter(outer_iter);
         }
     }
+
+    /** L2: pocket / iterative spine pole count (≥2 arms multi-pole AMAF floor). */
+    void set_multi_pole_n(int32_t n) {
+        multi_pole_n_ = std::max(0, n);
+        telem.multi_pole_n = multi_pole_n_;
+    }
+
+    int32_t multi_pole_n() const { return multi_pole_n_; }
 
     /**
      * H2: on BoardSnapshot.free_kind change, soft-scale arena AMAF + cohort_amaf_.
@@ -822,11 +832,38 @@ public:
         }
         if (placeable && region_i == motif_i && motif_fuel) {
             // Plan D Motif cohort/fuel bonus (Void keeps niche soft-scale only).
+            // Post-wise Motif niche miss soft-scale dual-missed with 3b lex GLS.
             score += 0.2f;
         }
         const int32_t sel_n = std::max(realized.sel_n, 1);
         if (region_i >= 0 && region_i < 4) {
             score += 0.2f * (static_cast<float>(realized.kind[static_cast<std::size_t>(region_i)]) / static_cast<float>(sel_n));
+        }
+        // L2: ALNS min-weight — when multi-pole and one Kind dominates the
+        // realized.kind mass (not /sel_n — Motif hist is sparse vs packed n),
+        // soft-floor trailing regions. Do not invert Kind formula.
+        if (multi_pole_n_ <= 0 && telem.multi_pole_n > 0) {
+            multi_pole_n_ = telem.multi_pole_n;
+        }
+        if (multi_pole_n_ >= 2 && region_i >= 0 && region_i < 4) {
+            int32_t max_k = realized.kind[0];
+            int32_t kind_sum = realized.kind[0];
+            for (int32_t k = 1; k < 4; ++k) {
+                const int32_t kv = realized.kind[static_cast<std::size_t>(k)];
+                max_k = std::max(max_k, kv);
+                kind_sum += kv;
+            }
+            if (kind_sum > 0 && max_k > 0) {
+                const float max_share =
+                    static_cast<float>(max_k) / static_cast<float>(kind_sum);
+                const float my_share = static_cast<float>(
+                    realized.kind[static_cast<std::size_t>(region_i)]
+                ) / static_cast<float>(kind_sum);
+                if (max_share >= 0.5f && my_share + 1e-6f < max_share) {
+                    // Miss unify: score boost dual-degraded; keep telem-only arm for L3+.
+                    telem.amaf_pole_floor += 1;
+                }
+            }
         }
         const int32_t attach_n = realized.attach;
         const int32_t member_hits = realized.member_hits;
@@ -1003,4 +1040,5 @@ private:
     std::unordered_map<ActionKey, CohortAmafSlot, ActionKeyHash> cohort_amaf_;
     FreeKind last_free_kind_ = FreeKind::Empty;
     bool have_last_free_kind_ = false;
+    int32_t multi_pole_n_ = 0;
 };

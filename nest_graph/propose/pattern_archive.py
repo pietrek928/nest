@@ -24,6 +24,56 @@ from nest_graph.utils import compose_transforms, invert_transform
 _motif_ref_anchors: dict[int, tuple[float, float, float]] = {}
 
 
+def _gid_pair_key(rec: Any) -> tuple[int, int]:
+    ga = int(getattr(rec, "gid_a", -1) or -1)
+    gb = int(getattr(rec, "gid_b", -1) or -1)
+    return (ga, gb) if ga <= gb else (gb, ga)
+
+
+def diversify_motif_ids_by_gid_pair(
+    motif_base: Any,
+    cand_ids: Sequence[int],
+    *,
+    max_keep: int,
+) -> list[int]:
+    """L3: one best id per gid-pair first, then fill by existing cand order.
+
+    Maps niche-bucket rotate intent without a MotifRecord.zone field.
+    """
+    if motif_base is None or max_keep <= 0 or not cand_ids:
+        return list(cand_ids)
+    primary: list[int] = []
+    seen_pairs: set[tuple[int, int]] = set()
+    rest: list[int] = []
+    for mid in cand_ids:
+        mid_i = int(mid)
+        if mid_i < 0 or mid_i >= int(motif_base.size()):
+            continue
+        pair = _gid_pair_key(motif_base.at(mid_i))
+        if pair not in seen_pairs:
+            seen_pairs.add(pair)
+            primary.append(mid_i)
+        else:
+            rest.append(mid_i)
+        if len(primary) >= int(max_keep):
+            break
+    out = list(primary)
+    for mid_i in rest:
+        if len(out) >= int(max_keep):
+            break
+        if mid_i not in out:
+            out.append(mid_i)
+    if len(out) < int(max_keep):
+        for mid in cand_ids:
+            mid_i = int(mid)
+            if mid_i in out:
+                continue
+            out.append(mid_i)
+            if len(out) >= int(max_keep):
+                break
+    return out
+
+
 def note_motif_ref_anchors(
     motif_base: Any,
     gids: Sequence[int],
@@ -519,6 +569,8 @@ def patterns_from_motif_base(
             cand_ids.append(int(mid_i))
             if len(cand_ids) >= inject_cap:
                 break
+    # L3 miss unify: niche/gid-pair rotate dual-degraded after lock — keep
+    # MotifBase::truncate outsider reserve only; inject stays accept→gci order.
     stitched, used = stitch_leader_star_patterns(
         motif_base, cand_ids, telem=telem,
     )
@@ -536,6 +588,13 @@ def patterns_from_motif_base(
             break
     if max_keep > 0 and len(out) > int(max_keep):
         out = out[: int(max_keep)]
+    if telem is not None:
+        pairs = {
+            _gid_pair_key(motif_base.at(int(mid)))
+            for mid in cand_ids
+            if 0 <= int(mid) < int(motif_base.size())
+        }
+        telem["inject_pair_n"] = int(len(pairs))
     return out
 
 

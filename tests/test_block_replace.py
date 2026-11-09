@@ -167,7 +167,7 @@ def test_hole_victim_skips_board_adj():
 
 
 def test_hole_victim_prefer_void_facing_over_strip():
-    """L1: void-facing round interior beats elongated non-void-facing strip."""
+    """prefer_void_facing: void-facing round beats nearer non-void-facing strip."""
     sheet = box(0, 0, 30, 30)
     void_poly = box(20, 10, 28, 20)
     # Elongated strip far from void (aspect≥2), nearer pole.
@@ -211,6 +211,38 @@ def test_hole_victim_prefer_void_facing_over_strip():
     assert base is not None and facing is not None
     assert set(base) <= {0, 1, 2}
     assert set(facing) <= {3, 4, 5}
+
+
+def test_hole_victim_w3_strip_beats_nearer_round():
+    """W3 (L1 ranking parked): farther strip still beats nearer round blob."""
+    sheet = box(0, 0, 30, 30)
+    # Far elongated strip (aspect≥2).
+    strip = [
+        box(2.0, 2.0, 4.0, 2.8),
+        box(4.1, 2.0, 6.1, 2.8),
+        box(6.2, 2.0, 8.2, 2.8),
+    ]
+    # Nearer roundish blob at pocket pole.
+    near = [
+        box(13.0, 13.0, 14.5, 14.5),
+        box(14.6, 13.0, 16.1, 14.5),
+        box(13.0, 14.6, 14.5, 16.1),
+    ]
+    polys = strip + near
+    pole = Point(14.5, 14.5)
+    victim = pick_block_hole_victim(
+        list(range(6)),
+        polys,
+        min_dist=0.15,
+        sheet=sheet,
+        pole=pole,
+        min_size=3,
+        max_size=6,
+        prefer_strip=True,
+        prefer_void_facing=False,
+    )
+    assert victim is not None
+    assert set(victim) <= {0, 1, 2}
 
 
 def test_densify_void_clear_sterile_requires_try():

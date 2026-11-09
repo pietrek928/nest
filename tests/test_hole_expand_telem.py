@@ -23,6 +23,11 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         "niche_amaf_motif": -1,
         "repair_mode": 1,
         "repair_patterns_n": 2,
+        "kind_survive_hist": [1, 4, 0, 2],
+        "relocate": {"attempted": 3, "accepted": 1, "moved": 2},
+        "local_se2": {"attempted": 5, "moved": 1},
+        "motif_sequential_partial": 2,
+        "motif_sequential_rcl": 7,
     }
     leak = build_void_leak_dict(
         free_kind=FreeKind.LargeVoid,
@@ -60,7 +65,7 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         refine_bp={},
         pocket_by_tag={},
         prop_accept="",
-        densify={},
+        densify={"multi_pole_count": 2},
         elite_seeded=0,
         elite_next=0,
         cc_e=0,
@@ -81,3 +86,12 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
     assert leak["niche_amaf_region"] == 1
     assert leak["niche_amaf_rule"] == 0
     assert leak["niche_amaf_motif"] == -1
+    assert list(leak["kind_survive_hist"])[:4] == [1, 4, 0, 2]
+    assert leak["relocate_attempted"] == 3
+    assert leak["relocate_accepted"] == 1
+    assert leak["relocate_moved"] == 2
+    assert leak["local_se2_attempted"] == 5
+    assert leak["local_se2_moved"] == 1
+    assert leak["motif_sequential_partial"] == 2
+    assert leak["motif_sequential_rcl"] == 7
+    assert leak["multi_pole_count"] == 2

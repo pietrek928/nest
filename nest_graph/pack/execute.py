@@ -20,6 +20,7 @@ from nest_graph.propose.heavy_polish import (
     run_improve_rules_rounds,
     should_freeze_improve_rules,
 )
+from nest_graph.propose.void_topology import iterative_multi_poles
 
 
 def note_mcts_free_kind(agent: Any, free_kind: Any) -> None:
@@ -32,6 +33,63 @@ def note_mcts_free_kind(agent: Any, free_kind: Any) -> None:
     note = getattr(agent, "note_free_kind", None)
     if note is not None:
         note(kind)
+
+
+def multi_pole_n_from_free(
+    free_poly: Any,
+    *,
+    min_dist: float,
+    max_poles: int = 4,
+    use_multi_pole: bool = True,
+) -> int:
+    """Count iterative spine poles for L2 AMAF floor (0 if disabled/empty)."""
+    if (
+        not use_multi_pole
+        or free_poly is None
+        or getattr(free_poly, "is_empty", True)
+    ):
+        return 0
+    poles = iterative_multi_poles(
+        free_poly,
+        min_dist=float(min_dist),
+        max_poles=max(1, int(max_poles)),
+    )
+    return int(len(poles))
+
+
+def note_mcts_multi_pole(
+    agent: Any,
+    n: int | None = None,
+    *,
+    propose_stats: dict | None = None,
+) -> None:
+    """L2: arm multi-pole AMAF floor from spine/pocket pole count.
+
+    Never clears an already-armed count when stats omit poles (stamp paths).
+    """
+    if agent is None:
+        return
+    count = int(n) if n is not None else 0
+    if count <= 0 and isinstance(propose_stats, dict):
+        count = int(propose_stats.get("multi_pole_count", 0) or 0)
+        if count <= 0:
+            dens = propose_stats.get("densify_stats") or {}
+            if isinstance(dens, dict):
+                count = int(dens.get("multi_pole_count", 0) or 0)
+        if count <= 0:
+            leak = propose_stats.get("void_leak")
+            if isinstance(leak, dict):
+                count = int(leak.get("multi_pole_count", 0) or 0)
+        if count <= 0:
+            count = int(
+                (propose_stats.get("mcts") or {}).get("multi_pole_n", 0) or 0
+            )
+    if count <= 0:
+        # Keep prior arm; do not zero on sparse propose_stats.
+        return
+    setter = getattr(agent, "set_multi_pole_n", None)
+    if setter is not None:
+        setter(int(count))
 
 
 def void_fit_r_from_stats(propose_stats: dict | None, *, default: float = 0.0) -> float:
@@ -513,6 +571,7 @@ def stamp_arena_amaf(
         arena_node_id=int(parent_id),
     )
     rem = tuple(int(g) for g in (child_snap.remaining_gids or ()))
+    note_mcts_multi_pole(agent, propose_stats=propose_stats)
     if action is None and rem:
         action = agent.pick_expand_action(
             rem, rule_ids=rule_ids, parent_id=int(parent_id), snapshot=child_snap,
