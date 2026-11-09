@@ -962,10 +962,15 @@ def maybe_block_hole_renest(
     propose_stats: dict,
 ) -> tuple[list[int], list, list, list, list | None, dict]:
     """Gate + call 3b hole re-nest (mid-pack, after refine)."""
-    propose_stats.setdefault("block_hole_accepted", 0)
-    propose_stats.setdefault("block_hole_emit_in_hull", 0)
-    propose_stats.setdefault("block_hole_victim", None)
-    propose_stats.setdefault("block_hole_tried", 0)
+    # Always clear — setdefault left sticky accepted=1 across skip/lex iters
+    # and poisoned hole_expand_gain / R1 repair_bp.
+    propose_stats["block_hole_accepted"] = 0
+    propose_stats["block_hole_emit_in_hull"] = 0
+    propose_stats["block_hole_victim"] = None
+    propose_stats["block_hole_tried"] = 0
+    propose_stats["block_hole_dcount"] = 0
+    propose_stats["block_hole_darea"] = 0.0
+    propose_stats["block_hole_reject_reason"] = ""
     skip_3b = int(propose_stats.get("block_cohort_accepted", 0) or 0) > 0
     if (
         not bool(getattr(polish_budget, "run_3b", False))
@@ -983,12 +988,8 @@ def maybe_block_hole_renest(
         begin_repair_cohort,
     )
 
-    # L1 park: void-facing peel lex dumped late Δ min (+0.1678 < open +0.1758)
-    # and early min under always-on; densify still void_clear_rate=0 / 3b no_gain|lex.
-    # Keep prefer_void_facing API + unit tests; production stays prefer_void_facing=False.
-    # L1 dual-miss: distance-first / clear_ratio hybrid / pocket_target pole all
-    # dumped early med below open — keep free target_pt + W3 strip lex; ship
-    # victim_pole_d telem + _pocket_pole_for_3b helper for post-wise evidence.
+    # R4 park: pocket emit pole dual-min (seed0 hull drop / early med short).
+    # Keep _pocket_pole_for_3b helper + victim target_pt + W3 strip lex.
     fit_r = 1.0 if bool(getattr(free_info, "fits_part", True)) else 0.0
     sterile = densify_void_clear_sterile(propose_stats)
     phantom = void_phantom(free_info, fit_r)

@@ -1479,6 +1479,7 @@ class NestingPipelineEvaluator:
                 "block_hole_accepted",
                 "block_hole_tried",
                 "block_hole_emit_in_hull",
+                "hole_expand_gain",
                 "motif_refine_hits",
                 "accepted_patterns_archived",
                 "refine_rejected",
@@ -1528,6 +1529,20 @@ class NestingPipelineEvaluator:
                     cur = max(cur, int(repack.get(short, 0) or 0))
                 letter_peak_state[key] = max(int(letter_peak_state.get(key, 0) or 0), cur)
                 last_void_leak[key] = int(letter_peak_state[key])
+            # R1: float peak — int() would zero out capped Δ ≤0.05.
+            _rbp = float(
+                propose_stats.get("repair_bp_delta", 0.0)
+                or (mcts_telem or {}).get("repair_bp_delta", 0.0)
+                or last_void_leak.get("repair_bp_delta", 0.0)
+                or 0.0
+            )
+            letter_peak_state["repair_bp_delta"] = max(
+                float(letter_peak_state.get("repair_bp_delta", 0.0) or 0.0),
+                _rbp,
+            )
+            last_void_leak["repair_bp_delta"] = float(
+                letter_peak_state["repair_bp_delta"]
+            )
             skip_reason = str(propose_stats.get("archive_mix_skip_reason") or "")
             if skip_reason:
                 last_void_leak["archive_mix_skip_reason"] = skip_reason
@@ -1737,6 +1752,9 @@ class NestingPipelineEvaluator:
                 motif_ttl_expand = int(
                     getattr(self.cfg.propose, "accepted_pattern_ttl", 4) or 4
                 )
+                propose_stats["board_area"] = float(
+                    getattr(self.sheet, "area", 0.0) or 0.0
+                )
                 mcts_parent_id, _child_snap = record_outer_iter_expand(
                     mcts_runner,
                     parent_id=mcts_parent_id,
@@ -1760,6 +1778,11 @@ class NestingPipelineEvaluator:
                     ),
                     rule_sets=rule_sets,
                 )
+                if isinstance(last_void_leak, dict):
+                    last_void_leak["repair_bp_delta"] = max(
+                        float(last_void_leak.get("repair_bp_delta", 0.0) or 0.0),
+                        float(propose_stats.get("repair_bp_delta", 0.0) or 0.0),
+                    )
                 del _child_snap
                 if isinstance(last_void_leak, dict):
                     last_void_leak["contact_grg_upserts"] = int(

@@ -83,3 +83,15 @@ def test_patterns_from_motif_base_sets_inject_pair_telem():
     pats = patterns_from_motif_base(base, max_keep=4, telem=telem)
     assert len(pats) >= 1
     assert int(telem.get("inject_pair_n", 0) or 0) >= 1
+
+
+def test_patterns_from_motif_base_inject_pair_counts_emitted():
+    """R3 park: swap dual-min; inject_pair_n still counts emitted list pairs."""
+    base = MotifBase()
+    base.upsert(_rec(0, 1, accept=5, gci=0.8, dx=0.0, dy=0.0), ttl=2)
+    base.upsert(_rec(2, 3, accept=4, gci=0.7, dx=5.0, dy=5.0), ttl=2)
+    base.upsert(_rec(0, 1, accept=3, gci=0.6, dx=1.0, dy=0.0), ttl=2)
+    telem: dict = {}
+    pats = patterns_from_motif_base(base, max_keep=4, telem=telem)
+    assert len(pats) >= 2
+    assert int(telem.get("inject_pair_n", 0) or 0) >= 2

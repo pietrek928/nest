@@ -17,6 +17,9 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         "block_hole_dcount": 0,
         "block_hole_darea": 0.0,
         "block_hole_reject_reason": "lex",
+        "hole_expand_gain": 0,
+        "repair_bp_delta": 0.0,
+        "amaf_miss": 3,
         "run_3b": 1,
         "niche_amaf_region": 1,
         "niche_amaf_rule": 0,
@@ -82,6 +85,9 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
     assert leak["block_cohort_accepted"] == 1
     assert leak["block_hole_tried"] == 1
     assert leak["block_hole_reject_reason"] == "lex"
+    assert leak["hole_expand_gain"] == 0
+    assert leak["repair_bp_delta"] == 0.0
+    assert leak["amaf_miss"] == 3
     assert leak["run_3b"] == 1
     assert leak["niche_amaf_region"] == 1
     assert leak["niche_amaf_rule"] == 0

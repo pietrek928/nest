@@ -831,17 +831,19 @@ public:
             score -= 0.15f;
         }
         if (placeable && region_i == motif_i && motif_fuel) {
-            // Plan D Motif cohort/fuel bonus (Void keeps niche soft-scale only).
-            // Post-wise Motif niche miss soft-scale dual-missed with 3b lex GLS.
+            // R2b unify: niche miss soft-scale dual-min under open — flat +0.2.
             score += 0.2f;
         }
         const int32_t sel_n = std::max(realized.sel_n, 1);
+        // R2: live Kind term; when multi-pole floor fires, scale trailing
+        // regions by 1+0.25·(max_share−my_share). Skip scale when visits==0.
+        float kind_term = 0.f;
         if (region_i >= 0 && region_i < 4) {
-            score += 0.2f * (static_cast<float>(realized.kind[static_cast<std::size_t>(region_i)]) / static_cast<float>(sel_n));
+            kind_term = 0.2f * (
+                static_cast<float>(realized.kind[static_cast<std::size_t>(region_i)])
+                / static_cast<float>(sel_n)
+            );
         }
-        // L2: ALNS min-weight — when multi-pole and one Kind dominates the
-        // realized.kind mass (not /sel_n — Motif hist is sparse vs packed n),
-        // soft-floor trailing regions. Do not invert Kind formula.
         if (multi_pole_n_ <= 0 && telem.multi_pole_n > 0) {
             multi_pole_n_ = telem.multi_pole_n;
         }
@@ -860,11 +862,12 @@ public:
                     realized.kind[static_cast<std::size_t>(region_i)]
                 ) / static_cast<float>(kind_sum);
                 if (max_share >= 0.5f && my_share + 1e-6f < max_share) {
-                    // Miss unify: score boost dual-degraded; keep telem-only arm for L3+.
+                    // R2 unify: Kind scale dual-min under open — telem-only.
                     telem.amaf_pole_floor += 1;
                 }
             }
         }
+        score += kind_term;
         const int32_t attach_n = realized.attach;
         const int32_t member_hits = realized.member_hits;
         const int32_t mat_motif = realized.materialized_motif;

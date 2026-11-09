@@ -30,6 +30,19 @@ def _gid_pair_key(rec: Any) -> tuple[int, int]:
     return (ga, gb) if ga <= gb else (gb, ga)
 
 
+def _emitted_motif_ids(pats: Sequence[ClusterPattern]) -> list[int]:
+    mids: list[int] = []
+    for pat in pats:
+        raw = getattr(pat, "motif_id", None)
+        mid = int(raw) if raw is not None else -1
+        if mid >= 0:
+            mids.append(mid)
+        for mid2 in getattr(pat, "motif_ids", None) or ():
+            if int(mid2) >= 0:
+                mids.append(int(mid2))
+    return mids
+
+
 def diversify_motif_ids_by_gid_pair(
     motif_base: Any,
     cand_ids: Sequence[int],
@@ -588,10 +601,13 @@ def patterns_from_motif_base(
             break
     if max_keep > 0 and len(out) > int(max_keep):
         out = out[: int(max_keep)]
+
+    # R3 last-slot gid-pair swap dual-min under open (accept-gate unify too) —
+    # park swap; keep emitted-list inject_pair_n (R0/R3 telem SoT).
     if telem is not None:
         pairs = {
             _gid_pair_key(motif_base.at(int(mid)))
-            for mid in cand_ids
+            for mid in _emitted_motif_ids(out)
             if 0 <= int(mid) < int(motif_base.size())
         }
         telem["inject_pair_n"] = int(len(pairs))

@@ -498,6 +498,14 @@ def build_void_leak_dict(
         "block_hole_victim_pole_d": float(
             propose_stats.get("block_hole_victim_pole_d", -1.0) or -1.0
         ),
+        # R0/R1: IR vs local — gainful 3a/3b clears hollow; repair Δ backprop.
+        "hole_expand_gain": int(propose_stats.get("hole_expand_gain", 0) or 0),
+        "repair_bp_delta": float(propose_stats.get("repair_bp_delta", 0.0) or 0.0),
+        "amaf_miss": int(
+            propose_stats.get("amaf_miss", 0)
+            or (propose_stats.get("mcts") or {}).get("amaf_miss", 0)
+            or 0
+        ),
         # H0: niche AMAF key beside 3a/3b for path/expand lag census.
         "niche_amaf_region": int(propose_stats.get("niche_amaf_region", -1) or -1),
         "niche_amaf_rule": int(propose_stats.get("niche_amaf_rule", 0) or 0),
@@ -1066,6 +1074,10 @@ def merge_phase_gate_telem(
             propose_stats.get("mcts_region", leak.get("mcts_region")),
         )
         leak["amaf_hits"] = int(mt.get("amaf_hits", leak.get("amaf_hits", 0)) or 0)
+        leak["amaf_miss"] = int(mt.get("amaf_miss", leak.get("amaf_miss", 0)) or 0)
+        leak["repair_bp_delta"] = float(
+            mt.get("repair_bp_delta", leak.get("repair_bp_delta", 0.0)) or 0.0
+        )
         leak["amaf_free_kind_decay"] = int(
             mt.get(
                 "amaf_free_kind_decay",

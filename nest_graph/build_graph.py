@@ -297,8 +297,8 @@ def _path_accept_contact_upsert(
     mask = [int(g) in allow_gids for g in gids_ok]
     if not any(mask):
         return 0
-    # Post-wise: mask_any_endpoint=True dual-missed early med (0.592 < 0.600);
-    # keep both-endpoints. Flag remains on upsert_from_contacts for evidence retries.
+    # R3 conditional one-endpoint (cap-1 / flush) dual-min under open —
+    # park; both-endpoints only (always-on any-endpoint also missed 0.592).
     n_up = upsert_from_contacts(
         runner.motif_base,
         geoms,
@@ -3284,6 +3284,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 mcts_telem["last_fits_part"] = int(propose_stats["fits_part"])
         # Macro-MCTS: record expand reward (Q68/Q69); upsert contact motifs when improved.
         if mcts_action is not None and mcts_runner.agent is not None:
+            # R1 repair Δ backprop lives in record_outer_iter_expand (shared with
+            # nesting_evaluator early dual) — never a second full leaf here.
+            propose_stats["board_area"] = float(board_area)
             mcts_parent_id, child_snap = record_outer_iter_expand(
                 mcts_runner,
                 parent_id=mcts_parent_id,
@@ -3315,19 +3318,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 rule_sets=rule_sets,
             )
             if child_snap is not None and mcts_action is not None:
-                realized = getattr(
-                    getattr(mcts_runner, "agent", None), "realized", None
-                ) or {}
-                outer_r = leaf_reward(
-                    child_snap,
-                    rule_id=int(getattr(mcts_action, "rule_id", 0) or 0),
-                    survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
-                    macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
-                    member_hits=int(realized.get("member_hits", 0) or 0),
-                    materialized_motif=int(realized.get("materialized_motif", 0) or 0),
-                )
-                cheap_r = float(mcts_telem.get("last_cheap_reward", 0.0) or 0.0)
-                mcts_telem["cheap_outer_reward_delta"] = float(outer_r) - cheap_r
+                if "cheap_outer_reward_delta" not in mcts_telem:
+                    realized = getattr(
+                        getattr(mcts_runner, "agent", None), "realized", None
+                    ) or {}
+                    outer_r = leaf_reward(
+                        child_snap,
+                        rule_id=int(getattr(mcts_action, "rule_id", 0) or 0),
+                        survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+                        macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+                        member_hits=int(realized.get("member_hits", 0) or 0),
+                        materialized_motif=int(
+                            realized.get("materialized_motif", 0) or 0
+                        ),
+                    )
+                    cheap_r = float(mcts_telem.get("last_cheap_reward", 0.0) or 0.0)
+                    mcts_telem["cheap_outer_reward_delta"] = float(outer_r) - cheap_r
             _exec_last["snap"] = child_snap
             if plateau.on_plateau and float(cov) >= float(plateau.last_cov or 0.0):
                 mcts_telem["plateau_rule_boost"] = 1

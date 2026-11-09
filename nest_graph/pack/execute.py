@@ -35,6 +35,63 @@ def note_mcts_free_kind(agent: Any, free_kind: Any) -> None:
         note(kind)
 
 
+def repair_bp_delta_addend(
+    *,
+    propose_stats: dict,
+    mcts_telem: dict,
+    board_area: float = 0.0,
+) -> float:
+    """R1: capped positive 3a/3b coverage Δ to fold into the one expand reward.
+
+    Prefer ``darea/board`` (cheap_outer leaf−leaf cancels under LargeVoid void_w).
+    ``0.01·dcount`` only when darea≤0 and dcount>0. No second ``backprop`` visit.
+    """
+    propose_stats["repair_bp_delta"] = 0.0
+    mcts_telem["repair_bp_delta"] = 0.0
+    if int(propose_stats.get("hole_expand_gain", 0) or 0) <= 0:
+        return 0.0
+    darea = float(propose_stats.get("block_hole_darea", 0.0) or 0.0)
+    if darea <= 0.0:
+        darea = float(propose_stats.get("block_cohort_darea", 0.0) or 0.0)
+    dcount = int(propose_stats.get("block_hole_dcount", 0) or 0)
+    if dcount <= 0:
+        dcount = int(propose_stats.get("block_cohort_dcount", 0) or 0)
+    board_a = float(board_area) if board_area else 0.0
+    if darea > 1e-12 and board_a > 1e-12:
+        raw_delta = float(darea) / board_a
+    elif dcount > 0:
+        raw_delta = 0.01 * float(dcount)
+    else:
+        return 0.0
+    repair_bp_delta = float(min(max(raw_delta, 0.0), 0.05))
+    if repair_bp_delta <= 1e-12:
+        return 0.0
+    propose_stats["repair_bp_delta"] = float(repair_bp_delta)
+    mcts_telem["repair_bp_delta"] = float(repair_bp_delta)
+    if isinstance(propose_stats.get("void_leak"), dict):
+        propose_stats["void_leak"]["repair_bp_delta"] = float(repair_bp_delta)
+    return float(repair_bp_delta)
+
+
+def maybe_repair_delta_backprop(
+    agent: Any,
+    *,
+    bp_node: int,
+    child_snap: BoardSnapshot,
+    action: Any,
+    propose_stats: dict,
+    mcts_telem: dict,
+    board_area: float = 0.0,
+) -> float:
+    """Deprecated path: compute addend only (no second backprop visit)."""
+    del agent, bp_node, child_snap, action
+    return repair_bp_delta_addend(
+        propose_stats=propose_stats,
+        mcts_telem=mcts_telem,
+        board_area=float(board_area),
+    )
+
+
 def multi_pole_n_from_free(
     free_poly: Any,
     *,
@@ -425,23 +482,31 @@ def record_mcts_expand(
     motif_max_keep: int = 0,
     upsert_contacts: bool = True,
     rule_sets: Sequence | None = None,
+    repair_bp_addend: float = 0.0,
 ) -> int:
     """Expand/backprop + ContactGRG MotifBase upsert (Q93); returns new parent id.
 
     ``upsert_contacts=False`` skips MotifBase upsert (S2 path adopt — Q389 already
     ran via ``_path_accept_contact_upsert``).
+    ``repair_bp_addend`` folds gainful 3a/3b coverage Δ into this one expand reward
+    (no second ``backprop`` visit).
     """
     del part_areas
     agent = runner.agent
     realized = (getattr(agent, "realized", None) or {}) if agent is not None else {}
-    reward = leaf_reward(
-        child_snap,
-        rule_id=int(getattr(action, "rule_id", 0) or 0),
-        member_hits=int(propose_stats.get("member_hits", 0) or 0),
-        materialized_motif=int(propose_stats.get("materialized_motif", 0) or 0),
-        survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
-        macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+    reward = float(
+        leaf_reward(
+            child_snap,
+            rule_id=int(getattr(action, "rule_id", 0) or 0),
+            member_hits=int(propose_stats.get("member_hits", 0) or 0),
+            materialized_motif=int(propose_stats.get("materialized_motif", 0) or 0),
+            survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
+            macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
+        )
     )
+    addend = float(repair_bp_addend)
+    if addend > 1e-12:
+        reward = float(reward) + addend
     if agent is None:
         return int(parent_id)
     note_mcts_free_kind(agent, getattr(child_snap, "free_kind", FreeKind.Empty))
@@ -674,6 +739,19 @@ def record_outer_iter_expand(
             )
             act.rule_id = 0
             act.motif_id = -1
+    # R1: fold capped 3b coverage Δ into the one expand reward (no second visit).
+    board_a = 0.0
+    try:
+        board_a = float(getattr(child_snap, "sheet_area", 0.0) or 0.0)
+    except Exception:
+        board_a = 0.0
+    if board_a <= 0.0:
+        board_a = float(propose_stats.get("board_area", 0.0) or 0.0)
+    repair_add = repair_bp_delta_addend(
+        propose_stats=propose_stats,
+        mcts_telem=mcts_telem,
+        board_area=float(board_a),
+    )
     new_id = record_mcts_expand(
         runner,
         parent_id=int(parent_id),
@@ -690,6 +768,7 @@ def record_outer_iter_expand(
         motif_ttl=int(motif_ttl),
         motif_max_keep=int(motif_max_keep),
         rule_sets=rule_sets,
+        repair_bp_addend=float(repair_add),
     )
     parent_visits = max(int(agent.arena.visits(int(parent_id))), 1)
     agent._ucb(int(new_id), parent_visits)
@@ -705,6 +784,10 @@ def record_outer_iter_expand(
         if int(mcts_telem.get("kiss_demote", 0) or 0) > 0:
             propose_stats["void_leak"]["kiss_demote"] = int(
                 mcts_telem.get("kiss_demote", 0) or 0
+            )
+        if "repair_bp_delta" in propose_stats:
+            propose_stats["void_leak"]["repair_bp_delta"] = float(
+                propose_stats.get("repair_bp_delta", 0.0) or 0.0
             )
     propose_stats["amaf_hits"] = int(agent.telem.get("amaf_hits", 0) or 0)
     propose_stats["amaf_miss"] = int(agent.telem.get("amaf_miss", 0) or 0)
@@ -965,6 +1048,8 @@ __all__ = [
     "execute_pack",
     "fit_shape_for_remaining",
     "make_execute_fn",
+    "maybe_repair_delta_backprop",
+    "repair_bp_delta_addend",
     "prep_selection_free",
     "prep_selection_freeze",
     "record_mcts_expand",
