@@ -110,6 +110,11 @@ def test_format_dg_expand_funnel_keys():
         {
             "replay_from_ancestor_ms": 12.5,
             "cheap_outer_reward_delta": 0.01,
+            "repair_bp_delta": 0.0123,
+            "void_fill": 0.25,
+            "void_fit_ratio": 0.42,
+            "ucb_beta_mean": 0.85,
+            "ucb_beta_min": 0.40,
             "place_cohort_ready": 1,
             "place_cohort_specs_n": 3,
             "mcts_cohort_macro_n": 2,
@@ -132,6 +137,10 @@ def test_format_dg_expand_funnel_keys():
     assert "mpg_a=" in line
     assert "fat=" in line
     assert "cheap_d=0.010" in line
+    assert "repair_bp=0.0123" in line
+    assert "void_fill=0.250" in line
+    assert "fit_ratio=0.42" in line
+    assert "ucb_b=0.85/0.40" in line
     assert "place_coh=1/3/2" in line
     assert "pick=4/1/0/3/1" in line
     assert "compose_sz=2" in line

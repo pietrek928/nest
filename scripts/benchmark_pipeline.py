@@ -740,6 +740,7 @@ def main() -> None:
                             f"amaf_miss={leak.get('amaf_miss', 0)} "
                             f"amaf_fk_decay={leak.get('amaf_free_kind_decay', 0)} "
                             f"amaf_pole_floor={leak.get('amaf_pole_floor', 0)} "
+                            f"pb_decay={leak.get('pb_decay_n', 0)} "
                             f"amaf_fb={leak.get('amaf_cohort_fallback', 0)} "
                             f"amaf_age={leak.get('amaf_age_apply', 0)}/"
                             f"{leak.get('amaf_age_max', 0)} "

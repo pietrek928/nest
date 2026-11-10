@@ -345,9 +345,18 @@ def build_void_leak_dict(
     attract_bonus: float,
 ) -> dict:
     """void_leak dict for propose_stats (keys unchanged)."""
+    # GE1: non-saturating void progress (shared with board_snapshot_from_selection).
+    _r0 = 10.0
+    _ratio = float(max_void_ratio)
+    if _ratio > 0.0:
+        _void_fill = float(1.0 / (1.0 + (_ratio / _r0)))
+    else:
+        _void_fill = 0.0
+    _void_fill = float(max(0.0, min(1.0, _void_fill)))
     return {
         "free_kind": free_kind_token(free_kind),
         "max_void_ratio": float(max_void_ratio),
+        "void_fill": float(_void_fill),
         "props": n_void_props,
         "props_pole": n_props_pole,
         "hijack": bool(hijack),
@@ -1096,6 +1105,13 @@ def merge_phase_gate_telem(
             )
             or 0
         )
+        leak["pb_decay_n"] = int(
+            mt.get(
+                "pb_decay_n",
+                propose_stats.get("pb_decay_n", leak.get("pb_decay_n", 0)),
+            )
+            or 0
+        )
         leak["amaf_cohort_fallback"] = int(
             mt.get(
                 "amaf_cohort_fallback",
@@ -1150,6 +1166,9 @@ def merge_phase_gate_telem(
         leak["void_fit_ratio"] = float(
             propose_stats.get("void_fit_ratio", leak.get("void_fit_ratio", 0.0)) or 0.0
         )
+        leak["void_fill"] = float(
+            propose_stats.get("void_fill", leak.get("void_fill", 0.0)) or 0.0
+        )
         leak["void_pole_conflict_scale"] = float(
             propose_stats.get(
                 "void_pole_conflict_scale", leak.get("void_pole_conflict_scale", 1.0)
@@ -1158,6 +1177,23 @@ def merge_phase_gate_telem(
         )
         leak["cheap_outer_reward_delta"] = float(
             mt.get("cheap_outer_reward_delta", leak.get("cheap_outer_reward_delta", 0.0)) or 0.0
+        )
+        leak["ucb_beta_mean"] = float(
+            mt.get("ucb_beta_mean", leak.get("ucb_beta_mean", 0.0)) or 0.0
+        )
+        leak["ucb_beta_min"] = float(
+            mt.get("ucb_beta_min", leak.get("ucb_beta_min", 1.0)) or 1.0
+        )
+        leak["ucb_beta_n"] = int(
+            mt.get("ucb_beta_n", leak.get("ucb_beta_n", 0)) or 0
+        )
+        leak["ir_rank"] = float(
+            mt.get("ir_rank", propose_stats.get("ir_rank", leak.get("ir_rank", 0.5)))
+            or 0.5
+        )
+        leak["ir_rank_n"] = int(
+            mt.get("ir_rank_n", propose_stats.get("ir_rank_n", leak.get("ir_rank_n", 0)))
+            or 0
         )
         # K: live bank dpos drift + mid aliases for letter SCORECARD.
         leak["working_dpos"] = float(
@@ -2319,6 +2355,14 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"path_ran={int(leak.get('path_ran', 0) or 0)}/"
         f"{int(leak.get('path_cache_miss', 0) or 0)} "
         f"cheap_d={float(leak.get('cheap_outer_reward_delta', 0.0) or 0.0):.3f} "
+        f"repair_bp={float(leak.get('repair_bp_delta', 0.0) or 0.0):.4f} "
+        f"void_fill={float(leak.get('void_fill', 0.0) or 0.0):.3f} "
+        f"fit_ratio={float(leak.get('void_fit_ratio', 0.0) or 0.0):.2f} "
+        f"ucb_b={float(leak.get('ucb_beta_mean', 0.0) or 0.0):.2f}/"
+        f"{float(leak.get('ucb_beta_min', 1.0) or 1.0):.2f} "
+        f"ir_rank={float(leak.get('ir_rank', 0.5) or 0.5):.2f}/"
+        f"{int(leak.get('ir_rank_n', 0) or 0)} "
+        f"pb_decay={int(leak.get('pb_decay_n', 0) or 0)} "
         f"place_coh={int(leak.get('place_cohort_ready', 0) or 0)}/"
         f"{int(leak.get('place_cohort_specs_n', 0) or 0)}/"
         f"{int(leak.get('mcts_cohort_macro_n', 0) or 0)} "

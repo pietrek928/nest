@@ -133,6 +133,24 @@ def run_void_leak_and_niche_credit(
         or {}
     )
     propose_stats["void_leak"] = leak_dict
+    propose_stats["max_void_ratio"] = float(leak_dict.get("max_void_ratio", 0.0) or 0.0)
+    propose_stats["void_fill"] = float(leak_dict.get("void_fill", 0.0) or 0.0)
+    # GE2: push agent MctsTelem (ucb_beta_*) into mcts_telem before funnel print.
+    push = getattr(mcts_runner, "push_state", None)
+    if callable(push):
+        push()
+    if isinstance(mcts_telem, dict) and getattr(mcts_runner, "agent", None) is not None:
+        at = getattr(mcts_runner.agent, "telem", None)
+        if isinstance(at, dict):
+            for _k in (
+                "ucb_beta_mean",
+                "ucb_beta_min",
+                "ucb_beta_n",
+                "ucb_beta_sum",
+                "pb_decay_n",
+            ):
+                if _k in at:
+                    mcts_telem[_k] = at[_k]
     # Wp: merge phase-gate keys before print so build_graph void_leak shows
     # place_coh / coh_sig / union (finalize_iter_mcts also merges later).
     merge_phase_gate_telem(leak_dict, mcts_telem, propose_stats)

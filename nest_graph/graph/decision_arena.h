@@ -333,8 +333,15 @@ public:
             region, n.action.rule_id, n.action.motif_id, n.action.preset_id
         );
         if (av > 0) {
-            const float beta = static_cast<float>(av)
-                / (static_cast<float>(av) + static_cast<float>(n.visits) + 1e-9f);
+            // GE2: Gelly–Silver β = sqrt(k/(3n+k)) so node means take over as
+            // visits grow (av/(av+n) kept AMAF-dominated because backprop
+            // always amaf_records the same key → av≥n → β≥0.5).
+            // Degrade ladder: k=20 early-med below open → k=50 (softer).
+            constexpr float k_amaf = 50.f;
+            const float n_vis = static_cast<float>(n.visits);
+            const float beta = std::sqrt(
+                k_amaf / (3.f * n_vis + k_amaf + 1e-9f)
+            );
             mean = beta
                     * amaf_mean(
                         region, n.action.rule_id, n.action.motif_id, n.action.preset_id

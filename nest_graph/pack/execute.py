@@ -12,7 +12,7 @@ from nest_graph.free_kind_util import (
 )
 from nest_graph.graph import BoardSnapshot, FreeKind, MacroAction, MacroRegion, leaf_reward
 from nest_graph.pack.cache_key import macro_motif_id
-from nest_graph.pack.slave_pack import upsert_from_contacts
+from nest_graph.pack.slave_pack import cheap_expand_slave, upsert_from_contacts
 from nest_graph.propose.context import prep_free_space, void_ratio_threshold
 from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.heavy_polish import (
@@ -35,36 +35,80 @@ def note_mcts_free_kind(agent: Any, free_kind: Any) -> None:
         note(kind)
 
 
+def apply_ir_rank(
+    agent: Any,
+    reward: float,
+    *,
+    kappa: float = 0.05,
+    propose_stats: dict | None = None,
+    mcts_telem: dict | None = None,
+) -> float:
+    """GE3: soft κ·(rank−0.5) vs related_snaps_; returns adjusted reward."""
+    ir_rank = 0.5
+    ir_rank_n = 0
+    out = float(reward)
+    try:
+        rank_fn = getattr(agent, "rank_related_reward", None)
+        if callable(rank_fn):
+            _rr = rank_fn(float(reward))
+            ir_rank = float(_rr[0])
+            ir_rank_n = int(_rr[1])
+    except Exception:
+        ir_rank = 0.5
+        ir_rank_n = 0
+    if ir_rank_n > 0:
+        out = float(reward) + float(kappa) * (float(ir_rank) - 0.5)
+    if isinstance(propose_stats, dict):
+        propose_stats["ir_rank"] = float(ir_rank)
+        propose_stats["ir_rank_n"] = int(ir_rank_n)
+        if isinstance(propose_stats.get("void_leak"), dict):
+            propose_stats["void_leak"]["ir_rank"] = float(ir_rank)
+            propose_stats["void_leak"]["ir_rank_n"] = int(ir_rank_n)
+    if isinstance(mcts_telem, dict):
+        mcts_telem["ir_rank"] = float(ir_rank)
+        mcts_telem["ir_rank_n"] = int(ir_rank_n)
+    return float(out)
+
+
 def repair_bp_delta_addend(
     *,
     propose_stats: dict,
     mcts_telem: dict,
     board_area: float = 0.0,
+    outer_reward: float | None = None,
 ) -> float:
-    """R1: capped positive 3a/3b coverage Δ to fold into the one expand reward.
+    """R1/GE4: capped IR addend into the one expand reward (no second visit).
 
-    Prefer ``darea/board`` (cheap_outer leaf−leaf cancels under LargeVoid void_w).
-    ``0.01·dcount`` only when darea≤0 and dcount>0. No second ``backprop`` visit.
+    Prefer gainful 3a/3b ``darea/board`` (else ``0.01·dcount``). When hole gain
+    is absent, GE4 folds ``clamp(outer−last_cheap, −0.02, +0.05)`` if both
+    ``outer_reward`` and ``last_cheap_reward`` are present.
     """
     propose_stats["repair_bp_delta"] = 0.0
     mcts_telem["repair_bp_delta"] = 0.0
-    if int(propose_stats.get("hole_expand_gain", 0) or 0) <= 0:
-        return 0.0
-    darea = float(propose_stats.get("block_hole_darea", 0.0) or 0.0)
-    if darea <= 0.0:
-        darea = float(propose_stats.get("block_cohort_darea", 0.0) or 0.0)
-    dcount = int(propose_stats.get("block_hole_dcount", 0) or 0)
-    if dcount <= 0:
-        dcount = int(propose_stats.get("block_cohort_dcount", 0) or 0)
-    board_a = float(board_area) if board_area else 0.0
-    if darea > 1e-12 and board_a > 1e-12:
-        raw_delta = float(darea) / board_a
-    elif dcount > 0:
-        raw_delta = 0.01 * float(dcount)
-    else:
-        return 0.0
-    repair_bp_delta = float(min(max(raw_delta, 0.0), 0.05))
-    if repair_bp_delta <= 1e-12:
+    repair_bp_delta = 0.0
+    if int(propose_stats.get("hole_expand_gain", 0) or 0) > 0:
+        darea = float(propose_stats.get("block_hole_darea", 0.0) or 0.0)
+        if darea <= 0.0:
+            darea = float(propose_stats.get("block_cohort_darea", 0.0) or 0.0)
+        dcount = int(propose_stats.get("block_hole_dcount", 0) or 0)
+        if dcount <= 0:
+            dcount = int(propose_stats.get("block_cohort_dcount", 0) or 0)
+        board_a = float(board_area) if board_area else 0.0
+        if darea > 1e-12 and board_a > 1e-12:
+            raw_delta = float(darea) / board_a
+        elif dcount > 0:
+            raw_delta = 0.01 * float(dcount)
+        else:
+            raw_delta = 0.0
+        repair_bp_delta = float(min(max(raw_delta, 0.0), 0.05))
+    elif outer_reward is not None and "last_cheap_reward" in mcts_telem:
+        # GE4: local-search advantage over cheap leaf (Q309 consumer).
+        # Positive-only + cap 0.02 (degrade ladder); consume cheap so stale
+        # multi_sim tips cannot boost every later outer expand.
+        cheap = float(mcts_telem.pop("last_cheap_reward", 0.0) or 0.0)
+        raw_delta = float(outer_reward) - cheap
+        repair_bp_delta = float(min(max(raw_delta, 0.0), 0.02))
+    if abs(repair_bp_delta) <= 1e-12:
         return 0.0
     propose_stats["repair_bp_delta"] = float(repair_bp_delta)
     mcts_telem["repair_bp_delta"] = float(repair_bp_delta)
@@ -434,8 +478,18 @@ def board_snapshot_from_selection(
         propose_stats.get("free_kind"),
     )
     rim_fill = float(propose_stats.get("rim_progress", leak.get("rim_progress", 0.0)) or 0.0)
-    max_void_ratio = float(leak.get("max_void_ratio", 0.0) or 0.0)
-    void_fill = float(max(0.0, min(1.0, 1.0 - (max_void_ratio / 10.0))))
+    # Prefer leak, then top-level propose_stats (snapshot often runs before leak hoist).
+    max_void_ratio = float(
+        leak.get(
+            "max_void_ratio",
+            propose_stats.get("max_void_ratio", 0.0),
+        )
+        or 0.0
+    )
+    # GE1: non-saturating void progress (ratio≳10 used to clamp void_fill→0).
+    _r0 = 10.0
+    void_fill = float(1.0 / (1.0 + (max_void_ratio / _r0))) if max_void_ratio > 0.0 else 1.0
+    void_fill = float(max(0.0, min(1.0, void_fill)))
     if is_large_void(free_kind) and max_void_ratio <= 0.0:
         void_fill = 0.0
     elif free_kind != FreeKind.Empty and not is_large_void(free_kind) and max_void_ratio <= 0.0:
@@ -443,6 +497,10 @@ def board_snapshot_from_selection(
     fit_r = void_fit_r_from_stats(propose_stats)
     fit_ratio = void_fit_ratio_from_stats(propose_stats)
     propose_stats["void_fit_ratio"] = float(fit_ratio)
+    propose_stats["void_fill"] = float(void_fill)
+    if isinstance(propose_stats.get("void_leak"), dict):
+        propose_stats["void_leak"]["void_fill"] = float(void_fill)
+        propose_stats["void_leak"]["void_fit_ratio"] = float(fit_ratio)
     return BoardSnapshot(
         packed_gids=packed_gids,
         packed_transforms=packed_tf,
@@ -505,10 +563,29 @@ def record_mcts_expand(
         )
     )
     addend = float(repair_bp_addend)
-    if addend > 1e-12:
+    if abs(addend) <= 1e-12:
+        # GE4: cheap→outer when R1 hole path was idle (needs outer leaf).
+        board_a = float(propose_stats.get("board_area", 0.0) or 0.0)
+        if board_a <= 0.0:
+            try:
+                board_a = float(getattr(child_snap, "sheet_area", 0.0) or 0.0)
+            except Exception:
+                board_a = 0.0
+        addend = float(
+            repair_bp_delta_addend(
+                propose_stats=propose_stats,
+                mcts_telem=mcts_telem,
+                board_area=float(board_a),
+                outer_reward=float(reward),
+            )
+        )
+    if abs(addend) > 1e-12:
         reward = float(reward) + addend
     if agent is None:
         return int(parent_id)
+    reward = apply_ir_rank(
+        agent, reward, propose_stats=propose_stats, mcts_telem=mcts_telem,
+    )
     note_mcts_free_kind(agent, getattr(child_snap, "free_kind", FreeKind.Empty))
     if agent.may_expand_node(parent_id):
         child_id = agent.expand(parent_id, action, reward)
@@ -867,8 +944,6 @@ def run_mcts_multi_sim(
     rule_ids: tuple[int, ...] = (0,),
 ) -> tuple[Any | None, int]:
     """Q107: K cheap expands; return (tip MacroAction, tip leaf id)."""
-    from nest_graph.pack.slave_pack import cheap_expand_slave
-
     agent = runner.agent
     tip_leaf = int(parent_id)
     tip_action = None
@@ -905,8 +980,11 @@ def run_mcts_multi_sim(
             telem=agent.telem,
             realized=dict(getattr(agent, "realized", None) or {}),
         )
-        child = agent.expand(leaf, action, result.reward)
-        mcts_telem["last_cheap_reward"] = float(result.reward)
+        cheap_raw = float(result.reward)
+        cheap_r = apply_ir_rank(agent, cheap_raw, mcts_telem=mcts_telem)
+        child = agent.expand(leaf, action, cheap_r)
+        # GE4 / Q309: store pre-rank cheap so outer leaf_reward compares like-for-like.
+        mcts_telem["last_cheap_reward"] = float(cheap_raw)
         result.snapshot.arena_node_id = int(child)
         runner.store_snapshot(int(child), result.snapshot)
         mcts_telem["pw_expand"] = int(mcts_telem.get("pw_expand", 0)) + 1

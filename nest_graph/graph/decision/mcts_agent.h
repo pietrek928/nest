@@ -66,6 +66,12 @@ struct MctsTelem {
     int32_t amaf_age_max = 0;          // H2e: max age applied
     int32_t amaf_pole_floor = 0;       // L2: multi-pole trailing-region floor fires
     int32_t multi_pole_n = 0;          // L2: mirrored for telem pull/push persistence
+    // GE2: Gelly–Silver β telem from ucb()
+    float ucb_beta_sum = 0.f;
+    int32_t ucb_beta_n = 0;
+    float ucb_beta_min = 1.f;
+    // GE5: progressive-bias envelope fires (k/(visits+k) < 1)
+    int32_t pb_decay_n = 0;
 };
 
 struct MotifCohortEntry {
@@ -240,8 +246,12 @@ inline float leaf_reward(
         rim_w = std::min(rim_w, 0.05f);
     }
     float void_fill_term = snapshot.void_fill;
-    if (snapshot.free_kind == FreeKind::LargeVoid
-        || snapshot.free_kind == FreeKind::SwissCheese) {
+    // GE1: LargeVoid scales by continuous void_fit_ratio (not binary fit_r).
+    // Swiss keeps binary fit_r so high Swiss void_fill cannot reward staying Swiss.
+    if (snapshot.free_kind == FreeKind::LargeVoid) {
+        const float fit_c = snapshot.void_fit_ratio;
+        void_fill_term *= std::min(std::max(fit_c, 0.f), 1.f);
+    } else if (snapshot.free_kind == FreeKind::SwissCheese) {
         void_fill_term *= std::min(std::max(fit_r, 0.f), 1.f);
     }
     // Layout-only: rule/motif additives live in amaf_pick_score (Gelly–Silver),
@@ -432,11 +442,22 @@ public:
         }
         const MacroAction &action = arena->node(node_id).action;
         const int32_t region_i = static_cast<int32_t>(action.region);
-        if (arena->amaf_visits(
-                region_i, action.rule_id, action.motif_id, action.preset_id
-            )
-            > 0) {
+        const int32_t av = arena->amaf_visits(
+            region_i, action.rule_id, action.motif_id, action.preset_id
+        );
+        if (av > 0) {
             telem.amaf_hits += 1;
+            // Mirror GE2 β for telem (same formula as DecisionArena::ucb_score).
+            constexpr float k_amaf = 50.f;
+            const float n_vis = static_cast<float>(
+                std::max(arena->node(node_id).visits, 1)
+            );
+            const float beta = std::sqrt(
+                k_amaf / (3.f * n_vis + k_amaf + 1e-9f)
+            );
+            telem.ucb_beta_sum += beta;
+            telem.ucb_beta_n += 1;
+            telem.ucb_beta_min = std::min(telem.ucb_beta_min, beta);
         }
         float score = arena->ucb_score(node_id, parent_visits, ucb_c);
         if (!std::isfinite(score) || score > MCTS_POS_INF_THRESH) {
@@ -675,6 +696,21 @@ public:
         }
     }
 
+    /** GE3: fraction of related_snaps_ with leaf_reward ≤ reward; n = buffer size. */
+    std::pair<float, int32_t> rank_related_reward(float reward) const {
+        const int32_t n = static_cast<int32_t>(related_snaps_.size());
+        if (n <= 0) {
+            return {0.5f, 0};
+        }
+        int32_t le = 0;
+        for (const BoardSnapshot &snap : related_snaps_) {
+            if (leaf_reward(snap) <= reward + 1e-12f) {
+                le += 1;
+            }
+        }
+        return {static_cast<float>(le) / static_cast<float>(n), n};
+    }
+
     std::unordered_set<ActionKey, ActionKeyHash> tried_action_keys(int32_t parent_id) const {
         std::unordered_set<ActionKey, ActionKeyHash> tried;
         if (arena == nullptr) {
@@ -827,12 +863,21 @@ public:
                 telem.conflict_p_sum += p;
             }
         }
+        // GE5 degrade: Motif-only PB envelope (full Rim/kind/attach/survive
+        // decay dual-min under open). k=8 matches beta_accept. Void/phantom flat.
+        constexpr float k_pb_decay = 8.f;
+        const float pb_decay =
+            visits <= 0 ? 1.f
+                        : (k_pb_decay / (static_cast<float>(visits) + k_pb_decay));
         if (placeable && region_i == rim_i) {
             score -= 0.15f;
         }
         if (placeable && region_i == motif_i && motif_fuel) {
             // R2b unify: niche miss soft-scale dual-min under open — flat +0.2.
-            score += 0.2f;
+            score += 0.2f * pb_decay;
+            if (pb_decay < 1.f - 1e-6f) {
+                telem.pb_decay_n += 1;
+            }
         }
         const int32_t sel_n = std::max(realized.sel_n, 1);
         // R2: live Kind term; when multi-pole floor fires, scale trailing

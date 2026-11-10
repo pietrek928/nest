@@ -1,0 +1,11 @@
+GE0 open snapshot (HEAD + telem hygiene only)
+early r1: 0.569 0.605 0.593  med=0.593 min=0.569 parts~59
+early r2: 0.589 0.620 0.569  med=0.589 min=0.569 parts~57
+pooled 6: med=0.591 min=0.569
+late N=3: Δcov=+0.1924,+0.1924,+0.1924  med=+0.1924 parts=+26
+IR telem: repair_bp/void_fill/fit_ratio in dg_funnel; pole floor test telem-only
+historical plan bar med>=0.600 min>=0.577 late>=+0.1924 — use max(open, historical) for letter pass
+GE series locked 2026-11-10T02:07:39+01:00
+early open med/min 0.591/0.569
+GE4 early r3 med 0.600 min 0.584; late med +0.1924; repair_bp fires
+GE5 Motif-only pb_decay k=8; early r2 med 0.599 min 0.584; late med +0.1924 (+0.2004 tip); pb_decay live

@@ -113,16 +113,39 @@ def test_leaf_reward_terms():
         rim_fill=0.2,
         free_kind=FreeKind.LargeVoid,
         void_fit_r=1.0,
+        void_fit_ratio=1.0,
         packed_gids=(1,),
     )
     assert leaf_reward(snap_void) > leaf_reward(snap_base)
-    # D1: phantom/unknown large_void does not inflate void_fill / void_w.
+    # GE1: continuous fit_ratio soft-scales LargeVoid; binary fit_r=0 alone no longer zeroes.
+    snap_partial = BoardSnapshot(
+        coverage=0.5,
+        void_fill=0.4,
+        rim_fill=0.2,
+        free_kind=FreeKind.LargeVoid,
+        void_fit_r=0.0,
+        void_fit_ratio=0.5,
+        packed_gids=(1,),
+    )
+    assert leaf_reward(snap_partial) > leaf_reward(
+        BoardSnapshot(
+            coverage=0.5,
+            void_fill=0.4,
+            rim_fill=0.2,
+            free_kind=FreeKind.LargeVoid,
+            void_fit_r=0.0,
+            void_fit_ratio=0.0,
+            packed_gids=(1,),
+        )
+    )
+    # D1: zero fit_ratio phantom does not inflate void_fill / void_w.
     snap_phantom = BoardSnapshot(
         coverage=0.5,
         void_fill=0.4,
         rim_fill=0.2,
         free_kind=FreeKind.LargeVoid,
         void_fit_r=0.0,
+        void_fit_ratio=0.0,
         packed_gids=(1,),
     )
     assert leaf_reward(snap_phantom) < leaf_reward(snap_void)
@@ -417,7 +440,7 @@ def test_amaf_pick_reads_realized_kind_attach():
 
 
 def test_amaf_multi_pole_floor_boosts_trailing_region():
-    """L2: trailing Kind gets soft floor when multi_pole_n≥2 and one Kind dominates."""
+    """R2 park: multi_pole floor is telem-only (no score multiply)."""
     from nest_graph.pack.motif_credit import credit_motif_on_nest_survival
 
     arena = DecisionArena()
@@ -456,13 +479,14 @@ def test_amaf_multi_pole_floor_boosts_trailing_region():
     agent.set_multi_pole_n(2)
     assert int(agent.multi_pole_n) == 2
     floored = float(agent._amaf_pick_score(key_void, 0, free_kind=FreeKind.Empty))
-    assert floored > cold
+    # Telem-only park: score unchanged; counter still fires for trailing Void.
+    assert floored == cold
     assert int(agent.telem.get("amaf_pole_floor", 0) or 0) >= 1
     # Leader Rim must not receive the trailing floor.
     rim_before = int(agent.telem.get("amaf_pole_floor", 0) or 0)
     agent._amaf_pick_score(key_rim, 0, free_kind=FreeKind.Empty)
     assert int(agent.telem.get("amaf_pole_floor", 0) or 0) == rim_before
-    # Sparse Motif hist vs large sel_n still floors trailing Void.
+    # Sparse Motif hist vs large sel_n still counts trailing Void telem.
     arena2 = DecisionArena()
     base2 = MotifBase()
     agent2 = MctsAgent(arena=arena2, motif_base=base2)

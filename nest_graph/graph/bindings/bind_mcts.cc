@@ -85,6 +85,10 @@ void sync_telem_to_agent(MctsAgent &agent, const nb::dict &telem) {
     t.amaf_cohort_fallback = get_i("amaf_cohort_fallback", t.amaf_cohort_fallback);
     t.amaf_age_apply = get_i("amaf_age_apply", t.amaf_age_apply);
     t.amaf_age_max = get_i("amaf_age_max", t.amaf_age_max);
+    t.ucb_beta_sum = get_f("ucb_beta_sum", t.ucb_beta_sum);
+    t.ucb_beta_n = get_i("ucb_beta_n", t.ucb_beta_n);
+    t.ucb_beta_min = get_f("ucb_beta_min", t.ucb_beta_min);
+    t.pb_decay_n = get_i("pb_decay_n", t.pb_decay_n);
 }
 
 void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
@@ -131,6 +135,14 @@ void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
     if (t.amaf_age_apply > 0) {
         telem["amaf_age_apply"] = t.amaf_age_apply;
         telem["amaf_age_max"] = t.amaf_age_max;
+    }
+    if (t.ucb_beta_n > 0) {
+        telem["ucb_beta_n"] = t.ucb_beta_n;
+        telem["ucb_beta_mean"] = t.ucb_beta_sum / static_cast<float>(t.ucb_beta_n);
+        telem["ucb_beta_min"] = t.ucb_beta_min;
+    }
+    if (t.pb_decay_n > 0) {
+        telem["pb_decay_n"] = t.pb_decay_n;
     }
 }
 
@@ -607,6 +619,13 @@ void bind_graph_mcts(nb::module_ &m) {
             nb::arg("snapshot"),
             nb::kw_only(),
             nb::arg("allow") = true)
+        .def(
+            "rank_related_reward",
+            [](MctsAgentHolder &h, float reward) {
+                const auto pr = h.agent.rank_related_reward(reward);
+                return nb::make_tuple(pr.first, pr.second);
+            },
+            nb::arg("reward"))
         .def(
             "pick_expand_action",
             [](MctsAgentHolder &h,
