@@ -83,7 +83,7 @@ Last split from root AGENTS.md: 2026-08-10.
 | Clearance SoT? | **Done.** |
 | Board adj twice? | **Done.** One `is_board_adj`; one `cluster_contact` (`2·gap`). |
 | Standoff vs solid distance for board adj? | **Standoff** (edge-to-edge). |
-| `_as_geometry` copy-paste? | **Done.** `placement_common.py`. |
+| `_as_geometry` copy-paste? | **Done.** `placement/common.py`. |
 | `footprint_inside` vs `fully_inside`? | **Done.** Hot-path = void solids. |
 | Obstacle list forks / contain aliases? | **Done.** `placement_obstacles`. |
 | Merge rim / obstacle / guide tangents? | **No.** Document normal sourcing only. |

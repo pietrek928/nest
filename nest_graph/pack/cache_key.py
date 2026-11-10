@@ -71,8 +71,24 @@ def cheap_pack_cache_key(
     )
 
 
+def motif_cohort_sig(cohorts: Sequence) -> int:
+    """Deterministic cohort fingerprint for cheap cache (M2a; no PYTHONHASHSEED)."""
+    parts: list[str] = []
+    for c in cohorts:
+        if not isinstance(c, dict):
+            continue
+        mid = int(c.get("motif_id", -1) or -1)
+        leader = int(c.get("leader_gid", -1) or -1)
+        keys = sorted(str(mk) for mk in (c.get("member_keys") or ()))
+        parts.append(f"{mid}:{leader}:{','.join(keys)}")
+    if not parts:
+        return 0
+    return int(zlib.crc32("|".join(sorted(parts)).encode("utf-8")) & 0x7FFFFFFF)
+
+
 __all__ = [
     "macro_motif_id",
     "cheap_lock_fingerprint",
     "cheap_pack_cache_key",
+    "motif_cohort_sig",
 ]

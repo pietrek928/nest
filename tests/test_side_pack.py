@@ -4,13 +4,13 @@ from shapely.geometry import Point, box
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_perimeter import (
+from nest_graph.placement.perimeter import (
     anti_crowd_far_segments,
     anti_crowd_segment_weights,
     select_stratified_by_segment,
     select_stratified_by_segment_weighted,
 )
-from nest_graph.propose.placements_edge import propose_placements_side_pack
+from nest_graph.placement.edge import propose_placements_side_pack
 from nest_graph.propose.pipeline import (
     _CollectState,
     _collect_builder_candidates,

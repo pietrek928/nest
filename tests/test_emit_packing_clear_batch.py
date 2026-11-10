@@ -2,7 +2,7 @@
 
 import pytest
 
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     emit_packing_clear,
     emit_packing_clear_batch,
 )

@@ -7,9 +7,9 @@ from typing import Sequence, Tuple
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
-from .board import board_context_from_geometry
-from .config import ProposeConfig
-from .geometry import Geometry, GuidanceConfig, evaluate_local_placement
+from nest_graph.board import board_context_from_geometry
+from nest_graph.config import ProposeConfig
+from nest_graph.geometry import Geometry, GuidanceConfig, evaluate_local_placement
 
 
 def placement_outside_outer(placed: Geometry, sheet: Polygon) -> bool:
@@ -29,7 +29,7 @@ def footprints_inside_board(
     return [p.fully_inside(board_geom) for p in placed]
 
 
-from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
+from nest_graph.placement.clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
 
 
 def _board_diag(board_bounds: tuple[float, float, float, float] | None) -> float:
@@ -459,8 +459,8 @@ def placement_ok_for_outline(
     kiss_tolerance_scale: float = 2.0,
 ) -> bool:
     """Optional outline kiss + one clearance SoT (voids+packed Scene)."""
-    from nest_graph.propose.placement_common import is_pose_clear
-    from nest_graph.propose.placement_outline import outline_kiss_ok
+    from nest_graph.placement.common import is_pose_clear
+    from nest_graph.placement.outline import outline_kiss_ok
 
     del config, epsilon_ratio  # guidance margin is stage-split; Scene is SoT here
     if require_outline_kiss and not outline_kiss_ok(

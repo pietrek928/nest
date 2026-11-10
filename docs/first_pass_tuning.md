@@ -52,7 +52,7 @@ See [build_graph_tuning.md](build_graph_tuning.md) for multi-iter pipeline bench
 
 ## Board-edge proposer (2026-06-03)
 
-New `board_edge` proposer: nest-outline geometric seeds + per-edge [`guidance_config_for_board_edge_anchor`](../nest_graph/placement_scene.py) (`Exact Gravity Dock`, vertex corner match, floor walk via [`guide.h`](../nest_graph/geometry/guide/guide.h)).
+New `board_edge` proposer: nest-outline geometric seeds + per-edge [`guidance_config_for_board_edge_anchor`](../nest_graph/placement/scene.py) (`Exact Gravity Dock`, vertex corner match, floor walk via [`guide.h`](../nest_graph/geometry/guide/guide.h)).
 
 Border benchmark (empty triangle, seeds 0–2): **`board_edge_hybrid`** `border_dist_min` **0.0014** vs `border_focus` **0.0033** — see [propose_border_benchmark.md](propose_border_benchmark.md).
 

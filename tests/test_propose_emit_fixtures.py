@@ -2,7 +2,7 @@
 
 import pytest
 
-from nest_graph.propose.placements_pattern import emit_packing_clear
+from nest_graph.placement.pattern import emit_packing_clear
 from nest_graph.propose.ranking import pack_tightness_cost
 from tests.fixtures.propose_emit import (
     EMIT_CLEAR_POSE_CASES,

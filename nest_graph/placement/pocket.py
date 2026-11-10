@@ -16,7 +16,7 @@ from nest_graph.propose.context import (
     part_extents,
 )
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.placements_pattern import ClusterPattern
+from nest_graph.placement.pattern import ClusterPattern
 from nest_graph.propose.void_topology import (
     polylabel,
     hull_bay_polygons,

@@ -57,7 +57,7 @@ Python exposes it through [`nest_graph/geometry/bindings/api.cc`](../nest_graph/
 
 ## 5. Python workarounds today
 
-- **`PlacementScene`** — packs `[placed, *obstacles, *voids]` and calls `evaluate_local_placement(0, …)` with part center ([`placement_scene.py`](../nest_graph/placement_scene.py)).
+- **`PlacementScene`** — packs `[placed, *obstacles, *voids]` and calls `evaluate_local_placement(0, …)` with part center ([`placement_scene.py`](../nest_graph/placement/scene.py)).
 - **`guidance_config_for_propose`** / **`guidance_config_for_board_edge_anchor`** — scale `search_radius`, `minimum_placing_distance`, attractor vs gravity per use case.
 - **Dual-pass guidance** — tight cast menu merged with attractor pass in [`placements_guidance.py`](../nest_graph/propose/placements_guidance.py).
 - **`guidance_walk`** — multi-step cast application in propose layer.

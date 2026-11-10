@@ -15,10 +15,10 @@ from nest_graph.propose.pipeline import (
     _proposer_enabled,
     allow_void_repack,
 )
-from nest_graph.propose.placements_free_space_cloud import (
+from nest_graph.placement.free_space_cloud import (
     propose_placements_free_space_cloud,
 )
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     ClusterPattern,
     emit_packing_clear,
     propose_placements_cluster_copy,
@@ -90,7 +90,7 @@ def test_stamp_motif_leader_follower_fallback(build_graph_config):
 
 def test_stamp_collide_telem_split_same_gid_kiss(build_graph_config):
     """H0: same-gid kiss dual at pole records collide subtypes."""
-    from nest_graph.propose.placements_pattern import (
+    from nest_graph.placement.pattern import (
         _same_gid_rels_kiss,
         stamp_motif_leader_follower,
     )

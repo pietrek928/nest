@@ -8,9 +8,9 @@ from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import obstacle_parts, placement_obstacles
-from nest_graph.propose.placement_outline import slide_toward_obstacle
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.common import obstacle_parts, placement_obstacles
+from nest_graph.placement.outline import slide_toward_obstacle
+from nest_graph.placement.pattern import (
     emit_packing_clear,
     emit_packing_clear_batch,
 )

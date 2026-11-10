@@ -28,7 +28,7 @@ from nest_graph.propose.pipeline import (
     _collect_candidates,
     collect_propose_candidates,
 )
-from nest_graph.propose.placement_common import is_pose_clear
+from nest_graph.placement.common import is_pose_clear
 from nest_graph.propose.types import (
     PackedProposeExtras,
     PocketStats,

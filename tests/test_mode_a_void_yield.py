@@ -10,7 +10,7 @@ from nest_graph.propose.pipeline import (
     _count_transforms_in_void,
     proposed_transforms_for_groups,
 )
-from nest_graph.propose.placements_pocket import (
+from nest_graph.placement.pocket import (
     TAG_OPEN_VOID,
     aligned_poses_for_pocket,
     propose_placements_pocket_fit,

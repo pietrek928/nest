@@ -12,7 +12,7 @@ from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
 from nest_graph.free_kind_util import void_phantom
 from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry,
     dual_pose_from_base,
     is_board_adj,
@@ -21,13 +21,13 @@ from nest_graph.propose.placement_common import (
     post_pack_overlap_ok,
     is_pose_clear_vs_fixed,
 )
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.outline import (
     inward_at_contact,
     outline_kiss_tolerance,
     outline_ring_geom,
     outline_standoff_distance,
 )
-from nest_graph.propose.placement_perimeter import edge_inward_at_point
+from nest_graph.placement.perimeter import edge_inward_at_point
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import preferred_spine_pole
 

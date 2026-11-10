@@ -12,7 +12,7 @@ from nest_graph.config import ProposeConfig, RankingMode
 from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
 from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
 from nest_graph.graph import FreeKind
-from nest_graph.propose.placement_outline import outline_standoff_distance
+from nest_graph.placement.outline import outline_standoff_distance
 
 
 def placement_free_region(
@@ -892,7 +892,7 @@ def cluster_contact_neighbors(
     gap: float,
 ) -> dict[int, list[int]]:
     """Adjacency at dist ≤ 2*gap (same policy as cluster_contact_components)."""
-    from nest_graph.propose.placement_common import as_geometry
+    from nest_graph.placement.common import as_geometry
 
     ids = list(component)
     adj: dict[int, list[int]] = {i: [] for i in ids}

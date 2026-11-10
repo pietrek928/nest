@@ -182,7 +182,7 @@ def test_cheap_expand_slave_motif_reward_parity():
 
 def test_polish_patterns_at_inject_keeps_on_missing_bases():
     from nest_graph.propose.pattern_archive import polish_patterns_at_inject
-    from nest_graph.propose.placements_pattern import ClusterPattern
+    from nest_graph.placement.pattern import ClusterPattern
 
     pat = ClusterPattern(
         members=((0, (0.0, 0.0, 0.0)), (1, (1.0, 0.0, 0.0))),

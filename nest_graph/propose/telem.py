@@ -6,7 +6,7 @@ import numpy as np
 from dataclasses import dataclass
 
 from nest_graph.free_kind_util import free_kind_token
-from nest_graph.propose.placement_common import count_edge_parallel_transforms
+from nest_graph.placement.common import count_edge_parallel_transforms
 from nest_graph.propose.void_selection import (
     centroid_in_free,
     count_graph_in_free,
@@ -48,52 +48,114 @@ def apply_pairing_edge_slot_census(
     }
 
 
-def format_void_leak_line(
-    *,
-    free_kind: str,
-    max_void_ratio: float,
-    n_void_props: int,
-    n_props_pole: int,
-    hijack: int | bool,
-    n_void_graph: int,
-    n_void_nest: int,
-    n_void_refine: int,
-    nest_refine_delta: int,
-    border_only: bool,
-    outline_cov: float,
-    sat_override: int | bool,
-    rim_progress: float,
-    on_plateau: bool,
-    zone_snip: str,
-    pf_em: int,
-    pf_att: int,
-    pf_sel: int,
-    pf_surv: int,
-    pocket_key_hits: int,
-    motif_key_hits: int,
-    island_hits: int,
-    small_hits: int,
-    pin_stats: Mapping[str, Any],
-    elite_seeded: int,
-    elite_next: int,
-    cc_e: int,
-    cc_p: int,
-    n_patterns: int,
-    sp_e: int,
-    sp_p: int,
-    fsc_e: int,
-    fsc_p: int,
-    propose_stats: Mapping[str, Any],
-    densify: Mapping[str, Any],
-    densify_a: int,
-    densify_f: int,
-    densify_reason: str | None,
-    skip_snip: str,
-    attract_edges: int,
-    attract_pairs_selected: int,
-    prop_accept: str,
-) -> str:
+@dataclass
+class VoidLeakPayload:
+    """Scalars for void_leak line + dict (gather → assemble)."""
+    free_kind: Any
+    max_void_ratio: float
+    n_void_props: int
+    n_props_pole: int
+    hijack: int | bool
+    n_void_graph: int
+    n_void_nest: int
+    n_void_refine: int
+    nest_refine_delta: int
+    outline_cov: float
+    sat_override: int | bool
+    rim_progress: float
+    plateau: Any
+    pin_all_blocked_streak: int
+    propose_stats: Mapping[str, Any]
+    zones: Sequence
+    pf_em: int
+    pf_att: int
+    pf_sel: int
+    pin_stats: Mapping[str, Any]
+    pf_surv: int
+    pocket_key_hits: int
+    motif_key_hits: int
+    island_hits: int
+    small_hits: int
+    densify_f: int
+    densify_a: int
+    densify_reason: Any
+    pocket_skip: Sequence
+    emitted_bp: dict
+    pool_bp: dict
+    nest_bp: dict
+    refine_bp: dict
+    pocket_by_tag: dict
+    prop_accept: str
+    densify: Mapping[str, Any]
+    elite_seeded: int
+    elite_next: int
+    cc_e: int
+    cc_p: int
+    sp_e: int
+    sp_p: int
+    fsc_e: int
+    fsc_p: int
+    n_patterns: int
+    attract_edges: int
+    attract_pairs_selected: int
+    attract_bonus: float
+    zone_snip: str
+    skip_snip: str
+
+def format_void_leak_line(p: VoidLeakPayload) -> str:
     """One-line void_leak print string (keys unchanged)."""
+    free_kind = p.free_kind
+    max_void_ratio = p.max_void_ratio
+    n_void_props = p.n_void_props
+    n_props_pole = p.n_props_pole
+    hijack = p.hijack
+    n_void_graph = p.n_void_graph
+    n_void_nest = p.n_void_nest
+    n_void_refine = p.n_void_refine
+    nest_refine_delta = p.nest_refine_delta
+    outline_cov = p.outline_cov
+    sat_override = p.sat_override
+    rim_progress = p.rim_progress
+    plateau = p.plateau
+    pin_all_blocked_streak = p.pin_all_blocked_streak
+    propose_stats = p.propose_stats
+    zones = p.zones
+    pf_em = p.pf_em
+    pf_att = p.pf_att
+    pf_sel = p.pf_sel
+    pin_stats = p.pin_stats
+    pf_surv = p.pf_surv
+    pocket_key_hits = p.pocket_key_hits
+    motif_key_hits = p.motif_key_hits
+    island_hits = p.island_hits
+    small_hits = p.small_hits
+    densify_f = p.densify_f
+    densify_a = p.densify_a
+    densify_reason = p.densify_reason
+    pocket_skip = p.pocket_skip
+    emitted_bp = p.emitted_bp
+    pool_bp = p.pool_bp
+    nest_bp = p.nest_bp
+    refine_bp = p.refine_bp
+    pocket_by_tag = p.pocket_by_tag
+    prop_accept = p.prop_accept
+    densify = p.densify
+    elite_seeded = p.elite_seeded
+    elite_next = p.elite_next
+    cc_e = p.cc_e
+    cc_p = p.cc_p
+    sp_e = p.sp_e
+    sp_p = p.sp_p
+    fsc_e = p.fsc_e
+    fsc_p = p.fsc_p
+    n_patterns = p.n_patterns
+    attract_edges = p.attract_edges
+    attract_pairs_selected = p.attract_pairs_selected
+    attract_bonus = p.attract_bonus
+    zone_snip = p.zone_snip
+    skip_snip = p.skip_snip
+    border_only = bool(propose_stats.get("border_only", False))
+    on_plateau = bool(getattr(plateau, "on_plateau", False))
     reason = f" reason={densify_reason}" if densify_reason else ""
     pocket = f" pocket_skip=[{skip_snip}]" if skip_snip else ""
     prop = f" prop_accept {prop_accept}" if prop_accept else ""
@@ -293,58 +355,60 @@ def _motif_skip_snip(
     return f" motif_skip=[{','.join(parts)}]"
 
 
-def build_void_leak_dict(
-    *,
-    free_kind: str,
-    max_void_ratio: float,
-    n_void_props: int,
-    n_props_pole: int,
-    hijack: bool,
-    n_void_graph: int,
-    n_void_nest: int,
-    n_void_refine: int,
-    nest_refine_delta: int,
-    outline_cov: float,
-    sat_override: bool,
-    rim_progress: float,
-    plateau: Any,
-    pin_all_blocked_streak: int,
-    propose_stats: Mapping[str, Any],
-    zones: Sequence,
-    pf_em: int,
-    pf_att: int,
-    pf_sel: int,
-    pin_stats: Mapping[str, Any],
-    pf_surv: int,
-    pocket_key_hits: int,
-    motif_key_hits: int,
-    island_hits: int,
-    small_hits: int,
-    densify_f: int,
-    densify_a: int,
-    densify_reason: Any,
-    pocket_skip: Sequence,
-    emitted_bp: dict,
-    pool_bp: dict,
-    nest_bp: dict,
-    refine_bp: dict,
-    pocket_by_tag: dict,
-    prop_accept: str,
-    densify: Mapping[str, Any],
-    elite_seeded: int,
-    elite_next: int,
-    cc_e: int,
-    cc_p: int,
-    sp_e: int,
-    sp_p: int,
-    fsc_e: int,
-    fsc_p: int,
-    n_patterns: int,
-    attract_edges: int,
-    attract_pairs_selected: int,
-    attract_bonus: float,
-) -> dict:
+def build_void_leak_dict(p: VoidLeakPayload) -> dict:
     """void_leak dict for propose_stats (keys unchanged)."""
+    free_kind = p.free_kind
+    max_void_ratio = p.max_void_ratio
+    n_void_props = p.n_void_props
+    n_props_pole = p.n_props_pole
+    hijack = p.hijack
+    n_void_graph = p.n_void_graph
+    n_void_nest = p.n_void_nest
+    n_void_refine = p.n_void_refine
+    nest_refine_delta = p.nest_refine_delta
+    outline_cov = p.outline_cov
+    sat_override = p.sat_override
+    rim_progress = p.rim_progress
+    plateau = p.plateau
+    pin_all_blocked_streak = p.pin_all_blocked_streak
+    propose_stats = p.propose_stats
+    zones = p.zones
+    pf_em = p.pf_em
+    pf_att = p.pf_att
+    pf_sel = p.pf_sel
+    pin_stats = p.pin_stats
+    pf_surv = p.pf_surv
+    pocket_key_hits = p.pocket_key_hits
+    motif_key_hits = p.motif_key_hits
+    island_hits = p.island_hits
+    small_hits = p.small_hits
+    densify_f = p.densify_f
+    densify_a = p.densify_a
+    densify_reason = p.densify_reason
+    pocket_skip = p.pocket_skip
+    emitted_bp = p.emitted_bp
+    pool_bp = p.pool_bp
+    nest_bp = p.nest_bp
+    refine_bp = p.refine_bp
+    pocket_by_tag = p.pocket_by_tag
+    prop_accept = p.prop_accept
+    densify = p.densify
+    elite_seeded = p.elite_seeded
+    elite_next = p.elite_next
+    cc_e = p.cc_e
+    cc_p = p.cc_p
+    sp_e = p.sp_e
+    sp_p = p.sp_p
+    fsc_e = p.fsc_e
+    fsc_p = p.fsc_p
+    n_patterns = p.n_patterns
+    attract_edges = p.attract_edges
+    attract_pairs_selected = p.attract_pairs_selected
+    attract_bonus = p.attract_bonus
+    zone_snip = p.zone_snip
+    skip_snip = p.skip_snip
+    hijack = bool(hijack)
+    sat_override = bool(sat_override)
     # GE1: non-saturating void progress (shared with board_snapshot_from_selection).
     _r0 = 10.0
     _ratio = float(max_void_ratio)
@@ -794,154 +858,60 @@ def classify_inward_explorers(
     }
 
 
-def assemble_void_leak(
-    *,
-    free_kind: str,
-    max_void_ratio: float,
-    n_void_props: int,
-    n_props_pole: int,
-    hijack: int | bool,
-    n_void_graph: int,
-    n_void_nest: int,
-    n_void_refine: int,
-    nest_refine_delta: int,
-    outline_cov: float,
-    sat_override: int | bool,
-    rim_progress: float,
-    plateau: Any,
-    pin_all_blocked_streak: int,
-    propose_stats: Mapping[str, Any],
-    zones: Sequence,
-    pf_em: int,
-    pf_att: int,
-    pf_sel: int,
-    pin_stats: Mapping[str, Any],
-    pf_surv: int,
-    pocket_key_hits: int,
-    motif_key_hits: int,
-    island_hits: int,
-    small_hits: int,
-    densify_f: int,
-    densify_a: int,
-    densify_reason: Any,
-    pocket_skip: Sequence,
-    emitted_bp: dict,
-    pool_bp: dict,
-    nest_bp: dict,
-    refine_bp: dict,
-    pocket_by_tag: dict,
-    prop_accept: str,
-    densify: Mapping[str, Any],
-    elite_seeded: int,
-    elite_next: int,
-    cc_e: int,
-    cc_p: int,
-    sp_e: int,
-    sp_p: int,
-    fsc_e: int,
-    fsc_p: int,
-    n_patterns: int,
-    attract_edges: int,
-    attract_pairs_selected: int,
-    attract_bonus: float,
-    zone_snip: str,
-    skip_snip: str,
-) -> tuple[str, dict]:
+def assemble_void_leak(p: VoidLeakPayload) -> tuple[str, dict]:
     """One void_leak line + dict (funnel/corners attached). Niche credit stays outside."""
-    line = format_void_leak_line(
-        free_kind=free_kind,
-        max_void_ratio=float(max_void_ratio),
-        n_void_props=n_void_props,
-        n_props_pole=n_props_pole,
-        hijack=hijack,
-        n_void_graph=n_void_graph,
-        n_void_nest=n_void_nest,
-        n_void_refine=n_void_refine,
-        nest_refine_delta=nest_refine_delta,
-        border_only=bool(propose_stats.get("border_only", False)),
-        outline_cov=outline_cov,
-        sat_override=sat_override,
-        rim_progress=rim_progress,
-        on_plateau=bool(getattr(plateau, "on_plateau", False)),
-        zone_snip=zone_snip,
-        pf_em=pf_em,
-        pf_att=pf_att,
-        pf_sel=pf_sel,
-        pf_surv=pf_surv,
-        pocket_key_hits=pocket_key_hits,
-        motif_key_hits=motif_key_hits,
-        island_hits=island_hits,
-        small_hits=small_hits,
-        pin_stats=pin_stats,
-        elite_seeded=elite_seeded,
-        elite_next=elite_next,
-        cc_e=cc_e,
-        cc_p=cc_p,
-        n_patterns=n_patterns,
-        sp_e=sp_e,
-        sp_p=sp_p,
-        fsc_e=fsc_e,
-        fsc_p=fsc_p,
-        propose_stats=propose_stats,
-        densify=densify,
-        densify_a=densify_a,
-        densify_f=densify_f,
-        densify_reason=densify_reason,
-        skip_snip=skip_snip,
-        attract_edges=attract_edges,
-        attract_pairs_selected=attract_pairs_selected,
-        prop_accept=prop_accept,
-    )
-    leak = build_void_leak_dict(
-        free_kind=free_kind,
-        max_void_ratio=float(max_void_ratio),
-        n_void_props=n_void_props,
-        n_props_pole=n_props_pole,
-        hijack=bool(hijack),
-        n_void_graph=n_void_graph,
-        n_void_nest=n_void_nest,
-        n_void_refine=n_void_refine,
-        nest_refine_delta=nest_refine_delta,
-        outline_cov=outline_cov,
-        sat_override=bool(sat_override),
-        rim_progress=rim_progress,
-        plateau=plateau,
-        pin_all_blocked_streak=pin_all_blocked_streak,
-        propose_stats=propose_stats,
-        zones=zones,
-        pf_em=pf_em,
-        pf_att=pf_att,
-        pf_sel=pf_sel,
-        pin_stats=pin_stats,
-        pf_surv=pf_surv,
-        pocket_key_hits=pocket_key_hits,
-        motif_key_hits=motif_key_hits,
-        island_hits=island_hits,
-        small_hits=small_hits,
-        densify_f=densify_f,
-        densify_a=densify_a,
-        densify_reason=densify_reason,
-        pocket_skip=pocket_skip,
-        emitted_bp=emitted_bp,
-        pool_bp=pool_bp,
-        nest_bp=nest_bp,
-        refine_bp=refine_bp,
-        pocket_by_tag=pocket_by_tag,
-        prop_accept=prop_accept,
-        densify=densify,
-        elite_seeded=elite_seeded,
-        elite_next=elite_next,
-        cc_e=cc_e,
-        cc_p=cc_p,
-        sp_e=sp_e,
-        sp_p=sp_p,
-        fsc_e=fsc_e,
-        fsc_p=fsc_p,
-        n_patterns=n_patterns,
-        attract_edges=attract_edges,
-        attract_pairs_selected=attract_pairs_selected,
-        attract_bonus=attract_bonus,
-    )
+    free_kind = p.free_kind
+    max_void_ratio = p.max_void_ratio
+    n_void_props = p.n_void_props
+    n_props_pole = p.n_props_pole
+    hijack = p.hijack
+    n_void_graph = p.n_void_graph
+    n_void_nest = p.n_void_nest
+    n_void_refine = p.n_void_refine
+    nest_refine_delta = p.nest_refine_delta
+    outline_cov = p.outline_cov
+    sat_override = p.sat_override
+    rim_progress = p.rim_progress
+    plateau = p.plateau
+    pin_all_blocked_streak = p.pin_all_blocked_streak
+    propose_stats = p.propose_stats
+    zones = p.zones
+    pf_em = p.pf_em
+    pf_att = p.pf_att
+    pf_sel = p.pf_sel
+    pin_stats = p.pin_stats
+    pf_surv = p.pf_surv
+    pocket_key_hits = p.pocket_key_hits
+    motif_key_hits = p.motif_key_hits
+    island_hits = p.island_hits
+    small_hits = p.small_hits
+    densify_f = p.densify_f
+    densify_a = p.densify_a
+    densify_reason = p.densify_reason
+    pocket_skip = p.pocket_skip
+    emitted_bp = p.emitted_bp
+    pool_bp = p.pool_bp
+    nest_bp = p.nest_bp
+    refine_bp = p.refine_bp
+    pocket_by_tag = p.pocket_by_tag
+    prop_accept = p.prop_accept
+    densify = p.densify
+    elite_seeded = p.elite_seeded
+    elite_next = p.elite_next
+    cc_e = p.cc_e
+    cc_p = p.cc_p
+    sp_e = p.sp_e
+    sp_p = p.sp_p
+    fsc_e = p.fsc_e
+    fsc_p = p.fsc_p
+    n_patterns = p.n_patterns
+    attract_edges = p.attract_edges
+    attract_pairs_selected = p.attract_pairs_selected
+    attract_bonus = p.attract_bonus
+    zone_snip = p.zone_snip
+    skip_snip = p.skip_snip
+    line = format_void_leak_line(p)
+    leak = build_void_leak_dict(p)
     funnel = classify_void_funnel(
         n_void_props=n_void_props,
         n_void_graph=n_void_graph,
@@ -2125,7 +2095,7 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         selected=ctx.selected_polys or ctx.selected_nest,
         sheet=ctx.sheet,
     )
-    return assemble_void_leak(
+    payload = VoidLeakPayload(
         free_kind=ctx.free_info.kind,
         max_void_ratio=float(ctx.free_info.max_void_ratio),
         n_void_props=n_void_props,
@@ -2177,6 +2147,7 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         zone_snip=zone_snip,
         skip_snip=skip_snip,
     )
+    return assemble_void_leak(payload)
 
 
 def archive_void_elite_transforms(
@@ -2217,6 +2188,21 @@ def void_elite_count(archive: dict[int, list[np.ndarray]] | None) -> int:
     if not archive:
         return 0
     return sum(len(v) for v in archive.values())
+
+
+def void_elite_tuple_from_archive(
+    archive: dict[int, list[np.ndarray]] | None,
+    ngroups: int,
+) -> tuple[np.ndarray, ...]:
+    """Build per-group void-elite arrays for ``build_transform_batch``."""
+    out: list[np.ndarray] = []
+    for g in range(max(int(ngroups), 0)):
+        rows = (archive or {}).get(g) or []
+        if rows:
+            out.append(np.asarray(rows, dtype=np.float64).reshape(-1, 3))
+        else:
+            out.append(np.zeros((0, 3), dtype=np.float64))
+    return tuple(out)
 
 
 @dataclass
@@ -2268,7 +2254,7 @@ def _best_pack_overlap_ok(
 
         if not selection_is_independent(graph, [int(i) for i in selected]):
             return False
-    from nest_graph.propose.placement_common import selection_packing_clear
+    from nest_graph.placement.common import selection_packing_clear
 
     if not selection_packing_clear(polys, selected, geoms=geoms, telem=telem):
         return False

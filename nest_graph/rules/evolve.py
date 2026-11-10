@@ -1,10 +1,12 @@
 """Rule-set evolution: mutate, dedupe, truncate, and demo/seed factories."""
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from shapely.geometry.base import BaseGeometry
+from shapely.ops import unary_union
 
+from nest_graph.board import board_context_from_geometry
 from nest_graph.config import BuildGraphConfig, SelectionConfig, score_rules_options
 from nest_graph.graph import (
     Circle,
@@ -511,3 +513,61 @@ def make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
 
 def make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
     return make_seed_rule_sets(cfg) + [make_demo_rule_set(cfg)]
+
+
+def copy_rule_set(rule_set: PlacementRuleSet) -> PlacementRuleSet:
+    out = PlacementRuleSet()
+    for pr in rule_set.point_rules:
+        out.append_rule(pr)
+    for cr in rule_set.circle_rules:
+        out.append_rule(cr)
+    for pr in rule_set.point_angle_rules:
+        out.append_rule(pr)
+    for cr in rule_set.circle_angle_rules:
+        out.append_rule(cr)
+    return out
+
+
+def repulsor_centroids(
+    board: BaseGeometry,
+    nest_state: Any | None,
+) -> list[tuple[float, float]]:
+    sheet, _ = board_context_from_geometry(board)
+    centroids: list[tuple[float, float]] = []
+    c = sheet.centroid
+    centroids.append((float(c.x), float(c.y)))
+    if nest_state is not None and nest_state.selected_indices:
+        packed = [nest_state.polys[i] for i in nest_state.selected_indices]
+        merged = unary_union(packed)
+        if merged is not None and not merged.is_empty:
+            mc = merged.centroid
+            centroids.append((float(mc.x), float(mc.y)))
+    return centroids
+
+
+def inject_repulsor_rules(
+    rule_sets: list[PlacementRuleSet],
+    cfg: BuildGraphConfig,
+    board: BaseGeometry,
+    nest_state: Any | None,
+) -> list[PlacementRuleSet]:
+    if not cfg.rules.use_repulsor_rules or not rule_sets:
+        return rule_sets
+    centroids = repulsor_centroids(board, nest_state)
+    r = max(cfg.rules.place_rule_radius * 0.5, 1e-4)
+    w = cfg.rules.repulsor_weight
+    ngroups = cfg.rules.ngroups
+    n_touch = min(max(cfg.rules.repulsor_sets_to_touch, 0), len(rule_sets))
+    out: list[PlacementRuleSet] = []
+    for i, rs in enumerate(rule_sets):
+        if i >= n_touch:
+            out.append(rs)
+            continue
+        copied = copy_rule_set(rs)
+        for g in range(ngroups):
+            for cx, cy in centroids[:2]:
+                copied.append_rule(PointPlaceRule(
+                    pos=Vec2(x=cx, y=cy), r=r, w=w, group=g,
+                ))
+        out.append(truncate_rule_set(copied, cfg.rules.max_rules_per_set))
+    return out

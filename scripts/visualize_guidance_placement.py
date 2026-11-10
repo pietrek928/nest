@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
 from shapely.affinity import rotate, translate
 
-from nest_graph.placement_scene import tiered_propositions
+from nest_graph.placement.scene import tiered_propositions
 from scripts.guidance_placement_fixtures import get_scenarios, run_scenario
 
 

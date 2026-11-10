@@ -1,6 +1,7 @@
 """Outer-iter pack stages (compose/refine/mid/first-pass/post)."""
 
 import time
+from functools import partial
 from typing import Any, Callable, Sequence
 
 from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
@@ -12,9 +13,12 @@ from nest_graph.pack.ctx import (
     RefinePackBox,
 )
 from nest_graph.pack.execute import execute_pack, schedule_prep_selection_free
-from nest_graph.pack.geoms import selection_coverage_pct
+from nest_graph.pack.geoms import (
+    kiss_geoms_for_selection,
+    rebuild_w1_packed,
+    selection_coverage_pct,
+)
 from nest_graph.pack.slave_pack import write_propose_kiss_ledger
-from nest_graph.propose.placement_common import as_geometry
 from nest_graph.propose.block_replace import maybe_block_hole_renest
 from nest_graph.propose.context import outline_coverage_ratio
 from nest_graph.propose.heavy_polish import (
@@ -22,7 +26,7 @@ from nest_graph.propose.heavy_polish import (
     apply_refine_with_restore,
     polish_budget_for_iter,
 )
-from nest_graph.propose.placement_common import selection_pairwise_independent
+from nest_graph.placement.common import selection_pairwise_independent
 from nest_graph.propose.post_pack import (
     PostPackPrep,
     apply_post_pack_and_telem,
@@ -31,7 +35,6 @@ from nest_graph.propose.selection_compose import (
     ComposedSelection,
     compose_and_nest_selection,
     compose_nest_kwargs,
-    dual_nest_for,
     kiss_lock_subset,
     sheet_diag_from,
 )
@@ -108,35 +111,33 @@ def _compose_from_ctx(
     grow_classify_seed: list = []
     grow_classify_mapped: list = []
     grow_classify_unmapped: list = []
-    if (
-        pgid is not None
-        and ptf is not None
-        and len(pgid) == len(ptf)
-        and len(pgid) > 0
-    ):
+    rebuilt_packed, rebuilt_n = rebuild_w1_packed(
+        packed_group_id=pgid,
+        packed_transform=ptf,
+        native_geoms_fn=ctx.native_geoms_fn,
+        part_bases=ctx.part_bases,
+        seed_void_geoms=ctx.seed_void_geoms,
+        telem=ctx.propose_stats,
+    )
+    if rebuilt_packed is not None and rebuilt_n is not None:
+        packed_geoms = rebuilt_packed
+        seed_geoms = [g for g in (ctx.seed_void_geoms or []) if g is not None]
         try:
-            rebuilt = ctx.native_geoms_fn(pgid, ptf, ctx.part_bases)
-            if rebuilt:
-                seed_geoms = [g for g in (ctx.seed_void_geoms or []) if g is not None]
-                packed_geoms = list(seed_geoms) + list(rebuilt)
-                if ctx.propose_stats is not None:
-                    ctx.propose_stats["w1_obstacle_sot"] = 1
-                    ctx.propose_stats["w1_packed_rebuilt_n"] = int(len(rebuilt))
-                grow_classify_seed, grow_classify_mapped, grow_classify_unmapped = (
-                    partition_packed_for_grow_classify(
-                        seed_geoms=seed_geoms,
-                        rebuilt_geoms=rebuilt,
-                        packed_group_id=pgid,
-                        packed_transform=ptf,
-                        group_id=ctx.group_id,
-                        transform=ctx.transform,
-                    )
+            grow_classify_seed, grow_classify_mapped, grow_classify_unmapped = (
+                partition_packed_for_grow_classify(
+                    seed_geoms=seed_geoms,
+                    rebuilt_geoms=list(packed_geoms[len(seed_geoms):]),
+                    packed_group_id=pgid,
+                    packed_transform=ptf,
+                    group_id=ctx.group_id,
+                    transform=ctx.transform,
                 )
-                if ctx.propose_stats is not None:
-                    # Counts only on propose_stats (no Geometry lists — avoid cache/leak churn).
-                    ctx.propose_stats["grow_classify_seed_n"] = int(len(grow_classify_seed))
-                    ctx.propose_stats["grow_classify_mapped_n"] = int(len(grow_classify_mapped))
-                    ctx.propose_stats["grow_classify_unmapped_n"] = int(len(grow_classify_unmapped))
+            )
+            if ctx.propose_stats is not None:
+                # Counts only on propose_stats (no Geometry lists — avoid cache/leak churn).
+                ctx.propose_stats["grow_classify_seed_n"] = int(len(grow_classify_seed))
+                ctx.propose_stats["grow_classify_mapped_n"] = int(len(grow_classify_mapped))
+                ctx.propose_stats["grow_classify_unmapped_n"] = int(len(grow_classify_unmapped))
         except Exception:
             pass
     kwargs = compose_nest_kwargs(
@@ -181,18 +182,9 @@ def _compose_from_ctx(
         )
         # Ds1: kiss ledger for BoardSnapshot / leaf_reward (same 2·gap band).
         sel = list(composed.selected_nest or ())
-        kiss_geoms = []
-        for i in sel:
-            ii = int(i)
-            if candidate_geoms is not None and 0 <= ii < len(candidate_geoms):
-                g = candidate_geoms[ii]
-                if g is not None:
-                    kiss_geoms.append(g)
-                    continue
-            if 0 <= ii < len(ctx.polys):
-                gg = as_geometry(ctx.polys[ii])
-                if gg is not None:
-                    kiss_geoms.append(gg)
+        kiss_geoms = kiss_geoms_for_selection(
+            sel, candidate_geoms=candidate_geoms, polys=ctx.polys,
+        )
         write_propose_kiss_ledger(
             ctx.propose_stats,
             kiss_geoms,
@@ -609,6 +601,27 @@ def run_first_pass_border_pack(
     )
 
 
+def _native_pack_geoms_for_sel(
+    native_geoms_fn: Callable | None,
+    part_bases: dict | None,
+    sel: Sequence[int],
+    tr: Sequence,
+    gids: Sequence[int],
+):
+    """Sel-ordered native rebuild for post-pack free refresh (no nested def)."""
+    if (
+        not sel
+        or native_geoms_fn is None
+        or part_bases is None
+    ):
+        return None
+    return native_geoms_fn(
+        [gids[i] for i in sel],
+        [tr[i] for i in sel],
+        part_bases,
+    )
+
+
 def _run_post_pack_work(
     ctx: PackIterCtx,
     prep: PostPackPrep,
@@ -621,13 +634,11 @@ def _run_post_pack_work(
 ) -> None:
     part_bases = ctx.part_bases
     native_geoms_fn = ctx.native_geoms_fn
-
-    def native_pack_geoms(sel, tr, gids):
-        return native_geoms_fn(
-            [gids[i] for i in sel],
-            [tr[i] for i in sel],
-            part_bases,
-        ) if sel and native_geoms_fn is not None and part_bases is not None else None
+    native_pack_geoms_fn = (
+        partial(_native_pack_geoms_for_sel, native_geoms_fn, part_bases)
+        if native_geoms_fn is not None
+        else None
+    )
 
     polys, transform, sel, pack_stats = apply_post_pack_and_telem(
         prep,
@@ -640,7 +651,7 @@ def _run_post_pack_work(
         cfg_propose=ctx.cfg.propose,
         fixed_obstacles=fixed_obstacles,
         part_bases=part_bases,
-        native_pack_geoms_fn=native_pack_geoms if native_geoms_fn is not None else None,
+        native_pack_geoms_fn=native_pack_geoms_fn,
         void_leak_stats=void_leak_stats,
     )
     out["polys"] = polys

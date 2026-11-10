@@ -1,7 +1,7 @@
 """Shared bag for post-pack selection editors (local_se2 / cluster_repack)."""
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -35,3 +35,5 @@ class SelectionEditCtx:
     force_hole_open: bool = False
     # FreeKind for void_phantom gate (Swiss !fit must not hole-open).
     free_kind: object | None = None
+    # Optional sel-ordered native rebuild for post-pack free refresh.
+    native_pack_geoms_fn: Callable | None = None

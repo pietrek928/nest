@@ -6,7 +6,7 @@ from shapely.geometry import Point, Polygon
 
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry, GuidanceConfig, evaluate_local_placement
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     guidance_config_for_propose,
     guidance_config_for_scene,
 )
@@ -83,8 +83,8 @@ def test_placement_guidance_rim_gravity_follows_nearest_edge():
 def test_tight_pass_rim_band_uses_rim_gravity_not_pole():
     """Rim seeds must not pole-walk into a hole; interior seeds keep pole unit."""
     from nest_graph.propose.context import part_extents
-    from nest_graph.propose.placement_perimeter import edge_inward_at_point
-    from nest_graph.propose.placements_guidance import _merged_guidance_propositions
+    from nest_graph.placement.perimeter import edge_inward_at_point
+    from nest_graph.placement.guidance import _merged_guidance_propositions
 
     board = Polygon([(0, 0), (4, 0), (0, 3)])
     part = Polygon([(0, 0), (0.3, 0), (0.3, 0.3), (0, 0.3)])
@@ -112,7 +112,7 @@ def test_tight_pass_rim_band_uses_rim_gravity_not_pole():
 
 def test_void_densify_pole_gravity_skips_rim_band():
     """Densify flag: tight merged pass uses pole unit even on rim seeds."""
-    from nest_graph.propose.placements_guidance import _merged_guidance_propositions
+    from nest_graph.placement.guidance import _merged_guidance_propositions
 
     assert ProposeConfig().void_densify_pole_gravity is False
     board = Polygon([(0, 0), (4, 0), (0, 3)])

@@ -3,8 +3,8 @@
 from shapely.geometry import Polygon, box
 
 from nest_graph.board import board_context_from_geometry
-from nest_graph.propose.placement_common import is_board_adj
-from nest_graph.propose.placement_outline import outline_ring_geom, outline_standoff_distance
+from nest_graph.placement.common import is_board_adj
+from nest_graph.placement.outline import outline_ring_geom, outline_standoff_distance
 from nest_graph.utils import transform_poly
 
 

@@ -7,14 +7,14 @@ from shapely import box
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_free_space_cloud import (
+from nest_graph.placement.free_space_cloud import (
     propose_placements_free_space_cloud,
 )
-from nest_graph.propose.placements_geo import (
+from nest_graph.placement.geo import (
     propose_placements_raycasting,
     propose_placements_voronoi,
 )
-from nest_graph.propose.placements_primary import propose_placements_erosion
+from nest_graph.placement.primary import propose_placements_erosion
 
 
 def _bench_ray(region, propose_geom, pt, n=3):

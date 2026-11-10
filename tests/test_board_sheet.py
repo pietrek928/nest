@@ -8,7 +8,7 @@ from nest_graph.board import board_context_from_geometry, board_sheet_from_outli
 from nest_graph.build_graph import make_polygon_graph
 from nest_graph.config import RulesConfig
 from nest_graph.geometry import Geometry, GuidanceConfig
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     board_placement_valid,
     build_placement_scene,
     is_valid_placement,
@@ -70,7 +70,7 @@ def test_user_board_holes():
 
 
 from nest_graph.config import ProposeConfig
-from nest_graph.placement_scene import build_placement_scene, guidance_config_for_scene, is_valid_placement, placement_outside_outer
+from nest_graph.placement.scene import build_placement_scene, guidance_config_for_scene, is_valid_placement, placement_outside_outer
 from nest_graph.propose.pipeline import proposed_transforms_for_groups
 
 def test_proposals_respect_board_min_dist(nest_board, rect_poly, build_graph_config):

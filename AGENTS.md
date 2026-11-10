@@ -167,7 +167,7 @@ Open Q-table for multi-track work: [docs/agent-domain-notes.md](docs/agent-domai
 | `propose/selection_edit.py` | `SelectionEditCtx` for `local_se2` / repack / relocate |
 | `propose/post_pack.py` | repack → relocate → local_se2; `prepare_post_pack` / `apply_post_pack_and_telem` |
 | `propose/block_replace.py` | 3a cohort lock-swap; 3b hole re-nest (`maybe_block_hole_renest`) |
-| `propose/placement_common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
+| `placement/common.py` | `placement_obstacles`, `is_pose_clear`, independence helper |
 | `pack/ctx.py` | `PackIterCtx`, `RefinePackBox`, stage result types |
 | `pack/stages.py` | compose/refine, mid_pack, first_pass, post_pack, rim_before |
 | `pack/credit.py` | `run_void_leak_and_niche_credit`, `finalize_iter_mcts` |

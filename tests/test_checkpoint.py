@@ -15,7 +15,7 @@ from nest_graph.pack.checkpoint import (
     save_nest_checkpoint,
     tip_board_snapshot,
 )
-from nest_graph.propose.placement_common import selection_pairwise_independent
+from nest_graph.placement.common import selection_pairwise_independent
 
 
 def test_checkpoint_round_trip(tmp_path: Path):

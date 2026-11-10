@@ -21,7 +21,7 @@ from nest_graph.geometry import (
     convex_hull_area_of,
 )
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_outline import outline_kiss_tolerance, outline_ring_geom
+from nest_graph.placement.outline import outline_kiss_tolerance, outline_ring_geom
 from nest_graph.propose.ranking import (
     _batch_rank_results,
     _coord_key,

@@ -15,7 +15,7 @@ from nest_graph.propose.pipeline import (
     pre_filter_candidates,
     propose_coords_from_candidates,
 )
-from nest_graph.propose.placements_selection_expand import (
+from nest_graph.placement.selection_expand import (
     propose_placements_history_expand,
     propose_placements_selection_expand,
 )

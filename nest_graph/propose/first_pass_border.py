@@ -38,7 +38,7 @@ from nest_graph.geometry import (
     find_polygon_intersections,
     find_polygon_intersections_telem,
 )
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     PlacementScene,
     guidance_config_for_board_edge_anchor,
     guidance_config_for_graph,
@@ -54,19 +54,19 @@ from nest_graph.propose.pipeline import (
     collect_propose_candidates,
     proposed_transforms_for_groups,
 )
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry,
     clearance_scene,
     is_pose_clear,
     part_base_geoms,
 )
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.outline import (
     outline_kiss_tolerance,
     outline_ring_geom,
     outline_standoff_distance,
 )
-from nest_graph.propose.placement_perimeter import edge_inward_at_point
-from nest_graph.propose.placements_guidance import (
+from nest_graph.placement.perimeter import edge_inward_at_point
+from nest_graph.placement.guidance import (
     candidate_from_proposition,
     is_cast_move,
     sorted_guidance_propositions,

@@ -6,8 +6,8 @@ from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
-from nest_graph.propose.placement_common import is_pose_clear, placement_obstacles
-from nest_graph.propose.placements_pattern import emit_packing_clear
+from nest_graph.placement.common import is_pose_clear, placement_obstacles
+from nest_graph.placement.pattern import emit_packing_clear
 from nest_graph.utils import transform_poly
 
 

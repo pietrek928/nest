@@ -14,13 +14,13 @@ from nest_graph.propose.cluster_repack import (
     pattern_fits_peeled,
     pattern_from_indices,
 )
-from nest_graph.propose.placement_common import selection_pairwise_independent
+from nest_graph.placement.common import selection_pairwise_independent
 from nest_graph.propose.context import FreeSpaceSnapshot, analyze_free_space
 from nest_graph.propose.geometry import ProposeGeometry
 from nest_graph.propose.local_se2 import exterior_tangent_dirs, local_se2_selection
-from nest_graph.propose.placement_outline import outline_ring_geom
-from nest_graph.propose.placements_pattern import ClusterPattern, free_pocket_anchors
-from nest_graph.propose.placements_pocket import (
+from nest_graph.placement.outline import outline_ring_geom
+from nest_graph.placement.pattern import ClusterPattern, free_pocket_anchors
+from nest_graph.placement.pocket import (
     TAG_OPEN_VOID,
     propose_placements_pocket_fit,
     trapped_void_polygons,

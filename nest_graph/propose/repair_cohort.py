@@ -11,7 +11,7 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.propose.block_replace import pick_block_hole_victim
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     ClusterPattern,
     cluster_pattern_from_indices,
     merge_cluster_patterns,

@@ -5,7 +5,7 @@ from shapely.ops import unary_union
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     extract_cluster_patterns,
     propose_placements_cluster_copy,
 )

@@ -16,13 +16,13 @@ from nest_graph.propose.ranking import (
     finalize_propositions,
 )
 from nest_graph.propose.void_topology import polylabel
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     obstacle_parts,
     placement_safe_zone,
     resolve_placement_angles,
 )
-from nest_graph.propose.placement_outline import slide_toward_obstacle
-from nest_graph.propose.placement_perimeter import perimeter_ring_vertices
+from nest_graph.placement.outline import slide_toward_obstacle
+from nest_graph.placement.perimeter import perimeter_ring_vertices
 
 
 def _finalize_placement_propositions(

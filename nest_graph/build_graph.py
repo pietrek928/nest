@@ -7,7 +7,7 @@ import time
 import zlib
 from dataclasses import dataclass, field
 from pydantic import BaseModel, ConfigDict
-from shapely import Polygon, unary_union
+from shapely import Polygon
 from shapely.geometry import box as shapely_box
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
@@ -26,59 +26,44 @@ from .geometry import (
     batch_check_validity,
     find_polygon_intersections,
 )
-from .placement_scene import (
+from nest_graph.placement.scene import (
     guidance_config_for_graph,
     placement_scene_for_part,
 )
-from nest_graph.propose.placement_common import as_geometry, post_pack_overlap_ok
+from nest_graph.placement.common import as_geometry, selection_pairwise_independent
 from .board import (
     board_context_from_geometry,
     default_sheet_padding,
     padded_board_bounds,
 )
-from .utils import normalize_poly, transform_poly
+from .utils import transform_poly
 from .track_perf import show_performance
 from .propose.feedback import ProposeFeedbackState
 from .propose.post_pack import prepare_post_pack
 from .propose.pattern_archive import (
-    age_motif_library,
     motif_patterns_for_inject,
-    note_motif_hollow_miss,
     note_motif_ref_anchors,
     note_motif_ref_anchors_from_nest,
 )
-from .propose.placements_selection_expand import (
-    transforms_around as _transforms_around_impl,
-)
-from .propose.placement_common import selection_pairwise_independent
 from .propose.context import (
-    build_free_space_snapshot,
-    outline_coverage_ratio,
     part_is_concave,
-    sheet_has_narrow_corridor,
-    should_use_border_focus,
-    void_ratio_threshold,
 )
 from .propose.telem import (
-    assemble_void_leak,
-    build_motif_telem,
-    gather_void_leak_inputs,
     VoidLeakGatherCtx,
-    archive_void_elite_transforms,
     void_elite_count,
+    void_elite_tuple_from_archive,
 )
 from nest_graph.pack.cheap import (
-    cheap_lock_fingerprint,
-    cheap_pack_cache_key,
-    invalidate_cheap_cache,
     maybe_invalidate_cheap_cache,
     pack_execute_snapshot,
-    peek_isolation_telem,
-    proven_compose_row,
-    with_isolated_pack_cache,
+    warm_outer_pack_cache,
 )
 from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
-from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
+from nest_graph.pack.credit import (
+    age_iter_archives,
+    finalize_iter_mcts,
+    run_void_leak_and_niche_credit,
+)
 from nest_graph.telem_log import configure_telem_log, write_telem
 from nest_graph.pack.geoms import (
     native_geoms_from_transforms as _native_geoms_from_transforms,
@@ -92,19 +77,14 @@ from nest_graph.pack.stages import (
 from nest_graph.rules.evolve import (
     blend_live_mutation_presets,
     credit_mut_slot_amaf_deltas,
-    dedupe_rule_sets,
     improve_rules,
-    make_demo_rule_set as _make_demo_rule_set,
-    make_initial_rule_sets as _make_initial_rule_sets,
-    make_seed_rule_sets as _make_seed_rule_sets,
-    rule_region as _rule_region,
-    score_rule_sets_with_dfs,
-    truncate_rule_set,
+    inject_repulsor_rules,
+    make_initial_rule_sets,
+    make_seed_rule_sets,
     write_mut_live_telem,
 )
 from .propose.heavy_polish import (
     apply_dfs_refinement,
-    apply_refine_with_restore,
     polish_budget_for_iter,
     run_improve_rules_rounds,
 )
@@ -116,75 +96,49 @@ from .propose.first_pass_border import (
     join_attract_pairs,
 )
 from .propose.void_selection import (
-    centroid_in_free,
-    count_graph_in_free,
-    count_props_in_free,
-    count_props_near_pole,
     count_selected_by_proposer,
-    count_selected_in_free,
-    format_prop_accept,
     transform_row_key,
-    void_pole_near_radius,
-    zones_have_void_hijack,
 )
 from .propose.selection_compose import (
     active_rule_set,
-    compose_and_nest_selection,
-    compose_nest_kwargs,
     dual_nest_for,
-    nest_border_kiss_selection,
     sheet_diag_from,
 )
 from .propose.transform_batch import (
     build_transform_batch,
-    graph_valid_carry_by_group,
-    prepend_group_transforms,
 )
 from .propose.motif_lock import LargeVoidMotifPlateau
-from .propose.placements_pattern import seed_motif_base_from_mates
+from nest_graph.placement.pattern import seed_motif_base_from_mates
 from .propose.telem import (
     BestPackSnapshot,
     best_pack_geom_sig,
     maybe_restore_best_pack,
-    record_overlap_reject,
 )
-from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
+from nest_graph.free_kind_util import free_kind_token, is_large_void
 from nest_graph.graph import BoardSnapshot, FreeKind, region_to_zone
 from nest_graph.place_zone_util import is_void_seek, place_zone_token
 from nest_graph.pack.browse import (
-    choose_browse_parent,
-    packed_gids_compatible,
+    hold_browse_tip,
+    install_iter_tip,
     should_browse_tip,
 )
-from nest_graph.pack.epoch import bind_epoch, inject_cohorts_and_bind_graph
+from nest_graph.pack.epoch import (
+    inject_cohorts_and_bind_graph,
+    sync_agent_motif_cohorts,
+)
 from nest_graph.pack.execute import (
     ensure_motif_tip_for_fuel,
-    execute_pack,
     make_execute_fn,
-    prep_selection_free,
+    mcts_rule_ids,
     prep_selection_freeze,
-    note_mcts_free_kind,
-    note_mcts_multi_pole,
-    multi_pole_n_from_free,
-    record_mcts_expand,
     record_outer_iter_expand,
-    run_mcts_multi_sim,
     schedule_prep_selection_free,
+    seed_parent_free_and_poles,
 )
-from nest_graph.pack.macro_path import (
-    ancestors,
-    macro_increase_path,
-    path_accept_apply,
-    path_accept_eligible,
-    path_probe_budget,
-    record_path_edge_census,
-)
-from nest_graph.graph import leaf_reward, path_reward_beats
+from nest_graph.pack.macro_path import run_outer_path_probe
+from nest_graph.graph import leaf_reward
 from nest_graph.pack.motif_credit import (
-    credit_motif_on_nest_survival,
-    credit_void_niche_from_iter,
     merge_void_elite_with_archive,
-    niche_amaf_key,
 )
 from nest_graph.pack.ram_budget import evaluate_ram_band
 from nest_graph.pack.runner import MacroMctsRunner
@@ -205,19 +159,15 @@ from nest_graph.pack.densify_preset import (
     load_densify_presets,
 )
 from nest_graph.pack.slave_pack import (
-    upsert_from_contacts,
     upsert_from_repack_accept,
     write_propose_kiss_ledger,
 )
 from .graph import (
-    PoseGraph, Circle, Vec2,
-    PointPlaceRule, PointAngleRule, PlacementRuleSet,
-    RuleMutationSettings,
-    nest_by_graph, nest_by_scores, score_elems, augment_rules, score_rules,
-    ScoreRulesOptions,
+    PoseGraph,
+    PlacementRuleSet,
+    nest_by_graph, nest_by_scores, score_elems, score_rules,
     selection_is_independent,
     MacroRegion,
-    MacroAction,
 )
 
 # Track performance
@@ -227,167 +177,9 @@ score_elems = show_performance(score_elems)
 score_rules = show_performance(score_rules)
 
 
-def _pack_cache_overlap_ok(pack_cache: dict) -> bool:
-    """Q384: independence on compose fields after cheap replay."""
-    geoms = pack_cache.get("compose_geoms")
-    return post_pack_overlap_ok(
-        list(pack_cache.get("compose_polys") or ()),
-        list(pack_cache.get("compose_sel") or ()),
-        geoms=list(geoms) if geoms else None,
-    )
 
 
-def _path_accept_contact_upsert(
-    runner: Any,
-    snap: BoardSnapshot,
-    *,
-    part_bases: dict,
-    min_dist: float,
-    motif_min_compactness: float,
-    motif_ttl: int,
-    motif_max_keep: int,
-    pack_cache: dict,
-    telem: dict,
-) -> int:
-    """Q389: masked ContactGRG upsert on macro_path accept (not multi-sim)."""
-    if runner is None or getattr(runner, "motif_base", None) is None:
-        return 0
-    packed_gids = tuple(getattr(snap, "packed_gids", ()) or ())
-    packed_tf = tuple(getattr(snap, "packed_transforms", ()) or ())
-    if len(packed_gids) < 2 or len(packed_tf) < 2 or not part_bases:
-        return 0
-    geoms = []
-    gids_ok = []
-    tfs_ok = []
-    for gid, tf in zip(packed_gids, packed_tf):
-        base = part_bases.get(int(gid))
-        if base is None:
-            continue
-        try:
-            geoms.append(
-                base.apply_transform(float(tf[0]), float(tf[1]), float(tf[2]))
-            )
-            gids_ok.append(int(gid))
-            tfs_ok.append((float(tf[0]), float(tf[1]), float(tf[2])))
-        except Exception:
-            continue
-    if len(geoms) < 2:
-        return 0
-    # Mask gids: MotifJoin survivors ∪ (motif_locked ∩ selected).
-    allow_gids: set[int] = set()
-    realized = getattr(getattr(runner, "agent", None), "realized", None) or {}
-    survive = realized.get("survive_by_motif") or {}
-    mb = runner.motif_base
-    for mid, cnt in (survive or {}).items():
-        if int(cnt) <= 0 or int(mid) < 0 or int(mid) >= int(mb.size()):
-            continue
-        rec = mb.at(int(mid))
-        allow_gids.add(int(rec.gid_a))
-        allow_gids.add(int(rec.gid_b))
-    locked = {
-        int(i) for i in (pack_cache.get("motif_locked") or ()) if int(i) >= 0
-    }
-    sel = {int(i) for i in (pack_cache.get("compose_sel") or ())}
-    gid_list = list(pack_cache.get("compose_group_id") or ())
-    for i in locked & sel:
-        if 0 <= int(i) < len(gid_list):
-            allow_gids.add(int(gid_list[int(i)]))
-    if not allow_gids:
-        # Path-proven leaf: discover among accept-snap packed gids only.
-        allow_gids = {int(g) for g in gids_ok}
-    mask = [int(g) in allow_gids for g in gids_ok]
-    if not any(mask):
-        return 0
-    # R3 conditional one-endpoint (cap-1 / flush) dual-min under open —
-    # park; both-endpoints only (always-on any-endpoint also missed 0.592).
-    n_up = upsert_from_contacts(
-        runner.motif_base,
-        geoms,
-        gids_ok,
-        tfs_ok,
-        gap=float(min_dist),
-        min_compactness=float(motif_min_compactness),
-        ttl=int(motif_ttl),
-        max_keep=int(motif_max_keep),
-        telem=telem,
-        selection_mask=mask,
-        mask_any_endpoint=False,
-    )
-    note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
-    telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(
-        n_up
-    )
-    return int(n_up)
 
-
-def _motif_cohort_sig(cohorts: list) -> int:
-    """Deterministic cohort fingerprint for cheap cache (M2a; no PYTHONHASHSEED)."""
-    parts: list[str] = []
-    for c in cohorts:
-        if not isinstance(c, dict):
-            continue
-        mid = int(c.get("motif_id", -1) or -1)
-        leader = int(c.get("leader_gid", -1) or -1)
-        keys = sorted(str(mk) for mk in (c.get("member_keys") or ()))
-        parts.append(f"{mid}:{leader}:{','.join(keys)}")
-    if not parts:
-        return 0
-    return int(zlib.crc32("|".join(sorted(parts)).encode("utf-8")) & 0x7FFFFFFF)
-
-
-def _sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
-    """Letter D/M2b: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
-    agent = getattr(runner, "agent", None)
-    if agent is None:
-        return 0
-    cohorts = list((propose_stats or {}).get("motif_cohorts") or ())
-    # Always keep cohorts on the agent (ablation winner for density); gate PLACE_COHORT
-    # expand via place_cohort_ready so soft/path still sees members (hybrid M2b).
-    agent.motif_cohorts = tuple(cohorts)
-    n_ready = 0
-    for c in cohorts:
-        if not isinstance(c, dict):
-            continue
-        if int(len(c.get("member_keys") or ())) >= 2:
-            n_ready += 1
-    if propose_stats is not None:
-        compose_sz = int(propose_stats.get("motif_compose_accepted_size", 0) or 0)
-        if compose_sz <= 0:
-            compose_sz = len(propose_stats.get("motif_locked") or ())
-        member_hits = int(propose_stats.get("member_hits", 0) or 0)
-        if member_hits <= 0 and isinstance(propose_stats.get("void_leak"), dict):
-            member_hits = int(
-                (propose_stats.get("void_leak") or {}).get("member_hits", 0) or 0
-            )
-        hard = bool(n_ready > 0 and compose_sz >= 2 and member_hits > 0)
-        # D4 soft: drop member_hits chicken-egg for PLACE_COHORT expand when
-        # compose_sz≥2 already sticky (AMAF/cohort still learn; hard telem kept).
-        soft = bool(n_ready > 0 and compose_sz >= 2)
-        ready = int(soft)
-        propose_stats["place_cohort_specs_n"] = int(n_ready)
-        propose_stats["place_cohort_ready"] = ready
-        propose_stats["place_cohort_ready_hard"] = int(hard)
-        propose_stats["motif_cohort_sig"] = (
-            _motif_cohort_sig(cohorts) if ready else 0
-        )
-        if hasattr(agent, "place_cohort_ready"):
-            agent.place_cohort_ready = bool(ready)
-        return int(n_ready)
-    if hasattr(agent, "place_cohort_ready"):
-        agent.place_cohort_ready = False
-    return 0
-
-
-def _note_path_accept_warm(runner: Any, snap: BoardSnapshot, action: Any) -> None:
-    """Q390: remember_related + warm bump on path accept."""
-    agent = getattr(runner, "agent", None)
-    if agent is None:
-        return
-    agent.remember_related(snap, allow=True)
-    mid = int(getattr(action, "motif_id", -1) or -1)
-    if mid >= 0:
-        agent.telem["related_warm"] = int(agent.telem.get("related_warm", 0) or 0) + 1
-        agent.telem["nearest_warm"] = int(agent.telem.get("nearest_warm", 0) or 0) + 1
 
 
 class Candidate(NamedTuple):
@@ -430,7 +222,7 @@ class NestState:
 
 
 def nest_state_from_proven_compose(
-    proven: dict,
+    proven: Any,
     *,
     seed_count: int,
     pack_cache: dict,
@@ -482,96 +274,6 @@ def history_from_nest_state(nest_state: NestState) -> tuple:
     return (np.array(buckets[0]), np.array(buckets[1]))
 
 
-def _seed_parent_free_kind(
-    parent_snap: BoardSnapshot,
-    *,
-    cfg: BuildGraphConfig,
-    p_sheet: Any,
-    part_areas: Sequence[float],
-    nest_state: NestState | None,
-    part_by_group: dict | None = None,
-):
-    """P: seed ``free_kind`` before path probe (was after path — late path_ms starved)."""
-    kind = free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
-    if kind != FreeKind.Empty:
-        return kind
-    try:
-        md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
-        packed_fk = []
-        if nest_state is not None and nest_state.selected_indices:
-            seed_n = int(nest_state.seed_count or 0)
-            for i in nest_state.selected_indices:
-                if int(i) < seed_n:
-                    continue
-                if int(i) < len(nest_state.polys):
-                    packed_fk.append(nest_state.polys[i])
-        rem = getattr(parent_snap, "remaining_gids", None)
-        fk_prep = prep_selection_free(
-            sheet=p_sheet,
-            part_areas=part_areas,
-            min_dist=md_fk,
-            cfg_propose=cfg.propose,
-            packed_shapely=packed_fk,
-            pack_geoms=None,
-            part_by_group=part_by_group,
-            remaining_gids=list(rem) if rem is not None else None,
-        )
-        kind = free_kind_from_any(getattr(fk_prep.free_info, "kind", FreeKind.Empty))
-        parent_snap.free_kind = kind
-    except Exception:
-        kind = FreeKind.Empty
-    return kind
-
-
-def _motif_tip_for_path_probe(
-    tip_action: Any,
-    *,
-    motif_base: Any,
-    remaining_gids: Sequence[int] | None,
-    seed_n: int,
-    prefer_motif_id: int | None = None,
-) -> Any:
-    """P: Motif tip for ``path_probe_budget`` when MotifBase has fuel (beam/2).
-
-    Does not mutate the outer expand tip — path budget only.
-    F4: ``prefer_motif_id`` from lock-soft Join when set.
-    """
-    if (
-        tip_action is not None
-        and getattr(tip_action, "region", None) == MacroRegion.Motif
-    ):
-        return tip_action
-    mb_n = 0
-    try:
-        if motif_base is not None:
-            mb_n = int(motif_base.size())
-    except Exception:
-        mb_n = 0
-    if mb_n <= 0:
-        mb_n = int(seed_n or 0)
-    if mb_n <= 0:
-        return tip_action
-    forced = MacroAction()
-    forced.region = MacroRegion.Motif
-    mid = 0
-    if prefer_motif_id is not None and int(prefer_motif_id) >= 0:
-        mid = int(prefer_motif_id)
-        if mb_n > 0 and mid >= mb_n:
-            mid = 0
-    forced.motif_id = int(mid)
-    rem = tuple(int(g) for g in (remaining_gids or ()))
-    forced.part_gid = int(rem[0]) if rem else 0
-    forced.rule_id = 0
-    forced.preset_id = 0
-    try:
-        if motif_base is not None and int(motif_base.size()) > mid:
-            rec = motif_base.at(mid)
-            forced.part_gid = int(
-                getattr(rec, "gid_a", forced.part_gid) or forced.part_gid
-            )
-    except Exception:
-        pass
-    return forced
 
 
 def nest_state_extra_voids(nest_state: NestState | None) -> list[Geometry] | None:
@@ -666,7 +368,7 @@ class PolygonGroup(BaseModel):
 
 def select_polygons_from_edges(b: BaseGeometry, polygons: Tuple[Tuple[Polygon, float, np.ndarray], ...]):
     board_geom = Geometry.from_shapely(b)
-    result = [[] for _ in range(len(polygons))]
+    result: list[list[Any]] = [[] for _ in range(len(polygons))]
     scored: list[tuple[float, int, np.ndarray, Geometry]] = []
     bases = _base_geometries(polygons)
 
@@ -854,14 +556,6 @@ def make_polygon_graph(
     return graph, selected_polys, selected_group_id, selected_transform
 
 
-def transforms_around(
-    p: np.ndarray,
-    s: Tuple[float, float, float],
-    n: int,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    return _transforms_around_impl(p, s, n, rng)
-
 
 def scale_coords(
     coords: np.ndarray,
@@ -982,62 +676,7 @@ def render_polys(
     return im
 
 
-def _copy_rule_set(rule_set: PlacementRuleSet) -> PlacementRuleSet:
-    out = PlacementRuleSet()
-    for pr in rule_set.point_rules:
-        out.append_rule(pr)
-    for cr in rule_set.circle_rules:
-        out.append_rule(cr)
-    for pr in rule_set.point_angle_rules:
-        out.append_rule(pr)
-    for cr in rule_set.circle_angle_rules:
-        out.append_rule(cr)
-    return out
 
-
-def _repulsor_centroids(
-    board: BaseGeometry,
-    nest_state: NestState | None,
-) -> list[tuple[float, float]]:
-    sheet, _ = board_context_from_geometry(board)
-    centroids: list[tuple[float, float]] = []
-    c = sheet.centroid
-    centroids.append((float(c.x), float(c.y)))
-    if nest_state is not None and nest_state.selected_indices:
-        packed = [nest_state.polys[i] for i in nest_state.selected_indices]
-        merged = unary_union(packed)
-        if merged is not None and not merged.is_empty:
-            mc = merged.centroid
-            centroids.append((float(mc.x), float(mc.y)))
-    return centroids
-
-
-def _inject_repulsor_rules(
-    rule_sets: list[PlacementRuleSet],
-    cfg: BuildGraphConfig,
-    board: BaseGeometry,
-    nest_state: NestState | None,
-) -> list[PlacementRuleSet]:
-    if not cfg.rules.use_repulsor_rules or not rule_sets:
-        return rule_sets
-    centroids = _repulsor_centroids(board, nest_state)
-    r = max(cfg.rules.place_rule_radius * 0.5, 1e-4)
-    w = cfg.rules.repulsor_weight
-    ngroups = cfg.rules.ngroups
-    n_touch = min(max(cfg.rules.repulsor_sets_to_touch, 0), len(rule_sets))
-    out: list[PlacementRuleSet] = []
-    for i, rs in enumerate(rule_sets):
-        if i >= n_touch:
-            out.append(rs)
-            continue
-        copied = _copy_rule_set(rs)
-        for g in range(ngroups):
-            for cx, cy in centroids[:2]:
-                copied.append_rule(PointPlaceRule(
-                    pos=Vec2(x=cx, y=cy), r=r, w=w, group=g,
-                ))
-        out.append(truncate_rule_set(copied, cfg.rules.max_rules_per_set))
-    return out
 
 
 def _propose_rules_for_iter(
@@ -1048,12 +687,12 @@ def _propose_rules_for_iter(
         return None
     if rule_sets:
         return active_rule_set(rule_sets)
-    return active_rule_set(_make_initial_rule_sets(cfg))
+    return active_rule_set(make_initial_rule_sets(cfg))
 
 
 def _append_selection_window(
-    selection_window: list[tuple[np.ndarray, np.ndarray]],
-    selected_t: tuple[np.ndarray, np.ndarray],
+    selection_window: list[tuple[np.ndarray, ...]],
+    selected_t: tuple[np.ndarray, ...],
     maxlen: int,
 ) -> None:
     if not any(t.shape[0] for t in selected_t):
@@ -1062,20 +701,6 @@ def _append_selection_window(
     if len(selection_window) > maxlen:
         del selection_window[: len(selection_window) - maxlen]
 
-
-def void_elite_tuple_from_archive(
-    archive: dict[int, list[np.ndarray]] | None,
-    ngroups: int,
-) -> tuple[np.ndarray, ...]:
-    """Build per-group void-elite arrays for ``build_transform_batch``."""
-    out: list[np.ndarray] = []
-    for g in range(max(int(ngroups), 0)):
-        rows = (archive or {}).get(g) or []
-        if rows:
-            out.append(np.asarray(rows, dtype=np.float64).reshape(-1, 3))
-        else:
-            out.append(np.zeros((0, 3), dtype=np.float64))
-    return tuple(out)
 
 
 @dataclass
@@ -1103,13 +728,6 @@ class PlateauTracker:
         self.on_plateau = self.streak >= max(int(self.flat_iters), 1)
         return self.on_plateau
 
-
-def _mcts_rule_ids(rule_sets: Sequence, k: int = 3) -> tuple[int, ...]:
-    """Q247: top-K rule_id indices for MCTS expand (baseline uses rule_id=0)."""
-    n = len(rule_sets or ())
-    if n <= 0:
-        return (0,)
-    return tuple(range(min(n, max(int(k), 1))))
 
 
 def _mcts_active_rules(rule_sets: Sequence, mcts_action: Any | None):
@@ -1150,41 +768,7 @@ def _selection_budget_for_iter(
     return sel.model_copy(update=updates)
 
 
-def _make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
-    rc = cfg.rules
-    r = rc.place_rule_radius
-    wrect = rc.weight_rect
-    wtri = rc.weight_tri
-    aw = rc.angle_rule_weight_scale * wtri
-    rule_set = PlacementRuleSet()
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=r, w=wrect, group=0))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0.7, y=0.7), r=r, w=wtri, group=1))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=1.1), r=r, w=wtri, group=1))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=1.2, y=0), r=r, w=wtri, group=1))
-    for gi, wgt in ((0, wrect), (1, wtri)):
-        for k in range(8):
-            a = float(2.0 * np.pi * k / 8.0)
-            rule_set.append_rule(
-                PointAngleRule(
-                    pos=Vec2(x=0.6, y=0.55),
-                    r=r,
-                    a=a,
-                    w=aw * wgt,
-                    group=gi,
-                ),
-            )
-    return rule_set
 
-
-def _make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
-    first = PlacementRuleSet()
-    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=0))
-    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=1))
-    return [first]
-
-
-def _make_initial_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
-    return _make_seed_rule_sets(cfg) + [_make_demo_rule_set(cfg)]
 
 
 
@@ -1243,21 +827,22 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             rng = cfg.apply_seed()
             sc = cfg.sampling
 
-    selected_t = (
+    selected_t: tuple[np.ndarray, ...] = (
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
     )
-    rule_sets = _make_initial_rule_sets(cfg)
+    rule_sets = make_initial_rule_sets(cfg)
     render_size = (out.render_size, out.render_size)
+    _fourcc = getattr(cv, "VideoWriter_fourcc")(*"mp4v")
     video = cv.VideoWriter(
         out.video_path,
-        cv.VideoWriter_fourcc(*'mp4v'),
+        _fourcc,
         out.video_fps,
         render_size,
     )
-    history = (np.zeros((1, 3)), np.zeros((1, 3)))
+    history: tuple[np.ndarray, ...] = (np.zeros((1, 3)), np.zeros((1, 3)))
     graphs: list[PoseGraph] = []
-    selection_window: list[tuple[np.ndarray, np.ndarray]] = []
+    selection_window: list[tuple[np.ndarray, ...]] = []
     nest_state: NestState | None = None
     propose_feedback = ProposeFeedbackState()
     had_void_override = False
@@ -1323,7 +908,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     )
     mcts_runner.store_snapshot(int(mcts_runner.arena.root_id()), mcts_root)
     mcts_parent_id = int(mcts_runner.arena.root_id())
-    mcts_telem = {
+    mcts_telem: dict[str, Any] = {
         "pw_expand": 0,
         "motif_hit": 0,
         "place_motif_ok": 0,
@@ -1467,104 +1052,49 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     )
         # E: schedule browse for choose_browse_parent; hold+rim also unlocks
         # multi-sim tip install (Motif prefer) without forcing a parent jump.
-        sched_browse = should_browse_tip(
-            iter_idx=int(_it),
-            n_iters=int(out.n_iters),
-            is_last_leaf=is_last_leaf,
-        )
-        hold_browse = (
-            (
-                bool(parent_free_hint)
-                or is_large_void(spine_snap)
-            )
-            and (
-                bool(plateau.on_plateau)
-                or (
-                    int(mcts_telem.get("last_incumbent_hold", 0) or 0) > 0
-                    and float(mcts_telem.get("last_rim_progress", 0.0) or 0.0) >= 0.9
-                )
+        do_browse = bool(
+            should_browse_tip(
+                iter_idx=int(_it),
+                n_iters=int(out.n_iters),
+                is_last_leaf=is_last_leaf,
             )
         )
-        do_browse = bool(sched_browse)
-        browse_parent_id, parent_snap, _jumped = choose_browse_parent(
-            mcts_runner,
+        hold_browse = hold_browse_tip(
+            parent_free_hint=bool(parent_free_hint),
+            spine_snap=spine_snap,
+            plateau_on=bool(plateau.on_plateau),
+            mcts_telem=mcts_telem,
+        )
+        browse_parent_id, parent_snap, tip_action = install_iter_tip(
+            mcts_runner=mcts_runner,
             spine_id=spine_id,
             spine_snap=spine_snap,
-            nest_packed_gids=nest_packed,
-            do_browse=do_browse,
-            mcts_telem=mcts_telem,
+            nest_packed=nest_packed,
             nest_tf_keys=nest_tf_keys,
+            do_browse=do_browse,
+            hold_browse=hold_browse,
+            pack_cache=_pack_cache,
+            mcts_telem=mcts_telem,
+            mcts_n_sims=int(_mcts_n_sims),
+            is_last_leaf=is_last_leaf,
+            rule_ids=mcts_rule_ids(rule_sets),
+            sync_cohorts_fn=sync_agent_motif_cohorts,
         )
-        # DgP / Q107: multi-sim on NestState cache (not tip geometry).
-        tip_action = None
-        _prev_ps = _pack_cache.get("propose_stats")
-        _sync_agent_motif_cohorts(
-            mcts_runner,
-            _prev_ps if isinstance(_prev_ps, dict) else None,
-        )
-        if isinstance(_prev_ps, dict):
-            _pack_cache["motif_cohort_sig"] = int(
-                _prev_ps.get("motif_cohort_sig", 0) or 0
-            )
-        if _pack_cache.get("ready") and not is_last_leaf and int(_mcts_n_sims) > 0:
-            tip_action, tip_leaf = run_mcts_multi_sim(
-                mcts_runner,
-                spine_snap,
-                n_sims=int(_mcts_n_sims),
-                parent_id=int(spine_id),
-                execute_fn=mcts_runner.execute_fn,
-                mcts_telem=mcts_telem,
-                rule_ids=_mcts_rule_ids(rule_sets),
-            )
-            cheap_t = _pack_cache.get("last_execute_telem") or {}
-            for k in ("uh_ran", "compose_ran", "refine_ran", "cluster_copy", "cache_hit"):
-                if k in cheap_t:
-                    mcts_telem[k] = cheap_t[k]
-            if (do_browse or hold_browse) and tip_leaf is not None:
-                tip_snap = mcts_runner.snapshot_at(int(tip_leaf), missing_ok=True)
-                # S4: multi-sim tip keeps Se2 hard gate (soft tip regressed early med).
-                # choose_browse_parent stays gid-hard / Se2-telem.
-                if tip_snap is not None and nest_tf_keys:
-                    gid_ok = packed_gids_compatible(
-                        tip_snap, nest_packed, nest_tf_keys=None
-                    )
-                    tf_ok = packed_gids_compatible(
-                        tip_snap, nest_packed, nest_tf_keys=nest_tf_keys
-                    )
-                    if gid_ok and not tf_ok:
-                        mcts_telem["browse_tf_mismatch"] = int(
-                            mcts_telem.get("browse_tf_mismatch", 0) or 0
-                        ) + 1
-                if tip_snap is not None and packed_gids_compatible(
-                    tip_snap, nest_packed, nest_tf_keys=nest_tf_keys
-                ):
-                    # E: only install multi-sim tip when it actually jumps; do not
-                    # clobber choose_browse_parent jump with tip_leaf==spine.
-                    if int(tip_leaf) != int(spine_id):
-                        browse_parent_id = int(tip_leaf)
-                        parent_snap = tip_snap
-                        mcts_telem["browse_leaf_id"] = int(tip_leaf)
-                        mcts_telem["browse_jump"] = 1
-                        agent = getattr(mcts_runner, "agent", None)
-                        if agent is not None:
-                            agent.telem["browse_jump"] = int(
-                                agent.telem.get("browse_jump", 0)
-                            ) + 1
-                        if hold_browse and not do_browse:
-                            mcts_telem["browse_hold_tip"] = 1
         mcts_parent_id = int(browse_parent_id)
         mcts_action = tip_action
         # P: seed free_kind before path probe (was after path — late path idle).
         if parent_snap is not None:
-            fk = _seed_parent_free_kind(
+            fk = seed_parent_free_and_poles(
                 parent_snap,
                 cfg=cfg,
                 p_sheet=p_sheet,
                 part_areas=part_areas,
                 nest_state=nest_state,
+                agent=mcts_runner.agent,
                 part_by_group={0: p1, 1: p2},
+                seed_free=True,
+                seed_poles=False,
             )
-            note_mcts_free_kind(mcts_runner.agent, fk)
             if is_large_void(fk) and not parent_free_hint:
                 parent_free_hint = True
                 polish_budget = polish_budget_for_iter(
@@ -1577,520 +1107,46 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     free_remaining=True,
                     fits_part=bool(int(mcts_telem.get("last_fits_part", 1) or 0)),
                 )
-        # G0: per-iter path telem (skip never clears cumulative lie).
-        mcts_telem["replay_from_ancestor_ms"] = 0.0
-        mcts_telem["path_probe_skip"] = 0
-        mcts_telem["motif_tip_pre_path"] = 0
-        mcts_telem["path_ran"] = 0
-        mcts_telem["path_cache_miss"] = 0
-        mcts_telem["path_carved"] = 0
-        mcts_telem["path_hard_carve"] = 0
-        mcts_telem["path_geom_dropped"] = 0
-        mcts_telem["path_compose_retained"] = 0
-        mcts_telem["path_nest_adopt"] = 0
-        mcts_telem["path_root_advance"] = 0
-        mcts_telem["path_alt_none"] = 0
-        mcts_telem["path_motif_discarded"] = 0
-        mcts_telem["path_motif_tracked"] = 0
-        mcts_telem["macro_path_cov_skip"] = 0
-        mcts_telem["path_motif_force_tip"] = 0
-        mcts_telem["motif_hold_tip"] = 0
-        # P0: per-iter path wall + cch (pack_cache mid clear must not wipe).
-        mcts_telem["path_compose_ms"] = 0.0
-        mcts_telem["path_refine_ms"] = 0.0
-        mcts_telem["cheap_cache_hit"] = 0
-        mcts_telem["cheap_cache_lookup"] = 0
-        _pack_cache["path_compose_ms"] = 0.0
-        _pack_cache["path_refine_ms"] = 0.0
-        # Snapshot multi-sim lookups before path (path adds on top).
-        mcts_telem["cheap_cache_hit"] = int(_pack_cache.get("cache_hit_n", 0) or 0)
-        mcts_telem["cheap_cache_lookup"] = int(
-            _pack_cache.get("cache_lookup_n", 0) or 0
-        )
-        # P: per-iter census reset (was cumulative max → false nbr/cut growth).
-        mcts_telem["path_nbr_macro"] = 0
-        mcts_telem["path_nbr_join"] = 0
-        mcts_telem["path_nbr_attach"] = 0
-        mcts_telem["path_nbr_pose"] = 0
-        mcts_telem["path_conflicts_cut"] = 0
-        mcts_telem["path_lock_join_overlap"] = 0
-        mcts_telem["path_lock_join_soft"] = 0
-        # T: path sees prior-iter fits (set after compose); expose lag explicitly.
-        mcts_telem["path_fits_lag"] = int(mcts_telem.get("last_fits_part", 1) or 0)
-        # P: Motif fuel → Motif tip for path_probe_budget only (beam/2); outer tip
-        # stays multi_sim/AMAF until ensure_motif_tip_for_fuel below.
-        path_tip_for_budget = _motif_tip_for_path_probe(
-            tip_action,
-            motif_base=mcts_runner.motif_base,
-            remaining_gids=(
-                parent_snap.remaining_gids if parent_snap is not None else None
-            ),
-            seed_n=int(mcts_telem.get("motif_base_seed_n", 0) or 0),
-        )
-        if (
-            path_tip_for_budget is not None
-            and getattr(path_tip_for_budget, "region", None) == MacroRegion.Motif
-            and (
-                tip_action is None
-                or getattr(tip_action, "region", None) != MacroRegion.Motif
-            )
-        ):
-            mcts_telem["motif_tip_pre_path"] = 1
-        # I1b/D1/P1: probe on plateau or large_void; P1 shrink-runs (beam/4) when
-        # place_cohort_ready=0 and tip is not Motif but free_hint. Motif tip → beam/2.
-        # P: thrift when path_carved_streak≥2 on hold/plateau (skip ready∧pick_empty).
-        # P0: graph_to_nest hollow → hard (1,1) after idle thrift (not Motif/4).
-        graph_to_nest_hollow = bool(
-            int(mcts_telem.get("last_graph_to_nest", 0) or 0)
-        )
-        run_path, path_beam, path_depth = path_probe_budget(
-            on_plateau=bool(plateau.on_plateau),
+        # G0–R1: path telem reset + Motif tip + probe + adopt (L4 extract).
+        _path_probe = run_outer_path_probe(
+            mcts_runner=mcts_runner,
+            nest_state=nest_state,
+            history=history,
+            mcts_parent_id=int(mcts_parent_id),
+            mcts_action=mcts_action,
+            tip_action=tip_action,
+            parent_snap=parent_snap,
             parent_free_hint=bool(parent_free_hint),
-            agent=getattr(mcts_runner, "agent", None),
-            tip_action=path_tip_for_budget,
-            beam=int(getattr(cfg.propose, "macro_path_beam", 4) or 4),
-            max_depth=int(getattr(cfg.propose, "macro_path_max_depth", 3) or 3),
             path_carved_streak=int(path_carved_streak),
-            incumbent_hold=bool(
-                int(mcts_telem.get("last_incumbent_hold", 0) or 0)
-            ),
-            pick_empty=int(
-                mcts_telem.get("hybrid_pick_trials", 0) or 0
-            )
-            <= 0,
-            graph_to_nest_hollow=graph_to_nest_hollow,
+            mcts_telem=mcts_telem,
+            pack_cache=_pack_cache,
+            cfg=cfg,
+            rule_sets=rule_sets,
+            part_bases=part_bases,
+            part_areas=part_areas,
+            p_sheet=p_sheet,
+            plateau=plateau,
+            nest_state_from_proven_compose=nest_state_from_proven_compose,
+            history_from_nest_state=history_from_nest_state,
         )
-        if not run_path:
-            mcts_telem["path_probe_skip"] = 1
-        # C: no pre-probe Motif soft tip_install (telem inflation without carve).
-        if (
-            run_path
-            and mcts_runner.agent is not None
-            and mcts_runner.execute_fn is not None
-            and _pack_cache.get("ready")
-        ):
-            path = ancestors(mcts_runner, int(mcts_parent_id))
-            mcts_telem["policy_path_len"] = int(len(path))
-            mcts_telem["macro_swap_attempts"] = int(
-                mcts_telem.get("macro_swap_attempts", 0) or 0
-            )
-            base_cov = float(getattr(parent_snap, "coverage", 0.0) or 0.0)
-            realized = getattr(
-                getattr(mcts_runner, "agent", None), "realized", None
-            ) or {}
-            base_r = leaf_reward(
-                parent_snap,
-                survive_motif_n=int(realized.get("survive_motif_n", 0) or 0),
-                macro_survive_n=int(realized.get("macro_survive_n", 0) or 0),
-                member_hits=int(realized.get("member_hits", 0) or 0),
-                materialized_motif=int(
-                    realized.get("materialized_motif", 0) or 0
-                ),
-            )
-            path_overlap_ok = False
-            agent_pc = getattr(mcts_runner, "agent", None)
-            # M: hold∧rim≥0.9∧large_void∧fuel∧late-density → Motif cov tip.
-            # Fuel: join/compose/ready OR motif_hit/seed (late join often 0).
-            rim_hi = float(mcts_telem.get("last_rim_progress", 0.0) or 0.0) >= 0.9
-            fuel_ok = (
-                int(mcts_telem.get("path_join_signal", 0) or 0) > 0
-                or len(_pack_cache.get("motif_locked") or ()) >= 2
-                or int(mcts_telem.get("motif_compose_accepted_size", 0) or 0)
-                >= 2
-                or bool(getattr(agent_pc, "place_cohort_ready", False))
-                or int(mcts_telem.get("motif_hit", 0) or 0) > 0
-                or int(mcts_telem.get("motif_base_seed_n", 0) or 0) > 0
-            )
-            motif_hold_tip = (
-                int(mcts_telem.get("last_incumbent_hold", 0) or 0) > 0
-                and rim_hi
-                and bool(parent_free_hint)
-                and fuel_ok
-                and int(mcts_telem.get("last_nest_n", 0) or 0) >= 60
-            )
-            mcts_telem["motif_hold_tip"] = int(motif_hold_tip)
-            mcts_telem["motif_hold_rim"] = int(rim_hi)
-            mcts_telem["motif_hold_fuel"] = int(fuel_ok)
-            force_motif = None
-            if motif_hold_tip:
-                # F4: path_lock_join_motif_id telem retained; forcing Join mid
-                # tip dumped late med below F3 — Motif tip stays MotifBase.at(0).
-                force_motif = _motif_tip_for_path_probe(
-                    path_tip_for_budget,
-                    motif_base=mcts_runner.motif_base,
-                    remaining_gids=(
-                        parent_snap.remaining_gids
-                        if parent_snap is not None
-                        else None
-                    ),
-                    seed_n=int(mcts_telem.get("motif_base_seed_n", 0) or 0),
-                )
-            # F2: sticky lock visible to _validate_join_bonus during path probe.
-            mcts_telem["motif_locked"] = list(_pack_cache.get("motif_locked") or ())
-            path_proven_compose: dict | None = None
-            with with_isolated_pack_cache(_pack_cache):
-                alt_action, alt_reward, path_accept_snap = macro_increase_path(
-                    mcts_runner,
-                    leaf_id=int(mcts_parent_id),
-                    baseline_reward=base_r,
-                    execute_fn=mcts_runner.execute_fn,
-                    rule_ids=_mcts_rule_ids(rule_sets),
-                    beam=int(path_beam),
-                    max_depth=int(path_depth),
-                    telem=mcts_telem,
-                    overlap_ok_fn=lambda _s=None: _pack_cache_overlap_ok(_pack_cache),
-                    prefer_motif_return=bool(motif_hold_tip),
-                    motif_hold_tip=bool(motif_hold_tip),
-                    force_motif_action=force_motif,
-                )
-                path_overlap_ok = bool(_pack_cache_overlap_ok(_pack_cache))
-                # S1: stash compose row before isolation restore (S2 adopt consumes).
-                path_proven_compose = proven_compose_row(_pack_cache, alt_action)
-                # P0: stamp path wall + cch before isolation restore (peek).
-                _path_telem = peek_isolation_telem(_pack_cache)
-                mcts_telem["path_compose_ms"] = float(
-                    _path_telem.get("path_compose_ms", 0.0) or 0.0
-                )
-                mcts_telem["path_refine_ms"] = float(
-                    _path_telem.get("path_refine_ms", 0.0) or 0.0
-                )
-                mcts_telem["cheap_cache_hit"] = int(
-                    _path_telem.get("cache_hit_n", 0) or 0
-                )
-                mcts_telem["cheap_cache_lookup"] = int(
-                    _path_telem.get("cache_lookup_n", 0) or 0
-                )
-            # E0/F0: census after probe (outside pack_cache isolation — telem only).
-            mcts_telem["motif_join_from_base"] = max(
-                int(mcts_telem.get("motif_join_from_base", 0) or 0),
-                int(
-                    (_pack_cache.get("propose_stats") or {}).get(
-                        "motif_join_from_base", 0
-                    )
-                    or 0
-                ),
-            )
-            record_path_edge_census(
-                mcts_runner,
-                int(mcts_parent_id),
-                mcts_telem,
-                motif_locked=_pack_cache.get("motif_locked"),
-                beam_cap=max(4, int(path_beam) * 2),
-            )
-            # M/T: hold tip armed but Motif execute sterile → telem only.
-            # Do not bump path_carved / tip_apply / clear streak (defeats idle_thrift).
-            if (
-                motif_hold_tip
-                and force_motif is not None
-                and (
-                    alt_action is None
-                    or getattr(alt_action, "region", None) != MacroRegion.Motif
-                )
-            ):
-                mcts_telem["path_motif_force_tip"] = 1
-            if alt_action is None:
-                mcts_telem["path_alt_none"] = int(
-                    mcts_telem.get("path_alt_none", 0) or 0
-                ) + 1
-            eligible, cov_ok, _base_cov, _alt_cov = path_accept_eligible(
-                alt_action=alt_action,
-                path_accept_snap=path_accept_snap,
-                parent_snap=parent_snap,
-                base_reward=base_r,
-                alt_reward=float(alt_reward),
-                path_overlap_ok=path_overlap_ok,
-                relax_motif_void_fill=True,
-                fits_part=bool(
-                    int(mcts_telem.get("last_fits_part", 1) or 0) > 0
-                ),
-            )
-            if eligible:
-                mcts_telem["macro_path_candidate"] = 1
-                decision = path_accept_apply(
-                    mode="build_graph",
-                    cov_ok=cov_ok,
-                    path_overlap_ok=path_overlap_ok,
-                    alt_action=alt_action,
-                    enable_macro_path_replay=bool(
-                        getattr(cfg.propose, "enable_macro_path_replay", False)
-                    ),
-                    mutate_motif_base_on_path=bool(
-                        getattr(cfg.propose, "mutate_motif_base_on_path", False)
-                    ),
-                    telem=mcts_telem,
-                    free_kind=free_kind_token(
-                        getattr(parent_snap, "free_kind", FreeKind.Empty)
-                    ),
-                )
-                # S1: retain compose row on accept (geom_drop after adopt attempt).
-                path_accept_hit = (
-                    path_accept_snap is not None
-                    and not decision.get("overlap_skip")
-                    and (
-                        bool(decision.get("credit"))
-                        or bool(decision.get("tip_install"))
-                    )
-                )
-                if path_accept_hit and path_proven_compose is not None:
-                    mcts_telem["path_compose_retained"] = int(
-                        mcts_telem.get("path_compose_retained", 0) or 0
-                    ) + 1
-                if decision["overlap_skip"]:
-                    mcts_telem["macro_path_overlap_skip"] = int(
-                        mcts_telem.get("macro_path_overlap_skip", 0) or 0
-                    ) + 1
-                    agent = getattr(mcts_runner, "agent", None)
-                    if (
-                        agent is not None
-                        and getattr(alt_action, "region", None)
-                        != MacroRegion.Motif
-                    ):
-                        agent.note_macro_miss(alt_action)
-                    cheap_by_key = _pack_cache.get("cheap_compose_by_key")
-                    if isinstance(cheap_by_key, dict):
-                        _ppid = _pack_cache.get("pack_preset_id")
-                        cheap_by_key.pop(
-                            cheap_pack_cache_key(
-                                place_zone_token(
-                                    region_to_zone(
-                                        getattr(alt_action, "region", None)
-                                    )
-                                ),
-                                alt_action,
-                                compose_sz=len(
-                                    _pack_cache.get("motif_locked") or ()
-                                ),
-                                cohort_sig=int(
-                                    _pack_cache.get("motif_cohort_sig", 0) or 0
-                                ),
-                                lock_fp=cheap_lock_fingerprint(
-                                    _pack_cache.get("motif_locked")
-                                ),
-                                pack_preset_id=(
-                                    int(_ppid) if _ppid is not None else None
-                                ),
-                            ),
-                            None,
-                        )
-                    record_overlap_reject(mcts_telem, stage="path")
-                elif decision["cov_skip"]:
-                    mcts_telem["macro_path_cov_skip"] = 1
-                    if path_accept_hit:
-                        mcts_telem["path_geom_dropped"] = int(
-                            mcts_telem.get("path_geom_dropped", 0) or 0
-                        ) + 1
-                    if decision["motif_soft"]:
-                        mcts_telem["macro_path_motif_soft"] = 1
-                    if decision["credit"] and not decision.get("motif_soft"):
-                        _note_path_accept_warm(
-                            mcts_runner, path_accept_snap, alt_action
-                        )
-                        mcts_telem["path_credit_n"] = int(
-                            mcts_telem.get("path_credit_n", 0) or 0
-                        ) + 1
-                    elif decision["credit"]:
-                        mcts_telem["path_credit_n"] = int(
-                            mcts_telem.get("path_credit_n", 0) or 0
-                        ) + 1
-                else:
-                    # R1: hard carve = tip_install ∧ ¬motif_soft (streak clear + idle).
-                    hard_carve = bool(decision["tip_install"]) and not bool(
-                        decision.get("motif_soft")
-                    )
-                    adopted = False
-                    if (
-                        bool(decision.get("adopt"))
-                        and path_proven_compose is not None
-                        and nest_state is not None
-                        and path_accept_snap is not None
-                        and alt_action is not None
-                    ):
-                        adopted_ns = nest_state_from_proven_compose(
-                            path_proven_compose,
-                            seed_count=int(nest_state.seed_count or 0),
-                            pack_cache=_pack_cache,
-                        )
-                        if adopted_ns is not None:
-                            pre_parent = int(mcts_parent_id)
-                            nest_state = adopted_ns
-                            history = history_from_nest_state(nest_state)
-                            ps_adopt = _pack_cache.get("propose_stats")
-                            if not isinstance(ps_adopt, dict):
-                                ps_adopt = {}
-                            new_parent = record_mcts_expand(
-                                mcts_runner,
-                                parent_id=pre_parent,
-                                action=alt_action,
-                                child_snap=path_accept_snap,
-                                nest_state=nest_state,
-                                part_bases=part_bases,
-                                part_areas=part_areas,
-                                min_dist=float(
-                                    cfg.board_min_dist_for(p_sheet)
-                                ),
-                                t_expand0=time.perf_counter(),
-                                mcts_telem=mcts_telem,
-                                propose_stats=ps_adopt,
-                                motif_min_compactness=float(
-                                    getattr(
-                                        cfg.propose,
-                                        "motif_min_compactness",
-                                        0.35,
-                                    )
-                                    or 0.35
-                                ),
-                                motif_ttl=int(
-                                    getattr(
-                                        cfg.propose,
-                                        "accepted_pattern_ttl",
-                                        4,
-                                    )
-                                    or 4
-                                ),
-                                motif_max_keep=int(
-                                    getattr(
-                                        cfg.propose,
-                                        "accepted_pattern_max",
-                                        4,
-                                    )
-                                    or 4
-                                ),
-                                upsert_contacts=False,
-                            )
-                            mcts_parent_id = int(new_parent)
-                            mcts_telem["path_nest_adopt"] = int(
-                                mcts_telem.get("path_nest_adopt", 0) or 0
-                            ) + 1
-                            if int(new_parent) != pre_parent:
-                                mcts_telem["path_root_advance"] = int(
-                                    mcts_telem.get("path_root_advance", 0)
-                                    or 0
-                                ) + 1
-                            adopted = True
-                    if path_accept_hit and not adopted:
-                        mcts_telem["path_geom_dropped"] = int(
-                            mcts_telem.get("path_geom_dropped", 0) or 0
-                        ) + 1
-                    if decision["tip_install"]:
-                        mcts_telem["macro_path_accept"] = int(
-                            mcts_telem.get("macro_path_accept", 0) or 0
-                        ) + 1
-                        # S2: non-Motif adopt skips force_zone; Motif soft tip kept.
-                        # P3 parked: always-install dumped late Δ; enable only when
-                        # A0 shows path_nest_adopt vs dg_force_zone mismatch hurt.
-                        if not adopted or bool(decision.get("motif_soft")):
-                            mcts_action = alt_action
-                        mcts_telem["path_carved"] = int(
-                            mcts_telem.get("path_carved", 0) or 0
-                        ) + 1
-                        if hard_carve:
-                            path_carved_streak = 0
-                            mcts_telem["path_carved_streak"] = 0
-                            mcts_telem["path_hard_carve"] = int(
-                                mcts_telem.get("path_hard_carve", 0) or 0
-                            ) + 1
-                    if decision["motif_soft"]:
-                        mcts_telem["macro_path_motif_soft"] = 1
-                    if decision["credit"] and not decision.get("motif_soft"):
-                        _note_path_accept_warm(
-                            mcts_runner, path_accept_snap, alt_action
-                        )
-                        mcts_telem["path_credit_n"] = int(
-                            mcts_telem.get("path_credit_n", 0) or 0
-                        ) + 1
-                    elif decision["credit"]:
-                        mcts_telem["path_credit_n"] = int(
-                            mcts_telem.get("path_credit_n", 0) or 0
-                        ) + 1
-                    if decision["upsert"] and path_accept_snap is not None:
-                        # J: Q389 upsert on path-proven snap (incl. Motif soft tip).
-                        # Pre-probe soft tip never reaches this block.
-                        _path_accept_contact_upsert(
-                            mcts_runner,
-                            path_accept_snap,
-                            part_bases=part_bases,
-                            min_dist=float(
-                                cfg.board_min_dist_for(p_sheet)
-                            ),
-                            motif_min_compactness=float(
-                                getattr(
-                                    cfg.propose, "motif_min_compactness", 0.35
-                                )
-                                or 0.35
-                            ),
-                            motif_ttl=int(
-                                getattr(cfg.propose, "accepted_pattern_ttl", 4)
-                                or 4
-                            ),
-                            motif_max_keep=int(
-                                getattr(cfg.propose, "accepted_pattern_max", 4)
-                                or 4
-                            ),
-                            pack_cache=_pack_cache,
-                            telem=mcts_telem,
-                        )
-            # T/R1: idle streak uses hard carve (soft tip must not freeze thrift).
-            if int(mcts_telem.get("path_hard_carve", 0) or 0) <= 0:
-                path_carved_streak += 1
-            mcts_telem["path_carved_streak"] = int(path_carved_streak)
-        elif run_path and not _pack_cache.get("ready"):
-            mcts_telem["path_cache_miss"] = 1
-            path_carved_streak += 1
-            mcts_telem["path_carved_streak"] = int(path_carved_streak)
-        # P2: seed free_kind before AMAF pick so Void/Rim bias is live on iter 0+.
-        # L2: always arm multi_pole_n when agent present (Empty path computes;
-        # already-LargeVoid falls back to prior telem or max_poles staging).
-        if mcts_runner.agent is not None:
-            try:
-                md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
-                use_mp = bool(getattr(cfg.propose, "use_multi_pole_void", True))
-                max_mp = int(getattr(cfg.propose, "multi_pole_max_poles", 4) or 4)
-                n_poles = int(mcts_telem.get("multi_pole_count", 0) or 0)
-                fk_now = free_kind_from_any(
-                    getattr(parent_snap, "free_kind", FreeKind.Empty)
-                )
-                if fk_now == FreeKind.Empty or n_poles < 2:
-                    packed_fk = []
-                    if nest_state is not None and nest_state.selected_indices:
-                        seed_n = int(nest_state.seed_count or 0)
-                        for i in nest_state.selected_indices:
-                            if int(i) < seed_n:
-                                continue
-                            if int(i) < len(nest_state.polys):
-                                packed_fk.append(nest_state.polys[i])
-                    rem_fk = getattr(parent_snap, "remaining_gids", None)
-                    fk_prep = prep_selection_free(
-                        sheet=p_sheet,
-                        part_areas=part_areas,
-                        min_dist=md_fk,
-                        cfg_propose=cfg.propose,
-                        packed_shapely=packed_fk,
-                        pack_geoms=None,
-                        part_by_group={0: p1, 1: p2},
-                        remaining_gids=list(rem_fk) if rem_fk is not None else None,
-                    )
-                    if fk_now == FreeKind.Empty:
-                        parent_snap.free_kind = free_kind_from_any(
-                            getattr(fk_prep.free_info, "kind", FreeKind.Empty)
-                        )
-                        note_mcts_free_kind(
-                            mcts_runner.agent, parent_snap.free_kind
-                        )
-                        fk_now = free_kind_from_any(parent_snap.free_kind)
-                    n_poles = multi_pole_n_from_free(
-                        getattr(fk_prep.free_info, "target_poly", None),
-                        min_dist=float(md_fk),
-                        max_poles=max_mp,
-                        use_multi_pole=use_mp,
-                    )
-                if n_poles < 2 and use_mp and is_large_void(fk_now):
-                    n_poles = max(2, max_mp)
-                note_mcts_multi_pole(mcts_runner.agent, n_poles)
-                mcts_telem["multi_pole_count"] = int(n_poles)
-            except Exception:
-                note_mcts_multi_pole(
-                    mcts_runner.agent, propose_stats=mcts_telem
-                )
+        nest_state = _path_probe.nest_state
+        history = _path_probe.history
+        mcts_parent_id = int(_path_probe.mcts_parent_id)
+        mcts_action = _path_probe.mcts_action
+        path_carved_streak = int(_path_probe.path_carved_streak)
+        # P2/L2: post-path free_kind + multi_pole (shared helper with pre-path).
+        seed_parent_free_and_poles(
+            parent_snap,
+            cfg=cfg,
+            p_sheet=p_sheet,
+            part_areas=part_areas,
+            nest_state=nest_state,
+            agent=mcts_runner.agent,
+            part_by_group={0: p1, 1: p2},
+            mcts_telem=mcts_telem,
+            seed_free=True,
+            seed_poles=True,
+        )
         preset_ids = [0]
         densify_hold = bool(
             int(mcts_telem.get("last_incumbent_hold", 0) or 0)
@@ -2109,7 +1165,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             mcts_action = mcts_runner.agent.pick_expand_action(
                 parent_snap.remaining_gids
                 or tuple(range(int(cfg.rules.ngroups))),
-                rule_ids=_mcts_rule_ids(rule_sets),
+                rule_ids=mcts_rule_ids(rule_sets),
                 parent_id=mcts_parent_id,
                 snapshot=parent_snap,
             )
@@ -2469,7 +1525,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         graphs = graphs[-gc.graphs_window:]
         first_pass = nest_state is None
         board_ctx_outline = board_context_from_geometry(p_outline, user_holes=user_holes)
-        seed_rules = active_rule_set(_make_seed_rule_sets(cfg))
+        seed_rules = active_rule_set(make_seed_rule_sets(cfg))
         free_info = None
         # Ua: one improve call above first_pass / mid-pack fork.
         # K: one live_presets list across iters; credit preset slots via AMAF
@@ -2686,44 +1742,32 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 _f1_sticky_spent = 1
             # P0: path/cch telem lives on mcts_telem; reset pack_cache counters
             # for next-iter multi-sim (do not carry wiped zeros into propose_stats).
-            _pack_cache.clear()
-            _pack_cache.update({
-                "ready": True,
-                "graph": mcts_runner.dg.poses(),
-                "dg": mcts_runner.dg,
-                "polys": polys,
-                "group_id": group_id,
-                "transform": transform,
-                "part_areas": part_areas,
-                "part_bases": part_bases,
-                "p_sheet": p_sheet,
-                "min_dist": min_dist,
-                "cfg": pack_cfg,
-                "densify_presets": list(_densify_presets),
-                "free_info": free_info,
-                "propose_stats": dict(propose_stats),
-                "packed_geoms": list(packed_geoms),
-                "packed_group_id": packed_group_id,
-                "packed_transform": packed_transform,
-                "void_geoms": list(void_geoms_compose or []),
-                "seed_void_geoms": list(seed_voids),
-                "sheet": sheet,
-                "sheet_area": float(sheet.area) if sheet is not None else 0.0,
-                "board_area": float(board_area),
-                "selected": list(selected_polys),
-                "compose_sel": list(selected_polys),
-                "compose_polys": list(polys),
-                "compose_group_id": list(group_id),
-                "compose_transform": list(transform),
-                "motif_locked": list(propose_stats.get("motif_locked") or ()),
-                "f1_sticky_spent": int(_f1_sticky_spent),
-                "cache_hit_n": 0,
-                "cache_lookup_n": 0,
-                "cache_miss_n": 0,
-                "path_compose_ms": 0.0,
-                "path_refine_ms": 0.0,
-            })
-            _sync_agent_motif_cohorts(mcts_runner, propose_stats)
+            warm_outer_pack_cache(
+                _pack_cache,
+                graph=mcts_runner.dg.poses(),
+                dg=mcts_runner.dg,
+                polys=polys,
+                group_id=group_id,
+                transform=transform,
+                part_areas=part_areas,
+                part_bases=part_bases,
+                p_sheet=p_sheet,
+                min_dist=min_dist,
+                cfg=pack_cfg,
+                densify_presets=_densify_presets,
+                free_info=free_info,
+                propose_stats=propose_stats,
+                packed_geoms=packed_geoms,
+                packed_group_id=packed_group_id,
+                packed_transform=packed_transform,
+                void_geoms=void_geoms_compose or [],
+                seed_void_geoms=seed_voids,
+                sheet=sheet,
+                board_area=board_area,
+                selected_polys=selected_polys,
+                f1_sticky_spent=int(_f1_sticky_spent),
+            )
+            sync_agent_motif_cohorts(mcts_runner, propose_stats)
             _pack_cache["motif_cohort_sig"] = int(
                 propose_stats.get("motif_cohort_sig", 0) or 0
             )
@@ -2779,28 +1823,31 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 if proposed_map else None
             )
             leak_orch = run_void_leak_and_niche_credit(
-                graph=graph,
-                polys=polys,
-                group_id=group_id,
-                transform=transform,
-                free_info=free_info,
-                free_poly=free_poly,
-                selected_nest=selected_nest,
-                selected_polys=selected_polys,
-                refine_scores=refine_scores,
-                propose_stats=propose_stats,
-                plateau=plateau,
-                pin_stats=pin_stats,
-                pin_all_blocked_streak=pin_all_blocked_streak,
-                n_void_nest=n_void_nest,
-                boost_hits=boost_hits,
-                void_pole_near_diag_ratio=float(
-                    getattr(cfg.propose, "void_pole_near_diag_ratio", 0.25) or 0.25
+                VoidLeakGatherCtx(
+                    graph=graph,
+                    polys=polys,
+                    group_id=group_id,
+                    transform=transform,
+                    free_info=free_info,
+                    free_poly=free_poly,
+                    selected_nest=selected_nest,
+                    selected_polys=selected_polys,
+                    refine_scores=refine_scores,
+                    propose_stats=propose_stats,
+                    plateau=plateau,
+                    pin_stats=pin_stats,
+                    pin_all_blocked_streak=pin_all_blocked_streak,
+                    n_void_nest=n_void_nest,
+                    boost_hits=boost_hits,
+                    void_pole_near_diag_ratio=float(
+                        getattr(cfg.propose, "void_pole_near_diag_ratio", 0.25) or 0.25
+                    ),
+                    proposer_counts=proposer_counts,
+                    sheet_diag=float(sheet_diag),
+                    mcts_telem=mcts_telem,
+                    mcts_runner=mcts_runner,
+                    sheet=p_sheet,
                 ),
-                proposer_counts=proposer_counts,
-                sheet_diag=float(sheet_diag),
-                mcts_telem=mcts_telem,
-                mcts_runner=mcts_runner,
                 mcts_action=mcts_action,
                 cfg_propose=cfg.propose,
                 prev_void_nest=_prev_void_nest,
@@ -2810,7 +1857,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 stratified_void_elite_quota=int(
                     getattr(cfg.propose, "stratified_void_elite_quota", 15)
                 ),
-                sheet=p_sheet,
             )
             void_elite_by_group = leak_orch.void_elite_by_group
             if leak_orch.had_void_override:
@@ -3187,66 +2233,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 propose_stats.get("motif_graph_hit_n", 0) or 0
             )
         # Q142: one global age tick — Motif + niche + arena idle/tombstone.
-        if bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True)):
-            if not pattern_accept:
-                age_motif_library(mcts_runner.motif_base, 1)
-            mcts_runner.niche_archive.age(1)
-            if mcts_runner.agent is not None:
-                mcts_runner.agent.age_and_tombstone(
-                    spine_id=int(mcts_parent_id),
-                    idle_t=4,
-                    force=bool(
-                        str(mcts_telem.get("ram_band") or "") in ("pressure", "critical")
-                    ),
-                )
-                # Tombstones stay on the agent; snapshots stay size-aligned with the arena.
-        lib_n = int(mcts_runner.motif_base.size())
-        propose_stats["motif_refine_hits"] = int(motif_refine_n)
-        propose_stats["accepted_patterns_archived"] = lib_n
-        propose_stats["motif_library_n"] = lib_n
-        propose_stats["motif_base_seed_n"] = int(
-            mcts_telem.get("motif_base_seed_n", 0) or 0
-        )
-        propose_stats["pattern_accept"] = bool(pattern_accept)
-        densify_full = propose_stats.get("densify_stats") or {}
-        skip_map: dict[str, int] = {}
-        densify_skips = densify_full.get("pocket_skip") or []
-        if isinstance(densify_skips, dict):
-            skip_map = {str(k): int(v) for k, v in densify_skips.items()}
-        elif isinstance(densify_skips, list):
-            for s in densify_skips:
-                skip_map[str(s)] = skip_map.get(str(s), 0) + 1
-        for k, v in (densify_full.get("motif_skip") or {}).items():
-            skip_map[str(k)] = int(v)
-        motif_telem = build_motif_telem(
-            skip_map=skip_map,
-            motif_refine_n=motif_refine_n,
+        motif_telem = age_iter_archives(
+            mcts_runner=mcts_runner,
+            mcts_parent_id=int(mcts_parent_id),
+            mcts_telem=mcts_telem,
             propose_stats=propose_stats,
-            archive_len=lib_n,
+            cfg_propose=cfg.propose,
+            pattern_accept=bool(pattern_accept),
+            motif_refine_n=int(motif_refine_n),
         )
-        motif_telem["motif_library_n"] = lib_n
-        motif_telem["motif_library_inject"] = int(
-            propose_stats.get("accepted_patterns_n", 0)
-        )
-        if isinstance(propose_stats.get("void_leak"), dict):
-            propose_stats["void_leak"]["motif_telem"] = motif_telem
-            for _mk in (
-                "full_motif_clear",
-                "fallback_leader",
-                "leader_fail",
-                "collide",
-                "lattice_anchors_added",
-                "lattice_anchors_kept",
-                "foreign_clear_fail_sheet",
-                "foreign_clear_fail_obs",
-                "foreign_clear_fail_empty",
-                "soft_foreign_incumbent_n",
-            ):
-                propose_stats["void_leak"][_mk] = max(
-                    int(propose_stats["void_leak"].get(_mk, 0) or 0),
-                    int(motif_telem.get(_mk, 0) or 0),
-                )
-        propose_stats["motif_telem"] = motif_telem
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
         )
@@ -3319,7 +2314,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 motif_max_keep=int(
                     getattr(cfg.propose, "accepted_pattern_max", 4) or 4
                 ),
-                rule_ids=_mcts_rule_ids(rule_sets),
+                rule_ids=mcts_rule_ids(rule_sets),
                 rule_sets=rule_sets,
             )
             if child_snap is not None and mcts_action is not None:
@@ -3411,7 +2406,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         else:
             refine_msg = f"{old_len} -> {len(selected_polys)}"
             write_telem(
-                len(polys),
+                str(len(polys)),
                 refine_msg,
                 f"cov={cov:.1f}%",
                 f"dfs_passes={int(polish_budget.dfs_passes)}",
@@ -3420,18 +2415,18 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         render_frame = shapely_box(*padded_board_bounds(p_outline, sheet_pad))
         im = render_polys(
             render_frame,
-            [[polys[i] for i in selected_polys]],
+            (tuple(polys[i] for i in selected_polys),),
             im_shape=render_size,
             nest_outline=p_sheet,
         )
         video.write(im)
         cv.imwrite(out.snapshot_path, im)
 
-        selected_t = ([], [])
+        selected_arms: list[list[Any]] = [[], []]
         for i in selected_polys:
-            gi = group_id[i]
-            selected_t[gi].append(transform[i])
-        selected_t = tuple(np.array(t) for t in selected_t)
+            gi = int(group_id[i])
+            selected_arms[gi].append(transform[i])
+        selected_t = tuple(np.array(t) for t in selected_arms)
         if relocate_accepted:
             # Drop stale window frames before appending post-move poses.
             selection_window.clear()
@@ -3473,7 +2468,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             seed_count=seed_n,
             _native_geoms=nest_natives,
         )
-        rule_sets = _inject_repulsor_rules(rule_sets, cfg, p_sheet, nest_state)
+        rule_sets = inject_repulsor_rules(rule_sets, cfg, p_sheet, nest_state)
         last_cov_frac = float(cov) / 100.0 if board_area > 0 else 0.0
         last_parts = int(len(selected_polys))
         ckpt_iter = int(getattr(out, "checkpoint_iter", 0) or 0)

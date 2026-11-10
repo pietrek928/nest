@@ -12,7 +12,7 @@ from nest_graph.config import ProposeConfig
 
 from nest_graph.propose.context import FreeSpaceSnapshot, should_use_border_focus
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import placement_angle_grid
+from nest_graph.placement.common import placement_angle_grid
 
 
 @dataclass

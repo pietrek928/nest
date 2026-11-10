@@ -20,7 +20,7 @@ from nest_graph.propose.context import (
     void_pole_seed_coords,
 )
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     _boundary_alignment_angles,
     as_geometry,
 )
@@ -412,7 +412,7 @@ def _unlock_clear_xy_anchors(
     # local Halton around pole; full-bbox Halton remains fallback (no 2nd mode).
     if len(found) < cap and sheet is not None and base_shape is not None:
         # Cycle: placements_free_space_cloud ↔ placements_pattern.emit_packing_clear.
-        from nest_graph.propose.placements_free_space_cloud import (
+        from nest_graph.placement.free_space_cloud import (
             polish_cloud_slide_toward_obstacles,
         )
         cloud: list[tuple[float, float, float]] = []
@@ -1603,7 +1603,7 @@ def void_seek_motif_anchors(
         and part_for_pocket is not None
         and not part_for_pocket.is_empty
     ):
-        from nest_graph.propose.placements_pocket import aligned_poses_for_pocket
+        from nest_graph.placement.pocket import aligned_poses_for_pocket
 
         # V: pocket R4 gets same wedge-edge grain as clear-XY unlock.
         pocket_angles = list(wedge_edge_grain_angles(void_poly))
@@ -1637,7 +1637,7 @@ def emit_packing_clear(
     obstacles: Sequence | None = None,
 ) -> bool:
     """Propose-emit packing SoT: Penetrating vs voids+packed (margin 0, not Scene)."""
-    from nest_graph.propose.placement_common import placement_obstacles
+    from nest_graph.placement.common import placement_obstacles
 
     placed = propose_geom.placed_at(coords)
     if placed is None:
@@ -1664,7 +1664,7 @@ def emit_packing_clear_batch(
     Uses ``geometry.batch_packing_clear`` (not Scene ``batch_check_validity``).
     """
     from nest_graph.geometry import batch_packing_clear
-    from nest_graph.propose.placement_common import placement_obstacles
+    from nest_graph.placement.common import placement_obstacles
 
     if not transforms:
         return []
@@ -1827,7 +1827,7 @@ def stamp_motif_leader_follower(
         )
         return []
 
-    from nest_graph.propose.placement_common import placement_obstacles
+    from nest_graph.placement.common import placement_obstacles
 
     voids = propose_geom.scene.void_geoms
     full_packed = list(propose_geom.full_packed_geoms or [])
@@ -2051,7 +2051,7 @@ def propose_placements_cluster_copy(
     if not propose_cfg.use_cluster_copy:
         return []
 
-    from nest_graph.propose.placement_common import placement_obstacles
+    from nest_graph.placement.common import placement_obstacles
 
     pole = void_pole
     if pole is None and free_space is not None:

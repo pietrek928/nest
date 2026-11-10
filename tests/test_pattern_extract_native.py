@@ -2,7 +2,7 @@
 
 from shapely.geometry import box
 
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     _pair_hull_area,
     synthesize_mate_patterns,
 )

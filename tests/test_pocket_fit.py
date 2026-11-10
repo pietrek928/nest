@@ -6,7 +6,7 @@ import numpy as np
 from shapely.geometry import box
 
 from nest_graph.config import ProposeConfig
-from nest_graph.propose.placements_pocket import (
+from nest_graph.placement.pocket import (
     TAG_POCKET_MRR,
     aligned_poses_for_pocket,
     hull_bay_polygons,

@@ -1,7 +1,7 @@
 import numpy as np
 
 from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     best_proposition,
     guidance_ray_direction_candidates,
     tiered_propositions,
@@ -9,7 +9,7 @@ from nest_graph.placement_scene import (
 from nest_graph.utils import transform_poly
 
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_edge import sample_placement_points_ribbon
+from nest_graph.placement.edge import sample_placement_points_ribbon
 from nest_graph.propose.ranking import calculate_complex_score, finalize_propositions
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.types import ProposeContext, PackedProposeExtras
@@ -47,7 +47,7 @@ def propose_placements_point_cloud(
     if isinstance(base_shape, Geometry):
         base_hull_area = float(base_shape.convex_hull_area())
     else:
-        from nest_graph.propose.placement_common import as_geometry
+        from nest_graph.placement.common import as_geometry
         from nest_graph.geometry import Geometry as _G
         g = as_geometry(base_shape) if not getattr(base_shape, "is_empty", True) else None
         base_hull_area = float(g.convex_hull_area()) if g is not None else 0.0

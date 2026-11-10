@@ -1,5 +1,6 @@
 """Void-elite archive, niche credit, and MCTS iter finalize."""
 
+from dataclasses import replace
 from typing import Any, Sequence
 
 import numpy as np
@@ -13,16 +14,17 @@ from nest_graph.pack.motif_credit import (
     credit_void_niche_from_iter,
     niche_amaf_key,
 )
-from nest_graph.propose.pattern_archive import note_motif_hollow_miss
+from nest_graph.propose.pattern_archive import age_motif_library, note_motif_hollow_miss
 from nest_graph.propose.telem import (
     VoidLeakGatherCtx,
+    build_motif_telem,
     archive_void_elite_transforms,
     format_dg_expand_funnel,
     gather_void_leak_inputs,
     merge_phase_gate_telem,
     void_elite_count,
 )
-from nest_graph.free_kind_util import is_large_void
+from nest_graph.free_kind_util import free_kind_token, is_large_void
 from nest_graph.propose.void_selection import (
     count_props_near_pole,
     transform_row_key,
@@ -32,27 +34,8 @@ from nest_graph.telem_log import write_telem
 
 
 def run_void_leak_and_niche_credit(
+    ctx: VoidLeakGatherCtx,
     *,
-    graph: Any,
-    polys: list,
-    group_id: list,
-    transform: list,
-    free_info: Any,
-    free_poly: Any,
-    selected_nest: Sequence[int],
-    selected_polys: Sequence[int],
-    refine_scores: Sequence[float],
-    propose_stats: dict,
-    plateau: Any,
-    pin_stats: dict,
-    pin_all_blocked_streak: int,
-    n_void_nest: int,
-    boost_hits: dict,
-    void_pole_near_diag_ratio: float,
-    proposer_counts: dict,
-    sheet_diag: float,
-    mcts_telem: dict,
-    mcts_runner: Any,
     mcts_action: Any | None,
     cfg_propose: Any,
     prev_void_nest: int,
@@ -61,9 +44,29 @@ def run_void_leak_and_niche_credit(
     proposed_list: Sequence | None,
     stratified_void_elite_quota: int = 15,
     print_funnel: bool = True,
-    sheet: Any = None,
 ) -> VoidLeakOrchResult:
     """Void-elite archive + gather_void_leak + niche credit (build_graph + evaluator)."""
+    graph = ctx.graph
+    polys = ctx.polys
+    group_id = ctx.group_id
+    transform = ctx.transform
+    free_info = ctx.free_info
+    free_poly = ctx.free_poly
+    selected_nest = ctx.selected_nest
+    selected_polys = ctx.selected_polys
+    refine_scores = ctx.refine_scores
+    propose_stats = ctx.propose_stats
+    plateau = ctx.plateau
+    pin_stats = ctx.pin_stats
+    pin_all_blocked_streak = ctx.pin_all_blocked_streak
+    n_void_nest = ctx.n_void_nest
+    boost_hits = ctx.boost_hits
+    void_pole_near_diag_ratio = float(ctx.void_pole_near_diag_ratio)
+    proposer_counts = ctx.proposer_counts or {}
+    sheet_diag = float(ctx.sheet_diag)
+    mcts_telem = ctx.mcts_telem if ctx.mcts_telem is not None else {}
+    mcts_runner = ctx.mcts_runner
+    sheet = ctx.sheet
     n_props_pole = count_props_near_pole(
         proposed_list,
         getattr(free_info, "target_pt", None),
@@ -95,33 +98,14 @@ def run_void_leak_and_niche_credit(
         max_keep=int(stratified_void_elite_quota),
         enabled=archive_enabled,
     )
-    void_leak, leak_dict = gather_void_leak_inputs(
-        VoidLeakGatherCtx(
-            graph=graph,
-            polys=polys,
-            group_id=group_id,
-            transform=transform,
-            free_info=free_info,
-            free_poly=free_poly,
-            selected_nest=selected_nest,
-            selected_polys=selected_polys,
-            refine_scores=refine_scores,
-            propose_stats=propose_stats,
-            plateau=plateau,
-            pin_stats=pin_stats,
-            pin_all_blocked_streak=pin_all_blocked_streak,
-            n_void_nest=n_void_nest,
-            boost_hits=boost_hits,
-            void_pole_near_diag_ratio=float(void_pole_near_diag_ratio),
-            proposer_counts=proposer_counts,
-            sheet_diag=float(sheet_diag),
-            void_elite_by_group=void_elite_by_group,
-            void_elite_count_fn=void_elite_count,
-            mcts_telem=mcts_telem,
-            mcts_runner=mcts_runner,
-            sheet=sheet,
-        )
+    ctx = replace(
+        ctx,
+        void_elite_by_group=void_elite_by_group,
+        void_elite_count_fn=void_elite_count,
+        proposer_counts=proposer_counts,
+        mcts_telem=mcts_telem,
     )
+    void_leak, leak_dict = gather_void_leak_inputs(ctx)
     had_void_override = bool(
         int(leak_dict.get("hijack", 0))
         or propose_stats.get("sat_override", False)
@@ -263,7 +247,7 @@ def run_void_leak_and_niche_credit(
             )
     niche_telem = credit_void_niche_from_iter(
         mcts_runner.niche_archive,
-        free_kind=getattr(free_info, "kind", None),
+        free_kind=free_kind_token(getattr(free_info, "kind", None)),
         bottleneck=bottleneck,
         n_void_nest=int(n_void_nest),
         n_void_graph=int(n_void_graph),
@@ -464,7 +448,81 @@ def finalize_iter_mcts(
         merge_phase_gate_telem(leak, mcts_telem, propose_stats)
 
 
+
+def age_iter_archives(
+    *,
+    mcts_runner: Any,
+    mcts_parent_id: int,
+    mcts_telem: dict,
+    propose_stats: dict,
+    cfg_propose: Any,
+    pattern_accept: bool,
+    motif_refine_n: int,
+) -> dict:
+    """Q142: Motif/niche/arena age + motif telem (build_graph-only sibling of finalize)."""
+    if bool(getattr(cfg_propose, "enable_accepted_pattern_archive", True)):
+        if not pattern_accept:
+            age_motif_library(mcts_runner.motif_base, 1)
+        mcts_runner.niche_archive.age(1)
+        if mcts_runner.agent is not None:
+            mcts_runner.agent.age_and_tombstone(
+                spine_id=int(mcts_parent_id),
+                idle_t=4,
+                force=bool(
+                    str(mcts_telem.get("ram_band") or "") in ("pressure", "critical")
+                ),
+            )
+    lib_n = int(mcts_runner.motif_base.size())
+    propose_stats["motif_refine_hits"] = int(motif_refine_n)
+    propose_stats["accepted_patterns_archived"] = lib_n
+    propose_stats["motif_library_n"] = lib_n
+    propose_stats["motif_base_seed_n"] = int(
+        mcts_telem.get("motif_base_seed_n", 0) or 0
+    )
+    propose_stats["pattern_accept"] = bool(pattern_accept)
+    densify_full = propose_stats.get("densify_stats") or {}
+    skip_map: dict[str, int] = {}
+    densify_skips = densify_full.get("pocket_skip") or []
+    if isinstance(densify_skips, dict):
+        skip_map = {str(k): int(v) for k, v in densify_skips.items()}
+    elif isinstance(densify_skips, list):
+        for s in densify_skips:
+            skip_map[str(s)] = skip_map.get(str(s), 0) + 1
+    for k, v in (densify_full.get("motif_skip") or {}).items():
+        skip_map[str(k)] = int(v)
+    motif_telem = build_motif_telem(
+        skip_map=skip_map,
+        motif_refine_n=motif_refine_n,
+        propose_stats=propose_stats,
+        archive_len=lib_n,
+    )
+    motif_telem["motif_library_n"] = lib_n
+    motif_telem["motif_library_inject"] = int(
+        propose_stats.get("accepted_patterns_n", 0)
+    )
+    if isinstance(propose_stats.get("void_leak"), dict):
+        propose_stats["void_leak"]["motif_telem"] = motif_telem
+        for _mk in (
+            "full_motif_clear",
+            "fallback_leader",
+            "leader_fail",
+            "collide",
+            "lattice_anchors_added",
+            "lattice_anchors_kept",
+            "foreign_clear_fail_sheet",
+            "foreign_clear_fail_obs",
+            "foreign_clear_fail_empty",
+            "soft_foreign_incumbent_n",
+        ):
+            propose_stats["void_leak"][_mk] = max(
+                int(propose_stats["void_leak"].get(_mk, 0) or 0),
+                int(motif_telem.get(_mk, 0) or 0),
+            )
+    propose_stats["motif_telem"] = motif_telem
+    return motif_telem
+
 __all__ = [
+    "age_iter_archives",
     "finalize_iter_mcts",
     "run_void_leak_and_niche_credit",
 ]

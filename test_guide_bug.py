@@ -1,5 +1,5 @@
 from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import build_placement_scene, guidance_config_for_propose
+from nest_graph.placement.scene import build_placement_scene, guidance_config_for_propose
 from shapely.geometry import Polygon, Point
 
 p1 = Geometry.from_shapely(Polygon([(0,0), (1,0), (1,1), (0,1)]))

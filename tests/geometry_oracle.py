@@ -142,7 +142,7 @@ def assert_pose_clear_matches_shapely(
 ) -> None:
     """Compare Geometry is_pose_clear to Shapely contain + min distance."""
     from nest_graph.board import board_context_from_geometry
-    from nest_graph.propose.placement_common import is_pose_clear
+    from nest_graph.placement.common import is_pose_clear
 
     cand_g = cand_g if cand_g is not None else as_geometry(candidate)
     _ = board_g  # board containment is separate from Scene clearance

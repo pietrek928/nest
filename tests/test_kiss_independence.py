@@ -3,7 +3,7 @@
 from shapely.geometry import box
 
 from nest_graph.geometry import Geometry, find_polygon_intersections
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     post_pack_overlap_ok,
     selection_pairwise_independent,
 )

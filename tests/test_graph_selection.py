@@ -19,7 +19,8 @@ from nest_graph.graph import (
     score_rules,
     sort_graph,
 )
-from nest_graph.build_graph import make_polygon_graph, _rule_region
+from nest_graph.build_graph import make_polygon_graph
+from nest_graph.rules.evolve import rule_region as _rule_region
 
 
 def _append_elem(g: PoseGraph, group_id: int, x: float, y: float, radius: float = 0.5):

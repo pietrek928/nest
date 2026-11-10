@@ -10,7 +10,7 @@ from nest_graph.propose.motif_lock import (
     LargeVoidMotifPlateau,
     sequential_accept_motif_cohorts,
 )
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     ClusterPattern,
     cluster_pattern_from_indices,
     extract_cluster_patterns,
@@ -172,7 +172,7 @@ def test_lattice_offsets_pi_kiss_scales_to_min_step():
 
 def test_lattice_offsets_single_part_extent_gap():
     """W1: identity-only pattern uses (extent+gap) orthogonal basis."""
-    from nest_graph.propose.placements_pattern import rotate_lattice_delta
+    from nest_graph.placement.pattern import rotate_lattice_delta
 
     pat = ClusterPattern(
         members=((0, (0.0, 0.0, 0.0)),),
@@ -440,7 +440,7 @@ def test_sequential_grow_hard_only_skips_soft_mapped():
 def test_motif_coemit_foreign_packing_clear():
     """P1: foreign member rejected on packed overlap; clear → foreign_out + multi-gid cohort."""
     from nest_graph.propose.geometry import ProposeGeometry
-    from nest_graph.propose.placements_pattern import stamp_motif_leader_follower
+    from nest_graph.placement.pattern import stamp_motif_leader_follower
     from nest_graph.geometry import Geometry
     from nest_graph.utils import transform_row_key
 
@@ -613,7 +613,7 @@ def test_large_void_motif_plateau_q27():
 
 
 def test_inject_cohorts_from_patterns_and_dedup():
-    from nest_graph.propose.placements_pattern import ClusterPattern
+    from nest_graph.placement.pattern import ClusterPattern
     from nest_graph.propose.pattern_archive import (
         inject_cohorts_from_patterns,
         merge_motif_hits,

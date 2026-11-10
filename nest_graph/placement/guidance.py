@@ -7,7 +7,7 @@ from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     guidance_config_for_board_edge_anchor,
     guidance_config_for_propose,
     guidance_kwargs_for_propose,
@@ -16,13 +16,13 @@ from nest_graph.placement_scene import (
 )
 
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_edge import (
+from nest_graph.placement.edge import (
     _board_edge_snap_seeds,
     propose_placements_board_edge as propose_placements_board_edge_snaps,
     sample_placement_points_ribbon,
 )
 from nest_graph.propose.context import part_extents, placement_contact_error
-from nest_graph.propose.placement_perimeter import edge_inward_at_point
+from nest_graph.placement.perimeter import edge_inward_at_point
 
 
 class GuidanceMoveType(StrEnum):

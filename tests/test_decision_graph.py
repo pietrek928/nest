@@ -180,7 +180,7 @@ def test_nest_by_scores_on_decision_graph():
 
 def test_motif_graph_hits_cohort_carries_motif_id():
     from nest_graph.propose.pattern_archive import motif_graph_hits
-    from nest_graph.propose.placements_pattern import ClusterPattern
+    from nest_graph.placement.pattern import ClusterPattern
 
     pat = ClusterPattern(
         members=((0, (0.0, 0.0, 0.0)), (1, (1.1, 0.0, 0.0))),

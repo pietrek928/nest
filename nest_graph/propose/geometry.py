@@ -13,7 +13,7 @@ from nest_graph.geometry import (
     batch_evaluate_local_placement,
     batch_evaluate_local_placement_validity,
 )
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     PLACEMENT_EPSILON_RATIO,
     best_proposition,
     build_placement_scene,
@@ -220,7 +220,7 @@ class ProposeGeometry:
         xy: Tuple[float, float],
     ) -> None:
         """Inward-normal rim gravity at seed xy; skip pull if no edge (no SW fallback)."""
-        from nest_graph.propose.placement_perimeter import edge_inward_at_point
+        from nest_graph.placement.perimeter import edge_inward_at_point
 
         sheet = self.sheet
         if sheet is None or getattr(sheet, "is_empty", False):

@@ -22,13 +22,13 @@ from nest_graph.propose.pipeline import (
     border_edge_transforms_for_group,
     collect_propose_batch_for_nest,
 )
-from nest_graph.propose.placements_selection_expand import (
+from nest_graph.placement.selection_expand import (
     history_expand_arrays,
     selection_expand_arrays,
 )
 from nest_graph.propose.void_selection import transform_row_key
 from nest_graph.propose.motif_keys import resolve_motif_keys
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     clear_of_geoms,
     dual_pose_from_base,
     placement_obstacles,

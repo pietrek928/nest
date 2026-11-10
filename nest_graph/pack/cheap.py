@@ -3,14 +3,14 @@
 import time
 import zlib
 from contextlib import contextmanager
-from typing import Sequence
+from typing import Any, Sequence
 
 from nest_graph.pack.cache_key import cheap_lock_fingerprint, cheap_pack_cache_key
 from nest_graph.pack.densify_preset import apply_densify_preset
 from nest_graph.pack.execute import execute_pack
 from nest_graph.pack.ctx import RefinePackBox
 from nest_graph.pack.slave_pack import contact_kiss_ledger, write_propose_kiss_ledger
-from nest_graph.free_kind_util import coalesce_free_kind, free_kind_from_any
+from nest_graph.free_kind_util import coalesce_free_kind
 from nest_graph.graph import BoardSnapshot, region_to_zone, score_elems
 from nest_graph.place_zone_util import place_zone_token
 from nest_graph.propose.heavy_polish import (
@@ -19,7 +19,8 @@ from nest_graph.propose.heavy_polish import (
     polish_budget_for_iter,
 )
 from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
-from nest_graph.propose.placement_common import as_geometry
+from nest_graph.pack.geoms import kiss_geoms_for_selection, rebuild_w1_packed
+from nest_graph.placement.common import post_pack_overlap_ok
 from nest_graph.propose.selection_compose import (
     active_rule_set,
     compose_and_nest_selection,
@@ -40,6 +41,83 @@ _ISOLATION_TELEM_KEYS: tuple[str, ...] = (
     "path_compose_ms",
     "path_refine_ms",
 )
+
+
+def pack_cache_overlap_ok(pack_cache: dict) -> bool:
+    """Q384: independence on compose fields after cheap replay."""
+    geoms = pack_cache.get("compose_geoms")
+    return post_pack_overlap_ok(
+        list(pack_cache.get("compose_polys") or ()),
+        list(pack_cache.get("compose_sel") or ()),
+        geoms=list(geoms) if geoms else None,
+    )
+
+
+def warm_outer_pack_cache(
+    pack_cache: dict,
+    *,
+    graph: Any,
+    dg: Any,
+    polys: list,
+    group_id: list,
+    transform: list,
+    part_areas: Sequence,
+    part_bases: dict,
+    p_sheet: Any,
+    min_dist: float,
+    cfg: Any,
+    densify_presets: Sequence,
+    free_info: Any,
+    propose_stats: dict,
+    packed_geoms: Sequence,
+    packed_group_id: Sequence | None,
+    packed_transform: Sequence | None,
+    void_geoms: Sequence,
+    seed_void_geoms: Sequence,
+    sheet: Any,
+    board_area: float,
+    selected_polys: Sequence[int],
+    f1_sticky_spent: int,
+) -> None:
+    """Post mid-pack warm of multi-sim cheap cache (outside isolation)."""
+    pack_cache.clear()
+    pack_cache.update({
+        "ready": True,
+        "graph": graph,
+        "dg": dg,
+        "polys": polys,
+        "group_id": group_id,
+        "transform": transform,
+        "part_areas": part_areas,
+        "part_bases": part_bases,
+        "p_sheet": p_sheet,
+        "min_dist": min_dist,
+        "cfg": cfg,
+        "densify_presets": list(densify_presets),
+        "free_info": free_info,
+        "propose_stats": dict(propose_stats),
+        "packed_geoms": list(packed_geoms),
+        "packed_group_id": packed_group_id,
+        "packed_transform": packed_transform,
+        "void_geoms": list(void_geoms or []),
+        "seed_void_geoms": list(seed_void_geoms),
+        "sheet": sheet,
+        "sheet_area": float(sheet.area) if sheet is not None else 0.0,
+        "board_area": float(board_area),
+        "selected": list(selected_polys),
+        "compose_sel": list(selected_polys),
+        "compose_polys": list(polys),
+        "compose_group_id": list(group_id),
+        "compose_transform": list(transform),
+        "motif_locked": list(propose_stats.get("motif_locked") or ()),
+        "f1_sticky_spent": int(f1_sticky_spent),
+        "cache_hit_n": 0,
+        "cache_lookup_n": 0,
+        "cache_miss_n": 0,
+        "path_compose_ms": 0.0,
+        "path_refine_ms": 0.0,
+    })
+
 
 
 def snapshot_pack_cache(pack_cache: dict) -> dict:
@@ -161,23 +239,16 @@ def compose_cached_selection(
     packed_geoms = list(pack_cache.get("packed_geoms") or [])
     pgid = pack_cache.get("packed_group_id")
     ptf = pack_cache.get("packed_transform")
-    if (
-        pgid is not None
-        and ptf is not None
-        and len(pgid) == len(ptf)
-        and len(pgid) > 0
-    ):
-        try:
-            rebuilt = native_geoms_fn(pgid, ptf, part_bases_c)
-            if rebuilt:
-                seed_geoms = [
-                    g for g in (pack_cache.get("seed_void_geoms") or []) if g is not None
-                ]
-                packed_geoms = list(seed_geoms) + list(rebuilt)
-                propose_stats_c["w1_obstacle_sot"] = 1
-                propose_stats_c["w1_packed_rebuilt_n"] = int(len(rebuilt))
-        except Exception:
-            pass
+    rebuilt_packed, _rebuilt_n = rebuild_w1_packed(
+        packed_group_id=pgid,
+        packed_transform=ptf,
+        native_geoms_fn=native_geoms_fn,
+        part_bases=part_bases_c,
+        seed_void_geoms=pack_cache.get("seed_void_geoms"),
+        telem=propose_stats_c,
+    )
+    if rebuilt_packed is not None:
+        packed_geoms = rebuilt_packed
     _compose_t0 = time.perf_counter()
     composed = compose_and_nest_selection(
         **compose_nest_kwargs(
@@ -215,18 +286,9 @@ def compose_cached_selection(
         (time.perf_counter() - _compose_t0) * 1000.0
     )
     sel_kiss = list(composed.selected_nest or ())
-    kiss_geoms = []
-    for i in sel_kiss:
-        ii = int(i)
-        if candidate_geoms is not None and 0 <= ii < len(candidate_geoms):
-            g = candidate_geoms[ii]
-            if g is not None:
-                kiss_geoms.append(g)
-                continue
-        if 0 <= ii < len(polys):
-            gg = as_geometry(polys[ii])
-            if gg is not None:
-                kiss_geoms.append(gg)
+    kiss_geoms = kiss_geoms_for_selection(
+        sel_kiss, candidate_geoms=candidate_geoms, polys=polys,
+    )
     write_propose_kiss_ledger(
         propose_stats_c,
         kiss_geoms,
@@ -538,16 +600,9 @@ def pack_execute_snapshot(
     mean_c = float(getattr(snap, "mean_compactness", 0.0) or 0.0)
     pool_geoms = list(pack_cache.get("compose_geoms") or ())
     polys_r = list(pack_cache.get("compose_polys") or ())
-    replay_geoms: list = []
-    for i in selected_out:
-        ii = int(i)
-        if 0 <= ii < len(pool_geoms) and pool_geoms[ii] is not None:
-            replay_geoms.append(pool_geoms[ii])
-            continue
-        if 0 <= ii < len(polys_r):
-            gg = as_geometry(polys_r[ii])
-            if gg is not None:
-                replay_geoms.append(gg)
+    replay_geoms = kiss_geoms_for_selection(
+        selected_out, candidate_geoms=pool_geoms, polys=polys_r,
+    )
     if len(replay_geoms) >= 2:
         gap = float(pack_cache.get("min_dist") or 0.0)
         try:
@@ -667,10 +722,12 @@ __all__ = [
     "compose_cached_selection",
     "invalidate_cheap_cache",
     "maybe_invalidate_cheap_cache",
+    "pack_cache_overlap_ok",
     "pack_execute_snapshot",
     "proven_compose_row",
     "refine_cached_selection",
     "peek_isolation_telem",
     "snapshot_pack_cache",
+    "warm_outer_pack_cache",
     "with_isolated_pack_cache",
 ]

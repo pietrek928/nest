@@ -11,7 +11,7 @@ from nest_graph.propose import (
     evaluate_ray_placement,
     proposed_transforms_for_groups,
 )
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     board_placement_valid,
     best_proposition,
     proposition_translation,

@@ -16,11 +16,11 @@ from nest_graph.board import board_context_from_geometry
 from nest_graph.build_graph import (
     NestState,
     _append_selection_window,
-    _make_initial_rule_sets,
     active_rule_set,
     improve_rules,
     make_polygon_graph,
 )
+from nest_graph.rules.evolve import make_initial_rule_sets
 from nest_graph.propose.heavy_polish import apply_dfs_refinement
 from nest_graph.propose.transform_batch import build_transform_batch as _build_transform_batch
 from nest_graph.config import BuildGraphConfig, ProposeConfig
@@ -261,7 +261,7 @@ def run_pipeline(flow: str, seed: int, n_iters: int = 3) -> PipelineRow:
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
         rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
     )
-    rule_sets = _make_initial_rule_sets(cfg)
+    rule_sets = make_initial_rule_sets(cfg)
     nest_state = None
     graphs: list = []
     selection_window: list = []

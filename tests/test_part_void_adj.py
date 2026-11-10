@@ -3,7 +3,7 @@
 from shapely.geometry import box
 
 from nest_graph.geometry import Geometry
-from nest_graph.propose.placement_common import part_void_adj
+from nest_graph.placement.common import part_void_adj
 from tests.geometry_oracle import (
     assert_distance_close,
     assert_intersects_matches_shapely,

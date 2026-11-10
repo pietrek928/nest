@@ -6,11 +6,11 @@ import numpy as np
 from shapely.geometry import Polygon, box
 
 from nest_graph.graph import MotifBase
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     count_edge_parallel_transforms,
     resolve_group_allowed_angles,
 )
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     seed_motif_base_from_mates,
     synthesize_mate_patterns,
     triangle_mate_relative,
@@ -73,7 +73,7 @@ def test_n2_resolve_group_allowed_angles_fills_empty_grain():
 
 
 def test_n4a_unlock_clear_xy_skips_when_clears_kept():
-    from nest_graph.propose.placements_pattern import _unlock_clear_xy_anchors
+    from nest_graph.placement.pattern import _unlock_clear_xy_anchors
 
     skip = {"anchor_clear_kept": 3}
     anchors = [(1.0, 1.0, 0.0), (2.0, 2.0, 0.0)]

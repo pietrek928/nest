@@ -72,25 +72,25 @@ from nest_graph.propose.context import (
     PlaceZoneInfo,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags, filter_candidates_batch
-from nest_graph.propose.placements_edge import (
+from nest_graph.placement.edge import (
     propose_placements_group_fit,
     propose_placements_ribbon_free,
     propose_placements_sheet_corners,
     propose_placements_sheet_edge,
     propose_placements_side_pack,
 )
-from nest_graph.propose.placements_geo import propose_placements_raycasting, propose_placements_voronoi
-from nest_graph.propose.placements_guidance import (
+from nest_graph.placement.geo import propose_placements_raycasting, propose_placements_voronoi
+from nest_graph.placement.guidance import (
     propose_placements_board_edge,
     propose_placements_guidance_cast,
     propose_placements_guidance_walk,
 )
-from nest_graph.propose.placements_primary import (
+from nest_graph.placement.primary import (
     propose_placements_erosion,
     propose_placements_neighbor_slide,
     propose_placements_perimeter_walk,
 )
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry,
     cluster_seed_coords,
     clearance_scene,
@@ -103,20 +103,20 @@ from nest_graph.propose.types import (
     make_propose_context,
 )
 from nest_graph.propose.motif_keys import fold_emit_motif_keys
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     extract_cluster_patterns,
     merge_cluster_patterns,
     propose_placements_cluster_copy,
     synthesize_mate_patterns,
 )
-from nest_graph.propose.placements_free_space_cloud import (
+from nest_graph.placement.free_space_cloud import (
     propose_placements_free_space_cloud,
 )
-from nest_graph.propose.placements_pocket import (
+from nest_graph.placement.pocket import (
     TAG_MOTIF_HOLE,
     propose_placements_pocket_fit,
 )
-from nest_graph.propose.placements_pso import propose_placements_point_cloud
+from nest_graph.placement.pso import propose_placements_point_cloud
 from nest_graph.propose.ranking import (
     _rank_proposal_coords,
     _score_placement_border,
@@ -127,7 +127,7 @@ from nest_graph.propose.ranking import (
     cast_squeeze_ranked_coords,
     select_guidance_cast_seeds,
 )
-from nest_graph.propose.placements_selection_expand import (
+from nest_graph.placement.selection_expand import (
     propose_placements_history_expand,
     propose_placements_selection_expand,
 )

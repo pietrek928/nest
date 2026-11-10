@@ -1,10 +1,11 @@
 """Bind a PoseGraph epoch onto DecisionGraph (copy-in + Kind + Attach)."""
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 
 from nest_graph.graph import DecisionGraph, MacroRegion
+from nest_graph.pack.cache_key import motif_cohort_sig
 from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.pattern_archive import inject_cohorts_from_patterns
 from nest_graph.propose.transform_batch import graph_valid_carry_by_group
@@ -359,4 +360,47 @@ def inject_cohorts_and_bind_graph(
                 int(propose_stats.get("motif_join_from_base", 0) or 0),
             )
     return carry
+
+
+def sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
+    """Letter D/M2b: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
+    agent = getattr(runner, "agent", None)
+    if agent is None:
+        return 0
+    cohorts = list((propose_stats or {}).get("motif_cohorts") or ())
+    # Always keep cohorts on the agent (ablation winner for density); gate PLACE_COHORT
+    # expand via place_cohort_ready so soft/path still sees members (hybrid M2b).
+    agent.motif_cohorts = tuple(cohorts)
+    n_ready = 0
+    for c in cohorts:
+        if not isinstance(c, dict):
+            continue
+        if int(len(c.get("member_keys") or ())) >= 2:
+            n_ready += 1
+    if propose_stats is not None:
+        compose_sz = int(propose_stats.get("motif_compose_accepted_size", 0) or 0)
+        if compose_sz <= 0:
+            compose_sz = len(propose_stats.get("motif_locked") or ())
+        member_hits = int(propose_stats.get("member_hits", 0) or 0)
+        if member_hits <= 0 and isinstance(propose_stats.get("void_leak"), dict):
+            member_hits = int(
+                (propose_stats.get("void_leak") or {}).get("member_hits", 0) or 0
+            )
+        hard = bool(n_ready > 0 and compose_sz >= 2 and member_hits > 0)
+        # D4 soft: drop member_hits chicken-egg for PLACE_COHORT expand when
+        # compose_sz≥2 already sticky (AMAF/cohort still learn; hard telem kept).
+        soft = bool(n_ready > 0 and compose_sz >= 2)
+        ready = int(soft)
+        propose_stats["place_cohort_specs_n"] = int(n_ready)
+        propose_stats["place_cohort_ready"] = ready
+        propose_stats["place_cohort_ready_hard"] = int(hard)
+        propose_stats["motif_cohort_sig"] = (
+            motif_cohort_sig(cohorts) if ready else 0
+        )
+        if hasattr(agent, "place_cohort_ready"):
+            agent.place_cohort_ready = bool(ready)
+        return int(n_ready)
+    if hasattr(agent, "place_cohort_ready"):
+        agent.place_cohort_ready = False
+    return 0
 

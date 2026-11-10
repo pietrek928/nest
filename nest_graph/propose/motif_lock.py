@@ -19,7 +19,7 @@ from nest_graph.propose.motif_keys import (
     cohort_member_indices,
 )
 from nest_graph.propose.context import cluster_contact_components
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry,
     clear_of_geoms,
     is_board_adj,

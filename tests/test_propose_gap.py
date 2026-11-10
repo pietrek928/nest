@@ -144,7 +144,7 @@ def test_obstacle_polys_single_blob_respects_nearest_k():
 def test_placement_safe_zone_nonempty_for_local_pocket():
     from shapely.affinity import rotate
 
-    from nest_graph.propose.placement_common import placement_safe_zone
+    from nest_graph.placement.common import placement_safe_zone
 
     sheet, _ = board_context_from_geometry(_triangle_board())
     rect = _rect()
@@ -200,7 +200,7 @@ def test_border_focus_tighter_than_centroid_on_empty_board():
 
 
 from nest_graph.propose import ProposeGeometry
-from nest_graph.propose.placements_edge import propose_placements_sheet_edge
+from nest_graph.placement.edge import propose_placements_sheet_edge
 
 def test_sheet_edge_produces_tight_border_placements():
     board = _triangle_board()

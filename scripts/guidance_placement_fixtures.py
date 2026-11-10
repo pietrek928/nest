@@ -7,7 +7,7 @@ from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
 
 from nest_graph.geometry import Geometry
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     PlacementScene,
     best_proposition,
     build_placement_scene,

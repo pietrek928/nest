@@ -4,7 +4,7 @@ from shapely.geometry import box
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placements_geo import propose_placements_raycasting
+from nest_graph.placement.geo import propose_placements_raycasting
 
 
 def test_ray_pose_fuse_emits_unique_keys():

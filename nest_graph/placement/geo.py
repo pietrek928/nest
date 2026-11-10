@@ -16,7 +16,7 @@ from nest_graph.propose.geometry import (
     batch_valid_flags,
     filter_candidates_batch,
 )
-from nest_graph.propose.placement_perimeter import vertex_anchors_from_geom
+from nest_graph.placement.perimeter import vertex_anchors_from_geom
 
 def densify_points(geometry, distance):
     """Adds points along the perimeter of the shape for a better Voronoi map."""

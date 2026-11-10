@@ -5,7 +5,7 @@ from shapely import box
 
 from nest_graph.config import BuildGraphConfig
 from nest_graph.geometry import Geometry
-from nest_graph.propose.placements_pattern import ClusterPattern
+from nest_graph.placement.pattern import ClusterPattern
 from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.transform_batch import build_transform_batch
 

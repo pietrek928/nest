@@ -17,21 +17,21 @@ from nest_graph.geometry import (
     convex_hull_area_of,
     find_polygon_distances_bipartite,
 )
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     best_proposition,
     placement_clearance_epsilon,
 )
 from nest_graph.utils import get_shape_polygons_coords, transform_poly
 
 from nest_graph.propose.context import placement_contact_error, should_use_border_focus
-from nest_graph.propose.placement_common import as_geometry
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.common import as_geometry
+from nest_graph.placement.outline import (
     outline_kiss_tolerance,
     outline_ring_geom,
     outline_standoff_distance,
 )
 from nest_graph.propose.geometry import ProposeGeometry, batch_valid_flags
-from nest_graph.propose.placements_guidance import (
+from nest_graph.placement.guidance import (
     candidate_from_proposition,
     is_cast_move,
 )
@@ -334,7 +334,7 @@ def pack_tightness_cost(
     if not geoms:
         return 0.0
     if any(not isinstance(g, Geometry) for g in geoms):
-        from nest_graph.propose.placement_common import as_geometry
+        from nest_graph.placement.common import as_geometry
 
         geoms = [g for g in (as_geometry(p) for p in geoms) if g is not None]
         if not geoms:

@@ -13,8 +13,7 @@ from nest_graph.geometry import (
     find_polygon_intersections,
     find_polygon_intersections_bipartite,
 )
-from nest_graph.propose.context import _cluster_merge_gap
-from nest_graph.propose.placement_outline import outline_ring_geom
+from nest_graph.placement.outline import outline_ring_geom
 from nest_graph.utils import transform_poly
 
 _MAX_OBSTACLE_PARTS = 32
@@ -80,9 +79,14 @@ def is_board_adj(
     board_ring = ring if ring is not None else outline_ring_geom(sheet)
     if board_ring is None:
         return False
-    g_gap = float(gap) if gap is not None else float(
-        _cluster_merge_gap([poly], min_dist, sheet)
-    )
+    if gap is not None:
+        g_gap = float(gap)
+    else:
+        # Cycle: placement.common → propose.context → propose.__init__/pipeline →
+        # placement.edge → common.
+        from nest_graph.propose.context import _cluster_merge_gap
+
+        g_gap = float(_cluster_merge_gap([poly], min_dist, sheet))
     geom = as_geometry(poly)
     if geom is None:
         return False

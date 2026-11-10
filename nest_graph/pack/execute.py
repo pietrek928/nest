@@ -17,7 +17,6 @@ from nest_graph.propose.context import prep_free_space, void_ratio_threshold
 from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.heavy_polish import (
     freeze_improve_rules,
-    run_improve_rules_rounds,
     should_freeze_improve_rules,
 )
 from nest_graph.propose.void_topology import iterative_multi_poles
@@ -882,6 +881,273 @@ def make_execute_fn(
     return execute_fn
 
 
+def mcts_rule_ids(rule_sets: Sequence, k: int = 3) -> tuple[int, ...]:
+    """Q247: top-K rule_id indices for MCTS expand (baseline uses rule_id=0)."""
+    n = len(rule_sets or ())
+    if n <= 0:
+        return (0,)
+    return tuple(range(min(n, max(int(k), 1))))
+
+
+def packed_shapely_skip_seeds(nest_state: Any | None) -> list:
+    """Packed polys excluding seed indices (hand-built; pack_geoms=None path)."""
+    packed: list = []
+    if nest_state is None or not nest_state.selected_indices:
+        return packed
+    seed_n = int(nest_state.seed_count or 0)
+    for i in nest_state.selected_indices:
+        if int(i) < seed_n:
+            continue
+        if int(i) < len(nest_state.polys):
+            packed.append(nest_state.polys[i])
+    return packed
+
+
+def seed_parent_free_kind(
+    parent_snap: BoardSnapshot,
+    *,
+    cfg: Any,
+    p_sheet: Any,
+    part_areas: Sequence[float],
+    nest_state: Any | None,
+    part_by_group: dict | None = None,
+):
+    """P: seed ``free_kind`` before path probe (was after path — late path_ms starved)."""
+    kind = free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
+    if kind != FreeKind.Empty:
+        return kind
+    try:
+        md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
+        packed_fk = packed_shapely_skip_seeds(nest_state)
+        rem = getattr(parent_snap, "remaining_gids", None)
+        fk_prep = prep_selection_free(
+            sheet=p_sheet,
+            part_areas=part_areas,
+            min_dist=md_fk,
+            cfg_propose=cfg.propose,
+            packed_shapely=packed_fk,
+            pack_geoms=None,
+            part_by_group=part_by_group,
+            remaining_gids=list(rem) if rem is not None else None,
+        )
+        kind = free_kind_from_any(getattr(fk_prep.free_info, "kind", FreeKind.Empty))
+        parent_snap.free_kind = kind
+    except Exception:
+        kind = FreeKind.Empty
+    return kind
+
+
+def seed_parent_free_and_poles(
+    parent_snap: BoardSnapshot | None,
+    *,
+    cfg: Any,
+    p_sheet: Any,
+    part_areas: Sequence[float],
+    nest_state: Any | None,
+    agent: Any,
+    part_by_group: dict | None = None,
+    mcts_telem: dict | None = None,
+    seed_free: bool = True,
+    seed_poles: bool = False,
+):
+    """Pre-path free_kind and/or post-path multi_pole (shared packed_fk skip-seeds).
+
+    Pre-path: ``seed_free=True, seed_poles=False``. Post-path: both True — may
+    re-seed Empty free_kind and always notes multi_pole when agent present.
+    """
+    if parent_snap is None:
+        return FreeKind.Empty
+    if seed_free and not seed_poles:
+        kind = seed_parent_free_kind(
+            parent_snap,
+            cfg=cfg,
+            p_sheet=p_sheet,
+            part_areas=part_areas,
+            nest_state=nest_state,
+            part_by_group=part_by_group,
+        )
+        note_mcts_free_kind(agent, kind)
+        return kind
+    if not seed_poles or agent is None:
+        return free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
+    try:
+        md_fk = cfg.board_min_dist_for(p_sheet, first_pass=nest_state is None)
+        use_mp = bool(getattr(cfg.propose, "use_multi_pole_void", True))
+        max_mp = int(getattr(cfg.propose, "multi_pole_max_poles", 4) or 4)
+        n_poles = int((mcts_telem or {}).get("multi_pole_count", 0) or 0)
+        fk_now = free_kind_from_any(
+            getattr(parent_snap, "free_kind", FreeKind.Empty)
+        )
+        if fk_now == FreeKind.Empty or n_poles < 2:
+            packed_fk = packed_shapely_skip_seeds(nest_state)
+            rem_fk = getattr(parent_snap, "remaining_gids", None)
+            fk_prep = prep_selection_free(
+                sheet=p_sheet,
+                part_areas=part_areas,
+                min_dist=md_fk,
+                cfg_propose=cfg.propose,
+                packed_shapely=packed_fk,
+                pack_geoms=None,
+                part_by_group=part_by_group,
+                remaining_gids=list(rem_fk) if rem_fk is not None else None,
+            )
+            if seed_free and fk_now == FreeKind.Empty:
+                parent_snap.free_kind = free_kind_from_any(
+                    getattr(fk_prep.free_info, "kind", FreeKind.Empty)
+                )
+                note_mcts_free_kind(agent, parent_snap.free_kind)
+                fk_now = free_kind_from_any(parent_snap.free_kind)
+            n_poles = multi_pole_n_from_free(
+                getattr(fk_prep.free_info, "target_poly", None),
+                min_dist=float(md_fk),
+                max_poles=max_mp,
+                use_multi_pole=use_mp,
+            )
+        if n_poles < 2 and use_mp and is_large_void(fk_now):
+            n_poles = max(2, max_mp)
+        note_mcts_multi_pole(agent, n_poles)
+        if mcts_telem is not None:
+            mcts_telem["multi_pole_count"] = int(n_poles)
+        return fk_now
+    except Exception:
+        note_mcts_multi_pole(agent, propose_stats=mcts_telem)
+        return free_kind_from_any(getattr(parent_snap, "free_kind", FreeKind.Empty))
+
+
+def path_accept_contact_upsert(
+    runner: Any,
+    snap: BoardSnapshot,
+    *,
+    part_bases: dict,
+    min_dist: float,
+    motif_min_compactness: float,
+    motif_ttl: int,
+    motif_max_keep: int,
+    pack_cache: dict,
+    telem: dict,
+) -> int:
+    """Q389: masked ContactGRG upsert on macro_path accept (not multi-sim)."""
+    if runner is None or getattr(runner, "motif_base", None) is None:
+        return 0
+    packed_gids = tuple(getattr(snap, "packed_gids", ()) or ())
+    packed_tf = tuple(getattr(snap, "packed_transforms", ()) or ())
+    if len(packed_gids) < 2 or len(packed_tf) < 2 or not part_bases:
+        return 0
+    geoms = []
+    gids_ok = []
+    tfs_ok = []
+    for gid, tf in zip(packed_gids, packed_tf):
+        base = part_bases.get(int(gid))
+        if base is None:
+            continue
+        try:
+            geoms.append(
+                base.apply_transform(float(tf[0]), float(tf[1]), float(tf[2]))
+            )
+            gids_ok.append(int(gid))
+            tfs_ok.append((float(tf[0]), float(tf[1]), float(tf[2])))
+        except Exception:
+            continue
+    if len(geoms) < 2:
+        return 0
+    # Mask gids: MotifJoin survivors ∪ (motif_locked ∩ selected).
+    allow_gids: set[int] = set()
+    realized = getattr(getattr(runner, "agent", None), "realized", None) or {}
+    survive = realized.get("survive_by_motif") or {}
+    mb = runner.motif_base
+    for mid, cnt in (survive or {}).items():
+        if int(cnt) <= 0 or int(mid) < 0 or int(mid) >= int(mb.size()):
+            continue
+        rec = mb.at(int(mid))
+        allow_gids.add(int(rec.gid_a))
+        allow_gids.add(int(rec.gid_b))
+    locked = {
+        int(i) for i in (pack_cache.get("motif_locked") or ()) if int(i) >= 0
+    }
+    sel = {int(i) for i in (pack_cache.get("compose_sel") or ())}
+    gid_list = list(pack_cache.get("compose_group_id") or ())
+    for i in locked & sel:
+        if 0 <= int(i) < len(gid_list):
+            allow_gids.add(int(gid_list[int(i)]))
+    if not allow_gids:
+        # Path-proven leaf: discover among accept-snap packed gids only.
+        allow_gids = {int(g) for g in gids_ok}
+    mask = [int(g) in allow_gids for g in gids_ok]
+    if not any(mask):
+        return 0
+    # R3 conditional one-endpoint (cap-1 / flush) dual-min under open —
+    # park; both-endpoints only (always-on any-endpoint also missed 0.592).
+    n_up = upsert_from_contacts(
+        runner.motif_base,
+        geoms,
+        gids_ok,
+        tfs_ok,
+        gap=float(min_dist),
+        min_compactness=float(motif_min_compactness),
+        ttl=int(motif_ttl),
+        max_keep=int(motif_max_keep),
+        telem=telem,
+        selection_mask=mask,
+        mask_any_endpoint=False,
+    )
+    note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
+    telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(
+        n_up
+    )
+    return int(n_up)
+
+
+def motif_tip_for_path_probe(
+    tip_action: Any,
+    *,
+    motif_base: Any,
+    remaining_gids: Sequence[int] | None,
+    seed_n: int,
+    prefer_motif_id: int | None = None,
+) -> Any:
+    """P: Motif tip for ``path_probe_budget`` when MotifBase has fuel (beam/2).
+
+    Does not mutate the outer expand tip — path budget only.
+    F4: ``prefer_motif_id`` from lock-soft Join when set.
+    """
+    if (
+        tip_action is not None
+        and getattr(tip_action, "region", None) == MacroRegion.Motif
+    ):
+        return tip_action
+    mb_n = 0
+    try:
+        if motif_base is not None:
+            mb_n = int(motif_base.size())
+    except Exception:
+        mb_n = 0
+    if mb_n <= 0:
+        mb_n = int(seed_n or 0)
+    if mb_n <= 0:
+        return tip_action
+    forced = MacroAction()
+    forced.region = MacroRegion.Motif
+    mid = 0
+    if prefer_motif_id is not None and int(prefer_motif_id) >= 0:
+        mid = int(prefer_motif_id)
+        if mb_n > 0 and mid >= mb_n:
+            mid = 0
+    forced.motif_id = int(mid)
+    rem = tuple(int(g) for g in (remaining_gids or ()))
+    forced.part_gid = int(rem[0]) if rem else 0
+    forced.rule_id = 0
+    forced.preset_id = 0
+    try:
+        if motif_base is not None and int(motif_base.size()) > mid:
+            rec = motif_base.at(mid)
+            forced.part_gid = int(
+                getattr(rec, "gid_a", forced.part_gid) or forced.part_gid
+            )
+    except Exception:
+        pass
+    return forced
+
+
 def ensure_motif_tip_for_fuel(
     mcts_action: Any | None,
     *,
@@ -1126,7 +1392,10 @@ __all__ = [
     "execute_pack",
     "fit_shape_for_remaining",
     "make_execute_fn",
+    "mcts_rule_ids",
     "maybe_repair_delta_backprop",
+    "motif_tip_for_path_probe",
+    "path_accept_contact_upsert",
     "repair_bp_delta_addend",
     "prep_selection_free",
     "prep_selection_freeze",
@@ -1134,7 +1403,10 @@ __all__ = [
     "record_outer_iter_expand",
     "run_mcts_multi_sim",
     "run_pack_stages",
+    "packed_shapely_skip_seeds",
     "schedule_prep_selection_free",
+    "seed_parent_free_and_poles",
+    "seed_parent_free_kind",
     "stamp_arena_amaf",
     "stamp_pack_stage",
 ]

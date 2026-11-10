@@ -1,10 +1,7 @@
 import pytest
 
-from nest_graph.build_graph import (
-    NestState,
-    _inject_repulsor_rules,
-    truncate_rule_set,
-)
+from nest_graph.build_graph import NestState
+from nest_graph.rules.evolve import inject_repulsor_rules, truncate_rule_set
 from nest_graph.config import BuildGraphConfig, RulesConfig
 from nest_graph.graph import (
     PlacementRuleSet,
@@ -42,7 +39,7 @@ def test_inject_repulsor_rules_adds_negative_point_rules(nest_board):
     base.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.5, group=0))
     rule_sets = [base]
     nest_state = NestState(polys=[], group_id=[], transform=[], selected_indices=[])
-    out = _inject_repulsor_rules(rule_sets, cfg, nest_board, nest_state)
+    out = inject_repulsor_rules(rule_sets, cfg, nest_board, nest_state)
     assert len(out) == 1
     neg = [pr for pr in out[0].point_rules if pr.w < 0]
     assert len(neg) >= 2

@@ -10,11 +10,8 @@ from nest_graph.build_graph import (
     Geometry,
     _append_selection_window,
     _base_geometries,
-    _make_initial_rule_sets,
-    _make_seed_rule_sets,
     _native_geoms_from_transforms,
     _poly_and_transforms,
-    _rule_region,
     active_rule_set,
     improve_rules,
     make_polygon_graph,
@@ -23,6 +20,11 @@ from nest_graph.build_graph import (
     run_build_graph,
     score_elems,
     select_polygons_from_edges,
+)
+from nest_graph.rules.evolve import (
+    make_initial_rule_sets,
+    make_seed_rule_sets,
+    rule_region as _rule_region,
 )
 from nest_graph.propose.first_pass_border import (
     border_pack_graph as _border_pack_graph,
@@ -40,7 +42,7 @@ from nest_graph.propose.ranking import pack_tightness_cost
 from nest_graph.config import BuildGraphConfig, SamplingConfig, SelectionConfig
 from nest_graph.graph import PlacementRuleSet, nest_by_graph
 from nest_graph.geometry import find_polygon_intersections_bipartite
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     board_placement_valid,
     guidance_config_for_graph,
     placement_ok_for_outline,
@@ -388,7 +390,7 @@ def test_nest_by_graph_selected_independent(
     graph, polys, _gid, _trans = make_polygon_graph(
         nest_board, [(rect_poly, transforms[0]), (tri_poly, transforms[1])]
     )
-    rule_sets = _make_seed_rule_sets(build_graph_config)
+    rule_sets = make_seed_rule_sets(build_graph_config)
     selected = nest_by_graph(graph, rule_sets[:1])[0]
     assert_selected_non_overlapping(graph, polys, selected)
 
@@ -412,7 +414,7 @@ def test_build_graph_output_no_overlap_strict_dfs(
         nest_board,
         [(rect_poly, selected_t[0]), (tri_poly, selected_t[1])],
     )
-    rule_sets = _make_seed_rule_sets(cfg)
+    rule_sets = make_seed_rule_sets(cfg)
     selected = _refine_selection_like_build_graph(graph, rule_sets, cfg.selection)
     bases = _base_geometries([(rect_poly, selected_t[0]), (tri_poly, selected_t[1])])
     geom_bases = [bases[gid[i]] for i in range(len(polys))]
@@ -562,7 +564,7 @@ def test_first_pass_border_pack_footprints_inside_board():
         min_dist=cfg.board_min_dist(first_pass=True),
         epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=True),
     )
-    seed_rules = active_rule_set(_make_initial_rule_sets(cfg))
+    seed_rules = active_rule_set(make_initial_rule_sets(cfg))
     scores = score_elems(graph, seed_rules)
     min_dist = cfg.board_min_dist(first_pass=True)
     ring = first_pass_border_ring_selection(
@@ -706,7 +708,7 @@ def test_pack_execute_snapshot_cohort_sig_from_pack_cache():
     key = cheap_pack_cache_key(
         "void_seek", action, compose_sz=1, cohort_sig=cohort_sig
     )
-    assert key == ("void_seek", 1, 0, 1, 99, 0, 0)
+    assert key == ("void_seek", 1, 0, 1, 99, 0, 0, 0)
     assert key != cheap_pack_cache_key(
         "void_seek", action, compose_sz=1, cohort_sig=7
     )
@@ -714,7 +716,7 @@ def test_pack_execute_snapshot_cohort_sig_from_pack_cache():
 
 def test_motif_graph_hits_cluster_copy_emit():
     from nest_graph.propose.pattern_archive import motif_graph_hits
-    from nest_graph.propose.placements_pattern import ClusterPattern
+    from nest_graph.placement.pattern import ClusterPattern
 
     pat = ClusterPattern(
         members=((0, (0.0, 0.0, 0.0)), (1, (2.0, 0.0, 0.0))),
@@ -742,6 +744,11 @@ def test_r4_split_homes_not_reexported():
     assert "noqa: F401" not in src
     assert "def apply_dfs_refinement" not in src
     assert "def assemble_void_leak" not in src
+    assert "def _make_demo_rule_set" not in src
+    assert "def _path_accept_contact_upsert" not in src
+    assert "def transforms_around" not in src
+    assert "def void_elite_tuple_from_archive" not in src
+    assert "def _mcts_rule_ids" not in src
     assert apply_dfs_refinement.__module__ == "nest_graph.propose.heavy_polish"
     assert build_transform_batch.__module__.endswith("transform_batch")
     assert assemble_void_leak.__module__.endswith("telem")

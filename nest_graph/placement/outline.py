@@ -5,10 +5,10 @@ from shapely import LineString, LinearRing, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.geometry import Geometry, snap_pose_to_ring
-from nest_graph.placement_clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
+from nest_graph.placement.clearance import PLACEMENT_EPSILON_RATIO, placement_clearance_epsilon
 from nest_graph.utils import get_shape_exteriors
 
-from nest_graph.propose.placement_perimeter import edge_inward_at_point
+from nest_graph.placement.perimeter import edge_inward_at_point
 
 if TYPE_CHECKING:
     from nest_graph.propose.geometry import ProposeGeometry

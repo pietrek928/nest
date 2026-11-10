@@ -9,13 +9,13 @@ from nest_graph.propose import (
     propose_placements_board_edge,
     propose_placements_sheet_edge,
 )
-from nest_graph.propose.placements_edge import _board_edge_snap_seeds
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.edge import _board_edge_snap_seeds
+from nest_graph.placement.outline import (
     inward_at_contact,
     outline_ring_geom,
     snap_coords_along_exterior,
 )
-from nest_graph.propose.placements_guidance import propose_placements_board_edge_guidance_cast
+from nest_graph.placement.guidance import propose_placements_board_edge_guidance_cast
 from nest_graph.utils import normalize_poly, transform_poly
 
 

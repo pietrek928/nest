@@ -16,7 +16,7 @@ from tests.fixtures.propose_emit import make_propose_geom, tightness_pack_geoms
 def test_pack_tightness_cost_matches_oracle(n, gap):
     geoms, outline, min_dist = tightness_pack_geoms(n=n, gap=gap)
     got = pack_tightness_cost(geoms, outline, min_dist)
-    from nest_graph.propose.placement_outline import outline_ring_geom
+    from nest_graph.placement.outline import outline_ring_geom
 
     ring = outline_ring_geom(outline)
     kiss = 0.0

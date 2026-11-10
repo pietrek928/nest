@@ -2,8 +2,8 @@
 
 from shapely.geometry import box
 
-from nest_graph.propose.placements_pattern import extract_cluster_patterns
-from nest_graph.propose.placements_pocket import TAG_MOTIF_HOLE, propose_motif_hole_fills
+from nest_graph.placement.pattern import extract_cluster_patterns
+from nest_graph.placement.pocket import TAG_MOTIF_HOLE, propose_motif_hole_fills
 from nest_graph.utils import transform_poly
 
 

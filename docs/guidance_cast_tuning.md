@@ -32,7 +32,7 @@ PYTHONPATH=. python scripts/benchmark_guidance_flow.py --seeds 0 1 2 3 4
 
 ## Board-edge cast (2026-06-03)
 
-[`propose_placements_board_edge`](../nest_graph/propose/placements_edge.py) refines snap seeds with [`guidance_config_for_board_edge_anchor`](../nest_graph/placement_scene.py): per-anchor `gravity_vector` points toward the nest edge (not global `(-1,-1)`), `target_position` on the outline anchor, tight packing + corner alignment enabled.
+[`propose_placements_board_edge`](../nest_graph/placement/edge.py) refines snap seeds with [`guidance_config_for_board_edge_anchor`](../nest_graph/placement/scene.py): per-anchor `gravity_vector` points toward the nest edge (not global `(-1,-1)`), `target_position` on the outline anchor, tight packing + corner alignment enabled.
 
 ## Pipeline ranking (seeds 0–2, 3 iters)
 

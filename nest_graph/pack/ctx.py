@@ -103,10 +103,20 @@ class VoidLeakOrchResult:
     prev_void_nest: int
 
 
+@dataclass
+class PathProbeResult:
+    nest_state: Any
+    history: Any
+    mcts_parent_id: int
+    mcts_action: Any
+    path_carved_streak: int
+
+
 __all__ = [
     "FirstPassBorderResult",
     "MidPackStagesResult",
     "PackIterCtx",
+    "PathProbeResult",
     "RefinePackBox",
     "VoidLeakOrchResult",
 ]

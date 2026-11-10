@@ -4,7 +4,7 @@ import math
 
 from shapely.geometry import Polygon
 
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.pattern import (
     emit_packing_clear,
     synthesize_mate_patterns,
     triangle_mate_relative,

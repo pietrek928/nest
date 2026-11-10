@@ -14,7 +14,7 @@ from shapely.ops import unary_union
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry as _as_geometry,
     clearance_scene,
     dual_pose_from_base,
@@ -34,8 +34,8 @@ from nest_graph.propose.context import (
     void_pole_seed_coords,
 )
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_outline import outline_ring_geom
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.outline import outline_ring_geom
+from nest_graph.placement.pattern import (
     ClusterPattern,
     _cluster_compactness,
     cluster_pattern_from_indices,
@@ -55,7 +55,7 @@ def pattern_from_indices(
     group_ids: Sequence[int],
     transforms: Sequence,
 ) -> ClusterPattern | None:
-    """Compat alias — shared builder lives in placements_pattern."""
+    """Compat alias — shared builder lives in placement.pattern."""
     return cluster_pattern_from_indices(indices, polys, group_ids, transforms)
 
 
@@ -732,8 +732,8 @@ def _component_board_adj(
     sheet: Polygon,
     min_dist: float,
 ) -> bool:
-    from nest_graph.propose.placement_common import is_board_adj
-    from nest_graph.propose.placement_outline import outline_ring_geom
+    from nest_graph.placement.common import is_board_adj
+    from nest_graph.placement.outline import outline_ring_geom
 
     ring = outline_ring_geom(sheet)
     for i in global_idxs:

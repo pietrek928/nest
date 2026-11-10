@@ -12,7 +12,7 @@ import numpy as np
 from shapely import Point
 from shapely.geometry.base import BaseGeometry
 
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.outline import (
     outline_kiss_tolerance,
     outline_ring_geom,
     outline_standoff_distance,

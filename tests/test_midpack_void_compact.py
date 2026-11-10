@@ -10,7 +10,7 @@ from nest_graph.config import ProposeConfig
 from nest_graph.propose.cluster_repack import cluster_relocate_selection
 from nest_graph.propose.context import analyze_free_space
 from nest_graph.propose.local_se2 import local_se2_selection
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     is_pose_clear,
     selection_pairwise_independent,
 )

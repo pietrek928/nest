@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 from nest_graph.geometry import evaluate_local_placement_traced
-from nest_graph.placement_scene import guidance_config_for_propose
+from nest_graph.placement.scene import guidance_config_for_propose
 from scripts.guidance_placement_fixtures import get_scenarios
 
 

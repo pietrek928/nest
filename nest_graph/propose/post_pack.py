@@ -15,7 +15,7 @@ from nest_graph.propose.cluster_repack import (
 from nest_graph.propose.context import FreeSpaceSnapshot, prep_free_space, void_ratio_threshold
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.propose.pipeline import allow_void_repack
-from nest_graph.propose.placement_common import post_pack_overlap_ok
+from nest_graph.placement.common import post_pack_overlap_ok
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import iterative_multi_poles
 from nest_graph.free_kind_util import (
@@ -27,20 +27,8 @@ from nest_graph.graph import FreeKind
 
 
 def run_post_pack_passes(
-    sheet: Polygon,
-    polys: list[BaseGeometry],
-    transforms: list,
-    group_ids: Sequence[int],
-    selected_indices: Sequence[int],
-    part_by_group: dict[int, Polygon],
-    min_dist: float,
-    propose_cfg: ProposeConfig,
+    ctx: SelectionEditCtx,
     *,
-    pole: Point | None = None,
-    poles: Sequence[Point] | None = None,
-    fixed_obstacles: Sequence[BaseGeometry] | None = None,
-    void_geoms: Sequence | None = None,
-    board_adj_indices: Sequence[int] | None = None,
     allow_repack: bool = True,
     allow_relocate: bool = True,
     allow_local_se2: bool = True,
@@ -49,16 +37,10 @@ def run_post_pack_passes(
     free_space=None,
     victim_indices: Sequence[int] | None = None,
     repair_patterns: Sequence | None = None,
-    part_bases=None,
-    board_geom=None,
     refresh_after_repack: bool = True,
     mean_part_area: float | None = None,
-    native_pack_geoms_fn=None,
     force_bfs_peel: bool = False,
     archived_patterns: Sequence | None = None,
-    fits_part: bool = True,
-    force_hole_open: bool = False,
-    free_kind=None,
 ) -> tuple[list[BaseGeometry], list, list[int], dict]:
     """Run cluster_repack → cluster_relocate → local_se2 (demo parity).
 
@@ -74,33 +56,25 @@ def run_post_pack_passes(
         "se2_ms": 0.0,
         "qp_ms": 0.0,
     }
-    sel = list(selected_indices)
-    out_polys = list(polys)
-    out_tr = list(transforms)
-    entry_polys = list(polys)
-    entry_tr = list(transforms)
-    entry_sel = list(selected_indices)
-    ctx = SelectionEditCtx(
-        sheet=sheet,
-        polys=out_polys,
-        transforms=out_tr,
-        group_ids=group_ids,
-        selected_indices=sel,
-        part_by_group=part_by_group,
-        min_dist=min_dist,
-        propose_cfg=propose_cfg,
-        pole=pole,
-        poles=poles,
-        fixed_obstacles=fixed_obstacles,
-        void_geoms=void_geoms,
-        board_adj_indices=board_adj_indices,
-        part_bases=part_bases,
-        board_geom=board_geom,
-        fits_part=bool(fits_part),
-        force_hole_open=bool(force_hole_open),
-        free_kind=free_kind,
-    )
-    if allow_repack and propose_cfg.enable_cluster_repack:
+    sheet = ctx.sheet
+    propose_cfg = ctx.propose_cfg
+    min_dist = float(ctx.min_dist)
+    group_ids = ctx.group_ids
+    part_by_group = ctx.part_by_group
+    fixed_obstacles = ctx.fixed_obstacles
+    pole = ctx.pole
+    poles = ctx.poles
+    native_pack_geoms_fn = ctx.native_pack_geoms_fn
+    sel = list(ctx.selected_indices)
+    out_polys = list(ctx.polys)
+    out_tr = list(ctx.transforms)
+    entry_polys = list(ctx.polys)
+    entry_tr = list(ctx.transforms)
+    entry_sel = list(ctx.selected_indices)
+    ctx.polys = out_polys
+    ctx.transforms = out_tr
+    ctx.selected_indices = sel
+    if allow_repack and propose_cfg is not None and propose_cfg.enable_cluster_repack:
         out_polys, out_tr, sel, repack_stats = cluster_repack_selection(
             ctx,
             void_poly=void_poly,
@@ -134,6 +108,7 @@ def run_post_pack_passes(
     poles_list = list(poles or ())
     if (
         refresh_after_repack
+        and propose_cfg is not None
         and int(repack_stats.get("accepted", 0)) > 0
         and len(poles_list) > 1
     ):
@@ -407,19 +382,27 @@ def apply_post_pack_and_telem(
         return list(polys), list(transform), list(selected_polys), {}
     if isinstance(void_leak_stats, dict):
         void_leak_stats["multi_pole_count"] = len(prep.reloc_poles)
-    polys_out, tr_out, sel_out, pack_stats = run_post_pack_passes(
-        prep.sheet_compact,
-        list(polys),
-        list(transform),
-        group_id,
-        selected_polys,
-        part_by_group,
-        min_dist,
-        cfg_propose,
+    edit_ctx = SelectionEditCtx(
+        sheet=prep.sheet_compact,
+        polys=list(polys),
+        transforms=list(transform),
+        group_ids=group_id,
+        selected_indices=list(selected_polys),
+        part_by_group=part_by_group,
+        min_dist=min_dist,
+        propose_cfg=cfg_propose,
         pole=prep.push_pt,
         poles=prep.reloc_poles,
         fixed_obstacles=fixed_obstacles,
         void_geoms=prep.void_geoms_post,
+        part_bases=part_bases,
+        fits_part=bool(getattr(prep.free_post, "fits_part", True)),
+        force_hole_open=True,
+        free_kind=fk_post,
+        native_pack_geoms_fn=native_pack_geoms_fn,
+    )
+    polys_out, tr_out, sel_out, pack_stats = run_post_pack_passes(
+        edit_ctx,
         # C: phantom hole-open — se2 only (skip repack/relocate noise on mid phantom).
         allow_repack=(
             prep.allow_repack
@@ -432,16 +415,10 @@ def apply_post_pack_and_telem(
         free_space=prep.free_snap_post,
         victim_indices=prep.stamp_victim,
         repair_patterns=list(prep.repair_patterns or ()) or None,
-        part_bases=part_bases,
         refresh_after_repack=True,
         mean_part_area=prep.mean_part_post,
-        native_pack_geoms_fn=native_pack_geoms_fn,
         force_bfs_peel=prep.force_bfs_peel,
         archived_patterns=list(prep.archived_patterns or ()) or None,
-        fits_part=bool(getattr(prep.free_post, "fits_part", True)),
-        # C: last-leaf post_pack always probes hole-open (strict restore if no grow).
-        force_hole_open=True,
-        free_kind=fk_post,
     )
     if isinstance(void_leak_stats, dict):
         void_leak_stats["repack"] = pack_stats.get("repack") or {

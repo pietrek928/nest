@@ -51,7 +51,7 @@ Disable progress bar: `NEST_PROGRESS=0`. When enabled, the bar shows `parts` (se
 |----------|---------|---------|
 | `NEST_GRAPHS_WINDOW` | 24 | Rule-improvement graph history; past nest selections are re-injected as graph nodes |
 
-Board nesting uses a **sheet** polygon: bbox outer ring plus void holes (`bbox \\ outline` and optional `board_holes`). Validity and propose guidance share `evaluate_local_placement` with voids as obstacles (`nest_graph.placement_scene`).
+Board nesting uses a **sheet** polygon: bbox outer ring plus void holes (`bbox \\ outline` and optional `board_holes`). Validity and propose guidance share `evaluate_local_placement` with voids as obstacles (`nest_graph.placement.scene`).
 
 Rules fields (Python config, not env): `board_coords` (nest outline), optional `board_holes`, `board_sheet_padding` (extra margin), `board_sheet_padding_ratio` (default `0.08` × bbox diagonal for the sheet outer rectangle), `max_inserts_per_type` (default 2), `max_rules_per_set` (default 24). Video/snapshots draw the nest outline only, not the sheet bbox.
 

@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from nest_graph.geometry import nfp_lite_pair_relative
-from nest_graph.propose.placements_pattern import ClusterPattern, extract_cluster_patterns
+from nest_graph.placement.pattern import ClusterPattern, extract_cluster_patterns
 from nest_graph.propose.void_selection import pose_key_to_verts, transform_row_key
 from nest_graph.propose.motif_keys import (
     cohort_member_indices,

@@ -4,7 +4,7 @@ import sys
 import pytest
 
 from nest_graph.geometry import Geometry, GuidanceConfig, evaluate_local_placement
-from nest_graph.placement_scene import (
+from nest_graph.placement.scene import (
     best_proposition,
     placement_clearance_epsilon,
     propositions_by_tier,

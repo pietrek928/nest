@@ -11,18 +11,18 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     clearance_scene,
     is_pose_clear,
     placement_obstacles,
 )
-from nest_graph.propose.placements_pattern import emit_packing_clear_batch
-from nest_graph.propose.placement_outline import (
+from nest_graph.placement.pattern import emit_packing_clear_batch
+from nest_graph.placement.outline import (
     inward_at_contact,
     outline_ring_geom,
     snap_coords_along_exterior,
 )
-from nest_graph.propose.placement_perimeter import (
+from nest_graph.placement.perimeter import (
     angles_for_edge_contact,
     anti_crowd_far_segments,
     anti_crowd_segment_weights,

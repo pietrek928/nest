@@ -6,8 +6,8 @@ from nest_graph.board import board_context_from_geometry, board_void_obstacles
 from nest_graph.config import ProposeConfig
 from nest_graph.geometry import Geometry
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import is_pose_clear
-from nest_graph.propose.placements_pattern import emit_packing_clear
+from nest_graph.placement.common import is_pose_clear
+from nest_graph.placement.pattern import emit_packing_clear
 
 
 def test_exterior_frame_rejects_far_outside():

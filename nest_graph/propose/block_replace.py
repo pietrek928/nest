@@ -17,7 +17,7 @@ from nest_graph.graph import (
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_pose_graph
-from nest_graph.propose.placement_common import (
+from nest_graph.placement.common import (
     as_geometry,
     clearance_scene,
     is_board_adj,
@@ -26,8 +26,8 @@ from nest_graph.propose.placement_common import (
     placement_obstacles,
     selection_pairwise_independent,
 )
-from nest_graph.propose.placement_outline import outline_ring_geom
-from nest_graph.propose.placements_pattern import (
+from nest_graph.placement.outline import outline_ring_geom
+from nest_graph.placement.pattern import (
     merge_cluster_patterns,
     motif_lattice_coords_2d,
     pattern_tile_basis,
@@ -36,7 +36,7 @@ from nest_graph.propose.placements_pattern import (
     wedge_edge_grain_angles,
 )
 from nest_graph.propose.motif_keys import cohort_member_indices
-from nest_graph.propose.placements_pocket import pocket_target
+from nest_graph.placement.pocket import pocket_target
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
 from nest_graph.utils import transform_poly, transform_row_key
@@ -403,7 +403,7 @@ def _emit_hole_candidates(
     packed_group_ids: Sequence[int] | None = None,
     packed_transforms: Sequence[tuple[float, float, float] | np.ndarray] | None = None,
 ) -> tuple[list[tuple[int, np.ndarray, BaseGeometry, Geometry]], int, int]:
-    # cycle: pipeline → block_replace (3b); placements_pattern hoisted at module top
+    # cycle: pipeline → block_replace (3b); placement.pattern hoisted at module top
     from nest_graph.config import ProposeConfig
     from nest_graph.propose.pipeline import propose_coords_with_strategy
 

@@ -2,11 +2,16 @@
 
 from types import SimpleNamespace
 
-from nest_graph.propose.telem import build_void_leak_dict
+from nest_graph.propose.telem import (
+    VoidLeakPayload,
+    assemble_void_leak,
+    build_void_leak_dict,
+    format_void_leak_line,
+)
 from nest_graph.graph import FreeKind
 
 
-def test_void_leak_includes_block_and_niche_amaf_keys():
+def _sample_payload(**overrides) -> VoidLeakPayload:
     propose_stats = {
         "block_cohort_accepted": 1,
         "block_cohort_related": 2,
@@ -31,19 +36,20 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         "local_se2": {"attempted": 5, "moved": 1},
         "motif_sequential_partial": 2,
         "motif_sequential_rcl": 7,
+        "border_only": False,
     }
-    leak = build_void_leak_dict(
+    base = dict(
         free_kind=FreeKind.LargeVoid,
         max_void_ratio=0.5,
         n_void_props=0,
         n_props_pole=0,
-        hijack=False,
+        hijack=0,
         n_void_graph=10,
         n_void_nest=0,
         n_void_refine=0,
         nest_refine_delta=0,
         outline_cov=0.0,
-        sat_override=False,
+        sat_override=0,
         rim_progress=0.0,
         plateau=SimpleNamespace(on_plateau=False, streak=0),
         pin_all_blocked_streak=0,
@@ -81,7 +87,15 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
         attract_edges=0,
         attract_pairs_selected=0,
         attract_bonus=0.0,
+        zone_snip="",
+        skip_snip="",
     )
+    base.update(overrides)
+    return VoidLeakPayload(**base)
+
+
+def test_void_leak_includes_block_and_niche_amaf_keys():
+    leak = build_void_leak_dict(_sample_payload())
     assert leak["block_cohort_accepted"] == 1
     assert leak["block_hole_tried"] == 1
     assert leak["block_hole_reject_reason"] == "lex"
@@ -101,3 +115,18 @@ def test_void_leak_includes_block_and_niche_amaf_keys():
     assert leak["motif_sequential_partial"] == 2
     assert leak["motif_sequential_rcl"] == 7
     assert leak["multi_pole_count"] == 2
+
+
+def test_void_leak_payload_line_and_dict_hijack_types():
+    """Print keeps int hijack/sat_override; dict stores bool."""
+    p = _sample_payload(hijack=1, sat_override=1)
+    line = format_void_leak_line(p)
+    leak = build_void_leak_dict(p)
+    assert "hijack=1" in line
+    assert "sat_override=1" in line
+    assert leak["hijack"] is True
+    assert leak["sat_override"] is True
+    line2, leak2 = assemble_void_leak(p)
+    assert line2 == line
+    assert leak2["hijack"] is True
+    assert "funnel" in leak2
