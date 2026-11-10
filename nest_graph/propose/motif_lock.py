@@ -66,7 +66,7 @@ def _lock_bonded_components(
             if i >= len(candidate_geoms):
                 continue
             g = candidate_geoms[i]
-            cg = as_geometry(g) if not isinstance(g, Geometry) else g
+            cg = as_geometry(g)
             if cg is not None:
                 geoms.append((i, cg))
         for ai, (ia, ga) in enumerate(geoms):
@@ -260,7 +260,7 @@ def order_idxs_seed_unmapped_mapped(
             rest.append(i)
             continue
         geom = candidate_geoms[i]
-        cg = as_geometry(geom) if not isinstance(geom, Geometry) else geom
+        cg = as_geometry(geom)
         if cg is None:
             rest.append(i)
             continue
@@ -398,7 +398,7 @@ def _growing_subset_indices(
             _bump("grow_reject_geom_missing")
             continue  # W2: do not truncate later members
         geom = candidate_geoms[i]
-        cg = as_geometry(geom) if not isinstance(geom, Geometry) else geom
+        cg = as_geometry(geom)
         if cg is None:
             _bump("grow_reject_none_cg")
             continue
@@ -1007,7 +1007,7 @@ def anchored_nest_indices(
         raw = candidate_geoms[i]
         if raw is None:
             continue
-        cg = raw if isinstance(raw, Geometry) else as_geometry(raw)
+        cg = as_geometry(raw)
         if cg is None:
             continue
         geoms.append(cg)
@@ -1033,7 +1033,7 @@ def anchored_nest_indices(
     for g in packed_geoms or ():
         if g is None:
             continue
-        pg = g if isinstance(g, Geometry) else as_geometry(g)
+        pg = as_geometry(g)
         if pg is not None:
             packed_list.append(pg)
     if packed_list and geoms:
@@ -1080,7 +1080,7 @@ def build_anchored_trial_packed(
         raw = candidate_geoms[ii]
         if raw is None:
             continue
-        cg = raw if isinstance(raw, Geometry) else as_geometry(raw)
+        cg = as_geometry(raw)
         if cg is not None:
             trial.append(cg)
     return trial

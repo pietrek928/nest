@@ -1,0 +1,12 @@
+Telem log: artifacts/tune/bench_telem.log
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+  -> parts=58 area=0.569 kiss_s=0.29 kiss_o=0.81 auc=0.90 ok=True free=large_void/45.6 void=1/272/10/10 time=52.34s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=1...
+  -> parts=63 area=0.631 kiss_s=0.28 kiss_o=0.89 auc=0.85 ok=True free=large_void/42.8 void=5/509/19/19 time=61.28s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=2...
+  -> parts=60 area=0.607 kiss_s=0.31 kiss_o=0.89 auc=0.88 ok=True free=large_void/46.1 void=0/401/22/22 time=48.74s
+  GATE FAIL demo_triangle_corner_cluster_s6: ['area_coverage']
+
+| Case | Demand | Propose | DFS | Parts | Area | ΔParts | KissS | KissO | AUC | Time | Indep |
+|------|--------|---------|-----|-------|------|--------|-------|-------|-----|------|-------|
+| demo_triangle_corner_cluster_s6 | 1.21 | shipped | merged_loose_tight | 60.3 | 0.602 | 54.3 | 0.29 | 0.86 | 0.88 | 54.12s | True |

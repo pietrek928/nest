@@ -89,10 +89,7 @@ def cluster_indices_with_board(
         return []
     parts = [polys[i] for i in placed_idx]
     gap = _cluster_merge_gap(parts, min_dist, sheet)
-    geoms = [
-        p if isinstance(p, Geometry) else Geometry.from_shapely(p)
-        for p in parts
-    ]
+    geoms = [_as_geometry(p) for p in parts]
     board_ring = outline_ring_geom(sheet)
     comps = cluster_contact_components(
         geoms,

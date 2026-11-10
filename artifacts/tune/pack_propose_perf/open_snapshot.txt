@@ -1,0 +1,14 @@
+Pack Propose Perf open snapshot (reuse GE open; HEAD after GE5)
+early void_fill seeds 0 1 2: med>=0.591 min>=0.569 independent_ok
+late N>=3 from artifacts/checkpoints/void_fill_seed0_iter20.npz --extra-iters 8: median Δcov>=+0.1924
+Source: artifacts/tune/graph_ir_evolution/open_snapshot.txt (pooled early med=0.591 min=0.569; late med=+0.1924)
+Opened 2026-11-10 for P0; do not retune fixtures.
+
+Series locked after P0–P4 + U1 (2026-11-10)
+early bars held: med>=0.591 min>=0.569 (P4 early 0.569/0.635/0.592 med=0.592)
+late N=3 all letters: Δcov=+0.1924
+P1: validity-only batch + vf= telem; wall ~45–55s vs pre ~80s
+P2: colonize covers memo + collision isdisjoint; col= telem
+P3: board-edge batch clear + board_ring= on placement_contact_error
+P4: ray sort-then-chunk validity early-exit
+U1: as_geometry / transform_row_key / packing batch hoist

@@ -20,7 +20,10 @@ from nest_graph.propose.context import (
     void_pole_seed_coords,
 )
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import _boundary_alignment_angles
+from nest_graph.propose.placement_common import (
+    _boundary_alignment_angles,
+    as_geometry,
+)
 from nest_graph.propose.void_topology import (
     multi_pole_seed_coords,
     polylabel,
@@ -571,18 +574,6 @@ def _free_space_void_poly(free_space) -> Polygon | None:
     return poly
 
 
-def _as_native_geom(p) -> Geometry | None:
-    """C1: one Geometry conversion site for placements_pattern."""
-    if p is None or getattr(p, "is_empty", False):
-        return None
-    if isinstance(p, Geometry):
-        return p
-    try:
-        return Geometry.from_shapely(p)
-    except Exception:
-        return None
-
-
 def _cluster_compactness(
     placed: Sequence[BaseGeometry],
     idxs: Sequence[int],
@@ -595,7 +586,7 @@ def _cluster_compactness(
         if p is None or getattr(p, "is_empty", False):
             continue
         areas += float(p.area)
-        g = _as_native_geom(p)
+        g = as_geometry(p)
         if g is not None:
             geoms.append(g)
     if areas <= 1e-18:
@@ -836,8 +827,8 @@ def _pair_hull_area(
     if a is None or b is None or a.is_empty or b.is_empty:
         return float("inf")
     try:
-        ga = _as_native_geom(a)
-        gb = _as_native_geom(b)
+        ga = as_geometry(a)
+        gb = as_geometry(b)
         if ga is None or gb is None:
             raise ValueError("native geom missing")
         return float(convex_hull_area_of([ga, gb]))
@@ -918,8 +909,8 @@ def _generic_mate_relative(
             if placed is None or placed.is_empty:
                 continue
             # P7: Penetrating SoT via native intersects (not Shapely intersection.area).
-            ga = _as_native_geom(poly)
-            gb = _as_native_geom(placed)
+            ga = as_geometry(poly)
+            gb = as_geometry(placed)
             if ga is not None and gb is not None and ga.intersects(gb):
                 continue
             area = _pair_hull_area(poly, mate)
@@ -954,8 +945,8 @@ def synthesize_mate_patterns(
         placed = transform_poly(poly, mate)
         if placed is None or placed.is_empty:
             continue
-        ga = _as_native_geom(poly)
-        gb = _as_native_geom(placed)
+        ga = as_geometry(poly)
+        gb = as_geometry(placed)
         if ga is not None and gb is not None and ga.intersects(gb):
             continue
         patterns.append(
@@ -1709,7 +1700,7 @@ def _foreign_member_packing_status(
         return "empty"
     if not propose_geom.sheet.buffer(1e-5).covers(placed_m.centroid):
         return "sheet"
-    native = _as_native_geom(placed_m)
+    native = as_geometry(placed_m)
     if native is None:
         return "empty"
     obs = list(obstacles) if obstacles is not None else []
@@ -1746,7 +1737,7 @@ def _full_motif_packing_clear(
     """True if every motif member is packing-clear at ``t_anchor``.
 
     Same-group uses ``emit_packing_clear``. Foreign members with ``part_by_group``
-    use Penetrating solid-vs-obstacles (``transform_poly`` → ``_as_native_geom`` →
+    use Penetrating solid-vs-obstacles (``transform_poly`` → ``as_geometry`` →
     ``intersects_any``) plus sheet cover. Unknown foreign solids are skipped.
     ``shape_to_place`` is unused (kept for call-site compatibility).
     """
@@ -2148,9 +2139,14 @@ def propose_placements_cluster_copy(
                 radius=float(max_e),
                 num=8,
             )
+            ring_rows = [
+                (float(a[0]), float(a[1]), float(a[2])) for a in ring
+            ]
+            ring_flags = emit_packing_clear_batch(
+                propose_geom, ring_rows, obstacles=obs
+            )
             ring_clear = [
-                a for a in ring
-                if emit_packing_clear(propose_geom, a, obstacles=obs)
+                a for a, ok in zip(ring_rows, ring_flags, strict=True) if ok
             ]
             if ring_clear:
                 _bump_skip(skip_reasons, "pole_ring_clear", len(ring_clear))
@@ -2183,10 +2179,14 @@ def propose_placements_cluster_copy(
         if int((skip_reasons or {}).get("clear_xy_none", 0) or 0) > 0:
             lat_coords = list(lattice_stats.get("lattice_anchor_coords") or ())
             if lat_coords:
+                lat_rows = [
+                    (float(a[0]), float(a[1]), float(a[2])) for a in lat_coords
+                ]
+                lat_flags = emit_packing_clear_batch(
+                    propose_geom, lat_rows, obstacles=obs
+                )
                 clear_lat = [
-                    a
-                    for a in lat_coords
-                    if emit_packing_clear(propose_geom, a, obstacles=obs)
+                    a for a, ok in zip(lat_rows, lat_flags, strict=True) if ok
                 ]
                 if clear_lat:
                     _bump_skip(
@@ -2211,9 +2211,14 @@ def propose_placements_cluster_copy(
                     skip_reasons["topo_near_pole_n"] = int(
                         max(0, len(topo_anchors) - len(off_pole))
                     )
+                topo_rows = [
+                    (float(a[0]), float(a[1]), float(a[2])) for a in use
+                ]
+                topo_flags = emit_packing_clear_batch(
+                    propose_geom, topo_rows, obstacles=obs
+                )
                 clear_topo = [
-                    a for a in use
-                    if emit_packing_clear(propose_geom, a, obstacles=obs)
+                    a for a, ok in zip(topo_rows, topo_flags, strict=True) if ok
                 ]
                 if clear_topo:
                     _bump_skip(

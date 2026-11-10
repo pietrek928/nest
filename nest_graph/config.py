@@ -1267,12 +1267,10 @@ def subsample_transforms_with_pinned(
     cap_rest = max_n - pinned.shape[0]
     if transforms.shape[0] == 0:
         return pinned
-    pinned_keys = {
-        (round(r[0], 4), round(r[1], 4), round(r[2], 4)) for r in pinned
-    }
+    pinned_keys = {transform_row_key(r) for r in pinned}
     rest_rows: list[np.ndarray] = []
     for row in transforms:
-        key = (round(float(row[0]), 4), round(float(row[1]), 4), round(float(row[2]), 4))
+        key = transform_row_key(row)
         if key in pinned_keys:
             continue
         rest_rows.append(row)

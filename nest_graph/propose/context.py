@@ -1618,13 +1618,22 @@ def placement_contact_error(
     sheet: Polygon,
     min_dist: float,
     focal_shape: Optional[BaseGeometry] = None,
+    *,
+    board_ring: Geometry | None = None,
+    propose_geom=None,
 ) -> float:
     """Distance from ideal standoff (0 = flush against border or group).
 
     When ``placed`` (and optionally ``focal_shape``) are Geometry, uses native
     standoff / ``Geometry.distance`` rather than Shapely outline distance.
+    Optional ``board_ring`` / ``propose_geom`` hoist outline SoT (one helper).
     """
-    border_err = abs(outline_standoff_distance(placed, sheet) - min_dist)
+    border_err = abs(
+        outline_standoff_distance(
+            placed, sheet, propose_geom=propose_geom, ring=board_ring,
+        )
+        - min_dist
+    )
 
     if focal_shape is not None:
         is_empty = False

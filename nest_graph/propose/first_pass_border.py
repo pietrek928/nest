@@ -468,7 +468,7 @@ def guidance_border_refine(
     propose_cfg = cfg.first_pass_propose_config()
     sheet, voids = board_context_from_geometry(board)
     if board_geom is None:
-        board_geom = Geometry.from_shapely(sheet)
+        board_geom = as_geometry(sheet)
     pad = default_sheet_padding(board)
     bounds = padded_board_bounds(board, pad)
     part_by_gid = {gid: poly for poly, gid in parts}
@@ -1043,7 +1043,7 @@ def sequential_border_augment(
     eps = cfg.placement_epsilon_ratio(first_pass=True)
     sheet, voids = board_context_from_geometry(board)
     if board_geom is None:
-        board_geom = Geometry.from_shapely(sheet)
+        board_geom = as_geometry(sheet)
     pad = default_sheet_padding(board)
     guidance_cfg = guidance_config_for_graph(
         min_dist,
@@ -1238,12 +1238,11 @@ def first_pass_layered_selection(
     min_dist = cfg.board_min_dist(first_pass=True)
     outline = board
     sheet, voids = board_context_from_geometry(board)
-    board_geom = Geometry.from_shapely(sheet)
-    part_bases = (
-        {0: Geometry.from_shapely(parts[0][0]), 1: Geometry.from_shapely(parts[1][0])}
-        if len(parts) >= 2
-        else {gid: Geometry.from_shapely(poly) for poly, gid in parts}
-    )
+    board_geom = as_geometry(sheet)
+    part_by_gid = {gid: poly for poly, gid in parts}
+    if len(parts) >= 2:
+        part_by_gid = {0: parts[0][0], 1: parts[1][0]}
+    part_bases = part_base_geoms(part_by_gid)
     polys_cur = polys
     group_id_cur = group_id
     transform_cur = transform

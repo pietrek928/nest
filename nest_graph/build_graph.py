@@ -2257,13 +2257,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             for gid, rows in arch_rows.items():
                 for row in rows:
                     arr = np.asarray(row, dtype=np.float64).reshape(3)
-                    _archive_feed_keys.add(
-                        (
-                            round(float(arr[0]), 4),
-                            round(float(arr[1]), 4),
-                            round(float(arr[2]), 4),
-                        )
-                    )
+                    _archive_feed_keys.add(transform_row_key(arr))
             mcts_runner.niche_archive.last_feed_keys = set(_archive_feed_keys)
         elite_n = void_elite_count(merged_elite)
         propose_stats["void_elite_seeded"] = elite_n

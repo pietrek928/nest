@@ -8,12 +8,13 @@ from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.geometry import ProposeGeometry
-from nest_graph.propose.placement_common import obstacle_parts
+from nest_graph.propose.placement_common import obstacle_parts, placement_obstacles
 from nest_graph.propose.placement_outline import slide_toward_obstacle
 from nest_graph.propose.placements_pattern import (
     emit_packing_clear,
     emit_packing_clear_batch,
 )
+from nest_graph.utils import transform_row_key
 
 
 def _halton(index: int, base: int) -> float:
@@ -48,6 +49,10 @@ def polish_cloud_slide_toward_obstacles(
     if not obstacles:
         return [(float(c[0]), float(c[1]), float(c[2])) for c in cloud], 0
     part = shape_to_place if shape_to_place is not None else propose_geom.part_poly
+    packing_obs = placement_obstacles(
+        propose_geom.scene.void_geoms,
+        propose_geom.full_packed_geoms,
+    )
     out: list[tuple[float, float, float]] = []
     slid_n = 0
     seen: set[tuple[float, float, float]] = set()
@@ -66,12 +71,12 @@ def polish_cloud_slide_toward_obstacles(
             )
             if slid is None:
                 continue
-            if not emit_packing_clear(propose_geom, slid):
+            if not emit_packing_clear(propose_geom, slid, obstacles=packing_obs):
                 continue
             best = (float(slid[0]), float(slid[1]), float(slid[2]))
             improved = True
             break
-        key = (round(best[0], 4), round(best[1], 4), round(best[2], 4))
+        key = transform_row_key(best)
         if key in seen:
             continue
         seen.add(key)

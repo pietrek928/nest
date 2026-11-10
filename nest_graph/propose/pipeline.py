@@ -1916,6 +1916,10 @@ def _collect_candidates(
         state.cascade_stats_out["pocket_ms"] = float(
             state.cascade_stats_out.get("pocket_ms", 0.0) or 0.0
         ) + float(state.pocket_ms)
+        state.cascade_stats_out["valid_flags_ms"] = float(
+            state.cascade_stats_out.get("valid_flags_ms", 0.0) or 0.0
+        ) + float(getattr(ctx.propose_geom, "valid_flags_ms", 0.0) or 0.0)
+        ctx.propose_geom.valid_flags_ms = 0.0
     return _filter_distant_collisions(state.candidates, ctx.propose_geom)
 
 
@@ -2677,20 +2681,10 @@ def _batch_top_seed_coords(
     ]
 
 
-def _as_batch_geometry(g) -> Geometry | None:
-    if g is None:
-        return None
-    if isinstance(g, Geometry):
-        return g
-    if hasattr(g, "is_empty") and g.is_empty:
-        return None
-    return Geometry.from_shapely(g)
-
-
 def _batch_obstacle_geoms(placed: Sequence[BaseGeometry]) -> list[Geometry]:
     out: list[Geometry] = []
     for p in placed:
-        g = _as_batch_geometry(p)
+        g = as_geometry(p)
         if g is not None:
             out.append(g)
     return out
@@ -2813,7 +2807,7 @@ def _batch_pack_pair_order(
         if not follow_coords:
             continue
 
-        focal_g = _as_batch_geometry(focal) if focal is not None else None
+        focal_g = as_geometry(focal) if focal is not None else None
         for coords_b in follow_coords[: propose_cfg.batch_pack_follow_proposals]:
             if not _batch_pair_valid(
                 voids, anchor_part, coords_a, follow_part, coords_b,
@@ -3752,6 +3746,9 @@ def proposed_transforms_for_groups(
         cascade_agg["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0) + float(
             group_cascade.get("ray_ms", 0.0) or 0.0
         )
+        cascade_agg["valid_flags_ms"] = float(
+            cascade_agg.get("valid_flags_ms", 0.0) or 0.0
+        ) + float(group_cascade.get("valid_flags_ms", 0.0) or 0.0)
         cascade_agg["ray_short_span_kept"] = int(
             cascade_agg.get("ray_short_span_kept", 0) or 0
         ) + int(group_cascade.get("ray_short_span_kept", 0) or 0)
@@ -4033,6 +4030,9 @@ def proposed_transforms_for_groups(
             cascade_agg.get("inward_rc_cap", 0) or 0
         )
         densify_stats_out["ray_ms"] = float(cascade_agg.get("ray_ms", 0.0) or 0.0)
+        densify_stats_out["valid_flags_ms"] = float(
+            cascade_agg.get("valid_flags_ms", 0.0) or 0.0
+        )
         densify_stats_out["ray_short_span_kept"] = int(
             cascade_agg.get("ray_short_span_kept", 0) or 0
         )

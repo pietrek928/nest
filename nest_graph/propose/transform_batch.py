@@ -776,6 +776,9 @@ def build_transform_batch(
             propose_stats_out["zones_used"] = zones_used
             propose_stats_out["densify_stats"] = densify_stats
             propose_stats_out["ray_ms"] = float(densify_stats.get("ray_ms", 0.0) or 0.0)
+            propose_stats_out["valid_flags_ms"] = float(
+                densify_stats.get("valid_flags_ms", 0.0) or 0.0
+            )
             propose_stats_out["erosion_ms"] = float(
                 densify_stats.get("erosion_ms", 0.0) or 0.0
             )

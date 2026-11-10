@@ -11,8 +11,12 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.propose.context import placement_contact_error, placement_free_region
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
-from nest_graph.propose.placement_common import clearance_scene, is_pose_clear
-from nest_graph.propose.placements_pattern import emit_packing_clear
+from nest_graph.propose.placement_common import (
+    clearance_scene,
+    is_pose_clear,
+    placement_obstacles,
+)
+from nest_graph.propose.placements_pattern import emit_packing_clear_batch
 from nest_graph.propose.placement_outline import (
     inward_at_contact,
     outline_ring_geom,
@@ -42,6 +46,11 @@ def _sheet_exterior_snap_propositions(
 ) -> list[dict]:
     """Shared exterior snap loop: anchors → angles → snap → contact error dicts."""
     propositions: list[dict] = []
+    board_ring = (
+        propose_geom.boundary_ring_geom
+        if propose_geom is not None
+        else outline_ring_geom(sheet)
+    )
     for contact in exterior_anchor_points(sheet, samples_per_edge):
         if segment_filter is not None:
             seg_i = _segment_index_at_point(sheet, contact)
@@ -58,14 +67,21 @@ def _sheet_exterior_snap_propositions(
                 min_dist,
                 container=sheet,
                 propose_geom=propose_geom,
-                boundary_ring_geom=propose_geom.boundary_ring_geom,
+                boundary_ring_geom=board_ring,
             )
             if coords is None:
                 continue
             placed_geom = propose_geom.placed_at(coords)
             if placed_geom is None:
                 continue
-            err = placement_contact_error(placed_geom, sheet, min_dist, None)
+            err = placement_contact_error(
+                placed_geom,
+                sheet,
+                min_dist,
+                None,
+                board_ring=board_ring,
+                propose_geom=propose_geom,
+            )
             propositions.append({
                 "coords": coords,
                 "anchor": snap_contact,
@@ -99,11 +115,22 @@ def _board_edge_snap_seeds(
     )
 
     # Snap-then-packing filter: rim Touch must survive (guidance valid_at rejects it).
+    packing_obs = placement_obstacles(
+        propose_geom.scene.void_geoms,
+        propose_geom.full_packed_geoms,
+    )
+    board_ring = propose_geom.boundary_ring_geom
     if propositions and pt_push is not None:
         _ = pt_push
+        rows = [
+            (float(p["coords"][0]), float(p["coords"][1]), float(p["coords"][2]))
+            for p in propositions
+        ]
+        flags = emit_packing_clear_batch(
+            propose_geom, rows, obstacles=packing_obs,
+        )
         propositions = [
-            p for p in propositions
-            if emit_packing_clear(propose_geom, p["coords"])
+            p for p, ok in zip(propositions, flags, strict=True) if ok
         ]
 
     def _add_seed(
@@ -130,10 +157,17 @@ def _board_edge_snap_seeds(
     )
     for coords in corner_coords:
         placed_geom = propose_geom.placed_at(coords)
-        md = placed_geom.standoff_min_distance(propose_geom.boundary_ring_geom)
+        md = placed_geom.standoff_min_distance(board_ring)
         anchor_pt = Point(md.closest_b[0], md.closest_b[1])
         anchor_pt, inward = inward_at_contact(sheet, anchor_pt)
-        err = placement_contact_error(placed_geom, sheet, min_dist, None)
+        err = placement_contact_error(
+            placed_geom,
+            sheet,
+            min_dist,
+            None,
+            board_ring=board_ring,
+            propose_geom=propose_geom,
+        )
         _add_seed(coords, anchor_pt, inward, err)
 
     selected = select_stratified_by_segment(sheet, propositions, top_n)
@@ -303,7 +337,14 @@ def propose_placements_group_fit(
                 obs=edge_obs, scene=edge_scene,
             ):
                 continue
-            err = placement_contact_error(placed_geom, sheet, min_dist, focal_geom)
+            err = placement_contact_error(
+                placed_geom,
+                sheet,
+                min_dist,
+                focal_geom,
+                board_ring=propose_geom.boundary_ring_geom,
+                propose_geom=propose_geom,
+            )
             propositions.append({
                 "coords": coords,
                 "anchor": snap_contact,
@@ -397,15 +438,29 @@ def _sheet_corner_seeds(
                 })
 
     if propositions:
+        packing_obs = placement_obstacles(
+            propose_geom.scene.void_geoms,
+            propose_geom.full_packed_geoms,
+        )
+        rows = [
+            (float(p["coords"][0]), float(p["coords"][1]), float(p["coords"][2]))
+            for p in propositions
+        ]
+        flags = emit_packing_clear_batch(
+            propose_geom, rows, obstacles=packing_obs,
+        )
         propositions = [
-            p for p in propositions
-            if emit_packing_clear(propose_geom, p["coords"])
+            p for p, ok in zip(propositions, flags, strict=True) if ok
         ]
 
     seen: set[tuple[float, float, float]] = set()
     out: list[tuple[float, float, float]] = []
     for p in propositions:
-        key = (round(p["coords"][0], 4), round(p["coords"][1], 4), round(p["coords"][2], 4))
+        key = (
+            round(float(p["coords"][0]), 4),
+            round(float(p["coords"][1]), 4),
+            round(float(p["coords"][2]), 4),
+        )
         if key not in seen:
             seen.add(key)
             out.append(p["coords"])
@@ -454,6 +509,7 @@ def propose_placements_sheet_edge(
     if sheet.is_empty:
         return []
 
+    board_ring = propose_geom.boundary_ring_geom
     halo_pts = exterior_anchor_points(sheet, samples_per_edge)
 
     for h_pt in halo_pts:
@@ -475,7 +531,14 @@ def propose_placements_sheet_edge(
                 ):
                     continue
                 coords = (dx, dy, float(angle))
-                err = placement_contact_error(placed, sheet, min_dist, None)
+                err = placement_contact_error(
+                    placed,
+                    sheet,
+                    min_dist,
+                    None,
+                    board_ring=board_ring,
+                    propose_geom=propose_geom,
+                )
                 propositions.append({"coords": coords, "anchor": h_pt, "cost": err})
 
     if propositions and pt_push is not None:

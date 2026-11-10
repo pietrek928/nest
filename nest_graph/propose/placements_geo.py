@@ -11,7 +11,11 @@ from nest_graph.utils import get_shape_exteriors
 
 from nest_graph.geometry import Geometry
 from nest_graph.propose.context import search_region_for_placement
-from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
+from nest_graph.propose.geometry import (
+    ProposeGeometry,
+    batch_valid_flags,
+    filter_candidates_batch,
+)
 from nest_graph.propose.placement_perimeter import vertex_anchors_from_geom
 
 def densify_points(geometry, distance):
@@ -315,20 +319,32 @@ def propose_placements_raycasting(
         return []
     _ray_ms = (time.perf_counter() - t_ray0) * 1000.0
     propose_geom._last_raycast_ms = float(getattr(propose_geom, "_last_raycast_ms", 0.0) or 0.0) + _ray_ms
-    cost_map = {c: cost for c, cost in zip(pose_list, cost_list, strict=True)}
     span_map = {c: sp for c, sp in zip(pose_list, span_list, strict=True)}
-    rank_span_map = {c: rs for c, rs in zip(pose_list, rank_span_list, strict=True)}
-    mouth_map = {c: m for c, m in zip(pose_list, mouth_list, strict=True)}
-    valid = filter_candidates_batch(propose_geom, pose_list, pt_push)
-    # Among clears: prefer corridor band, then mouth, then attract (A r4 hybrid).
-    valid.sort(
-        key=lambda c: (
-            rank_span_map.get(c, 1.0),
-            0 if mouth_map.get(c, 0) else 1,
-            cost_map.get(c, 0.0),
-        )
+    # P4: sort by final survivor key, then validity-chunk until top_n (same order
+    # as filter-all-then-sort; skip validating the attract-tail once filled).
+    order = sorted(
+        range(len(pose_list)),
+        key=lambda i: (
+            rank_span_list[i],
+            0 if mouth_list[i] else 1,
+            cost_list[i],
+        ),
     )
-    kept = valid[:top_n]
+    ordered = [pose_list[i] for i in order]
+    chunk = max(int(top_n) * 2, 32)
+    valid: list[tuple[float, float, float]] = []
+    for start in range(0, len(ordered), chunk):
+        block = ordered[start:start + chunk]
+        flags = batch_valid_flags(propose_geom, block, pt_push)
+        for coords, ok in zip(block, flags, strict=True):
+            if not ok:
+                continue
+            valid.append(coords)
+            if len(valid) >= int(top_n):
+                break
+        if len(valid) >= int(top_n):
+            break
+    kept = valid[: int(top_n)]
     short_kept = sum(
         1
         for c in kept

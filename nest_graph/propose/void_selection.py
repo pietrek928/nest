@@ -106,7 +106,7 @@ class FreeCentroidPredicate:
 
     __slots__ = (
         "_free_poly", "_margin", "_boundary", "_free_geom", "_geoms",
-        "_buffer_collapsed",
+        "_buffer_collapsed", "_covers_memo",
     )
 
     def __init__(
@@ -123,6 +123,7 @@ class FreeCentroidPredicate:
         self._boundary: BaseGeometry | None = None
         self._free_geom = free_geom
         self._geoms = geoms
+        self._covers_memo: dict[int, bool] = {}
         if buffer_collapsed is not None:
             self._buffer_collapsed = bool(buffer_collapsed)
         else:
@@ -190,14 +191,28 @@ class FreeCentroidPredicate:
         return float(p.distance(boundary)) >= margin - _CLEARANCE_EPS
 
     def covers_part(self, poly, *, index: int | None = None) -> bool:
-        if poly is None or getattr(poly, "is_empty", True):
-            return False
+        # Native Geometry path first (skip Shapely is_empty on hot colonize walks).
         if (
             self._geoms is not None
             and index is not None
             and 0 <= int(index) < len(self._geoms)
         ):
-            cx, cy = self._geoms[int(index)].centroid()
+            ik = int(index)
+            hit = self._covers_memo.get(ik)
+            if hit is not None:
+                return hit
+            g = self._geoms[ik]
+            if g is None:
+                ok = False
+            else:
+                cx, cy = g.centroid()
+                ok = self._covers_point(float(cx), float(cy))
+            self._covers_memo[ik] = ok
+            return ok
+        if poly is None or getattr(poly, "is_empty", True):
+            return False
+        if isinstance(poly, Geometry):
+            cx, cy = poly.centroid()
             return self._covers_point(float(cx), float(cy))
         c = poly.centroid
         return self._covers_point(float(c.x), float(c.y))
@@ -958,20 +973,40 @@ def format_prop_accept(
     return " ".join(parts)
 
 
+def _collision_neighbor_sets(collisions) -> list[set[int]]:
+    """Precompute neighbor sets once per colonize call (isdisjoint SoT)."""
+    out: list[set[int]] = []
+    for row in collisions:
+        if isinstance(row, set):
+            out.append(row)
+        else:
+            out.append({int(u) for u in row})
+    return out
+
+
 def colonize_pin_clear(
     candidates: Sequence[int],
     collisions,
     cur: list[int],
     cur_set: set[int],
 ) -> tuple[list[int], set[int], int, int]:
-    """Pin collision-clear void candidates onto ``cur`` (one SoT walk)."""
+    """Pin collision-clear void candidates onto ``cur`` (one SoT walk).
+
+    ``collisions`` may be raw adjacency lists or precomputed ``set`` rows;
+    set rows use ``isdisjoint`` against ``cur_set``.
+    """
     add = 0
     blk = 0
     for v in candidates:
         vi = int(v)
         if vi in cur_set:
             continue
-        if any(int(u) in cur_set for u in collisions[vi]):
+        nbrs = collisions[vi]
+        if isinstance(nbrs, set):
+            blocked = not nbrs.isdisjoint(cur_set)
+        else:
+            blocked = any(int(u) in cur_set for u in nbrs)
+        if blocked:
             blk += 1
             continue
         cur.append(vi)
@@ -1100,9 +1135,10 @@ def colonize_void_onto_base(
             stats_out["colonize_cohort_prefer"] = 0
             stats_out["colonize_ms"] = (time.perf_counter() - t0) * 1000.0
         return out
+    coll_sets = _collision_neighbor_sets(collisions)
     candidates = [
         i
-        for i in range(len(collisions))
+        for i in range(len(coll_sets))
         if i not in out_set
         and i < len(polys)
         and pred.covers_part(polys[i], index=int(i))
@@ -1111,7 +1147,7 @@ def colonize_void_onto_base(
     if not candidates and margin > 1e-12:
         candidates = [
             i
-            for i in range(len(collisions))
+            for i in range(len(coll_sets))
             if i not in out_set
             and i < len(polys)
             and pred_zero.covers_part(polys[i], index=int(i))
@@ -1136,7 +1172,7 @@ def colonize_void_onto_base(
                 probe = list(out)
                 probe_set = set(out_set)
                 _, _, add, _ = colonize_pin_clear(
-                    cohort_probe, collisions, probe, probe_set
+                    cohort_probe, coll_sets, probe, probe_set
                 )
                 if add > 0:
                     cohort_front = [
@@ -1158,23 +1194,23 @@ def colonize_void_onto_base(
         if core_first:
             core_set = set(int(i) for i in core_first)
             rest = [i for i in candidates if int(i) not in core_set]
-            if scores is not None and len(scores) >= len(collisions):
+            if scores is not None and len(scores) >= len(coll_sets):
                 core_first.sort(key=lambda v: float(scores[v]), reverse=True)
                 rest.sort(key=lambda v: float(scores[v]), reverse=True)
             candidates = core_first + rest
             if stats_out is not None:
                 stats_out["colonize_prefer"] = int(len(core_first))
-        elif scores is not None and len(scores) >= len(collisions):
+        elif scores is not None and len(scores) >= len(coll_sets):
             candidates.sort(key=lambda v: float(scores[v]), reverse=True)
-    elif scores is not None and len(scores) >= len(collisions):
+    elif scores is not None and len(scores) >= len(coll_sets):
         candidates.sort(key=lambda v: float(scores[v]), reverse=True)
     if cohort_front:
-        if scores is not None and len(scores) >= len(collisions):
+        if scores is not None and len(scores) >= len(coll_sets):
             cohort_front.sort(key=lambda v: float(scores[v]), reverse=True)
         candidates = cohort_front + candidates
 
     out, out_set, pinned, blocked = colonize_pin_clear(
-        candidates, collisions, out, out_set,
+        candidates, coll_sets, out, out_set,
     )
     drop_budget = max(0, int(max_rim_drop))
     tried_victims: set[frozenset[int]] = set()
@@ -1185,7 +1221,7 @@ def colonize_void_onto_base(
             vi = int(v)
             if vi in out_set:
                 continue
-            plugs = [int(u) for u in collisions[vi] if int(u) in out_set]
+            plugs = [int(u) for u in coll_sets[vi] if int(u) in out_set]
             if not plugs:
                 continue
             rim_plugs = [
@@ -1197,7 +1233,7 @@ def colonize_void_onto_base(
             blocked_plugs.append((vi, rim_plugs))
         if not blocked_plugs:
             ordered = colonize_blocker_order(
-                candidates, collisions, out_set, polys, free_poly, margin,
+                candidates, coll_sets, out_set, polys, free_poly, margin,
                 predicate=pred,
             )
             if not ordered:
@@ -1244,7 +1280,7 @@ def colonize_void_onto_base(
             trial = [i for i in out if int(i) not in drop_set]
             trial_set = set(int(i) for i in trial)
             trial, trial_set, add, blk = colonize_pin_clear(
-                candidates, collisions, trial, trial_set,
+                candidates, coll_sets, trial, trial_set,
             )
             n_drop = len(drop_set)
             if not _colonize_trial_better(
@@ -1272,7 +1308,7 @@ def colonize_void_onto_base(
     # single-set V3 stalls (many void cands share a small plug clique).
     if drop_budget >= 2 and blocked > 0:
         ordered = colonize_blocker_order(
-            candidates, collisions, out_set, polys, free_poly, margin,
+            candidates, coll_sets, out_set, polys, free_poly, margin,
             predicate=pred,
         )
         k = min(4, int(drop_budget), len(ordered))
@@ -1281,7 +1317,7 @@ def colonize_void_onto_base(
             trial = [i for i in out if int(i) not in drop_set]
             trial_set = set(int(i) for i in trial)
             trial, trial_set, add, blk = colonize_pin_clear(
-                candidates, collisions, trial, trial_set,
+                candidates, coll_sets, trial, trial_set,
             )
             if _colonize_trial_better(
                 trial,
@@ -1329,34 +1365,35 @@ def void_core_then_rim(
             stats_out["void_core_rim_add"] = 0
             stats_out["void_core_ms"] = (time.perf_counter() - t0) * 1000.0
         return []
+    coll_sets = _collision_neighbor_sets(collisions)
     margin = float(interior_margin)
     pred = predicate or FreeCentroidPredicate.from_shapely(free_poly, margin)
     pred_zero = pred.with_margin(0.0) if margin > 1e-12 else pred
     void_cands = [
         i
-        for i in range(len(collisions))
+        for i in range(len(coll_sets))
         if i < len(polys)
         and pred.covers_part(polys[i], index=int(i))
     ]
     if not void_cands and margin > 1e-12:
         void_cands = [
             i
-            for i in range(len(collisions))
+            for i in range(len(coll_sets))
             if i < len(polys)
             and pred_zero.covers_part(polys[i], index=int(i))
         ]
-    if scores is not None and len(scores) >= len(collisions):
+    if scores is not None and len(scores) >= len(coll_sets):
         void_cands.sort(key=lambda v: float(scores[v]), reverse=True)
     core: list[int] = []
     core_set: set[int] = set()
     for raw in seed_core or ():
         vi = int(raw)
-        if vi in core_set or vi >= len(collisions) or vi >= len(polys):
+        if vi in core_set or vi >= len(coll_sets) or vi >= len(polys):
             continue
         if not pred.covers_part(polys[vi], index=vi):
             if margin > 1e-12 and not pred_zero.covers_part(polys[vi], index=vi):
                 continue
-        if any(int(u) in core_set for u in collisions[vi]):
+        if not coll_sets[vi].isdisjoint(core_set):
             continue
         core.append(vi)
         core_set.add(vi)
@@ -1364,17 +1401,17 @@ def void_core_then_rim(
         vi = int(v)
         if vi in core_set:
             continue
-        if any(int(u) in core_set for u in collisions[vi]):
+        if not coll_sets[vi].isdisjoint(core_set):
             continue
         core.append(vi)
         core_set.add(vi)
     rest = [
-        i for i in range(len(collisions))
+        i for i in range(len(coll_sets))
         if i not in core_set and i < len(polys)
     ]
-    if scores is not None and len(scores) >= len(collisions):
+    if scores is not None and len(scores) >= len(coll_sets):
         rest.sort(key=lambda v: float(scores[v]), reverse=True)
-    out, out_set, add, _blk = colonize_pin_clear(rest, collisions, core, core_set)
+    out, out_set, add, _blk = colonize_pin_clear(rest, coll_sets, core, core_set)
     if stats_out is not None:
         stats_out["void_core_n"] = len(core)
         stats_out["void_core_rim_add"] = int(add)
@@ -1411,9 +1448,10 @@ def pin_nest_void_independent(
         return refine
     if scores is not None and len(scores) == len(graph.group_id):
         candidates.sort(key=lambda v: scores[v], reverse=True)
+    coll_sets = _collision_neighbor_sets(graph.collisions)
     refine, refine_set, pin_added, pin_blocked = colonize_pin_clear(
         candidates,
-        graph.collisions,
+        coll_sets,
         refine,
         refine_set,
     )

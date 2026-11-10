@@ -39,7 +39,7 @@ from nest_graph.propose.motif_keys import cohort_member_indices
 from nest_graph.propose.placements_pocket import pocket_target
 from nest_graph.propose.void_selection import _sel_area, pose_key_to_index
 from nest_graph.proposer_names import ProposerName
-from nest_graph.utils import transform_poly
+from nest_graph.utils import transform_poly, transform_row_key
 from nest_graph.free_kind_util import is_large_void, void_phantom
 
 
@@ -492,7 +492,7 @@ def _emit_hole_candidates(
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             tr = np.asarray(c, dtype=np.float64).reshape(3)
-            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            key = transform_row_key(tr)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -613,7 +613,7 @@ def _emit_hole_candidates(
             if len(out) >= _HOLE_EMIT_CAP:
                 break
             tr = np.asarray(lc, dtype=np.float64).reshape(3)
-            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            key = transform_row_key(tr)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
@@ -642,7 +642,7 @@ def _emit_hole_candidates(
             if mpart is None or getattr(mpart, "is_empty", True):
                 continue
             tr = np.asarray(mtr, dtype=np.float64).reshape(3)
-            key = (round(float(tr[0]), 4), round(float(tr[1]), 4), round(float(tr[2]), 4))
+            key = transform_row_key(tr)
             if key in seen_keys:
                 continue
             seen_keys.add(key)

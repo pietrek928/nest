@@ -172,6 +172,47 @@ void bind_batch_api(nb::module_ &m) {
         nb::arg("current_position"),
         nb::arg("config"));
 
+    // P1: penetrate+clearance only (no proposition / rotation sweep).
+    m.def(
+        "batch_evaluate_local_placement_validity",
+        [](const GeometryHolder &part,
+           const std::vector<std::tuple<double, double, double>> &transforms,
+           std::vector<GeometryHolder> obstacles,
+           const GuidanceConfig2d &config) {
+            std::vector<SolidGeometry2d> polys =
+                solids_from_holders(std::move(obstacles));
+            polys.insert(polys.begin(), SolidGeometry2d{});
+
+            std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
+            auto angle_key = [](double angle) -> long long {
+                return static_cast<long long>(std::llround(angle * 1e6));
+            };
+
+            std::vector<std::tuple<bool, double>> out;
+            out.reserve(transforms.size());
+            for (const auto &[x, y, angle] : transforms) {
+                const long long key = angle_key(angle);
+                auto it = rotated_by_angle_key.find(key);
+                if (it == rotated_by_angle_key.end()) {
+                    SolidGeometry2d rotated = part.solid;
+                    rotated = rotated.rotate(static_cast<Vec2d::Scalar>(angle));
+                    it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
+                }
+                SolidGeometry2d placed = it->second;
+                placed = placed.translate(Vec2d({x, y}));
+                polys[0] = placed;
+                PlacementGuidance2d g =
+                    evaluate_local_placement_validity<Vec2d>(0, polys, config);
+                out.emplace_back(
+                    g.is_penetrating, static_cast<double>(g.clearance));
+            }
+            return out;
+        },
+        nb::arg("part"),
+        nb::arg("transforms"),
+        nb::arg("obstacles"),
+        nb::arg("config"));
+
     // P1: margin-0 Penetrating batch (emit_packing_clear SoT). Not Scene
     // batch_check_validity (Q13/Q327 — Scene uses min_dist+ε margin).
     m.def(

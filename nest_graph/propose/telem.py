@@ -1872,6 +1872,12 @@ def merge_phase_gate_telem(
     leak["ray_ms"] = float(
         propose_stats.get("ray_ms", leak.get("ray_ms", 0.0)) or 0.0
     )
+    leak["valid_flags_ms"] = float(
+        propose_stats.get("valid_flags_ms", leak.get("valid_flags_ms", 0.0)) or 0.0
+    )
+    leak["colonize_ms"] = float(
+        propose_stats.get("colonize_ms", leak.get("colonize_ms", 0.0)) or 0.0
+    )
     leak["erosion_ms"] = float(
         propose_stats.get("erosion_ms", leak.get("erosion_ms", 0.0)) or 0.0
     )
@@ -2410,6 +2416,8 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"fit_ir={float(leak.get('fit_in_r', 0.0) or 0.0):.3f}/"
         f"{float(leak.get('fit_need_r', 0.0) or 0.0):.3f} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
+        f"vf={float(leak.get('valid_flags_ms', 0.0) or 0.0):.1f} "
+        f"col={float(leak.get('colonize_ms', 0.0) or 0.0):.1f} "
         f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"
         f"{int(leak.get('void_override', 0) or 0)} "
         f"path_skip={int(leak.get('path_probe_skip', 0) or 0)} "

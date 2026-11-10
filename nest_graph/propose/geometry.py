@@ -1,12 +1,18 @@
+import math
+import time
 from typing import Sequence, Tuple
 
-import math
 import numpy as np
 from shapely import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.config import ProposeConfig
-from nest_graph.geometry import Geometry, GuidanceConfig, batch_evaluate_local_placement
+from nest_graph.geometry import (
+    Geometry,
+    GuidanceConfig,
+    batch_evaluate_local_placement,
+    batch_evaluate_local_placement_validity,
+)
 from nest_graph.placement_scene import (
     PLACEMENT_EPSILON_RATIO,
     best_proposition,
@@ -293,7 +299,8 @@ def batch_valid_flags(
 ) -> list[bool] | list[object | None]:
     """Batch validity matching ProposeGeometry.valid_at (base+void + guidance).
 
-    Uses ``batch_evaluate_local_placement`` for both bool and guidance modes.
+    Bool mode uses penetrate+clearance-only batch (no proposition/rotation sweep).
+    Guidance mode keeps full ``batch_evaluate_local_placement``.
     """
     if not transforms:
         return []
@@ -308,6 +315,30 @@ def batch_valid_flags(
     survivor_transforms = [
         (float(c[0]), float(c[1]), float(c[2])) for c in transforms
     ]
+    t0 = time.perf_counter()
+
+    if not return_guidance:
+        rows = batch_evaluate_local_placement_validity(
+            propose_geom.part,
+            survivor_transforms,
+            obstacles,
+            cfg,
+        )
+        out: list[bool] = []
+        for is_pen, clearance in rows:
+            if is_pen:
+                out.append(False)
+                continue
+            if margin > 0.0 and float(clearance) < margin:
+                out.append(False)
+                continue
+            out.append(True)
+        ms = (time.perf_counter() - t0) * 1000.0
+        propose_geom.valid_flags_ms = float(
+            getattr(propose_geom, "valid_flags_ms", 0.0) or 0.0
+        ) + ms
+        return out
+
     guidance_list = batch_evaluate_local_placement(
         propose_geom.part,
         survivor_transforms,
@@ -315,19 +346,6 @@ def batch_valid_flags(
         (float(pt_push.x), float(pt_push.y)),
         cfg,
     )
-
-    if not return_guidance:
-        out: list[bool] = []
-        for g in guidance_list:
-            if g.is_penetrating:
-                out.append(False)
-                continue
-            if margin > 0.0 and float(g.clearance) < margin:
-                out.append(False)
-                continue
-            out.append(True)
-        return out
-
     out_guidance: list[object | None] = []
     for g in guidance_list:
         if g.is_penetrating:
@@ -337,6 +355,10 @@ def batch_valid_flags(
             out_guidance.append(None)
             continue
         out_guidance.append(g)
+    ms = (time.perf_counter() - t0) * 1000.0
+    propose_geom.valid_flags_ms = float(
+        getattr(propose_geom, "valid_flags_ms", 0.0) or 0.0
+    ) + ms
     return out_guidance
 
 

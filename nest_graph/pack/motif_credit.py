@@ -8,7 +8,7 @@ import numpy as np
 from nest_graph.free_kind_util import is_large_void
 from nest_graph.graph import MacroRegion, Se2, niche_amaf_key
 from nest_graph.propose.void_selection import centroid_in_free, transform_row_key
-from nest_graph.utils import relative_transform
+from nest_graph.utils import relative_transform, transform_row_key
 
 
 def _key_is_void_seek(key: tuple[int, int, int]) -> bool:
@@ -248,11 +248,7 @@ def merge_void_elite_with_archive(
         kept: list = []
         for row in merged:
             arr = np.asarray(row, dtype=np.float64).reshape(3)
-            key = (
-                round(float(arr[0]), 4),
-                round(float(arr[1]), 4),
-                round(float(arr[2]), 4),
-            )
+            key = transform_row_key(arr)
             if key in seen:
                 continue
             seen.add(key)

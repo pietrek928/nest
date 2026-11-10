@@ -763,6 +763,37 @@ inline PlacementProposition<VecType> formulate_gravity_fallback(
 }
 
 template <class VecType, class Tracer = DefaultTracer>
+inline PlacementGuidance<VecType> evaluate_local_placement_validity(
+    int placed_poly_idx,
+    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const GuidanceConfig<VecType>& config = GuidanceConfig<VecType>{},
+    Tracer* tracer = nullptr
+) {
+    // Clearance/penetrate only — skips proposition + rotation sweep (P1).
+    using Scalar = typename VecType::Scalar;
+    PlacementGuidance<VecType> guidance;
+
+    std::vector<int> active_indices = { placed_poly_idx };
+    auto results = find_polygon_distances<VecType, Tracer>(
+        all_polygons,
+        active_indices,
+        static_cast<Scalar>(0),
+        config.search_radius,
+        tracer
+    );
+
+    if (results.empty()) {
+        return guidance;
+    }
+
+    PhysicsContext<VecType> ctx;
+    aggregate_physics_feedback(placed_poly_idx, all_polygons, results, config, ctx);
+    guidance.is_penetrating = ctx.is_penetrating;
+    guidance.clearance = ctx.min_clearance;
+    return guidance;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
 inline PlacementGuidance<VecType> evaluate_local_placement(
     int placed_poly_idx,
     const std::vector<SolidGeometry<VecType>>& all_polygons,
