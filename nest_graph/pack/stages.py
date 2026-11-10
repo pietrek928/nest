@@ -36,6 +36,7 @@ from nest_graph.propose.selection_compose import (
     sheet_diag_from,
 )
 from nest_graph.propose.void_selection import count_selected_in_free
+from nest_graph.telem_log import write_telem
 from nest_graph.propose.first_pass_border import (
     first_pass_border_ring_selection,
     first_pass_layered_selection,
@@ -537,7 +538,7 @@ def run_first_pass_border_pack(
         ctx.propose_stats["post_rim_uh_candidate"] = int(
             is_large_void(post_rim.free_info)
         )
-        print(
+        write_telem(
             f"r0 post_rim free={ctx.propose_stats['post_rim_free_kind']} "
             f"uh_candidate={ctx.propose_stats['post_rim_uh_candidate']}"
         )
@@ -587,7 +588,7 @@ def run_first_pass_border_pack(
             ctx.propose_stats["uh_n_void"] = int(composed_uh.n_void_nest)
             ctx.propose_stats["uh_n_sel"] = int(len(selected_polys))
             ctx.propose_stats["uh_kiss_lock_n"] = int(len(kiss_lock))
-            print(
+            write_telem(
                 f"uh post_rim void_nest={composed_uh.n_void_nest} "
                 f"sel={len(selected_polys)} kiss_lock={len(kiss_lock)} "
                 f"beam_unlocked={ctx.propose_stats.get('uh_beam_unlocked', 0)}"

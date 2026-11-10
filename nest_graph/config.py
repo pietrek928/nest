@@ -372,6 +372,8 @@ class OutputConfig(BaseModel):
     video_fps: int = 5
     render_size: int = 1024
     progress: bool = True
+    # Per-iter void_leak / dg_funnel / letter telem (stdout stays progress-only).
+    telem_log_path: str = "artifacts/tune/telem.log"
     # Dckpt: save NestState(+DG memory) after this many iters (0 = off).
     checkpoint_iter: int = 0
     checkpoint_path: str = "artifacts/checkpoints/void_fill_seed0_iter20.npz"
@@ -1201,6 +1203,9 @@ class BuildGraphConfig(BaseModel):
                 video_fps=_env_int("NEST_VIDEO_FPS", 5),
                 render_size=_env_int("NEST_RENDER_SIZE", 1024),
                 progress=_env_bool("NEST_PROGRESS", True),
+                telem_log_path=os.environ.get(
+                    "NEST_TELEM_LOG", "artifacts/tune/telem.log"
+                ),
                 checkpoint_iter=_env_int("NEST_CHECKPOINT_ITER", 0),
                 checkpoint_path=os.environ.get(
                     "NEST_CHECKPOINT_PATH",

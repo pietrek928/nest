@@ -79,6 +79,7 @@ from nest_graph.pack.cheap import (
 )
 from nest_graph.pack.ctx import PackIterCtx, RefinePackBox
 from nest_graph.pack.credit import finalize_iter_mcts, run_void_leak_and_niche_credit
+from nest_graph.telem_log import configure_telem_log, write_telem
 from nest_graph.pack.geoms import (
     native_geoms_from_transforms as _native_geoms_from_transforms,
     selection_coverage_pct as _selection_coverage_pct,
@@ -1216,6 +1217,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     gc = cfg.graph
     sel = cfg.selection
     out = cfg.output
+    # Prefer an outer driver path (bench); only truncate on a fresh session.
+    _env_telem = str(os.environ.get("NEST_TELEM_LOG", "") or "").strip()
+    if _env_telem:
+        telem_path = configure_telem_log(_env_telem, reset=False)
+    else:
+        telem_path = configure_telem_log(
+            getattr(out, "telem_log_path", None) or "artifacts/tune/telem.log",
+            reset=True,
+        )
+    write_telem(f"# nest telem session path={telem_path}")
 
     resume_path = str(getattr(out, "resume_checkpoint", "") or "").strip()
     resume_ckpt = None
@@ -3093,7 +3104,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
                 or 0.0
             )
-            print(
+            write_telem(
                 f"repack={repack_stats.get('accepted', 0)}/"
                 f"{repack_stats.get('attempted', 0)} "
                 f"motif={repack_stats.get('motif_accepted', 0)} "
@@ -3405,8 +3416,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             )
         else:
             refine_msg = f"{old_len} -> {len(selected_polys)}"
-            print(
-                len(polys), refine_msg,
+            write_telem(
+                len(polys),
+                refine_msg,
                 f"cov={cov:.1f}%",
                 f"dfs_passes={int(polish_budget.dfs_passes)}",
                 f"mcts_heavy={int(polish_budget.mcts_heavy)}",

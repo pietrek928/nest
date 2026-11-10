@@ -1,6 +1,8 @@
 import time
 from functools import partial, wraps
 
+from nest_graph.telem_log import write_telem
+
 
 class _show_performance:
     def __init__(self, func, a, show_every):
@@ -30,13 +32,19 @@ class _show_performance:
         self.time_avg = self.time_avg * (1 - a) + duration * a
 
         if self.count % self.show_every == 0:
-            print(f"[{time.strftime('%H:%M:%S')}] {self.func.__name__} Execution: {duration:.4f}s | "
-                f"Avg: {self.time_avg:.4f}s | Calls: {self.count}")
+            write_telem(
+                f"[{time.strftime('%H:%M:%S')}] {self.func.__name__} "
+                f"Execution: {duration:.4f}s | "
+                f"Avg: {self.time_avg:.4f}s | Calls: {self.count}"
+            )
 
         return result
 
     def __del__(self):
-        print(f"[{time.strftime('%H:%M:%S')}] {self.func.__name__} Avg: {self.time_avg:.4f}s | Calls: {self.count}")
+        write_telem(
+            f"[{time.strftime('%H:%M:%S')}] {self.func.__name__} "
+            f"Avg: {self.time_avg:.4f}s | Calls: {self.count}"
+        )
 
 
 def show_performance(func, a=0.1, show_every=16):

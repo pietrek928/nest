@@ -15,6 +15,7 @@ from nest_graph.config import (
     ProposeAblation,
     ProposeConfig,
 )
+from nest_graph.telem_log import configure_telem_log, write_telem
 from scripts.nesting_evaluator import NestingPipelineEvaluator, metrics_meet_floors
 from scripts.nesting_fixtures import get_all_cases, resolve_cases
 from scripts.tune.cfg_overrides import (
@@ -361,6 +362,12 @@ def main() -> None:
     if args.baselines.exists():
         baselines = json.loads(args.baselines.read_text())
 
+    telem_path = configure_telem_log(
+        Path("artifacts/tune") / "bench_telem.log",
+        reset=True,
+    )
+    print(f"Telem log: {telem_path}", flush=True)
+
     gate_fail = False
     for case in cases_to_run:
         for propose in args.propose:
@@ -537,7 +544,7 @@ def main() -> None:
                         or leak.get("rim_progress") is not None
                         or inward
                     ):
-                        print(
+                        write_telem(
                             f"     letter telem niche_pos={leak.get('niche_pos', 0)} "
                             f"niche_rescue={leak.get('niche_rescue', 0)} "
                             f"contact_grg_upserts={leak.get('contact_grg_upserts', 0)} "
@@ -803,7 +810,7 @@ def main() -> None:
                         )
                     diag = (evaluator.last_result or {}).get("void_leak", {}).get("diag") or {}
                     if diag:
-                        print(
+                        write_telem(
                             f"     diag cov={diag.get('cov_final', 0):.3f}/"
                             f"{diag.get('cov_peak', 0):.3f}/"
                             f"seed={diag.get('cov_seed', 0):.3f} "

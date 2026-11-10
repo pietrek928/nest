@@ -28,6 +28,7 @@ from nest_graph.propose.void_selection import (
     transform_row_key,
     void_pole_near_radius,
 )
+from nest_graph.telem_log import write_telem
 
 
 def run_void_leak_and_niche_credit(
@@ -167,7 +168,7 @@ def run_void_leak_and_niche_credit(
         propose_stats.get("graph_to_nest_hollow", 0) or 0
     )
     if print_funnel:
-        print(
+        write_telem(
             f"r0 bottleneck={funnel['bottleneck']} "
             f"funnel={funnel['funnel_stages']} "
             f"corners_in={corners['corner_in']} kept={corners['corner_kept']} "
@@ -205,8 +206,8 @@ def run_void_leak_and_niche_credit(
                 f"{int(leak_dict.get('grow_reject_geom_missing', 0) or 0)}/"
                 f"{int(leak_dict.get('grow_reject_none_cg', 0) or 0)}"
             )
-        print(f"{void_leak}{motif_wire}")
-        print(format_dg_expand_funnel(leak_dict))
+        write_telem(f"{void_leak}{motif_wire}")
+        write_telem(format_dg_expand_funnel(leak_dict))
     bottleneck = str(funnel.get("bottleneck") or "")
     large_void = is_large_void(free_info)
     hollow = bool(
