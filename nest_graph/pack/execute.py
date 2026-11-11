@@ -1094,6 +1094,16 @@ def path_accept_contact_upsert(
     telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(
         n_up
     )
+    # L3: post-truncate mid for next-iter prefer_motif_id (tip stays first).
+    post_raw = telem.get("last_upsert_mid", -1)
+    post_mid = -1 if post_raw is None else int(post_raw)
+    if n_up > 0 and post_mid >= 0:
+        telem["path_upsert_prefer_mid"] = int(post_mid)
+        telem["path_upsert_prefer_gap"] = 0
+    elif n_up > 0:
+        telem["path_upsert_prefer_gap"] = max(
+            int(telem.get("path_upsert_prefer_gap", 0) or 0), 1
+        )
     return int(n_up)
 
 

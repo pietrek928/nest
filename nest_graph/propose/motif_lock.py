@@ -1920,6 +1920,9 @@ def stamp_cross_cohort_motif_joins(
                     unjoined = (
                         (0 if ia in joined else 1) + (0 if ib in joined else 1)
                     )
+                    # L1: hard-skip pairs where both endpoints already starred.
+                    if unjoined == 0:
+                        continue
                     key = (1 if agreed else 0, ac, unjoined, -spat)
                     if key > best_key:
                         best_key = key

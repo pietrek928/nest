@@ -1276,6 +1276,29 @@ def merge_phase_gate_telem(
             int(mt.get("motif_join_from_base", leak.get("motif_join_from_base", 0)) or 0),
             int(propose_stats.get("motif_join_from_base", 0) or 0),
         )
+        leak["motif_join_spoke_n"] = max(
+            int(mt.get("motif_join_spoke_n", leak.get("motif_join_spoke_n", 0)) or 0),
+            int(propose_stats.get("motif_join_spoke_n", 0) or 0),
+        )
+        # L0 MotifJoin identity census.
+        for _k in (
+            "path_join_labeled_n",
+            "path_join_mid_unique_n",
+            "join_stack_n",
+            "stale_join_mid_n",
+            "path_upsert_prefer_gap",
+            "wang_rank_tie_n",
+            "wang_rank_flip_n",
+            "star_spoke_n",
+            "star_mid_unique_n",
+            "prefer_from_path_n",
+        ):
+            leak[_k] = max(
+                int(mt.get(_k, leak.get(_k, 0)) or 0),
+                int(propose_stats.get(_k, 0) or 0),
+            )
+        _pup = mt.get("path_upsert_prefer_mid", propose_stats.get("path_upsert_prefer_mid", -1))
+        leak["path_upsert_prefer_mid"] = -1 if _pup is None else int(_pup)
         # T: path idle interpretable — probe ran vs cache miss vs soft tip only.
         leak["path_ran"] = int(mt.get("path_ran", leak.get("path_ran", 0)) or 0)
         leak["path_cache_miss"] = int(
@@ -1532,6 +1555,15 @@ def merge_phase_gate_telem(
         "void_scene_lock_accept",
         "star_stitch_n",
         "star_stitch_members",
+        "star_spoke_n",
+        "star_mid_unique_n",
+        "path_join_labeled_n",
+        "path_join_mid_unique_n",
+        "join_stack_n",
+        "stale_join_mid_n",
+        "path_upsert_prefer_gap",
+        "wang_rank_tie_n",
+        "wang_rank_flip_n",
         "cohort_void_rank_n",
         "motif_cohort_sig",
         "cache_invalidate_cohort",
@@ -2434,6 +2466,14 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"lock_ov={int(leak.get('path_lock_join_overlap', 0) or 0)} "
         f"lock_soft={int(leak.get('path_lock_join_soft', 0) or 0)} "
         f"base_j={int(leak.get('motif_join_from_base', 0) or 0)} "
+        f"spoke={int(leak.get('star_spoke_n', 0) or 0)}/"
+        f"{int(leak.get('star_mid_unique_n', 0) or 0)} "
+        f"jlbl={int(leak.get('path_join_labeled_n', 0) or 0)}/"
+        f"{int(leak.get('path_join_mid_unique_n', 0) or 0)} "
+        f"jstack={int(leak.get('join_stack_n', 0) or 0)} "
+        f"jstale={int(leak.get('stale_join_mid_n', 0) or 0)} "
+        f"upref={int(leak.get('path_upsert_prefer_gap', 0) or 0)} "
+        f"wtie={int(leak.get('wang_rank_tie_n', 0) or 0)} "
         f"densify_xy={int(leak.get('densify_xy_in', 0) or 0)}/"
         f"{str(leak.get('void_yield_tag', '') or '-')}"
     )

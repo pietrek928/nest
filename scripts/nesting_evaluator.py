@@ -59,6 +59,7 @@ from nest_graph.pack.macro_path import (
     path_accept_apply,
     path_accept_eligible,
     path_probe_budget,
+    record_path_edge_census,
 )
 from nest_graph.pack.stages import run_mid_pack_stages, run_post_pack_stage
 from nest_graph.placement.common import (
@@ -883,6 +884,14 @@ class NestingPipelineEvaluator:
                         path_overlap_ok = bool(pack_cache_overlap_ok(pack_cache))
                         # S1 telem parity: stash before isolation restore (no NestState adopt).
                         path_proven_compose = proven_compose_row(pack_cache, alt_action)
+                    # L0: path edge/Wang identity census (parity with run_outer_path_probe).
+                    record_path_edge_census(
+                        mcts_runner,
+                        int(mcts_parent_id),
+                        mcts_telem,
+                        motif_locked=pack_cache.get("motif_locked"),
+                        beam_cap=max(4, int(path_beam) * 2),
+                    )
                     eligible, cov_ok, _bc, _ac = path_accept_eligible(
                         alt_action=alt_action,
                         path_accept_snap=path_accept_snap,
@@ -1111,11 +1120,14 @@ class NestingPipelineEvaluator:
                 getattr(self.cfg.propose, "enable_accepted_pattern_archive", True)
             ):
                 note_motif_ref_anchors_from_nest(mcts_runner.motif_base, nest_state)
+                _path_pref_raw = mcts_telem.get("path_upsert_prefer_mid", -1)
+                path_prefer_mid = -1 if _path_pref_raw is None else int(_path_pref_raw)
                 archived_for_propose = motif_patterns_for_inject(
                     mcts_runner.motif_base,
                     max_keep=int(
                         getattr(self.cfg.propose, "accepted_pattern_max", 4) or 4
                     ),
+                    also_prefer_motif_id=path_prefer_mid,
                     part_bases=part_bases_fixed,
                     min_dist=float(self._min_dist(first_pass=False)),
                     telem=propose_stats,

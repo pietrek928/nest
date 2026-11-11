@@ -1340,6 +1340,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             and mcts_action.region == MacroRegion.Motif
             else -1
         )
+        # L3: path ContactGRG post-truncate mid — tip Motif id stays first.
+        _path_pref_raw = mcts_telem.get("path_upsert_prefer_mid", -1)
+        path_prefer_mid = -1 if _path_pref_raw is None else int(_path_pref_raw)
         if (
             nest_state is not None
             and bool(getattr(cfg.propose, "enable_accepted_pattern_archive", True))
@@ -1357,6 +1360,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 mcts_runner.motif_base,
                 max_keep=int(getattr(cfg.propose, "accepted_pattern_max", 4) or 4),
                 prefer_motif_id=prefer_mid,
+                also_prefer_motif_id=path_prefer_mid,
                 part_bases=part_bases,
                 min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=False)),
                 telem=propose_stats,

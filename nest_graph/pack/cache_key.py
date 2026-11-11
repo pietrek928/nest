@@ -77,10 +77,25 @@ def motif_cohort_sig(cohorts: Sequence) -> int:
     for c in cohorts:
         if not isinstance(c, dict):
             continue
-        mid = int(c.get("motif_id", -1) or -1)
-        leader = int(c.get("leader_gid", -1) or -1)
+        # motif_id=0 / leader_gid=0 are valid — never ``x or -1``.
+        _mid_raw = c.get("motif_id", -1)
+        mid = -1 if _mid_raw is None else int(_mid_raw)
+        _lead_raw = c.get("leader_gid", -1)
+        leader = -1 if _lead_raw is None else int(_lead_raw)
         keys = sorted(str(mk) for mk in (c.get("member_keys") or ()))
-        parts.append(f"{mid}:{leader}:{','.join(keys)}")
+        # L1: include gid-keyed spoke mids when present.
+        spokes = c.get("spoke_mids") or ()
+        spoke_s = ",".join(
+            f"{int(a)}-{int(b)}:{int(m)}"
+            for a, b, m in sorted(
+                (
+                    (int(t[0]), int(t[1]), int(t[2]))
+                    for t in spokes
+                    if isinstance(t, (tuple, list)) and len(t) >= 3
+                )
+            )
+        )
+        parts.append(f"{mid}:{leader}:{','.join(keys)}:{spoke_s}")
     if not parts:
         return 0
     return int(zlib.crc32("|".join(sorted(parts)).encode("utf-8")) & 0x7FFFFFFF)

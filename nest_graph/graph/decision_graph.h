@@ -149,14 +149,16 @@ public:
         attach_.push_back(AttachNode{lo, hi});
     }
 
+    /** One MotifJoin per unordered pose pair (L1). Same (lo,hi) replaces mid. */
     void add_motif_join(int32_t motif_id, Tvertex a, Tvertex b) {
         if (pose_pair_skip(poses_, a, b)) {
             return;
         }
         Tvertex lo = a < b ? a : b;
         Tvertex hi = a < b ? b : a;
-        for (const MotifJoin &e : motifs_) {
-            if (e.motif_id == motif_id && e.a == lo && e.b == hi) {
+        for (MotifJoin &e : motifs_) {
+            if (e.a == lo && e.b == hi) {
+                e.motif_id = motif_id;
                 return;
             }
         }

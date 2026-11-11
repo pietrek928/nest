@@ -189,21 +189,34 @@ def _sibling_actions(
     )
 
 
-def _path_neighbors_ranked(runner: Any, macro_node_id: int, agent: Any) -> list[Any]:
+def _path_neighbors_ranked(
+    runner: Any, macro_node_id: int, agent: Any, telem: dict | None = None
+) -> list[Any]:
     """Structural MotifJoin neighbors via DecisionGraph.neighbors (Q378/Q386)."""
     dg = getattr(runner, "dg", None)
     if dg is None:
         return []
     realized = _realized_dict(agent)
     sc = realized.get("survive_by_motif") or {}
+    mb = getattr(agent, "motif_base", None) if agent is not None else None
+    if mb is None:
+        mb = getattr(runner, "motif_base", None)
     try:
-        return list(
-            rank_motif_join_neighbors(
-                dg,
-                int(macro_node_id),
-                {int(k): int(v) for k, v in dict(sc).items()},
-            )
+        ranked = rank_motif_join_neighbors(
+            dg,
+            int(macro_node_id),
+            {int(k): int(v) for k, v in dict(sc).items()},
+            mb,
         )
+        # L2 binding returns (steps, wang_rank_flip_n).
+        if isinstance(ranked, tuple) and len(ranked) == 2:
+            steps, flips = ranked
+            if telem is not None:
+                telem["wang_rank_flip_n"] = max(
+                    int(telem.get("wang_rank_flip_n", 0) or 0), int(flips)
+                )
+            return list(steps)
+        return list(ranked)
     except Exception:
         return []
 
@@ -232,6 +245,151 @@ def _pose_validate_hops(
             continue
     return out
 
+
+
+def _record_motif_join_identity_census(
+    runner: Any,
+    telem: dict,
+    *,
+    join_nbrs: Sequence[Any],
+) -> None:
+    """L0: MotifJoin labeled/unique/stack/stale/prefer-gap census (telem only).
+
+    Prefer ``dg.motifs()`` as SoT — ``path_nbr_join`` may only mirror
+    ``path_step_join`` when ``neighbors()`` is empty at census time.
+    """
+    dg = getattr(runner, "dg", None)
+    agent = getattr(runner, "agent", None)
+    mb = getattr(agent, "motif_base", None) if agent is not None else None
+    if mb is None:
+        mb = getattr(runner, "motif_base", None)
+
+    motifs: list[Any] = []
+    if dg is not None:
+        try:
+            motifs_fn = getattr(dg, "motifs", None)
+            motifs = list(motifs_fn() if callable(motifs_fn) else (motifs_fn or []))
+        except Exception:
+            motifs = []
+
+    join_only = [
+        n for n in join_nbrs if getattr(n, "kind", None) == PathKind.MotifJoin
+    ]
+    # Mid list: path Join nbrs first (probe SoT), else dg.motifs().
+    mid_list: list[int] = [int(macro_motif_id(nbr)) for nbr in join_only]
+    if not mid_list:
+        for m in motifs:
+            raw = getattr(m, "motif_id", -1)
+            mid = -1 if raw is None else int(raw)
+            mid_list.append(mid)
+
+    labeled = 0
+    mid_set: set[int] = set()
+    for mid in mid_list:
+        if mid >= 0:
+            mid_set.add(mid)
+        if mb is None or mid < 0:
+            continue
+        try:
+            if mid >= int(mb.size()):
+                continue
+            rec = mb.at(mid)
+            ea_raw = getattr(rec, "edge_a", -1)
+            eb_raw = getattr(rec, "edge_b", -1)
+            ea = int(ea_raw) if ea_raw is not None else -1
+            eb = int(eb_raw) if eb_raw is not None else -1
+            if ea >= 0 or eb >= 0:
+                labeled += 1
+        except Exception:
+            continue
+    telem["path_join_labeled_n"] = max(
+        int(telem.get("path_join_labeled_n", 0) or 0), int(labeled)
+    )
+    telem["path_join_mid_unique_n"] = max(
+        int(telem.get("path_join_mid_unique_n", 0) or 0), int(len(mid_set))
+    )
+
+    # Stack: unordered pose pairs with >1 MotifJoin in dg.motifs().
+    pair_counts: dict[tuple[int, int], int] = {}
+    for m in motifs:
+        a = int(getattr(m, "a", -1))
+        b = int(getattr(m, "b", -1))
+        if a < 0 or b < 0 or a == b:
+            continue
+        lo, hi = (a, b) if a < b else (b, a)
+        pair_counts[(lo, hi)] = int(pair_counts.get((lo, hi), 0)) + 1
+    stack_n = sum(1 for c in pair_counts.values() if int(c) > 1)
+    telem["join_stack_n"] = max(int(telem.get("join_stack_n", 0) or 0), int(stack_n))
+
+    # Stale: MotifRecord gid pair ≠ join pose gids.
+    stale_n = 0
+    poses = None
+    if dg is not None:
+        poses_attr = getattr(dg, "poses", None)
+        try:
+            poses = poses_attr() if callable(poses_attr) else poses_attr
+        except Exception:
+            poses = None
+    pose_gids = getattr(poses, "group_id", None) if poses is not None else None
+    if mb is not None and pose_gids is not None:
+        for m in motifs:
+            raw = getattr(m, "motif_id", -1)
+            mid = -1 if raw is None else int(raw)
+            if mid < 0:
+                continue
+            try:
+                if mid >= int(mb.size()):
+                    continue
+                a = int(getattr(m, "a", -1))
+                b = int(getattr(m, "b", -1))
+                if a < 0 or b < 0 or a >= len(pose_gids) or b >= len(pose_gids):
+                    continue
+                ga, gb = int(pose_gids[a]), int(pose_gids[b])
+                rec = mb.at(mid)
+                ra_raw = getattr(rec, "gid_a", -1)
+                rb_raw = getattr(rec, "gid_b", -1)
+                ra = -1 if ra_raw is None else int(ra_raw)
+                rb = -1 if rb_raw is None else int(rb_raw)
+                if ra < 0 or rb < 0:
+                    continue
+                if {ra, rb} != {ga, gb}:
+                    stale_n += 1
+            except Exception:
+                continue
+    telem["stale_join_mid_n"] = max(
+        int(telem.get("stale_join_mid_n", 0) or 0), int(stale_n)
+    )
+
+    # Prefer gap: path upsert fired but prefer_mid still tip-only (no path mid).
+    upsert_n = int(telem.get("path_contact_upserts", 0) or 0)
+    path_prefer = telem.get("path_upsert_prefer_mid", None)
+    path_prefer_i = -1 if path_prefer is None else int(path_prefer)
+    tip_prefer = telem.get("prefer_motif_id", None)
+    if tip_prefer is None and isinstance(getattr(agent, "telem", None), dict):
+        tip_prefer = agent.telem.get("prefer_motif_id")
+    tip_i = -1 if tip_prefer is None else int(tip_prefer)
+    gap = 1 if upsert_n > 0 and path_prefer_i < 0 else 0
+    telem["path_upsert_prefer_gap"] = max(
+        int(telem.get("path_upsert_prefer_gap", 0) or 0), int(gap)
+    )
+    if tip_i >= 0:
+        telem["prefer_motif_id"] = int(tip_i)
+
+    # Survive-count ties among join mids (id-ascending would decide).
+    survive = {}
+    if agent is not None:
+        survive = _realized_dict(agent).get("survive_by_motif") or {}
+    counts = [
+        0 if mid < 0 else int(survive.get(mid, 0) or 0) for mid in mid_list
+    ]
+    tie_n = 0
+    for i in range(len(counts)):
+        for j in range(i + 1, len(counts)):
+            if counts[i] == counts[j]:
+                tie_n += 1
+    telem["wang_rank_tie_n"] = max(
+        int(telem.get("wang_rank_tie_n", 0) or 0), int(tie_n)
+    )
 
 
 def record_path_edge_census(
@@ -288,7 +446,9 @@ def record_path_edge_census(
     # P: cap conflict scan to probe beam (reuse ranked Join slice when available).
     cap = int(beam_cap) if int(beam_cap) > 0 else 0
     if cap > 0 and len(join_nbrs) > cap:
-        ranked = _path_neighbors_ranked(runner, int(macro_node_id), getattr(runner, "agent", None))
+        ranked = _path_neighbors_ranked(
+            runner, int(macro_node_id), getattr(runner, "agent", None), telem
+        )
         if ranked:
             ranked_ids = {int(getattr(n, "id", -1)) for n in ranked[:cap]}
             capped = [
@@ -351,6 +511,23 @@ def record_path_edge_census(
     telem["motif_join_from_base"] = max(
         int(telem.get("motif_join_from_base", 0) or 0), int(base_j)
     )
+    # L0: MotifJoin identity / stack / Wang-tie census (telem only).
+    # Prefer Join steps captured during macro_increase_path probe; fall back to
+    # neighbors() / ranked beam (path_nbr_join may only mirror path_step_join).
+    census_joins = [
+        n for n in join_nbrs if getattr(n, "kind", None) == PathKind.MotifJoin
+    ]
+    seen = telem.get("path_join_steps_seen") or []
+    if isinstance(seen, list) and seen:
+        census_joins = list(seen) + census_joins
+    if not census_joins:
+        ranked = _path_neighbors_ranked(
+            runner, int(macro_node_id), getattr(runner, "agent", None), telem
+        )
+        census_joins = [
+            n for n in ranked if getattr(n, "kind", None) == PathKind.MotifJoin
+        ]
+    _record_motif_join_identity_census(runner, telem, join_nbrs=census_joins)
 
 
 def _join_endpoints(step: Any) -> tuple[int, int]:
@@ -614,7 +791,7 @@ def macro_increase_path(
         else:
             siblings = siblings[:beam_n]
         # Q386: MotifJoin/Attach neighbors validate-only (no pack).
-        join_nbrs = _path_neighbors_ranked(runner, block_node, agent)[
+        join_nbrs = _path_neighbors_ranked(runner, block_node, agent, telem)[
             : max(int(beam), 1)
         ]
         path_step_attach_d = 0
@@ -628,6 +805,11 @@ def macro_increase_path(
             else:
                 path_step_join += 1
                 path_type_hist[int(getattr(PathKind.MotifJoin, "value", 1))] += 1
+            # L0: accumulate Join PathNodes seen during probe for identity census.
+            if telem is not None and kind == PathKind.MotifJoin:
+                seen = telem.setdefault("path_join_steps_seen", [])
+                if isinstance(seen, list):
+                    seen.append(join_step)
             # F2: lock_scale inside _validate_join_bonus; accept when realized.
             scored = _validate_join_bonus(
                 agent, join_step, baseline_reward, telem=telem

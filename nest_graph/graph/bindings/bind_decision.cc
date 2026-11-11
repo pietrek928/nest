@@ -769,16 +769,22 @@ void bind_graph_decision(nb::module_ &m) {
         "rank_motif_join_neighbors",
         [](const DecisionGraph &dg,
            int32_t macro_node_id,
-           nb::dict survive_by_motif) {
+           nb::dict survive_by_motif,
+           const MotifBase *motif_base) {
             std::unordered_map<int32_t, int32_t> sc;
             for (auto item : survive_by_motif) {
                 sc[nb::cast<int32_t>(item.first)] = nb::cast<int32_t>(item.second);
             }
-            return rank_motif_join_neighbors(dg, macro_node_id, sc);
+            int32_t flips = 0;
+            auto out = rank_motif_join_neighbors(
+                dg, macro_node_id, sc, motif_base, &flips
+            );
+            return nb::make_tuple(std::move(out), flips);
         },
         nb::arg("dg"),
         nb::arg("macro_node_id"),
-        nb::arg("survive_by_motif") = nb::dict{});
+        nb::arg("survive_by_motif") = nb::dict{},
+        nb::arg("motif_base") = nb::none());
 
     m.def(
         "sibling_macro_actions",

@@ -46,6 +46,8 @@ class ClusterPattern:
     part_count: int
     ref_transform: tuple[float, float, float]
     motif_id: int = -1
+    # L1: per-spoke MotifBase ids aligned with members[1:] (hub has no spoke id).
+    motif_ids: tuple[int, ...] = ()
 
 
 # H0: kiss MotifBase inject (ckpt Δxy≈0.1); classify dual same-gid collide.

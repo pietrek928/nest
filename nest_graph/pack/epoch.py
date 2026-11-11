@@ -214,6 +214,17 @@ def bind_epoch(
         if leader < 0:
             continue
         motif_val = int(getattr(MacroRegion.Motif, "value", 3))
+        # L1: gid-keyed spoke mids from cohort (hub/follower MotifBase pair ids).
+        spoke_lookup: dict[tuple[int, int], int] = {}
+        for t in cohort.get("spoke_mids") or ():
+            if not isinstance(t, (tuple, list)) or len(t) < 3:
+                continue
+            ga, gb, sm = int(t[0]), int(t[1]), int(t[2])
+            if sm < 0:
+                continue
+            lo, hi = (ga, gb) if ga <= gb else (gb, ga)
+            spoke_lookup[(lo, hi)] = sm
+        lead_gid = int(group_id[int(leader)])
         for ix in idxs:
             gi = int(group_id[int(ix)])
             key = transform_row_key(transform[int(ix)])
@@ -222,11 +233,19 @@ def bind_epoch(
             cohort_kind_touch = True
             if int(ix) == int(leader):
                 continue
-            dg.add_motif_join(mid, int(leader), int(ix))
+            # L1: prefer spoke mid whose MotifRecord gid pair matches endpoints.
+            pair = (lead_gid, gi) if lead_gid <= gi else (gi, lead_gid)
+            spoke_mid = spoke_lookup.get(pair, -1)
+            join_mid = int(spoke_mid) if int(spoke_mid) >= 0 else mid
+            dg.add_motif_join(join_mid, int(leader), int(ix))
             motif_join_n += 1
             # F0: MotifBase-backed Join attribution (mid >= 0 from pattern/cohort).
-            if mid >= 0:
+            if join_mid >= 0:
                 motif_join_from_base += 1
+                if int(spoke_mid) >= 0 and int(spoke_mid) != mid:
+                    stats["motif_join_spoke_n"] = int(
+                        stats.get("motif_join_spoke_n", 0) or 0
+                    ) + 1
     if cohort_kind_touch:
         dg.set_pose_kinds(kinds)
     stats["motif_join_n"] = int(motif_join_n)
@@ -238,9 +257,13 @@ def bind_epoch(
     stats["mutex_n"] = int(dg.mutex_n())
     if propose_stats is not None:
         prior_base_j = int(propose_stats.get("motif_join_from_base", 0) or 0)
+        prior_spoke = int(propose_stats.get("motif_join_spoke_n", 0) or 0)
         propose_stats.update(stats)
         # Accumulate MotifBase→Join edges across binds this iter.
         propose_stats["motif_join_from_base"] = prior_base_j + int(motif_join_from_base)
+        propose_stats["motif_join_spoke_n"] = prior_spoke + int(
+            stats.get("motif_join_spoke_n", 0) or 0
+        )
 
 
 def realize_selection(dg, selected: Sequence[int], propose_stats: dict | None = None) -> dict:

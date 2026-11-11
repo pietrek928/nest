@@ -331,11 +331,28 @@ def motif_graph_hits(
                 continue
             for gid_m, key_m in member_keys:
                 motif_keys.setdefault(int(gid_m), set()).add(key_m)
+            # L1: gid-keyed spoke mids from pattern.motif_ids ↔ members[1:].
+            spoke_mids: list[tuple[int, int, int]] = []
+            raw_ids = tuple(getattr(pat, "motif_ids", None) or ())
+            memb = tuple(getattr(pat, "members", ()) or ())
+            if raw_ids and len(memb) >= 2:
+                hub_g = int(memb[0][0])
+                for si, (fg, _rel) in enumerate(memb[1:]):
+                    if si >= len(raw_ids):
+                        break
+                    sm = int(raw_ids[si])
+                    if sm < 0:
+                        continue
+                    ga, gb = int(hub_g), int(fg)
+                    if ga > gb:
+                        ga, gb = gb, ga
+                    spoke_mids.append((ga, gb, sm))
             cohorts.append({
                 "leader_gid": int(gid_a),
                 "leader_key": key_a,
                 "member_keys": member_keys,
                 "motif_id": mid,
+                "spoke_mids": spoke_mids,
             })
             cohort_sigs.add((mid, key_a))
             n_hits += 1
@@ -486,6 +503,9 @@ def stitch_leader_star_patterns(
     hub_order = sorted(hubs, key=lambda g: (-int(degree[g]), int(g)))
     used_mids: set[int] = set()
     stitched: list[ClusterPattern] = []
+    # L0: spoke collapse census — spokes collected vs unique tags kept on patterns.
+    census_spoke_n = 0
+    census_tag_uniq: set[int] = set()
     for hub in hub_order:
         members: list[tuple[int, tuple[float, float, float]]] = [
             (int(hub), (0.0, 0.0, 0.0)),
@@ -517,16 +537,20 @@ def stitch_leader_star_patterns(
             continue
         for mid_i in star_mids:
             used_mids.add(int(mid_i))
+            census_spoke_n += 1
         mid_tag = int(best_mid) if best_mid >= 0 else int(star_mids[0])
+        census_tag_uniq.add(int(mid_tag))
         ref = _motif_ref_anchors.get(mid_tag)
         if ref is None:
             ref = (0.0, 0.0, 0.0)
+        # L1: keep per-spoke MotifBase ids (aligned with members[1:]).
         stitched.append(
             ClusterPattern(
                 members=tuple(members),
                 part_count=len(members),
                 ref_transform=(float(ref[0]), float(ref[1]), float(ref[2])),
                 motif_id=mid_tag,
+                motif_ids=tuple(int(m) for m in star_mids),
             )
         )
     if telem is not None and stitched:
@@ -536,6 +560,13 @@ def stitch_leader_star_patterns(
         telem["star_stitch_members"] = int(
             telem.get("star_stitch_members", 0) or 0
         ) + int(sum(int(p.part_count) for p in stitched))
+        # L0: collapse when star_spoke_n >> star_mid_unique_n (one tag per star).
+        telem["star_spoke_n"] = int(telem.get("star_spoke_n", 0) or 0) + int(
+            census_spoke_n
+        )
+        telem["star_mid_unique_n"] = int(telem.get("star_mid_unique_n", 0) or 0) + int(
+            len(census_tag_uniq)
+        )
     return stitched, used_mids
 
 
@@ -544,6 +575,7 @@ def patterns_from_motif_base(
     *,
     max_keep: int = 4,
     prefer_motif_id: int = -1,
+    also_prefer_motif_id: int = -1,
     telem: dict | None = None,
 ) -> list[ClusterPattern]:
     """Cross-iter inject list via MotifBase.list_for_inject (Q91) + Q237 stitch."""
@@ -551,9 +583,22 @@ def patterns_from_motif_base(
         return []
     cand_ids: list[int] = []
     seen: set[int] = set()
-    if prefer_motif_id >= 0 and prefer_motif_id < int(motif_base.size()):
+    mb_n = int(motif_base.size())
+    # Tip Motif id first; L3 path upsert mid next when distinct.
+    if prefer_motif_id >= 0 and prefer_motif_id < mb_n:
         cand_ids.append(int(prefer_motif_id))
         seen.add(int(prefer_motif_id))
+    if (
+        also_prefer_motif_id >= 0
+        and also_prefer_motif_id < mb_n
+        and int(also_prefer_motif_id) not in seen
+    ):
+        cand_ids.append(int(also_prefer_motif_id))
+        seen.add(int(also_prefer_motif_id))
+        if telem is not None:
+            telem["prefer_from_path_n"] = int(
+                telem.get("prefer_from_path_n", 0) or 0
+            ) + 1
     # Pull a wider window so star hubs can reconstruct before max_keep trim.
     inject_cap = max(int(max_keep) * 3, int(max_keep), 1)
     for mid in motif_base.list_for_inject(int(inject_cap)):
@@ -619,6 +664,7 @@ def motif_patterns_for_inject(
     *,
     max_keep: int = 4,
     prefer_motif_id: int = -1,
+    also_prefer_motif_id: int = -1,
     part_bases: Mapping[int, Any] | None = None,
     min_dist: float = 0.0,
     telem: dict | None = None,
@@ -633,6 +679,7 @@ def motif_patterns_for_inject(
         motif_base,
         max_keep=int(max_keep),
         prefer_motif_id=int(prefer_motif_id),
+        also_prefer_motif_id=int(also_prefer_motif_id),
         telem=telem,
     )
     if pats and telem is not None:

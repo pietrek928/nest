@@ -5,6 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
+from nest_graph.geometry import find_polygon_distances
 from nest_graph.graph import (
     BoardSnapshot,
     ContactEdge,
@@ -232,8 +233,6 @@ def upsert_from_contacts(
     the selection mask — basin↔neighbor pairs for MotifBase truncate reserve.
     Default both-endpoints keeps prior ContactGRG behavior.
     """
-    from nest_graph.geometry import find_polygon_distances
-
     n = len(geoms)
     if n < 2 or len(gids) != n or len(transforms) != n:
         return 0
@@ -252,6 +251,9 @@ def upsert_from_contacts(
     n_demote = 0
     n_flush_stair_prefer = 0
     lim2 = _SAME_GID_KISS_XY * _SAME_GID_KISS_XY
+    # L3: best-GCI edge this call → post-truncate prefer mid via find_nearest.
+    best_edge: ContactEdge | None = None
+    best_gci = -1.0
     if patterns:
         n_pat = _upsert_leader_star_patterns(
             motif_base,
@@ -364,11 +366,32 @@ def upsert_from_contacts(
         mid = int(motif_base.upsert_contact(edge, float(floor), int(ttl)))
         if mid >= 0:
             n_up += 1
+            if float(gci) > best_gci:
+                best_gci = float(gci)
+                best_edge = edge
     if max_keep > 0:
         motif_base.truncate(int(max_keep))
+    # L3: re-resolve best upsert after truncate reorder (no stable-id table).
+    post_mid = -1
+    if best_edge is not None and n_up > 0:
+        try:
+            post_mid = int(
+                motif_base.find_nearest_id(
+                    int(best_edge.gid_a),
+                    int(best_edge.gid_b),
+                    best_edge.relative_pose,
+                    5.0,
+                    1.0,
+                    1.0,
+                )
+            )
+        except Exception:
+            post_mid = -1
     if telem is not None:
         telem["contact_grg_upserts"] = int(telem.get("contact_grg_upserts", 0)) + n_up
         telem["motif_floor"] = float(floor)
+        if post_mid >= 0:
+            telem["last_upsert_mid"] = int(post_mid)
         if n_demote > 0:
             telem["kiss_demote"] = int(telem.get("kiss_demote", 0) or 0) + int(n_demote)
         if n_flush_stair_prefer > 0:

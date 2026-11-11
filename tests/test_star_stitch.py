@@ -34,6 +34,11 @@ def test_stitch_three_member_star():
     assert {int(m[0]) for m in stitched[0].members} == {0, 1, 2}
     assert used == {mid0, mid1}
     assert int(telem.get("star_stitch_n", 0)) == 1
+    # L0: two spokes collapsed to one best-GCI tag.
+    assert int(telem.get("star_spoke_n", 0)) == 2
+    assert int(telem.get("star_mid_unique_n", 0)) == 1
+    # L1: per-spoke MotifBase ids retained on pattern.
+    assert tuple(int(x) for x in (stitched[0].motif_ids or ())) == (mid0, mid1)
 
 
 def test_patterns_from_motif_base_prefers_stitch():

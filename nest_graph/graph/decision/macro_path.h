@@ -76,10 +76,33 @@ inline float survive_rank(const MacroAction &action, const MacroPathRealized &re
     return base;
 }
 
+/** L2: MotifRecord edge/flush fuel for survive-count tie-break (never primary). */
+inline float motif_join_edge_fuel(const MotifBase *mb, int32_t mid) {
+    if (mb == nullptr || mid < 0 || mid >= mb->size()) {
+        return 0.f;
+    }
+    const MotifRecord &rec = mb->at(mid);
+    int32_t ea = rec.edge_a;
+    int32_t eb = rec.edge_b;
+    if (ea < 0 && eb < 0) {
+        wang_edge_pair_from_relative(rec.relative, ea, eb);
+    }
+    float fuel = 0.f;
+    if (ea >= 0 && eb >= 0) {
+        fuel += 1.f;
+    }
+    if (rec.flush) {
+        fuel += 1.f;
+    }
+    return fuel;
+}
+
 inline std::vector<PathNode> rank_motif_join_neighbors(
     const DecisionGraph &dg,
     int32_t macro_node_id,
-    const std::unordered_map<int32_t, int32_t> &survive_by_motif) {
+    const std::unordered_map<int32_t, int32_t> &survive_by_motif,
+    const MotifBase *motif_base = nullptr,
+    int32_t *wang_rank_flip_n = nullptr) {
     const PathNode step = node_macro(macro_node_id);
     std::vector<PathNode> join_steps;
     for (const PathNode &nbr : dg.neighbors(step)) {
@@ -94,9 +117,11 @@ inline std::vector<PathNode> rank_motif_join_neighbors(
         const auto it = survive_by_motif.find(mid);
         return it == survive_by_motif.end() ? 0 : it->second;
     };
+    // Survive-only order for flip telem (L2).
+    std::vector<PathNode> survive_order = join_steps;
     std::sort(
-        join_steps.begin(),
-        join_steps.end(),
+        survive_order.begin(),
+        survive_order.end(),
         [&survive_count](const PathNode &a, const PathNode &b) {
             const int32_t ca = survive_count(a.motif_id);
             const int32_t cb = survive_count(b.motif_id);
@@ -107,6 +132,36 @@ inline std::vector<PathNode> rank_motif_join_neighbors(
             const int32_t mb = b.motif_id >= 0 ? b.motif_id : -1;
             return ma < mb;
         });
+    std::sort(
+        join_steps.begin(),
+        join_steps.end(),
+        [&survive_count, motif_base](const PathNode &a, const PathNode &b) {
+            const int32_t ca = survive_count(a.motif_id);
+            const int32_t cb = survive_count(b.motif_id);
+            if (ca != cb) {
+                return ca > cb;
+            }
+            // L2: Wang edge_fuel tie-break before id ascending — never primary.
+            const float fa = motif_join_edge_fuel(motif_base, a.motif_id);
+            const float fb = motif_join_edge_fuel(motif_base, b.motif_id);
+            if (fa != fb) {
+                return fa > fb;
+            }
+            const int32_t ma = a.motif_id >= 0 ? a.motif_id : -1;
+            const int32_t mb = b.motif_id >= 0 ? b.motif_id : -1;
+            return ma < mb;
+        });
+    if (wang_rank_flip_n != nullptr) {
+        int32_t flips = 0;
+        const std::size_t n = std::min(survive_order.size(), join_steps.size());
+        for (std::size_t i = 0; i < n; ++i) {
+            if (survive_order[i].id != join_steps[i].id
+                || survive_order[i].motif_id != join_steps[i].motif_id) {
+                flips += 1;
+            }
+        }
+        *wang_rank_flip_n = flips;
+    }
     return join_steps;
 }
 
