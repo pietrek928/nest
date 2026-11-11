@@ -1719,6 +1719,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 archived_for_propose=archived_for_propose,
                 pin_all_blocked_streak=pin_all_blocked_streak,
                 cheap=False,
+                prev_fits_part=int(mcts_telem.get("last_fits_part", 1) or 0),
             )
             composed = pack_box.composed
             assert composed is not None
@@ -2099,6 +2100,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats["hole_open_fit"] = int(
                 se2_stats.get("hole_open_fit", 0) or 0
             )
+            # L3: hole_open success clears pin latch for the next iter.
+            if int(propose_stats["hole_open_fit"]) > 0:
+                pin_all_blocked_streak = 0
+                propose_stats["pin_streak_reset"] = 3
             propose_stats["hole_open_r_entry"] = float(
                 se2_stats.get("hole_open_r_entry", 0.0) or 0.0
             )
@@ -2171,6 +2176,10 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"r_entry={float(se2_stats.get('hole_open_r_entry', 0) or 0):.3f} "
                 f"r={float(se2_stats.get('hole_open_r0', 0) or 0):.3f}→"
                 f"{float(se2_stats.get('hole_open_r1', 0) or 0):.3f} "
+                f"slack={float(se2_stats.get('hole_open_slack_pre', 0) or 0):.3f}→"
+                f"{float(se2_stats.get('hole_open_slack_post', 0) or 0):.3f}/"
+                f"dfit={float(se2_stats.get('hole_open_dfit', 0) or 0):.3f}/"
+                f"rest={int(se2_stats.get('hole_open_slack_restore', 0) or 0)} "
                 f"fit_ir={float(propose_stats.get('fit_in_r', 0) or 0):.3f}/"
                 f"{float(propose_stats.get('fit_need_r', 0) or 0):.3f} "
                 f"post_ms={float(propose_stats.get('post_ms', 0) or 0):.1f}/"

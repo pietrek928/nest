@@ -1358,6 +1358,7 @@ class NestingPipelineEvaluator:
                 archived_for_propose=archived_for_propose,
                 pin_all_blocked_streak=pin_all_blocked_streak,
                 cheap=False,
+                prev_fits_part=int(mcts_telem.get("last_fits_part", 1) or 0),
             )
             composed = pack_box.composed
             assert composed is not None
@@ -1719,6 +1720,13 @@ class NestingPipelineEvaluator:
             propose_stats["gls_separate_moved"] = int(
                 se2_stats.get("gls_separate_moved", 0) or 0
             )
+            propose_stats["hole_open_fit"] = int(
+                se2_stats.get("hole_open_fit", 0) or 0
+            )
+            # L3: hole_open success clears pin latch for the next iter.
+            if int(propose_stats["hole_open_fit"]) > 0:
+                pin_all_blocked_streak = 0
+                propose_stats["pin_streak_reset"] = 3
             if isinstance(last_void_leak, dict):
                 last_void_leak["gls_attempted"] = int(
                     propose_stats["gls_attempted"]

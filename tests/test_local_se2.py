@@ -174,3 +174,79 @@ def test_oblique_slide_reaches_near_min_dist():
     assert gap + 1e-4 >= min_dist
     # Halving left ~0.5–0.8 residual; bisect should land within 2× min_dist.
     assert gap <= min_dist * 2.0 + 1e-3
+
+
+def test_restore_away_if_slack_flat_reverts_when_dfit_nonpositive():
+    from nest_graph.propose.local_se2 import _restore_away_if_slack_flat
+
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 2, 2)
+    # Two packed parts leaving a thin crescent — fit slack stays negative.
+    tr0 = np.array([2.0, 2.0, 0.0])
+    tr1 = np.array([6.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0), transform_poly(part, tr1)]
+    # Fake "moved" state: shift first part (still packed similarly).
+    moved = [transform_poly(part, np.array([2.2, 2.0, 0.0])), polys[1]]
+    snap_tr = [tr0.copy(), tr1.copy()]
+    moved_tr = [np.array([2.2, 2.0, 0.0]), tr1.copy()]
+    snap_geoms = [None, None]
+    moved_geoms = [None, None]
+    stats: dict = {}
+    pre_slack = -0.05
+    _restore_away_if_slack_flat(
+        sheet=sheet,
+        out_polys=moved,
+        out_tr=moved_tr,
+        out_geoms=moved_geoms,
+        sel=[0, 1],
+        snap_polys=list(polys),
+        snap_tr=snap_tr,
+        snap_geoms=snap_geoms,
+        pre_slack=pre_slack,
+        mean_part_area=4.0,
+        min_dist=0.25,
+        void_ratio_threshold=2.5,
+        stats=stats,
+    )
+    assert "hole_open_dfit" in stats
+    assert "hole_open_slack_restore" in stats
+    # Either restored (dfit<=0 and no clearance grow) or kept; both record SoT.
+    if int(stats["hole_open_slack_restore"]) == 1:
+        assert moved[0].equals(polys[0])
+        assert stats["hole_open_fit"] == 0
+    else:
+        assert (
+            float(stats["hole_open_dfit"]) > 0.0
+            or int(stats.get("hole_open_fit", 0) or 0) == 1
+        )
+
+
+def test_restore_keeps_away_when_clearance_grew_even_if_slack_flat():
+    from nest_graph.propose.local_se2 import _restore_away_if_slack_flat
+
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 2, 2)
+    tr0 = np.array([2.0, 2.0, 0.0])
+    tr1 = np.array([6.0, 2.0, 0.0])
+    polys = [transform_poly(part, tr0), transform_poly(part, tr1)]
+    moved = [transform_poly(part, np.array([2.2, 2.0, 0.0])), polys[1]]
+    moved_tr = [np.array([2.2, 2.0, 0.0]), tr1.copy()]
+    stats = {"hole_open_fit": 1}
+    _restore_away_if_slack_flat(
+        sheet=sheet,
+        out_polys=moved,
+        out_tr=moved_tr,
+        out_geoms=[None, None],
+        sel=[0, 1],
+        snap_polys=list(polys),
+        snap_tr=[tr0.copy(), tr1.copy()],
+        snap_geoms=[None, None],
+        pre_slack=-0.05,
+        mean_part_area=4.0,
+        min_dist=0.25,
+        void_ratio_threshold=2.5,
+        stats=stats,
+    )
+    assert int(stats["hole_open_slack_restore"]) == 0
+    assert int(stats["hole_open_fit"]) == 1
+    assert not moved[0].equals(polys[0])

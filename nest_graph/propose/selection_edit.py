@@ -35,5 +35,9 @@ class SelectionEditCtx:
     force_hole_open: bool = False
     # FreeKind for void_phantom gate (Swiss !fit must not hole-open).
     free_kind: object | None = None
+    # Pre-pass fit SoT from FreeSpaceAnalysis (L2 pass-end slack restore).
+    fit_in_r: float = 0.0
+    fit_need_r: float = 0.0
+    mean_part_area: float = 0.0
     # Optional sel-ordered native rebuild for post-pack free refresh.
     native_pack_geoms_fn: Callable | None = None

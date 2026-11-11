@@ -15,7 +15,7 @@ from nest_graph.graph import (
     refine_selection,
 )
 from nest_graph.geometry import Geometry
-from nest_graph.propose.context import cluster_packed_indices
+from nest_graph.propose.context import analyze_free_space, cluster_packed_indices
 from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.placement.common import (
     as_geometry,
@@ -93,6 +93,44 @@ def lex_count_area_better(
     if new_count < old_count:
         return False
     return new_area > old_area + 1e-9
+
+
+def _fit_slack_from_analysis(info) -> float:
+    return float(getattr(info, "fit_in_r", 0.0) or 0.0) - float(
+        getattr(info, "fit_need_r", 0.0) or 0.0
+    )
+
+
+def _block_hole_tie_fit_accept(
+    *,
+    sheet: Polygon,
+    trial_polys: Sequence,
+    trial_sel: Sequence[int],
+    base_slack: float,
+    mean_part_area: float,
+    min_dist: float,
+    void_ratio_threshold: float,
+    dfit_min: float = 1e-6,
+) -> tuple[bool, float]:
+    """Tertiary phantom tie: accept when trial fit slack rises (L1)."""
+    if float(mean_part_area) <= 1e-12 or sheet is None or sheet.is_empty:
+        return False, 0.0
+    packed = [
+        trial_polys[int(i)]
+        for i in trial_sel
+        if 0 <= int(i) < len(trial_polys)
+        and trial_polys[int(i)] is not None
+        and not getattr(trial_polys[int(i)], "is_empty", False)
+    ]
+    trial = analyze_free_space(
+        sheet,
+        packed,
+        float(mean_part_area),
+        float(min_dist),
+        void_ratio_threshold=float(void_ratio_threshold),
+    )
+    dfit = _fit_slack_from_analysis(trial) - float(base_slack)
+    return bool(dfit >= float(dfit_min)), float(dfit)
 
 
 def _cohorts_collide(a: Sequence[int], b: Sequence[int], graph) -> bool:
@@ -690,6 +728,9 @@ def try_block_hole_renest(
     free_space=None,
     cluster_patterns=None,
     victim_override: Sequence[int] | None = None,
+    phantom: bool = False,
+    free_info=None,
+    mean_part_area: float = 0.0,
 ) -> tuple[list[int], list, list, list, list | None, dict]:
     """3b: peel contact CC, re-emit into the hole, refine warm-start locked=kept.
 
@@ -706,6 +747,8 @@ def try_block_hole_renest(
         "block_hole_dcount": 0,
         "block_hole_darea": 0.0,
         "block_hole_reject_reason": "",
+        "block_hole_tie_acc": 0,
+        "block_hole_dfit": 0.0,
     }
     sel = [int(i) for i in selected]
     if victim_override:
@@ -916,20 +959,45 @@ def try_block_hole_renest(
             new_cgeoms.append(geom)
     old_area = _sel_area(sel, group_id, part_areas)
     new_area = _sel_area(new_sel, new_gid, part_areas)
-    telem["block_hole_dcount"] = len(new_sel) - len(sel)
-    telem["block_hole_darea"] = float(new_area - old_area)
-    if not lex_count_area_better(
+    dcount = len(new_sel) - len(sel)
+    darea = float(new_area - old_area)
+    telem["block_hole_dcount"] = int(dcount)
+    telem["block_hole_darea"] = float(darea)
+    lex_ok = lex_count_area_better(
         old_count=len(sel),
         old_area=old_area,
         new_count=len(new_sel),
         new_area=new_area,
-    ):
-        # H3 research: hybrid unlocked_void accept of count-drop dumped late Δ;
-        # keep lex_count_area_better as sole 3b accept SoT.
-        telem["block_hole_reject_reason"] = (
-            "no_gain" if not append_gids else "lex"
-        )
-        return sel, polys, transforms, group_id, candidate_geoms, telem
+    )
+    if not lex_ok:
+        # L1: beside lex (never widen lex_count_area_better) — phantom zero-Δ
+        # ties may accept when fit slack rises. Never count-drop (H3).
+        tie_ok = False
+        if bool(phantom) and int(dcount) == 0 and abs(float(darea)) <= 1e-9:
+            base_slack = _fit_slack_from_analysis(free_info)
+            thr = float(
+                getattr(propose_cfg, "late_border_void_override_ratio", 2.5) or 2.5
+            )
+            mean_a = float(mean_part_area)
+            if mean_a <= 1e-12 and part_areas:
+                mean_a = float(sum(float(a) for a in part_areas) / max(len(part_areas), 1))
+            tie_ok, dfit = _block_hole_tie_fit_accept(
+                sheet=sheet,
+                trial_polys=new_polys,
+                trial_sel=new_sel,
+                base_slack=base_slack,
+                mean_part_area=mean_a,
+                min_dist=float(min_dist),
+                void_ratio_threshold=thr,
+            )
+            telem["block_hole_dfit"] = float(dfit)
+            if tie_ok:
+                telem["block_hole_tie_acc"] = 1
+        if not tie_ok:
+            telem["block_hole_reject_reason"] = (
+                "no_gain" if not append_gids else "lex"
+            )
+            return sel, polys, transforms, group_id, candidate_geoms, telem
     if not selection_pairwise_independent(new_polys, new_sel):
         telem["block_hole_reject_reason"] = "indep"
         return sel, polys, transforms, group_id, candidate_geoms, telem
@@ -971,6 +1039,8 @@ def maybe_block_hole_renest(
     propose_stats["block_hole_dcount"] = 0
     propose_stats["block_hole_darea"] = 0.0
     propose_stats["block_hole_reject_reason"] = ""
+    propose_stats["block_hole_tie_acc"] = 0
+    propose_stats["block_hole_dfit"] = 0.0
     skip_3b = int(propose_stats.get("block_cohort_accepted", 0) or 0) > 0
     if (
         not bool(getattr(polish_budget, "run_3b", False))
@@ -1039,6 +1109,11 @@ def maybe_block_hole_renest(
         void_geoms=void_geoms,
         cluster_patterns=patterns_for_emit,
         victim_override=cohort.victim,
+        phantom=bool(phantom),
+        free_info=free_info,
+        mean_part_area=float(
+            sum(float(a) for a in part_areas) / max(len(part_areas), 1)
+        ),
     )
     propose_stats.update(hole_telem)
     cohort.emit_in_hull = int(hole_telem.get("block_hole_emit_in_hull", 0) or 0)

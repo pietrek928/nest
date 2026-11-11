@@ -303,6 +303,7 @@ def run_mid_pack_stages(
     archived_for_propose: Sequence | None,
     pin_all_blocked_streak: int,
     cheap: bool = False,
+    prev_fits_part: int | None = None,
 ) -> tuple[MidPackStagesResult, int]:
     """Compose+refine via execute_pack, then 3b + pin (mid-pack after refine)."""
     run_compose_refine_pack(ctx, box, cheap=cheap)
@@ -341,6 +342,19 @@ def run_mid_pack_stages(
             polish_budget=budget,
             propose_stats=ctx.propose_stats,
         )
+    # L3: unstick pin latch when 3b accepted or fits_part flips 0→1 vs prior iter.
+    hole_acc = int(ctx.propose_stats.get("block_hole_accepted", 0) or 0) > 0
+    cur_fits = int(bool(getattr(composed.free_info, "fits_part", True)))
+    fits_flip = (
+        prev_fits_part is not None
+        and int(prev_fits_part) == 0
+        and cur_fits == 1
+    )
+    if hole_acc or fits_flip:
+        pin_all_blocked_streak = 0
+        ctx.propose_stats["pin_streak_reset"] = 1 if hole_acc else 2
+    else:
+        ctx.propose_stats["pin_streak_reset"] = 0
     pin_stats: dict = {}
     skip_pin = (
         int(getattr(ctx.cfg.propose, "pin_all_blocked_skip_after", 3) or 0) > 0

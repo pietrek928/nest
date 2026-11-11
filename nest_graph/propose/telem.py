@@ -250,6 +250,8 @@ def format_void_leak_line(p: VoidLeakPayload) -> str:
         f"mate={int(propose_stats.get('block_hole_mate_n', 0))}"
         f" d={int(propose_stats.get('block_hole_dcount', 0) or 0)}"
         f"/{float(propose_stats.get('block_hole_darea', 0.0) or 0.0):.4f}"
+        f" tie={int(propose_stats.get('block_hole_tie_acc', 0) or 0)}/"
+        f"{float(propose_stats.get('block_hole_dfit', 0.0) or 0.0):.4f}"
         f" rej={propose_stats.get('block_hole_reject_reason', '') or '-'}"
         f"{prop}"
     )
@@ -565,6 +567,8 @@ def build_void_leak_dict(p: VoidLeakPayload) -> dict:
         "block_hole_mate_n": int(propose_stats.get("block_hole_mate_n", 0) or 0),
         "block_hole_dcount": int(propose_stats.get("block_hole_dcount", 0) or 0),
         "block_hole_darea": float(propose_stats.get("block_hole_darea", 0.0) or 0.0),
+        "block_hole_tie_acc": int(propose_stats.get("block_hole_tie_acc", 0) or 0),
+        "block_hole_dfit": float(propose_stats.get("block_hole_dfit", 0.0) or 0.0),
         "block_hole_reject_reason": str(
             propose_stats.get("block_hole_reject_reason", "") or ""
         ),
@@ -1845,6 +1849,7 @@ def merge_phase_gate_telem(
     leak["fit_need_r"] = float(
         propose_stats.get("fit_need_r", leak.get("fit_need_r", 0.0)) or 0.0
     )
+    leak["fit_slack"] = float(leak["fit_in_r"]) - float(leak["fit_need_r"])
     leak["void_core_fat_free"] = int(
         propose_stats.get("void_core_fat_free", leak.get("void_core_fat_free", 0)) or 0
     )
@@ -2433,6 +2438,7 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{int(leak.get('mcts_phantom_n', 0) or 0)} "
         f"fit_ir={float(leak.get('fit_in_r', 0.0) or 0.0):.3f}/"
         f"{float(leak.get('fit_need_r', 0.0) or 0.0):.3f} "
+        f"fit_slack={float(leak.get('fit_slack', 0.0) or 0.0):.3f} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
         f"vf={float(leak.get('valid_flags_ms', 0.0) or 0.0):.1f} "
         f"col={float(leak.get('colonize_ms', 0.0) or 0.0):.1f} "

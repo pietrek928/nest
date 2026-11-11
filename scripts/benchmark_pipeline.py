@@ -586,6 +586,8 @@ def main() -> None:
                             f"3b_mate={int(leak.get('block_hole_mate_n', 0) or 0)} "
                             f"3b_d={int(leak.get('block_hole_dcount', 0) or 0)}/"
                             f"{float(leak.get('block_hole_darea', 0.0) or 0.0):.4f} "
+                            f"3b_tie={int(leak.get('block_hole_tie_acc', 0) or 0)}/"
+                            f"{float(leak.get('block_hole_dfit', 0.0) or 0.0):.4f} "
                             f"3b_rej={leak.get('block_hole_reject_reason', '') or '-'} "
                             f"3b_vd={float(leak.get('block_hole_victim_pole_d', -1.0) or -1.0):.2f} "
                             f"hole_gain={int(leak.get('hole_expand_gain', 0) or 0)} "

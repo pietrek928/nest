@@ -399,6 +399,9 @@ def apply_post_pack_and_telem(
         fits_part=bool(getattr(prep.free_post, "fits_part", True)),
         force_hole_open=True,
         free_kind=fk_post,
+        fit_in_r=float(getattr(prep.free_post, "fit_in_r", 0.0) or 0.0),
+        fit_need_r=float(getattr(prep.free_post, "fit_need_r", 0.0) or 0.0),
+        mean_part_area=float(prep.mean_part_post or 0.0),
         native_pack_geoms_fn=native_pack_geoms_fn,
     )
     polys_out, tr_out, sel_out, pack_stats = run_post_pack_passes(
