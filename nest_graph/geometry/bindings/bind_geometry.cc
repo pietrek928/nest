@@ -10,6 +10,8 @@ namespace nb = nanobind;
 
 #include "bind_internal.h"
 #include "common/polylabel.h"
+#include "common/sample_boundary.h"
+#include "common/voronoi_vertices.h"
 #include "convex/hull.h"
 #include "geometry_factory.h"
 #include "intersect/polygon_intersect.h"
@@ -72,29 +74,47 @@ std::vector<std::vector<Vec2d>> rings_from_python(nb::handle rings_handle) {
     return rings;
 }
 
-std::vector<Vec2d> clip_ray_interior_samples(
+// Reusable scratch for clip_ray_interior_samples (bind/batch edge owns it).
+//
+// Buffer contract:
+//   inside_intervals: cleared each call; at most march_steps/2+1 pairs.
+//   Used only during the call; samples go to caller out buffer.
+struct ClipRayScratch {
+    std::vector<std::pair<double, double>> inside_intervals;
+};
+
+// Sample points along inside intervals of a ray through solid.
+//
+// Buffer contract:
+//   sample_fracs: n_fracs doubles in [0,1]; may be null only if n_fracs==0.
+//   out_xy: capacity out_cap_xy doubles interleaved;
+//           REQUIRE out_cap_xy >= 2 * n_fracs * n_intervals (n_intervals ≤ 33).
+//           Safe UB: out_cap_xy >= 2 * n_fracs * 33.
+//   return: written doubles (even), or 0 if empty/fail/cap too small (no write).
+inline std::size_t clip_ray_interior_samples_xy(
     const SolidGeometry2d &solid,
     double ox,
     double oy,
     double dx,
     double dy,
     double max_t,
-    const std::vector<double> &sample_fracs
+    const double *sample_fracs,
+    std::size_t n_fracs,
+    ClipRayScratch &scratch,
+    double *out_xy,
+    std::size_t out_cap_xy
 ) {
-    std::vector<Vec2d> out;
-    if (max_t <= 0.0 || sample_fracs.empty()) {
-        return out;
+    scratch.inside_intervals.clear();
+    if (max_t <= 0.0 || n_fracs == 0 || sample_fracs == nullptr) {
+        return 0;
     }
     const double len = std::hypot(dx, dy);
     if (len <= 1e-15) {
-        return out;
+        return 0;
     }
     const double ux = dx / len;
     const double uy = dy / len;
-    // March the ray and collect inside intervals (Shapely parity: sample along
-    // intersection segments, not fixed fractions of the full ray length).
     constexpr int march_steps = 64;
-    std::vector<std::pair<double, double>> inside_intervals;
     bool prev_inside = false;
     double interval_start = 0.0;
     for (int i = 0; i <= march_steps; ++i) {
@@ -106,25 +126,72 @@ std::vector<Vec2d> clip_ray_interior_samples(
         if (inside && !prev_inside) {
             interval_start = t;
         } else if (!inside && prev_inside) {
-            inside_intervals.push_back({interval_start, t});
+            scratch.inside_intervals.push_back({interval_start, t});
         }
         prev_inside = inside;
     }
     if (prev_inside) {
-        inside_intervals.push_back({interval_start, max_t});
+        scratch.inside_intervals.push_back({interval_start, max_t});
     }
-    for (const auto &[t0, t1] : inside_intervals) {
+
+    std::size_t need = 0;
+    for (const auto &[t0, t1] : scratch.inside_intervals) {
+        if (t1 - t0 <= 1e-15) {
+            continue;
+        }
+        for (std::size_t fi = 0; fi < n_fracs; ++fi) {
+            const double sf = sample_fracs[fi];
+            if (sf < 0.0 || sf > 1.0) {
+                continue;
+            }
+            need += 2;
+        }
+    }
+    if (need == 0) {
+        return 0;
+    }
+    if (out_xy == nullptr || out_cap_xy < need) {
+        return 0;
+    }
+    std::size_t w = 0;
+    for (const auto &[t0, t1] : scratch.inside_intervals) {
         const double span = t1 - t0;
         if (span <= 1e-15) {
             continue;
         }
-        for (double sf : sample_fracs) {
+        for (std::size_t fi = 0; fi < n_fracs; ++fi) {
+            const double sf = sample_fracs[fi];
             if (sf < 0.0 || sf > 1.0) {
                 continue;
             }
             const double t = t0 + sf * span;
-            out.push_back({ox + ux * t, oy + uy * t});
+            out_xy[w++] = ox + ux * t;
+            out_xy[w++] = oy + uy * t;
         }
+    }
+    return w;
+}
+
+inline std::vector<Vec2d> clip_ray_interior_samples(
+    const SolidGeometry2d &solid,
+    double ox,
+    double oy,
+    double dx,
+    double dy,
+    double max_t,
+    const std::vector<double> &sample_fracs
+) {
+    ClipRayScratch scratch;
+    // UB: 2 * n_fracs * 33 doubles.
+    std::vector<double> buf(sample_fracs.size() * 66, 0.0);
+    const std::size_t n = clip_ray_interior_samples_xy(
+        solid, ox, oy, dx, dy, max_t,
+        sample_fracs.data(), sample_fracs.size(), scratch,
+        buf.data(), buf.size());
+    std::vector<Vec2d> out;
+    out.reserve(n / 2);
+    for (std::size_t i = 0; i + 1 < n; i += 2) {
+        out.push_back(Vec2d({buf[i], buf[i + 1]}));
     }
     return out;
 }
@@ -389,6 +456,47 @@ void bind_geometry_class(nb::module_ &m) {
             nb::arg("x"),
             nb::arg("y"))
         .def(
+            "contains_points_batch",
+            [](const GeometryHolder &g,
+               const std::vector<std::tuple<double, double>> &pts) {
+                // Contract: xy = 2*n doubles; flags = n bytes.
+                std::vector<double> xy;
+                xy.reserve(pts.size() * 2);
+                for (const auto &t : pts) {
+                    xy.push_back(std::get<0>(t));
+                    xy.push_back(std::get<1>(t));
+                }
+                std::vector<uint8_t> flags(pts.size(), 0);
+                contains_points_batch_xy(
+                    g.solid, xy.data(), xy.size(), flags.data(), flags.size());
+                nb::list out;
+                for (const auto f : flags) {
+                    out.append(f != 0);
+                }
+                return out;
+            },
+            nb::arg("points"),
+            "Batch contains_point over [(x,y), ...] (same SoT).")
+        .def(
+            "sample_boundary_rings",
+            [](const GeometryHolder &g, double step, bool exteriors_only) {
+                // Contract: out_xy capacity >= 2 * sample_boundary_rings_n.
+                const std::size_t n_pts =
+                    sample_boundary_rings_n(g.solid, step, exteriors_only);
+                std::vector<double> xy(n_pts * 2, 0.0);
+                const std::size_t wrote = sample_boundary_rings_xy(
+                    g.solid, step, exteriors_only, xy.data(), xy.size());
+                std::vector<std::tuple<double, double>> out;
+                out.reserve(wrote / 2);
+                for (std::size_t i = 0; i + 1 < wrote; i += 2) {
+                    out.emplace_back(xy[i], xy[i + 1]);
+                }
+                return out;
+            },
+            nb::arg("step"),
+            nb::arg("exteriors_only") = true,
+            "Arc-length densify of boundary rings → [(x,y), ...].")
+        .def(
             "clip_ray_interior",
             [](const GeometryHolder &g,
                nb::tuple origin_xy,
@@ -449,7 +557,11 @@ void bind_geometry_class(nb::module_ &m) {
                         "even-length flat xy or list of pairs");
                 }
                 const size_t n = origins.size() / 2;
-                nb::list coords;
+                // Contract: per-ray UB = 2 * n_fracs * 33 doubles; reuse one scratch.
+                ClipRayScratch scratch;
+                std::vector<double> ray_buf(std::max<std::size_t>(fracs.size() * 66, 8), 0.0);
+                std::vector<double> coords_flat;
+                coords_flat.reserve(n * fracs.size() * 2);
                 nb::list offsets;
                 offsets.append(0);
                 for (size_t i = 0; i < n; ++i) {
@@ -457,13 +569,18 @@ void bind_geometry_class(nb::module_ &m) {
                     const double oy = origins[2 * i + 1];
                     const double dx = dirs[2 * i];
                     const double dy = dirs[2 * i + 1];
-                    const auto pts = clip_ray_interior_samples(
-                        g.solid, ox, oy, dx, dy, max_t, fracs);
-                    for (const auto &p : pts) {
-                        coords.append(static_cast<double>(p[0]));
-                        coords.append(static_cast<double>(p[1]));
+                    const std::size_t wrote = clip_ray_interior_samples_xy(
+                        g.solid, ox, oy, dx, dy, max_t,
+                        fracs.data(), fracs.size(), scratch,
+                        ray_buf.data(), ray_buf.size());
+                    for (std::size_t k = 0; k < wrote; ++k) {
+                        coords_flat.push_back(ray_buf[k]);
                     }
-                    offsets.append(static_cast<int>(coords.size() / 2));
+                    offsets.append(static_cast<int>(coords_flat.size() / 2));
+                }
+                nb::list coords;
+                for (double v : coords_flat) {
+                    coords.append(v);
                 }
                 return nb::make_tuple(coords, offsets);
             },
@@ -610,4 +727,29 @@ void bind_geometry_class(nb::module_ &m) {
     m.def("coord_copy_buffer_n", &coord_copy_buffer_n);
     m.def("coord_copy_iter_n", &coord_copy_iter_n);
     m.def("reset_coord_copy_telem", &reset_coord_copy_telem);
+
+    m.def(
+        "voronoi_vertices",
+        [](const std::vector<std::tuple<double, double>> &sites) {
+            // Contract: site_xy = 2*n_sites; out_xy >= 4*n_sites doubles UB.
+            std::vector<double> xy;
+            xy.reserve(sites.size() * 2);
+            for (const auto &t : sites) {
+                xy.push_back(std::get<0>(t));
+                xy.push_back(std::get<1>(t));
+            }
+            VoronoiScratch scratch;
+            // 4*n_sites doubles = 2*n_sites points (DT triangle UB).
+            std::vector<double> out_xy(std::max<std::size_t>(xy.size() * 2, 8), 0.0);
+            const std::size_t n_out = voronoi_vertices_xy(
+                xy.data(), xy.size(), scratch, out_xy.data(), out_xy.size());
+            std::vector<std::tuple<double, double>> out;
+            out.reserve(n_out / 2);
+            for (std::size_t i = 0; i + 1 < n_out; i += 2) {
+                out.emplace_back(out_xy[i], out_xy[i + 1]);
+            }
+            return out;
+        },
+        nb::arg("sites"),
+        "Finite Voronoi vertices (Delaunay dual circumcenters), lex-sorted.");
 }

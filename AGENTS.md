@@ -188,7 +188,9 @@ Open Q-table for multi-track work: [docs/agent-domain-notes.md](docs/agent-domai
 - No Python grids / Shapely fallbacks when C++ polish or Scene fails — fix the C++.
 - Hot paths: `nest_graph.geometry.Geometry` + `NestState.native_geoms`. Do not loop `Geometry.from_shapely()` in propose emit / tightness / coverage.
 - Prefer raw ring samples + batch `valid_at`; do not `buffer(-min_dist)` seed erosion. Ribbon annuli OK for frontier focus.
-- Do not add Clipper2, libnest2d, or C++ Voronoi.
+- Do not add Clipper2, libnest2d, GEOS-linked Voronoi, or Boost.Polygon Voronoi.
+  In-tree Delaunay-dual finite vertices (`geometry.voronoi_vertices` / delaunator)
+  are allowed; keep region filter on `contains_point` (no parallel free-space SoT).
 - Do not OR guidance `valid_at` with packing independence.
 - Void-fill last resorts: no corner gravity; PSO only if `props_pole≈0` after OOS-1+4. B2: no void-aware nest/refine MIS until B0/B1 exhausted; rim drop >2% = fail.
 

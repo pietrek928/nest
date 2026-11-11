@@ -4,7 +4,9 @@
 #include "common/geometry_common.h"
 
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 template<class VecType>
 inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<VecType>& poly) {
@@ -50,6 +52,39 @@ inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<V
         }
     }
     return (winding & 1) != 0;
+}
+
+// Batch contains: same SoT as contains_point / is_point_inside_solid_space.
+//
+// Buffer contract:
+//   xy:    n_xy doubles, interleaved (x0,y0,...); n_xy even; n_points = n_xy/2.
+//          xy may be null only when n_xy == 0.
+//   flags: n_flags bytes; REQUIRE n_flags >= n_xy/2 (else no-op).
+//          writes exactly n_xy/2 flags (1 = inside, 0 = outside).
+//   return: void. Does not allocate.
+template <class VecType>
+inline void contains_points_batch_xy(
+    const SolidGeometry<VecType> &poly,
+    const double *xy,
+    std::size_t n_xy,
+    uint8_t *flags,
+    std::size_t n_flags
+) {
+    if (n_xy == 0) {
+        return;
+    }
+    if (xy == nullptr || flags == nullptr || (n_xy % 2) != 0) {
+        return;
+    }
+    const std::size_t n_points = n_xy / 2;
+    if (n_flags < n_points) {
+        return;
+    }
+    for (std::size_t i = 0; i < n_points; ++i) {
+        const VecType pt({static_cast<typename VecType::Scalar>(xy[2 * i]),
+                          static_cast<typename VecType::Scalar>(xy[2 * i + 1])});
+        flags[i] = is_point_inside_solid_space(pt, poly) ? 1 : 0;
+    }
 }
 
 template<class VecType>

@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
@@ -116,11 +118,13 @@ void bind_batch_api(nb::module_ &m) {
                 return static_cast<long long>(std::llround(angle * 1e6));
             };
 
-            std::vector<bool> out;
-            out.reserve(transforms.size());
-            for (const auto &[x, y, angle] : transforms) {
+            // Buffer contract: flags[i] for transforms[i]; n_flags == n_transforms.
+            // Scene owns query_elements + sweep_scratch (M1/M2); no per-pose element alloc.
+            std::vector<uint8_t> flags(transforms.size(), 0);
+            for (std::size_t i = 0; i < transforms.size(); ++i) {
+                const auto &[x, y, angle] = transforms[i];
                 if (scene.obstacles.empty()) {
-                    out.push_back(true);
+                    flags[i] = 1;
                     continue;
                 }
                 const long long key = angle_key(angle);
@@ -132,8 +136,15 @@ void bind_batch_api(nb::module_ &m) {
                 }
                 SolidGeometry2d placed = it->second;
                 placed = placed.translate(Vec2d({x, y}));
-                out.push_back(scene.is_valid_placement(
-                    placed, static_cast<Vec2d::Scalar>(margin_sq)));
+                flags[i] = scene.is_valid_placement(
+                               placed, static_cast<Vec2d::Scalar>(margin_sq))
+                    ? 1
+                    : 0;
+            }
+            std::vector<bool> out;
+            out.reserve(flags.size());
+            for (uint8_t f : flags) {
+                out.push_back(f != 0);
             }
             return out;
         },

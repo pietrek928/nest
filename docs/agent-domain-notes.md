@@ -986,7 +986,7 @@ Use when planning letters; cite Q numbers above; do not lock in root AGENTS.md u
 | **Q314** | **Flip to native primary** | After pytest parity (Q283), delete Shapely `intersection` hot loop in [`placements_geo.py`](../nest_graph/propose/placements_geo.py). Native `clip_ray_interior` is sole SoT. |
 | **Q315** | **Cache on `ProposeGeometry`** | Store `region_g` on propose object; one `from_shapely` per proposer invocation (Q282). |
 | **Q316** | **Use `native_geoms`** | Do not `get_shape_exteriors` on packed parts; harvest rim anchors via `boundary_rings` on `NestState.native_geoms`. |
-| **Q317** | **Filter-only sufficient** | R2a `contains_point` only; no C++ Voronoi diagram — inclusion test is the bottleneck. |
+| **Q317** | **Filter-only sufficient** (superseded for vertices) | R2a `contains_point` only for inclusion; in-tree Delaunay-dual `voronoi_vertices` now supplies sites (no clipped cells / no GEOS diagram). |
 | **Q318** | **Mostly identical** | After `search_region`, explorer filters match `region_g`. **Exception:** `free_space_cloud` uses `yield_poly` — parity-test before unify (Q334). |
 | **Q319** | **Match Shapely polylabel** | `polylabel_rings` mirrors pole-of-inaccessibility; Shapely `representative_point` fallback on degenerate rings only. |
 | **Q320** | **Batch flat (`anchor×ray×frac`)** | Not per-anchor batch; minimizes Python↔C++ overhead. |
@@ -1019,9 +1019,9 @@ Use when planning letters; cite Q numbers above; do not lock in root AGENTS.md u
 |---|---------|----------------|
 | **Q333** | **Shipped (sequential)** — archive first, cluster_copy fills remainder when rows `< motif_floor_n` | [`transform_batch.py`](../nest_graph/propose/transform_batch.py) `_motif_mix_floor_rows` |
 | **Q334** | One **`region_g` per void** at pipeline explorer stage | [`pipeline.py`](../nest_graph/propose/pipeline.py) explorer stage |
-| **Q335** | **Full C++ Voronoi — REJECT v1** | R2a `contains_point` only; ~0.05–0.19 s/call; off in void_seek; AGENTS ban |
+| **Q335** | **Full C++ Voronoi — REJECT Fortune/GEOS; dual OK** | User override: in-tree delaunator dual `voronoi_vertices` + `contains_point` filter. Still ban Clipper2 / libnest2d / GEOS-linked / Boost.Polygon Voronoi. |
 
-**Q335 detail:** Native geometry has no GEOS. Full port = Boost.Polygon (~1–2 weeks) or GEOS link (~2–4 weeks). Nest only needs Voronoi **vertices inside region** (filter with `contains_point`), not clipped cells.
+**Q335 detail:** Nest needs Voronoi **vertices inside region** (filter with `contains_point`), not clipped cells. Shipped vehicle = Delaunay → unique finite circumcenters (lex-sorted). Fortune / GEOS-link / Boost.Polygon remain parked.
 
 ---
 

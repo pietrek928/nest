@@ -3,36 +3,71 @@ import time
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from shapely import LineString, LinearRing, MultiPoint, Point, Polygon
+from shapely import MultiPoint, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import voronoi_diagram
 
 from nest_graph.utils import get_shape_exteriors
 
-from nest_graph.geometry import Geometry
+from nest_graph.geometry import Geometry, voronoi_vertices
 from nest_graph.propose.context import search_region_for_placement
 from nest_graph.propose.geometry import (
     ProposeGeometry,
     batch_valid_flags,
     filter_candidates_batch,
 )
-from nest_graph.placement.perimeter import vertex_anchors_from_geom
+from nest_graph.placement.perimeter import (
+    harvest_boundary_ring_coords,
+    vertex_anchors_from_geom,
+)
 
-def densify_points(geometry, distance):
-    """Adds points along the perimeter of the shape for a better Voronoi map."""
-    if distance <= 0 or geometry.is_empty:
+
+def densify_points(geometry, distance, *, include_holes: bool = False):
+    """Arc-length densify of boundary rings for Voronoi / free-space seeds.
+
+    Prefers native ``Geometry.sample_boundary_rings``; Shapely path samples
+    ring segments without per-step ``interpolate``.
+    """
+    if distance <= 0 or getattr(geometry, "is_empty", False):
         return MultiPoint()
 
-    points = []
-    for ring in get_shape_exteriors(geometry):
-        if ring.length <= 0:
+    if isinstance(geometry, Geometry):
+        pts = geometry.sample_boundary_rings(
+            float(distance), exteriors_only=not include_holes
+        )
+        return MultiPoint([(x, y) for x, y in pts]) if pts else MultiPoint()
+
+    rings, _, _ = harvest_boundary_ring_coords(
+        geometry,
+        exteriors_only=not include_holes,
+        close_rings=True,
+    )
+    if not rings:
+        for ring in get_shape_exteriors(geometry):
+            coords = [(float(x), float(y)) for x, y in ring.coords]
+            if coords:
+                rings.append(coords)
+
+    points: list[tuple[float, float]] = []
+    step = float(distance)
+    for coords in rings:
+        n = len(coords)
+        if n < 2:
             continue
-        line = LineString(ring.coords) if isinstance(ring, LinearRing) else ring
-        if line.geom_type != "LineString" or line.length <= 0:
-            continue
-        for d in np.arange(0, line.length, distance):
-            points.append(line.interpolate(d))
-        points.append(line.interpolate(line.length))
+        for i in range(n - 1):
+            x0, y0 = coords[i]
+            x1, y1 = coords[i + 1]
+            dx = x1 - x0
+            dy = y1 - y0
+            length = math.hypot(dx, dy)
+            if length <= 1e-15:
+                continue
+            points.append((x0, y0))
+            n_mid = int(math.floor(length / step))
+            for k in range(1, n_mid + 1):
+                t = (k * step) / length
+                if t >= 1.0 - 1e-15:
+                    break
+                points.append((x0 + t * dx, y0 + t * dy))
     return MultiPoint(points) if points else MultiPoint()
 
 
@@ -54,8 +89,13 @@ def propose_placements_voronoi(
 ) -> List[Tuple[float, float, float]]:
     """
     Proposes placements using Voronoi vertices as candidate centers.
+
+    Vertices from native Delaunay dual (``voronoi_vertices``); in-region filter
+    via batch ``contains_point`` SoT (no Shapely diagram).
     """
-    propositions: list[dict] = []
+    del shape_to_place  # clearance via propose_geom
+    if max_sites <= 0 or top_n <= 0:
+        return []
     region = search_region_for_placement(
         base_shape, sheet, sheet, min_dist,
         use_free_region=use_free_region, border_focus=border_focus,
@@ -69,53 +109,60 @@ def propose_placements_voronoi(
         else region.centroid
     )
     region_g = propose_geom.region_geometry(region)
-
-    # 1. Densify the layout region and generate Voronoi Diagram
-    extent = max(region.bounds[2] - region.bounds[0], region.bounds[3] - region.bounds[1])
-    step = max(extent / densify_divisor, 1e-4)
-    points = densify_points(region, step)
-    if points.is_empty:
+    if region_g is None:
         return []
 
-    vor_regions = voronoi_diagram(points)
+    extent = max(region.bounds[2] - region.bounds[0], region.bounds[3] - region.bounds[1])
+    step = max(extent / densify_divisor, 1e-4)
+    # Native densify: exteriors + hole walls (V2); dual → batch contains.
+    sites = region_g.sample_boundary_rings(float(step), exteriors_only=False)
+    if not sites:
+        return []
 
-    candidate_points = []
-    for vor_region in vor_regions.geoms:
-        rings = get_shape_exteriors(vor_region)
-        for ring in rings:
-            for vert in ring.coords:
-                x, y = float(vert[0]), float(vert[1])
-                if region_g is not None:
-                    if not region_g.contains_point(x, y):
-                        continue
-                elif not region.contains(Point(x, y)):
-                    continue
-                candidate_points.append((x, y))
-    if len(candidate_points) > max_sites:
-        idx = np.linspace(0, len(candidate_points) - 1, max_sites, dtype=int)
-        candidate_points = [candidate_points[i] for i in idx]
+    verts = voronoi_vertices(sites)
+    if not verts:
+        return []
+    inside = region_g.contains_points_batch(verts)
+    seen: set[tuple[float, float]] = set()
+    candidate_points: list[tuple[float, float]] = []
+    for (x, y), ok in zip(verts, inside, strict=True):
+        if not ok:
+            continue
+        key = (round(float(x), 4), round(float(y), 4))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate_points.append((float(x), float(y)))
+    if not candidate_points:
+        return []
 
-    angles = np.linspace(0, 2*np.pi, num_angles, endpoint=False)
     attract_x, attract_y = float(attract.x), float(attract.y)
+    # Attract-nearest max_sites (medial + near-focal); lex cover left seed0 starved.
+    candidate_points.sort(
+        key=lambda p: math.hypot(p[0] - attract_x, p[1] - attract_y)
+    )
+    if len(candidate_points) > max_sites:
+        candidate_points = candidate_points[: int(max_sites)]
 
+    angles = np.linspace(0, 2 * np.pi, num_angles, endpoint=False)
     raw: list[tuple[float, float, float]] = []
     costs: list[float] = []
     for px, py in candidate_points:
+        cost = math.hypot(px - attract_x, py - attract_y)
         for angle in angles:
-            coords = (float(px), float(py), float(angle))
-            raw.append(coords)
-            costs.append(math.hypot(px - attract_x, py - attract_y))
+            raw.append((float(px), float(py), float(angle)))
+            costs.append(cost)
     if not raw:
         return []
-    valid = set(filter_candidates_batch(propose_geom, raw, pt_push))
+
+    valid_set = set(filter_candidates_batch(propose_geom, raw, pt_push))
     propositions = [
         {"coords": c, "cost": cost}
         for c, cost in zip(raw, costs, strict=True)
-        if c in valid
+        if c in valid_set
     ]
     propositions.sort(key=lambda x: x["cost"])
     return [p["coords"] for p in propositions[:top_n]]
-
 
 def propose_placements_raycasting(
     base_shape: BaseGeometry,

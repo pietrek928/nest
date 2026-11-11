@@ -118,20 +118,20 @@ def propose_placements_free_space_cloud(
     if hasattr(propose_geom, "region_geometry"):
         void_g = propose_geom.region_geometry(void_poly)
 
-    # P4: gather inside×angle rows, one emit_packing_clear_batch.
-    rows: list[tuple[float, float, float]] = []
-    seen: set[tuple[float, float, float]] = set()
-    # Skip first Halton index (0,0) clump; start at 1.
+    # P4: Halton xy → batch contains → inside×angle rows, one emit batch.
+    xy: list[tuple[float, float]] = []
     for i in range(1, n_xy + 1):
         u = _halton(i, 2)
         v = _halton(i, 3)
-        x = minx + u * w
-        y = miny + v * h
-        inside = (
-            void_g.contains_point(x, y)
-            if void_g is not None
-            else void_poly.covers(Point(x, y))
-        )
+        xy.append((minx + u * w, miny + v * h))
+    if void_g is not None:
+        inside_flags = void_g.contains_points_batch(xy)
+    else:
+        inside_flags = [bool(void_poly.covers(Point(x, y))) for x, y in xy]
+
+    rows: list[tuple[float, float, float]] = []
+    seen: set[tuple[float, float, float]] = set()
+    for (x, y), inside in zip(xy, inside_flags, strict=True):
         if not inside:
             continue
         for ang in angles:

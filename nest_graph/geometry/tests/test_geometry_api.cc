@@ -3,10 +3,14 @@
 #include <cmath>
 #include <random>
 
+#include "geometry/common/sample_boundary.h"
 #include "geometry/solid/containment.h"
 #include "geometry/solid/point_in_solid.h"
 #include "geometry/intersect/polygon_intersect.h"
 #include "geometry/tests/geometry_test_helpers.h"
+
+#include <cstdint>
+#include <vector>
 
 using PolyTestVec2 = Vec<2, double>;
 using SolidGeometry2 = PolyTestSolidGeometry2;
@@ -227,4 +231,39 @@ TEST_CASE("Geometry API: intersects disjoint and overlap", "[geometry_api]") {
 
     REQUIRE(find_polygon_intersections<PolyTestVec2>({left, right_sep}).empty());
     REQUIRE_FALSE(find_polygon_intersections<PolyTestVec2>({left, overlap}).empty());
+}
+
+TEST_CASE("Geometry API: sample_boundary count equals fill", "[geometry_api][voronoi]") {
+    SolidGeometry2 rect = polygon_from_quad({
+        {0, 0},
+        {10, 0},
+        {10, 4},
+        {0, 4},
+    });
+    const double step = 1.0;
+    const std::size_t n_pts = sample_boundary_rings_n(rect, step, true);
+    REQUIRE(n_pts >= 8);
+    std::vector<double> xy(n_pts * 2, -1.0);
+    const std::size_t wrote = sample_boundary_rings_xy(
+        rect, step, true, xy.data(), xy.size());
+    REQUIRE(wrote == n_pts * 2);
+    // Cap too small → 0, buffer untouched at index 0.
+    xy[0] = 99.0;
+    REQUIRE(sample_boundary_rings_xy(rect, step, true, xy.data(), 2) == 0);
+    REQUIRE(xy[0] == 99.0);
+}
+
+TEST_CASE("Geometry API: contains_points_batch_xy ptr", "[geometry_api][voronoi]") {
+    SolidGeometry2 rect = polygon_from_quad({
+        {0, 0},
+        {10, 0},
+        {10, 10},
+        {0, 10},
+    });
+    const double xy[] = {1.0, 1.0, 20.0, 20.0, 5.0, 5.0};
+    uint8_t flags[3] = {9, 9, 9};
+    contains_points_batch_xy(rect, xy, 6, flags, 3);
+    REQUIRE(flags[0] == 1);
+    REQUIRE(flags[1] == 0);
+    REQUIRE(flags[2] == 1);
 }

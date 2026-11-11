@@ -54,6 +54,28 @@ TEST_CASE("StaticCollisionScene: margin prune with default aura", "[distance][va
     REQUIRE_FALSE(scene.is_valid_placement(tight, 0.5 * 0.5));
 }
 
+TEST_CASE("StaticCollisionScene: query_elements scratch reuse parity", "[distance][validity]") {
+    auto obstacle = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
+    auto part = polygon_from_quad({{0, 0}, {1, 0}, {1, 1}, {0, 1}});
+    StaticCollisionScene<Vec2> scene;
+    scene.build({obstacle}, 0.5);
+
+    auto a = part.translate(Vec2{{6.0, 1.0}});
+    auto b = part.translate(Vec2{{0.5, 0.5}});
+    const auto hits_a1 = scene.query_placed(a);
+    const auto hits_a2 = scene.query_placed(a);
+    REQUIRE(hits_a1.size() == hits_a2.size());
+    for (size_t i = 0; i < hits_a1.size(); ++i) {
+        REQUIRE(hits_a1[i].intersect == hits_a2[i].intersect);
+        REQUIRE(hits_a1[i].distance_sq == Catch::Approx(hits_a2[i].distance_sq).margin(1e-12));
+    }
+    REQUIRE(scene.is_valid_placement(a, 0.0));
+    REQUIRE_FALSE(scene.is_valid_placement(b, 0.0));
+    // Scratch reused across mixed query kinds.
+    REQUIRE(scene.query_any_violation(b, 0.0, 0.0));
+    REQUIRE_FALSE(scene.query_any_violation(a, 0.0, 0.0));
+}
+
 TEST_CASE("cast skips subtractive hole parts but still docks to shell", "[cast][holes][gap]") {
     auto shell = polygon_outer_with_square_hole(0, 0, 10, 10, 4, 4, 6, 6);
     auto probe = polygon_from_quad({{4.5, 7.5}, {5.5, 7.5}, {5.5, 8.5}, {4.5, 8.5}});

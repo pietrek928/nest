@@ -333,89 +333,9 @@ struct IntersectSweepResult {
     std::vector<std::pair<int, int>> potential_containments;
 };
 
-template <class VecType, class Tracer = DefaultTracer>
-inline IntersectSweepResult<VecType> execute_intersect_sweep(
-    std::vector<PartSweepElement<VecType>>& elements,
-    SweepMode mode = SweepMode::Monopartite,
-    int bipartite_set_a_size = -1,
-    Tracer* tracer = nullptr
-) {
-    IntersectSweepResult<VecType> result;
-    if (elements.empty()) return result;
-
-    std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
-        return a.min_proj < b.min_proj;
-    });
-
-    // 1. COLLECT: Gather all broad-phase overlapping boundaries
-    std::vector<IntersectCandidate<VecType>> candidates;
-    for (size_t i = 0; i < elements.size(); ++i) {
-        for (size_t j = i + 1; j < elements.size(); ++j) {
-            if (elements[j].min_proj > elements[i].max_proj) break;
-            if (elements[i].poly_idx == elements[j].poly_idx) continue;
-
-            std::pair<int, int> pair_id;
-            bool reverse = false;
-            if (!resolve_sweep_pair_id(elements[i], elements[j], mode, bipartite_set_a_size, pair_id, reverse)) continue;
-
-            if constexpr (!std::is_same_v<Tracer, NullTracer>) if (tracer) tracer->count_sweep_pair();
-
-            const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
-            const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
-            int partA = reverse ? elements[j].part_idx : elements[i].part_idx;
-            int partB = reverse ? elements[i].part_idx : elements[j].part_idx;
-
-            candidates.push_back({pair_id, partA, partB, polyA, polyB});
-        }
-    }
-
-    // 2. SORT: Group identically paired polygons together
-    std::sort(candidates.begin(), candidates.end());
-
-    // 3. EVALUATE: Process sequentially with early-exit logic
-    std::pair<int, int> current_pair = {-1, -1};
-    bool current_pair_hit = false;
-
-    for (const auto& cand : candidates) {
-        if (cand.pair_id != current_pair) {
-            current_pair = cand.pair_id;
-            current_pair_hit = false;
-        }
-
-        if (current_pair_hit) continue;
-
-        TracerScope<Tracer> scope(tracer, cand.pair_id.first, cand.pair_id.second);
-
-        const auto cr = evaluate_narrow_phase_parts<VecType, Tracer>(
-            *cand.polyA, cand.partA_idx, *cand.polyB, cand.partB_idx, tracer);
-        if (cr.state == ContactState::Penetrating) {
-            result.confirmed_collisions.push_back(cand.pair_id);
-            current_pair_hit = true;
-        } else if (cr.state == ContactState::Disjoint) {
-            // Only boundary-disjoint parts: may still be nested → containment.
-            // Touch must not promote (strict-interior contain also guards this).
-            result.potential_containments.push_back(cand.pair_id);
-        }
-    }
-
-    std::sort(result.potential_containments.begin(), result.potential_containments.end());
-    result.potential_containments.erase(
-        std::unique(result.potential_containments.begin(), result.potential_containments.end()),
-        result.potential_containments.end());
-
-    auto new_end = std::remove_if(
-        result.potential_containments.begin(),
-        result.potential_containments.end(),
-        [&result](const std::pair<int, int>& p) {
-            return std::binary_search(
-                result.confirmed_collisions.begin(),
-                result.confirmed_collisions.end(),
-                p);
-        });
-    result.potential_containments.erase(new_end, result.potential_containments.end());
-
-    return result;
-}
+// Defined after DistanceCandidate (same header); forward for intersect API.
+template <class VecType>
+struct SweepScratch;
 
 // -------------------------------------------------------------------------
 // Distance sweep (Optimized Pipeline)
@@ -447,6 +367,22 @@ struct DistanceCandidate {
         // Evaluate physically closer parts first to maximize dynamic pruning
         return center_dist_sq < o.center_dist_sq;
     }
+};
+
+// Caller-owned scratch for distance + intersect sweeps (one-gate).
+//
+// Buffer contract:
+//   distance_candidates: cleared each collect; reserve ~O(elements) typical.
+//   final_results: cleared each full distance sweep; written pair-best hits.
+//   intersect_candidates / confirmed_collisions / potential_containments:
+//     reused by execute_intersect_sweep; cleared each call.
+template <class VecType>
+struct SweepScratch {
+    std::vector<DistanceCandidate<VecType>> distance_candidates;
+    std::vector<ComplexDistanceResult<VecType>> final_results;
+    std::vector<IntersectCandidate<VecType>> intersect_candidates;
+    std::vector<std::pair<int, int>> confirmed_collisions;
+    std::vector<std::pair<int, int>> potential_containments;
 };
 
 template <class VecType>
@@ -556,9 +492,15 @@ inline ComplexDistanceResult<VecType> evaluate_distance_candidate(
     return current_eval;
 }
 
+// Distance sweep into caller scratch.
+//
+// Buffer contract:
+//   scratch.distance_candidates: cleared/refilled; reserve ~O(elements).
+//   scratch.final_results: cleared then appended pair-best hits; return moves it.
 template <class VecType, class Tracer = DefaultTracer>
 inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
     std::vector<PartSweepElement<VecType>>& elements,
+    SweepScratch<VecType>& scratch,
     typename VecType::Scalar aura_multiplier,
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     SweepMode mode = SweepMode::Monopartite,
@@ -566,18 +508,21 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
+    scratch.final_results.clear();
+    scratch.distance_candidates.clear();
     if (elements.empty()) return {};
 
     std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
         return a.min_proj < b.min_proj;
     });
 
-    std::vector<DistanceCandidate<VecType>> candidates;
     collect_distance_candidates(
-        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size, candidates);
+        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size,
+        scratch.distance_candidates);
 
-    std::vector<ComplexDistanceResult<VecType>> final_results;
-    if (candidates.empty()) return final_results;
+    auto &candidates = scratch.distance_candidates;
+    auto &final_results = scratch.final_results;
+    if (candidates.empty()) return {};
 
     std::pair<int, int> current_pair = candidates[0].pair_id;
     ComplexDistanceResult<VecType> best_eval;
@@ -641,12 +586,32 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
     }
     commit_best_eval();
 
-    return final_results;
+    std::vector<ComplexDistanceResult<VecType>> out;
+    out.swap(final_results);
+    return out;
+}
+
+// Edge wrapper: owns a local SweepScratch (callers that already have scratch
+// should use the overload above).
+template <class VecType, class Tracer = DefaultTracer>
+inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
+    std::vector<PartSweepElement<VecType>>& elements,
+    typename VecType::Scalar aura_multiplier,
+    typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    SweepScratch<VecType> scratch;
+    return execute_distance_sweep<VecType, Tracer>(
+        elements, scratch, aura_multiplier, distance_margin, mode,
+        bipartite_set_a_size, tracer);
 }
 
 template <class VecType, class Tracer = DefaultTracer>
 inline bool execute_distance_sweep_any_violation(
     std::vector<PartSweepElement<VecType>>& elements,
+    SweepScratch<VecType>& scratch,
     typename VecType::Scalar aura_multiplier,
     typename VecType::Scalar distance_margin,
     typename VecType::Scalar margin_sq,
@@ -655,15 +620,17 @@ inline bool execute_distance_sweep_any_violation(
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
+    scratch.distance_candidates.clear();
     if (elements.empty()) return false;
 
     std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
         return a.min_proj < b.min_proj;
     });
 
-    std::vector<DistanceCandidate<VecType>> candidates;
     collect_distance_candidates(
-        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size, candidates);
+        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size,
+        scratch.distance_candidates);
+    auto &candidates = scratch.distance_candidates;
     if (candidates.empty()) return false;
 
     std::pair<int, int> current_pair = candidates[0].pair_id;
@@ -737,4 +704,132 @@ inline bool execute_distance_sweep_any_violation(
         }
     }
     return pair_violates();
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+inline bool execute_distance_sweep_any_violation(
+    std::vector<PartSweepElement<VecType>>& elements,
+    typename VecType::Scalar aura_multiplier,
+    typename VecType::Scalar distance_margin,
+    typename VecType::Scalar margin_sq,
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    SweepScratch<VecType> scratch;
+    return execute_distance_sweep_any_violation<VecType, Tracer>(
+        elements, scratch, aura_multiplier, distance_margin, margin_sq, mode,
+        bipartite_set_a_size, tracer);
+}
+
+// Intersect sweep into caller scratch (one-gate with distance SweepScratch).
+//
+// Buffer contract:
+//   scratch.intersect_candidates: cleared/refilled.
+//   scratch.confirmed_collisions / potential_containments: cleared then written;
+//   returned IntersectSweepResult moves those two vectors.
+template <class VecType, class Tracer = DefaultTracer>
+inline IntersectSweepResult<VecType> execute_intersect_sweep(
+    std::vector<PartSweepElement<VecType>>& elements,
+    SweepScratch<VecType>& scratch,
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    scratch.confirmed_collisions.clear();
+    scratch.potential_containments.clear();
+    scratch.intersect_candidates.clear();
+    IntersectSweepResult<VecType> result;
+    if (elements.empty()) return result;
+
+    std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
+        return a.min_proj < b.min_proj;
+    });
+
+    auto &candidates = scratch.intersect_candidates;
+    for (size_t i = 0; i < elements.size(); ++i) {
+        for (size_t j = i + 1; j < elements.size(); ++j) {
+            if (elements[j].min_proj > elements[i].max_proj) break;
+            if (elements[i].poly_idx == elements[j].poly_idx) continue;
+
+            std::pair<int, int> pair_id;
+            bool reverse = false;
+            if (!resolve_sweep_pair_id(
+                    elements[i], elements[j], mode, bipartite_set_a_size, pair_id,
+                    reverse)) {
+                continue;
+            }
+
+            if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+                if (tracer) tracer->count_sweep_pair();
+            }
+
+            const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
+            const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
+            int partA = reverse ? elements[j].part_idx : elements[i].part_idx;
+            int partB = reverse ? elements[i].part_idx : elements[j].part_idx;
+
+            candidates.push_back({pair_id, partA, partB, polyA, polyB});
+        }
+    }
+
+    std::sort(candidates.begin(), candidates.end());
+
+    std::pair<int, int> current_pair = {-1, -1};
+    bool current_pair_hit = false;
+
+    for (const auto& cand : candidates) {
+        if (cand.pair_id != current_pair) {
+            current_pair = cand.pair_id;
+            current_pair_hit = false;
+        }
+
+        if (current_pair_hit) continue;
+
+        TracerScope<Tracer> scope(tracer, cand.pair_id.first, cand.pair_id.second);
+
+        const auto cr = evaluate_narrow_phase_parts<VecType, Tracer>(
+            *cand.polyA, cand.partA_idx, *cand.polyB, cand.partB_idx, tracer);
+        if (cr.state == ContactState::Penetrating) {
+            scratch.confirmed_collisions.push_back(cand.pair_id);
+            current_pair_hit = true;
+        } else if (cr.state == ContactState::Disjoint) {
+            scratch.potential_containments.push_back(cand.pair_id);
+        }
+    }
+
+    std::sort(
+        scratch.potential_containments.begin(), scratch.potential_containments.end());
+    scratch.potential_containments.erase(
+        std::unique(
+            scratch.potential_containments.begin(),
+            scratch.potential_containments.end()),
+        scratch.potential_containments.end());
+
+    auto new_end = std::remove_if(
+        scratch.potential_containments.begin(),
+        scratch.potential_containments.end(),
+        [&scratch](const std::pair<int, int>& p) {
+            return std::binary_search(
+                scratch.confirmed_collisions.begin(),
+                scratch.confirmed_collisions.end(),
+                p);
+        });
+    scratch.potential_containments.erase(new_end, scratch.potential_containments.end());
+
+    result.confirmed_collisions.swap(scratch.confirmed_collisions);
+    result.potential_containments.swap(scratch.potential_containments);
+    return result;
+}
+
+template <class VecType, class Tracer = DefaultTracer>
+inline IntersectSweepResult<VecType> execute_intersect_sweep(
+    std::vector<PartSweepElement<VecType>>& elements,
+    SweepMode mode = SweepMode::Monopartite,
+    int bipartite_set_a_size = -1,
+    Tracer* tracer = nullptr
+) {
+    SweepScratch<VecType> scratch;
+    return execute_intersect_sweep<VecType, Tracer>(
+        elements, scratch, mode, bipartite_set_a_size, tracer);
 }
