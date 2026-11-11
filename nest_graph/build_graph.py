@@ -2128,6 +2128,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 propose_stats["fit_need_r"] = float(
                     getattr(free_post, "fit_need_r", 0.0) or 0.0
                 )
+                propose_stats["fit_need_w"] = float(
+                    getattr(free_post, "fit_need_w", 0.0) or 0.0
+                )
+            propose_stats["hole_open_dfit"] = float(
+                se2_stats.get("hole_open_dfit", 0.0) or 0.0
+            )
+            propose_stats["hole_open_slack_would_restore"] = int(
+                se2_stats.get("hole_open_slack_would_restore", 0) or 0
+            )
             # P0: prefer mcts_telem (stamped after path; mid-pack clear wipes pack_cache).
             propose_stats["cheap_cache_hit"] = int(
                 mcts_telem.get(
@@ -2181,7 +2190,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"dfit={float(se2_stats.get('hole_open_dfit', 0) or 0):.3f}/"
                 f"rest={int(se2_stats.get('hole_open_slack_restore', 0) or 0)} "
                 f"fit_ir={float(propose_stats.get('fit_in_r', 0) or 0):.3f}/"
-                f"{float(propose_stats.get('fit_need_r', 0) or 0):.3f} "
+                f"{float(propose_stats.get('fit_need_r', 0) or 0):.3f}/"
+                f"w={float(propose_stats.get('fit_need_w', 0) or 0):.3f} "
+                f"would_rest={int(se2_stats.get('hole_open_slack_would_restore', 0) or 0)} "
                 f"post_ms={float(propose_stats.get('post_ms', 0) or 0):.1f}/"
                 f"{float(propose_stats.get('se2_ms', 0) or 0):.1f}/"
                 f"{float(propose_stats.get('qp_ms', 0) or 0):.1f} "
@@ -2293,6 +2304,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 )
                 propose_stats["fit_need_r"] = float(
                     getattr(free_post, "fit_need_r", 0.0) or 0.0
+                )
+                propose_stats["fit_need_w"] = float(
+                    getattr(free_post, "fit_need_w", 0.0) or 0.0
                 )
                 mcts_telem["last_fits_part"] = int(propose_stats["fits_part"])
         # Macro-MCTS: record expand reward (Q68/Q69); upsert contact motifs when improved.

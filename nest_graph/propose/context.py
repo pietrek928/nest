@@ -80,6 +80,8 @@ class FreeSpaceAnalysis:
     # T0 telem: measured inradius vs part need (same SoT as fits_part).
     fit_in_r: float = 0.0
     fit_need_r: float = 0.0
+    # R1 telem: min bbox extent of fit_shape (0 when disk/unknown).
+    fit_need_w: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "kind", free_kind_from_any(self.kind))
@@ -220,11 +222,15 @@ def _make_free_space_analysis(
     fits_part: bool | None = None,
     fit_in_r: float | None = None,
     fit_need_r: float | None = None,
+    fit_need_w: float | None = None,
 ) -> FreeSpaceAnalysis:
     kind_e = free_kind_from_any(kind)
     fits = True if fits_part is None else bool(fits_part)
     in_r = 0.0 if fit_in_r is None else float(fit_in_r)
     need_r = 0.0 if fit_need_r is None else float(fit_need_r)
+    need_w = 0.0 if fit_need_w is None else float(fit_need_w)
+    if fit_shape is not None and not getattr(fit_shape, "is_empty", True) and need_w <= 0.0:
+        need_w = float(part_extents(fit_shape)[0])
     if (
         fits_part is None
         and kind_e != FreeKind.Full
@@ -248,6 +254,7 @@ def _make_free_space_analysis(
         fits_part=bool(fits),
         fit_in_r=float(in_r),
         fit_need_r=float(need_r),
+        fit_need_w=float(need_w),
     )
 
 
@@ -433,6 +440,7 @@ def analyze_free_space(
         largest_area=float(largest.area),
         target_poly=target_poly,
         target_pt=target_pt,
+        fit_shape=fit_shape,
         fits_part=bool(fits),
         fit_in_r=float(fit_in_r),
         fit_need_r=float(fit_need_r),
@@ -513,6 +521,68 @@ def part_extents(part_poly: Polygon) -> tuple[float, float]:
     w = max(maxx - minx, 1e-9)
     h = max(maxy - miny, 1e-9)
     return min(w, h), max(w, h)
+
+
+def fit_shape_for_remaining(
+    part_by_group: dict | None,
+    remaining_gids: Sequence[int] | None = None,
+) -> Polygon | None:
+    """Smallest-extent remaining catalog polygon for void fit (rem0 fallback)."""
+    if not part_by_group:
+        return None
+    gids: list[int]
+    if remaining_gids:
+        gids = [int(g) for g in remaining_gids if int(g) in part_by_group]
+    else:
+        gids = [int(g) for g in part_by_group.keys()]
+    if not gids:
+        return None
+    best_g = gids[0]
+    best_ext = float("inf")
+    for g in gids:
+        poly = part_by_group.get(int(g))
+        if poly is None or getattr(poly, "is_empty", False):
+            continue
+        _mn, mx = part_extents(poly)
+        if float(mx) < best_ext:
+            best_ext = float(mx)
+            best_g = int(g)
+    shape = part_by_group.get(best_g)
+    if shape is None or getattr(shape, "is_empty", False):
+        return None
+    return shape
+
+
+def selection_fit_slack(
+    sheet: Polygon,
+    packed: Sequence[BaseGeometry],
+    part_area: float,
+    min_dist: float,
+    *,
+    void_ratio_threshold: float = 2.5,
+    fit_shape: Polygon | None = None,
+    free: BaseGeometry | None = None,
+    pack_geoms: Sequence[Geometry] | None = None,
+) -> float:
+    """Honest fit slack: ``fit_in_r - fit_need_r`` with the same ``fit_shape`` SoT.
+
+    Callers that delta two selections must pass the **same** ``fit_shape`` on both
+    sides (typically ``fit_shape_for_remaining``). Omitting ``fit_shape`` falls back
+    to equal-area disk need — do not mix shape vs disk across a dfit.
+    """
+    info = analyze_free_space(
+        sheet,
+        packed,
+        float(part_area),
+        float(min_dist),
+        void_ratio_threshold=float(void_ratio_threshold),
+        free=free,
+        pack_geoms=pack_geoms,
+        fit_shape=fit_shape,
+    )
+    return float(getattr(info, "fit_in_r", 0.0) or 0.0) - float(
+        getattr(info, "fit_need_r", 0.0) or 0.0
+    )
 
 
 def part_hull_fill_ratio(part_poly: Polygon) -> float:

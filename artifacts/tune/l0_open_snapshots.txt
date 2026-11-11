@@ -1,0 +1,27 @@
+# L0 open snapshots (late densify series) 2026-11-11
+# early: OMP=1 PYTHONHASHSEED=0 benchmark_pipeline --tags void_fill --seeds 0 1 2 --propose shipped --gate
+early_areas=0.606,0.604,0.586
+early_med_area=0.604
+early_min_area=0.586
+early_med_parts=58.7
+# note: gate reported overlap_ok fail on aggregate; table independent_ok=True
+
+# late: resume void_fill_seed0_iter20.npz --extra-iters 8, NEST_SEED 0 1 2
+late_iter20_dcov=+0.1924,+0.1909,+0.1534
+late_iter20_med_dcov=+0.1909
+late_iter20_min_dcov=+0.1534
+late_iter20_dparts=+26,+24,+22
+
+# phantom: resume void_fill_seed0_iter100.npz --extra-iters 8, NEST_SEED 0 1 2
+phantom_dcov=+0.0080,+0.0000,+0.0000
+phantom_med_dcov=+0.0000
+phantom_min_dcov=+0.0000
+
+# branch: L2-first — phantom hole_open fires (1/0, 1/1) with fits=0 and fit_slack<0
+# fit_slack printed via assemble_void_leak
+
+# L3 dual results
+# early med=0.587 (0.569/0.600/0.592) indep OK — same-code noise vs open 0.604
+# late iter20 Δcov=+0.1924/+0.1909/+0.1686 med=+0.1909 ≥ open
+# phantom Δcov=0/0/0 ≥ open med
+# L1 telem: phantom 3b tie=1/dfit>0 (e.g. 0.0484); L3 pin=0/1 after reset

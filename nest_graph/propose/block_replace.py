@@ -15,7 +15,11 @@ from nest_graph.graph import (
     refine_selection,
 )
 from nest_graph.geometry import Geometry
-from nest_graph.propose.context import analyze_free_space, cluster_packed_indices
+from nest_graph.propose.context import (
+    cluster_packed_indices,
+    fit_shape_for_remaining,
+    selection_fit_slack,
+)
 from nest_graph.propose.first_pass_border import build_pose_graph
 from nest_graph.placement.common import (
     as_geometry,
@@ -95,41 +99,59 @@ def lex_count_area_better(
     return new_area > old_area + 1e-9
 
 
-def _fit_slack_from_analysis(info) -> float:
-    return float(getattr(info, "fit_in_r", 0.0) or 0.0) - float(
-        getattr(info, "fit_need_r", 0.0) or 0.0
-    )
-
-
 def _block_hole_tie_fit_accept(
     *,
     sheet: Polygon,
+    base_polys: Sequence,
+    base_sel: Sequence[int],
     trial_polys: Sequence,
     trial_sel: Sequence[int],
-    base_slack: float,
     mean_part_area: float,
     min_dist: float,
     void_ratio_threshold: float,
+    fit_shape: Polygon | None,
     dfit_min: float = 1e-6,
 ) -> tuple[bool, float]:
-    """Tertiary phantom tie: accept when trial fit slack rises (L1)."""
+    """Tertiary phantom tie: accept when trial fit slack rises (L1).
+
+    Base and trial share the same ``fit_shape`` via ``selection_fit_slack``.
+    """
     if float(mean_part_area) <= 1e-12 or sheet is None or sheet.is_empty:
         return False, 0.0
-    packed = [
+    base_packed = [
+        base_polys[int(i)]
+        for i in base_sel
+        if 0 <= int(i) < len(base_polys)
+        and base_polys[int(i)] is not None
+        and not getattr(base_polys[int(i)], "is_empty", False)
+    ]
+    trial_packed = [
         trial_polys[int(i)]
         for i in trial_sel
         if 0 <= int(i) < len(trial_polys)
         and trial_polys[int(i)] is not None
         and not getattr(trial_polys[int(i)], "is_empty", False)
     ]
-    trial = analyze_free_space(
+    thr = float(void_ratio_threshold)
+    mean_a = float(mean_part_area)
+    md = float(min_dist)
+    base_slack = selection_fit_slack(
         sheet,
-        packed,
-        float(mean_part_area),
-        float(min_dist),
-        void_ratio_threshold=float(void_ratio_threshold),
+        base_packed,
+        mean_a,
+        md,
+        void_ratio_threshold=thr,
+        fit_shape=fit_shape,
     )
-    dfit = _fit_slack_from_analysis(trial) - float(base_slack)
+    trial_slack = selection_fit_slack(
+        sheet,
+        trial_packed,
+        mean_a,
+        md,
+        void_ratio_threshold=thr,
+        fit_shape=fit_shape,
+    )
+    dfit = float(trial_slack) - float(base_slack)
     return bool(dfit >= float(dfit_min)), float(dfit)
 
 
@@ -970,34 +992,32 @@ def try_block_hole_renest(
         new_area=new_area,
     )
     if not lex_ok:
-        # L1: beside lex (never widen lex_count_area_better) — phantom zero-Δ
-        # ties may accept when fit slack rises. Never count-drop (H3).
-        tie_ok = False
+        # R0: honest fit-slack SoT kept for telem; L1 tie *accept* reverted after
+        # early dual stayed below open (med/min). Never count-drop (H3).
         if bool(phantom) and int(dcount) == 0 and abs(float(darea)) <= 1e-9:
-            base_slack = _fit_slack_from_analysis(free_info)
             thr = float(
                 getattr(propose_cfg, "late_border_void_override_ratio", 2.5) or 2.5
             )
             mean_a = float(mean_part_area)
             if mean_a <= 1e-12 and part_areas:
                 mean_a = float(sum(float(a) for a in part_areas) / max(len(part_areas), 1))
-            tie_ok, dfit = _block_hole_tie_fit_accept(
+            _tie_ok, dfit = _block_hole_tie_fit_accept(
                 sheet=sheet,
+                base_polys=polys,
+                base_sel=sel,
                 trial_polys=new_polys,
                 trial_sel=new_sel,
-                base_slack=base_slack,
                 mean_part_area=mean_a,
                 min_dist=float(min_dist),
                 void_ratio_threshold=thr,
+                fit_shape=fit_shape_for_remaining(part_by_group),
             )
             telem["block_hole_dfit"] = float(dfit)
-            if tie_ok:
-                telem["block_hole_tie_acc"] = 1
-        if not tie_ok:
-            telem["block_hole_reject_reason"] = (
-                "no_gain" if not append_gids else "lex"
-            )
-            return sel, polys, transforms, group_id, candidate_geoms, telem
+            # tie_acc stays 0 — accept path off until a later letter re-gates.
+        telem["block_hole_reject_reason"] = (
+            "no_gain" if not append_gids else "lex"
+        )
+        return sel, polys, transforms, group_id, candidate_geoms, telem
     if not selection_pairwise_independent(new_polys, new_sel):
         telem["block_hole_reject_reason"] = "indep"
         return sel, polys, transforms, group_id, candidate_geoms, telem

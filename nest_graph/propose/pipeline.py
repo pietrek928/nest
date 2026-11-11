@@ -872,6 +872,7 @@ def _void_seek_densify(
         need_cloud = True
         telem["v6_large_free_cloud"] = 1
     densify_pinned = bool(accepted) and reason == "void_yield_union"
+    telem["free_space_cloud_skip"] = ""
     if (
         need_cloud
         and void_path
@@ -924,6 +925,21 @@ def _void_seek_densify(
             telem["emitted_by_proposer"]["free_space_cloud"] = len(cloud)
             telem["pool_by_proposer"]["free_space_cloud"] = len(cloud)
             telem["total_counts"]["free_space_cloud"] = len(cloud)
+        else:
+            telem["free_space_cloud_skip"] = "empty_cloud"
+    elif need_cloud:
+        if not void_path:
+            telem["free_space_cloud_skip"] = "not_void_path"
+        elif not bool(getattr(propose_cfg, "use_free_space_cloud", True)):
+            telem["free_space_cloud_skip"] = "cfg_off"
+        elif not _proposer_enabled("free_space_cloud", densify_enabled):
+            telem["free_space_cloud_skip"] = "proposer_disabled"
+        elif yield_poly is None or getattr(yield_poly, "is_empty", True):
+            telem["free_space_cloud_skip"] = "no_yield_poly"
+        else:
+            telem["free_space_cloud_skip"] = "need_cloud_blocked"
+    else:
+        telem["free_space_cloud_skip"] = "not_needed"
 
     return arr, zone_label, True, accepted, reason, telem
 
@@ -3247,6 +3263,7 @@ def proposed_transforms_for_groups(
     densify_stats_union_new: int | None = None
     densify_stats_yield_tag: str | None = None
     densify_stats_xy_in: int = 0
+    densify_stats_cloud_skip: str = ""
     pocket_skips_all: list[str] = []
     cascade_agg: dict = {
         "cascade_stopped_after": "none",
@@ -3900,6 +3917,9 @@ def proposed_transforms_for_groups(
                 densify_stats_union_new = int(densify_telem.get("union_new_n") or 0)
                 densify_stats_yield_tag = densify_telem.get("void_yield_tag")
             densify_stats_xy_in += int(densify_telem.get("densify_xy_in", 0) or 0)
+            skip_s = str(densify_telem.get("free_space_cloud_skip", "") or "")
+            if skip_s:
+                densify_stats_cloud_skip = skip_s
         if (
             zones_used_out is not None
             and propose_cfg.place_profiles_enabled
@@ -4062,6 +4082,7 @@ def proposed_transforms_for_groups(
         densify_stats_out["union_new_n"] = densify_stats_union_new
         densify_stats_out["void_yield_tag"] = densify_stats_yield_tag
         densify_stats_out["densify_xy_in"] = int(densify_stats_xy_in)
+        densify_stats_out["free_space_cloud_skip"] = str(densify_stats_cloud_skip)
 
     # Batch-pack re-runs full proposers per anchor; only useful on empty / near-empty sheets.
     if propose_cfg.use_batch_pack and len(out) >= 2 and not placed:

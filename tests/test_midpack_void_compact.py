@@ -8,7 +8,11 @@ import pytest
 
 from nest_graph.config import ProposeConfig
 from nest_graph.propose.cluster_repack import cluster_relocate_selection
-from nest_graph.propose.context import analyze_free_space
+from nest_graph.propose.context import (
+    analyze_free_space,
+    fit_shape_for_remaining,
+    selection_fit_slack,
+)
 from nest_graph.propose.local_se2 import local_se2_selection
 from nest_graph.placement.common import (
     is_pose_clear,
@@ -68,6 +72,29 @@ def test_swiss_fit_shape_uses_part_extents_not_disk():
     assert info_shape.fit_need_r == pytest.approx(0.08, rel=1e-6)
     assert info_shape.fits_part is True
     assert info_shape.target_pt is not None
+
+
+def test_selection_fit_slack_parity_same_selection():
+    """R0: unchanged selection ⇒ dfit == 0 when both sides share fit_shape."""
+    sheet = box(0, 0, 20, 20)
+    part = box(0, 0, 2, 2)
+    packed = [
+        transform_poly(part, (2.0, 2.0, 0.0)),
+        transform_poly(part, (6.0, 2.0, 0.0)),
+    ]
+    shape = fit_shape_for_remaining({0: part})
+    a = selection_fit_slack(
+        sheet, packed, 4.0, 0.25, void_ratio_threshold=2.5, fit_shape=shape
+    )
+    b = selection_fit_slack(
+        sheet, packed, 4.0, 0.25, void_ratio_threshold=2.5, fit_shape=shape
+    )
+    assert abs(float(a) - float(b)) <= 1e-12
+    # Mixing shape need vs disk need invents a false positive dfit.
+    disk = selection_fit_slack(
+        sheet, packed, 4.0, 0.25, void_ratio_threshold=2.5, fit_shape=None
+    )
+    assert abs(float(disk) - float(a)) > 1e-6
 
 
 def test_fit_any_component_not_only_largest():

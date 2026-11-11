@@ -13,7 +13,11 @@ from nest_graph.free_kind_util import (
 from nest_graph.graph import BoardSnapshot, FreeKind, MacroAction, MacroRegion, leaf_reward
 from nest_graph.pack.cache_key import macro_motif_id
 from nest_graph.pack.slave_pack import cheap_expand_slave, upsert_from_contacts
-from nest_graph.propose.context import prep_free_space, void_ratio_threshold
+from nest_graph.propose.context import (
+    fit_shape_for_remaining,
+    prep_free_space,
+    void_ratio_threshold,
+)
 from nest_graph.propose.pattern_archive import note_motif_ref_anchors
 from nest_graph.propose.heavy_polish import (
     freeze_improve_rules,
@@ -277,35 +281,6 @@ class SelectionFreePrep:
         """Full snapshot when snapshot=True; else None."""
         r = self.free_result
         return r if hasattr(r, "analysis") else None
-
-
-def fit_shape_for_remaining(
-    part_by_group: dict | None,
-    remaining_gids: Sequence[int] | None = None,
-) -> object | None:
-    """Smallest-extent remaining catalog polygon for void fit (rem0 fallback)."""
-    if not part_by_group:
-        return None
-    from nest_graph.propose.context import part_extents
-
-    gids: list[int]
-    if remaining_gids:
-        gids = [int(g) for g in remaining_gids if int(g) in part_by_group]
-    else:
-        gids = [int(g) for g in part_by_group.keys()]
-    if not gids:
-        return None
-    best_g = gids[0]
-    best_ext = float("inf")
-    for g in gids:
-        poly = part_by_group.get(int(g))
-        if poly is None or getattr(poly, "is_empty", False):
-            continue
-        _mn, mx = part_extents(poly)
-        if float(mx) < best_ext:
-            best_ext = float(mx)
-            best_g = int(g)
-    return part_by_group.get(best_g)
 
 
 def schedule_prep_selection_free(

@@ -193,7 +193,9 @@ def format_void_leak_line(p: VoidLeakPayload) -> str:
         f"motif_credit={int(propose_stats.get('motif_nest_credit', 0))} "
         f"hollow={int(propose_stats.get('hollow_miss', 0))} "
         f"cluster_copy={cc_e}/{cc_p} patterns={n_patterns} "
-        f"side_pack={sp_e}/{sp_p} cloud={fsc_e}/{fsc_p} "
+        f"side_pack={sp_e}/{sp_p} cloud={fsc_e}/{fsc_p}"
+        f"{('/' + str(propose_stats.get('free_space_cloud_skip') or (densify.get('free_space_cloud_skip') or '') or '-')) if int(fsc_e) == 0 else ''} "
+
         f"ray={int((densify.get('emitted_by_proposer') or {}).get('raycasting', 0))}/"
         f"{int((densify.get('pool_by_proposer') or {}).get('raycasting', 0))} "
         f"voronoi={int((densify.get('emitted_by_proposer') or {}).get('voronoi', 0))}/"
@@ -1849,7 +1851,34 @@ def merge_phase_gate_telem(
     leak["fit_need_r"] = float(
         propose_stats.get("fit_need_r", leak.get("fit_need_r", 0.0)) or 0.0
     )
+    leak["fit_need_w"] = float(
+        propose_stats.get("fit_need_w", leak.get("fit_need_w", 0.0)) or 0.0
+    )
     leak["fit_slack"] = float(leak["fit_in_r"]) - float(leak["fit_need_r"])
+    # R1: compose→compose slack Δ (prev stored on propose_stats across iters).
+    prev_slack = propose_stats.get("fit_slack_prev")
+    if prev_slack is None:
+        leak["fit_slack_d"] = 0.0
+    else:
+        leak["fit_slack_d"] = float(leak["fit_slack"]) - float(prev_slack)
+    propose_stats["fit_slack_prev"] = float(leak["fit_slack"])
+    leak["hole_open_dfit"] = float(
+        propose_stats.get("hole_open_dfit", leak.get("hole_open_dfit", 0.0)) or 0.0
+    )
+    leak["hole_open_slack_would_restore"] = int(
+        propose_stats.get(
+            "hole_open_slack_would_restore",
+            leak.get("hole_open_slack_would_restore", 0),
+        )
+        or 0
+    )
+    dens_for_skip = propose_stats.get("densify_stats") or {}
+    skip_cloud = propose_stats.get("free_space_cloud_skip")
+    if not skip_cloud and isinstance(dens_for_skip, dict):
+        skip_cloud = dens_for_skip.get("free_space_cloud_skip")
+    leak["free_space_cloud_skip"] = str(
+        skip_cloud or leak.get("free_space_cloud_skip", "") or ""
+    )
     leak["void_core_fat_free"] = int(
         propose_stats.get("void_core_fat_free", leak.get("void_core_fat_free", 0)) or 0
     )
@@ -2437,8 +2466,10 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"fit_r={float(leak.get('leaf_fit_r', 0.0) or 0.0):.0f}/"
         f"{int(leak.get('mcts_phantom_n', 0) or 0)} "
         f"fit_ir={float(leak.get('fit_in_r', 0.0) or 0.0):.3f}/"
-        f"{float(leak.get('fit_need_r', 0.0) or 0.0):.3f} "
-        f"fit_slack={float(leak.get('fit_slack', 0.0) or 0.0):.3f} "
+        f"{float(leak.get('fit_need_r', 0.0) or 0.0):.3f}/"
+        f"w={float(leak.get('fit_need_w', 0.0) or 0.0):.3f} "
+        f"fit_slack={float(leak.get('fit_slack', 0.0) or 0.0):.3f}/"
+        f"d={float(leak.get('fit_slack_d', 0.0) or 0.0):.3f} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
         f"vf={float(leak.get('valid_flags_ms', 0.0) or 0.0):.1f} "
         f"col={float(leak.get('colonize_ms', 0.0) or 0.0):.1f} "

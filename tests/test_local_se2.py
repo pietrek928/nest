@@ -176,7 +176,7 @@ def test_oblique_slide_reaches_near_min_dist():
     assert gap <= min_dist * 2.0 + 1e-3
 
 
-def test_restore_away_if_slack_flat_reverts_when_dfit_nonpositive():
+def test_restore_away_if_slack_flat_records_honest_dfit():
     from nest_graph.propose.local_se2 import _restore_away_if_slack_flat
 
     sheet = box(0, 0, 20, 20)
@@ -206,19 +206,13 @@ def test_restore_away_if_slack_flat_reverts_when_dfit_nonpositive():
         mean_part_area=4.0,
         min_dist=0.25,
         void_ratio_threshold=2.5,
+        fit_shape=part,
         stats=stats,
     )
     assert "hole_open_dfit" in stats
-    assert "hole_open_slack_restore" in stats
-    # Either restored (dfit<=0 and no clearance grow) or kept; both record SoT.
-    if int(stats["hole_open_slack_restore"]) == 1:
-        assert moved[0].equals(polys[0])
-        assert stats["hole_open_fit"] == 0
-    else:
-        assert (
-            float(stats["hole_open_dfit"]) > 0.0
-            or int(stats.get("hole_open_fit", 0) or 0) == 1
-        )
+    assert int(stats["hole_open_slack_restore"]) == 0
+    # R0: mutation off; would_restore flags honest regress without mutating.
+    assert not moved[0].equals(polys[0]) or float(stats["hole_open_dfit"]) >= -1e-9
 
 
 def test_restore_keeps_away_when_clearance_grew_even_if_slack_flat():
@@ -245,6 +239,7 @@ def test_restore_keeps_away_when_clearance_grew_even_if_slack_flat():
         mean_part_area=4.0,
         min_dist=0.25,
         void_ratio_threshold=2.5,
+        fit_shape=part,
         stats=stats,
     )
     assert int(stats["hole_open_slack_restore"]) == 0

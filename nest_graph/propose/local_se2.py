@@ -28,13 +28,25 @@ from nest_graph.placement.outline import (
     outline_standoff_distance,
 )
 from nest_graph.placement.perimeter import edge_inward_at_point
-from nest_graph.propose.context import analyze_free_space
+from nest_graph.propose.context import (
+    fit_shape_for_remaining,
+    selection_fit_slack,
+)
 from nest_graph.propose.selection_edit import SelectionEditCtx
 from nest_graph.propose.void_topology import preferred_spine_pole
 
 
-def _fit_slack(in_r: float, need_r: float) -> float:
-    return float(in_r) - float(need_r)
+def _packed_from_sel(
+    polys: Sequence[BaseGeometry],
+    sel: Sequence[int],
+) -> list[BaseGeometry]:
+    return [
+        polys[int(i)]
+        for i in sel
+        if 0 <= int(i) < len(polys)
+        and polys[int(i)] is not None
+        and not getattr(polys[int(i)], "is_empty", False)
+    ]
 
 
 def _restore_away_if_slack_flat(
@@ -51,6 +63,7 @@ def _restore_away_if_slack_flat(
     mean_part_area: float,
     min_dist: float,
     void_ratio_threshold: float,
+    fit_shape: Polygon | None,
     stats: dict,
 ) -> None:
     """Pass-end fit SoT: revert away-pass when slack did not rise (L2)."""
@@ -59,40 +72,24 @@ def _restore_away_if_slack_flat(
     stats["hole_open_dfit"] = 0.0
     if float(mean_part_area) <= 1e-12 or sheet is None or sheet.is_empty:
         return
-    packed = [
-        out_polys[int(i)]
-        for i in sel
-        if 0 <= int(i) < len(out_polys)
-        and out_polys[int(i)] is not None
-        and not getattr(out_polys[int(i)], "is_empty", False)
-    ]
-    post = analyze_free_space(
+    post_slack = selection_fit_slack(
         sheet,
-        packed,
+        _packed_from_sel(out_polys, sel),
         float(mean_part_area),
         float(min_dist),
         void_ratio_threshold=float(void_ratio_threshold),
-    )
-    post_slack = _fit_slack(
-        float(getattr(post, "fit_in_r", 0.0) or 0.0),
-        float(getattr(post, "fit_need_r", 0.0) or 0.0),
+        fit_shape=fit_shape,
     )
     dfit = float(post_slack) - float(pre_slack)
     stats["hole_open_slack_post"] = float(post_slack)
     stats["hole_open_dfit"] = float(dfit)
-    # Keep unless slack strictly regressed. Flat dfit + clearance growth are
-    # kept (polylabel slack ≠ spine r_entry; early mid-phantom needs the open).
+    # R0: honest SoT telem only (mutation off after early stayed below open).
+    # Do not rewrite hole_open_fit from dfit — spine r_entry owns the latch (L3).
     clearance_grew = int(stats.get("hole_open_fit", 0) or 0) == 1
-    if dfit >= -1e-9 or clearance_grew:
-        if dfit > 1e-9 or clearance_grew:
-            stats["hole_open_fit"] = 1
-        return
-    for i in range(len(out_polys)):
-        out_polys[i] = snap_polys[i]
-        out_tr[i] = snap_tr[i]
-        out_geoms[i] = snap_geoms[i]
-    stats["hole_open_slack_restore"] = 1
-    stats["hole_open_fit"] = 0
+    stats["hole_open_slack_would_restore"] = int(
+        dfit < -1e-9 and not clearance_grew
+    )
+    # snap_* retained for API parity with callers; mutation off.
 
 
 def _slide_dirs(ux: float, uy: float) -> list[tuple[float, float]]:
@@ -507,16 +504,27 @@ def local_se2_selection(
     snap_polys: list[BaseGeometry] | None = None
     snap_tr: list | None = None
     snap_geoms: list | None = None
+    fit_shape: Polygon | None = None
     if away_floaters:
         stats["hole_open_attempted"] = 1
         if phantom_hole and ctx is not None:
-            pre_slack = _fit_slack(
-                float(getattr(ctx, "fit_in_r", 0.0) or 0.0),
-                float(getattr(ctx, "fit_need_r", 0.0) or 0.0),
+            # R0: same fit_shape for pre/post (do not mix ctx shape need vs disk).
+            fit_shape = fit_shape_for_remaining(getattr(ctx, "part_by_group", None))
+            thr_pre = float(
+                getattr(propose_cfg, "late_border_void_override_ratio", 2.5) or 2.5
             )
+            mean_a = float(getattr(ctx, "mean_part_area", 0.0) or 0.0)
             snap_polys = list(out_polys)
             snap_tr = [np.asarray(t, dtype=np.float64).reshape(3).copy() for t in out_tr]
             snap_geoms = list(out_geoms)
+            pre_slack = selection_fit_slack(
+                sheet,
+                _packed_from_sel(snap_polys, sel),
+                mean_a,
+                float(min_dist),
+                void_ratio_threshold=thr_pre,
+                fit_shape=fit_shape,
+            )
 
     if void_geoms is None:
         _, void_geoms = board_context_from_geometry(sheet)
@@ -797,6 +805,7 @@ def local_se2_selection(
             mean_part_area=float(getattr(ctx, "mean_part_area", 0.0) or 0.0),
             min_dist=float(min_dist),
             void_ratio_threshold=thr,
+            fit_shape=fit_shape,
             stats=stats,
         )
     return out_polys, out_tr, stats
