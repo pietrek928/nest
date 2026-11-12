@@ -41,6 +41,8 @@ struct MotifJoin {
     Tvertex a = -1;
     Tvertex b = -1;
     bool realized = false;
+    /** Fracture weight scale (1+gci from MotifBase; default 1). */
+    float gci = 0.0f;
 };
 
 /** Typed walk handle over DecisionGraph partitions (Q378). */
@@ -150,7 +152,12 @@ public:
     }
 
     /** One MotifJoin per unordered pose pair (L1). Same (lo,hi) replaces mid. */
-    void add_motif_join(int32_t motif_id, Tvertex a, Tvertex b) {
+    void add_motif_join(
+        int32_t motif_id,
+        Tvertex a,
+        Tvertex b,
+        float gci = 0.0f
+    ) {
         if (pose_pair_skip(poses_, a, b)) {
             return;
         }
@@ -159,10 +166,13 @@ public:
         for (MotifJoin &e : motifs_) {
             if (e.a == lo && e.b == hi) {
                 e.motif_id = motif_id;
+                if (gci > e.gci) {
+                    e.gci = gci;
+                }
                 return;
             }
         }
-        motifs_.push_back(MotifJoin{motif_id, lo, hi});
+        motifs_.push_back(MotifJoin{motif_id, lo, hi, false, gci});
     }
 
     PathNode path_node_motif(std::size_t i) const {

@@ -96,18 +96,31 @@ inline float selected_attract_pairs(
     return pair;
 }
 
+inline float motif_join_pair_weight(
+    const std::vector<float> &weights,
+    std::size_t i
+) {
+    if (i < weights.size()) {
+        const float w = weights[i];
+        return w > 0.0f ? w : 1.0f;
+    }
+    return 1.0f;
+}
+
 inline float motif_fracture_penalty_on_remove(
     Tvertex removed,
     const unsigned char *selected,
     const std::vector<std::pair<Tvertex, Tvertex>> &pairs,
     float penalty,
-    int n
+    int n,
+    const std::vector<float> &weights = {}
 ) {
     if (penalty <= 0.0f || pairs.empty()) {
         return 0.0f;
     }
     float delta = 0.0f;
-    for (const std::pair<Tvertex, Tvertex> &p : pairs) {
+    for (std::size_t i = 0; i < pairs.size(); ++i) {
+        const std::pair<Tvertex, Tvertex> &p = pairs[i];
         const Tvertex a = p.first;
         const Tvertex b = p.second;
         if (a != removed && b != removed) {
@@ -115,10 +128,35 @@ inline float motif_fracture_penalty_on_remove(
         }
         const Tvertex other = a == removed ? b : a;
         if (vertex_in_graph(other, n) && selected[static_cast<std::size_t>(other)]) {
-            delta -= penalty;
+            delta -= penalty * motif_join_pair_weight(weights, i);
         }
     }
     return delta;
+}
+
+/** Survived MotifJoin weight: both endpoints selected; weight = 1+gci (or 1). */
+inline float selected_motif_join_weight(
+    const unsigned char *selected,
+    const std::vector<std::pair<Tvertex, Tvertex>> &pairs,
+    const std::vector<float> &weights,
+    int n
+) {
+    if (selected == nullptr || pairs.empty()) {
+        return 0.0f;
+    }
+    float wsum = 0.0f;
+    for (std::size_t i = 0; i < pairs.size(); ++i) {
+        const Tvertex a = pairs[i].first;
+        const Tvertex b = pairs[i].second;
+        if (!vertex_in_graph(a, n) || !vertex_in_graph(b, n)) {
+            continue;
+        }
+        if (selected[static_cast<std::size_t>(a)]
+            && selected[static_cast<std::size_t>(b)]) {
+            wsum += motif_join_pair_weight(weights, i);
+        }
+    }
+    return wsum;
 }
 
 inline float sum_selected_objective(

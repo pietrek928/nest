@@ -16,6 +16,21 @@ _UNTAGGED = 255
 _VOID_PROPOSER_NAMES = frozenset(p.value for p in ZONE_PROPOSERS[PlaceZone.VoidSeek])
 
 
+def _motif_record_gci(stats: dict, mid: int) -> float:
+    """D1: MotifBase gci for MotifJoin fracture weight (missing → 0)."""
+    if mid < 0 or not isinstance(stats, dict):
+        return 0.0
+    mb = stats.get("motif_base")
+    if mb is None:
+        return 0.0
+    try:
+        if int(mid) >= int(mb.size()):
+            return 0.0
+        return float(mb.at(int(mid)).gci)
+    except Exception:
+        return 0.0
+
+
 def _elem_area_proxy(graph, idx: int) -> float:
     coords = getattr(graph, "coords", None)
     if coords is not None and 0 <= int(idx) < len(coords):
@@ -237,7 +252,12 @@ def bind_epoch(
             pair = (lead_gid, gi) if lead_gid <= gi else (gi, lead_gid)
             spoke_mid = spoke_lookup.get(pair, -1)
             join_mid = int(spoke_mid) if int(spoke_mid) >= 0 else mid
-            dg.add_motif_join(join_mid, int(leader), int(ix))
+            dg.add_motif_join(
+                join_mid,
+                int(leader),
+                int(ix),
+                float(_motif_record_gci(stats, join_mid)),
+            )
             motif_join_n += 1
             # F0: MotifBase-backed Join attribution (mid >= 0 from pattern/cohort).
             if join_mid >= 0:
@@ -375,6 +395,7 @@ def inject_cohorts_and_bind_graph(
             agent.motif_cohorts = tuple(propose_stats.get("motif_cohorts") or ())
     carry = bind_graph_epoch(dg, graph, group_id, transform, propose_stats, cfg)
     # F0: mirror base_j onto agent telem for path census / dg_funnel.
+    # D4 inject-sync / force-sticky dual-missed early↔late — park mid-iter sync.
     if agent is not None:
         at = getattr(agent, "telem", None)
         if isinstance(at, dict):
@@ -388,9 +409,15 @@ def inject_cohorts_and_bind_graph(
 def sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
     """Letter D/M2b: feed propose motif_cohorts + sticky readiness telem for PLACE_COHORT."""
     agent = getattr(runner, "agent", None)
+    # D4: allow passing the agent directly.
+    if agent is None and hasattr(runner, "motif_cohorts"):
+        agent = runner
     if agent is None:
         return 0
     cohorts = list((propose_stats or {}).get("motif_cohorts") or ())
+    # Prefer agent-hydrated cohorts when stats omit them (ckpt iter0 / cold tip).
+    if not cohorts:
+        cohorts = list(getattr(agent, "motif_cohorts", ()) or ())
     # Always keep cohorts on the agent (ablation winner for density); gate PLACE_COHORT
     # expand via place_cohort_ready so soft/path still sees members (hybrid M2b).
     agent.motif_cohorts = tuple(cohorts)
@@ -423,7 +450,10 @@ def sync_agent_motif_cohorts(runner: Any, propose_stats: dict | None) -> int:
         if hasattr(agent, "place_cohort_ready"):
             agent.place_cohort_ready = bool(ready)
         return int(n_ready)
-    if hasattr(agent, "place_cohort_ready"):
+    # D4: stats None (cold tip / ckpt iter0) — keep ready if cohorts already hydrated.
+    if n_ready > 0 and bool(getattr(agent, "place_cohort_ready", False)):
+        return int(n_ready)
+    if hasattr(agent, "place_cohort_ready") and n_ready == 0:
         agent.place_cohort_ready = False
-    return 0
+    return int(n_ready)
 

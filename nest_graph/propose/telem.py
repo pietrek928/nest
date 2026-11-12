@@ -1088,6 +1088,13 @@ def merge_phase_gate_telem(
             )
             or 0
         )
+        leak["survive_tie_n"] = int(
+            mt.get(
+                "survive_tie_n",
+                propose_stats.get("survive_tie_n", leak.get("survive_tie_n", 0)),
+            )
+            or 0
+        )
         leak["amaf_cohort_fallback"] = int(
             mt.get(
                 "amaf_cohort_fallback",
@@ -2125,6 +2132,9 @@ def gather_void_leak_inputs(ctx: VoidLeakGatherCtx) -> tuple[str, dict]:
         propose_stats["mcts_cohort_macro_n"] = int(
             agent.telem.get("mcts_cohort_macro_n", 0) or 0
         )
+        propose_stats["survive_tie_n"] = int(
+            agent.telem.get("survive_tie_n", 0) or 0
+        )
         propose_stats["extend_scaled_n"] = int(
             agent.telem.get("extend_scaled_n", 0) or 0
         )
@@ -2421,6 +2431,7 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"ir_rank={float(leak.get('ir_rank', 0.5) or 0.5):.2f}/"
         f"{int(leak.get('ir_rank_n', 0) or 0)} "
         f"pb_decay={int(leak.get('pb_decay_n', 0) or 0)} "
+        f"surv_tie={int(leak.get('survive_tie_n', 0) or 0)} "
         f"place_coh={int(leak.get('place_cohort_ready', 0) or 0)}/"
         f"{int(leak.get('place_cohort_specs_n', 0) or 0)}/"
         f"{int(leak.get('mcts_cohort_macro_n', 0) or 0)} "

@@ -119,7 +119,10 @@ bool refine_lex_better(
     bool use_area,
     float new_attract,
     float old_attract,
-    bool use_attract
+    bool use_attract,
+    float new_join_w = 0.0f,
+    float old_join_w = 0.0f,
+    bool use_join_w = false
 ) {
     if (new_count != old_count) {
         return new_count > old_count;
@@ -132,6 +135,11 @@ bool refine_lex_better(
     }
     if (new_sum + min_delta < old_sum) {
         return false;
+    }
+    // D1: at equal (count, area, score), prefer surviving MotifJoin weight
+    // before attract (soft — does not override a real score gain).
+    if (use_join_w && std::fabs(new_join_w - old_join_w) > 1e-6f) {
+        return new_join_w > old_join_w;
     }
     if (use_attract) {
         return new_attract > old_attract + 1e-6f;
@@ -150,12 +158,26 @@ bool path_beats_best(
     float best_attract,
     float min_delta,
     bool use_area,
-    bool use_attract
+    bool use_attract,
+    float join_w = 0.0f,
+    float best_join_w = 0.0f,
+    bool use_join_w = false
 ) {
     return refine_lex_better(
-        count, area, score_sum, attract,
-        best_count, best_area, best_sum, best_attract,
-        min_delta, use_area, use_attract);
+        count,
+        area,
+        score_sum,
+        best_count,
+        best_area,
+        best_sum,
+        min_delta,
+        use_area,
+        attract,
+        best_attract,
+        use_attract,
+        join_w,
+        best_join_w,
+        use_join_w);
 }
 
 void select_node(
@@ -324,6 +346,7 @@ float score_path_dfs(
     int &best_count,
     float &best_area,
     float &best_attract,
+    float &best_join_w,
     std::vector<unsigned char> &best_selected,
     unsigned char *selected,
     int *mark,
@@ -337,6 +360,8 @@ float score_path_dfs(
         options.lexicographic_area
         && options.node_areas.size() == static_cast<std::size_t>(n);
     const bool use_attract = options.dg_aware_refine;
+    const bool use_join_w =
+        options.dg_aware_refine && !options.motif_join_pairs.empty();
     if (depth > max_depth || mark[node]) {
         return best_delta;
     }
@@ -374,14 +399,33 @@ float score_path_dfs(
             const float path_attract = use_attract
                 ? selected_attract_pairs(g, selected, n)
                 : 0.0f;
+            const float path_join_w = use_join_w
+                ? selected_motif_join_weight(
+                    selected,
+                    options.motif_join_pairs,
+                    options.motif_join_weights,
+                    n)
+                : 0.0f;
             if (path_beats_best(
-                    count, path_area, path_delta, path_attract,
-                    best_count, best_area, best_delta, best_attract,
-                    options.min_score_delta, use_area, use_attract)) {
+                    count,
+                    path_area,
+                    path_delta,
+                    path_attract,
+                    best_count,
+                    best_area,
+                    best_delta,
+                    best_attract,
+                    options.min_score_delta,
+                    use_area,
+                    use_attract,
+                    path_join_w,
+                    best_join_w,
+                    use_join_w)) {
                 best_count = count;
                 best_delta = path_delta;
                 best_area = path_area;
                 best_attract = path_attract;
+                best_join_w = path_join_w;
                 best_selected.assign(selected, selected + n);
             }
         }
@@ -405,10 +449,19 @@ float score_path_dfs(
         if (vertex_is_locked(locked, v)) {
             continue;
         }
+        // D1: restore path_delta after each conflict — penalty must not leak.
+        const float path_before_remove = path_delta;
+        float fracture = 0.0f;
         if (options.dg_aware_refine && options.motif_fracture_penalty > 0.0f) {
-            path_delta += motif_fracture_penalty_on_remove(
-                v, selected, options.motif_join_pairs,
-                options.motif_fracture_penalty, n);
+            // Flat fracture magnitude (GCI weight is lex-only via join_w) —
+            // scaled DFS penalty degraded late Δ med vs L0.
+            fracture = motif_fracture_penalty_on_remove(
+                v,
+                selected,
+                options.motif_join_pairs,
+                options.motif_fracture_penalty,
+                n);
+            path_delta += fracture;
         }
         unselect_node(v, collisions, selected, selected_collisions, n);
         const float delta_after_remove = path_delta - scores[v];
@@ -431,12 +484,12 @@ float score_path_dfs(
             score_path_dfs(
                 candidates[static_cast<std::size_t>(ci)], g, scores,
                 delta_after_remove, depth + 1, max_depth, beam_width, best_delta,
-                best_count, best_area, best_attract, best_selected, selected, mark,
-                selected_collisions, n, locked, options);
+                best_count, best_area, best_attract, best_join_w, best_selected,
+                selected, mark, selected_collisions, n, locked, options);
         }
 
         select_node(v, collisions, selected, selected_collisions, n);
-        path_delta = delta_after_remove + scores[v];
+        path_delta = path_before_remove;
     }
 
     unmark_collisions(node, collisions, mark, n);
@@ -472,28 +525,55 @@ bool try_refine_root(
     int best_count = -1;
     float best_area = -1e30f;
     float best_attract = -1e30f;
+    float best_join_w = -1e30f;
     score_path_dfs(
         v, g, scores.data(), 0.0f, 0, options.max_depth, beam,
-        best_delta, best_count, best_area, best_attract, best_selected,
-        selected.data(), mark.data(), selected_collisions.data(), n, locked,
-        options);
+        best_delta, best_count, best_area, best_attract, best_join_w,
+        best_selected, selected.data(), mark.data(), selected_collisions.data(),
+        n, locked, options);
 
     const float new_sum = sum_selected_scores(scores.data(), best_selected.data(), n);
     const int new_count = selected_count(best_selected, n);
     const float new_area = use_area
         ? selected_area_sum(best_selected, options.node_areas, n)
         : 0.0f;
+    const bool use_join_w =
+        options.dg_aware_refine && !options.motif_join_pairs.empty();
     const float baseline_attract = options.dg_aware_refine
         ? selected_attract_pairs(g, backup.data(), n)
         : 0.0f;
     const float new_attract = options.dg_aware_refine
         ? selected_attract_pairs(g, best_selected.data(), n)
         : 0.0f;
+    const float baseline_join_w = use_join_w
+        ? selected_motif_join_weight(
+            backup.data(),
+            options.motif_join_pairs,
+            options.motif_join_weights,
+            n)
+        : 0.0f;
+    const float new_join_w = use_join_w
+        ? selected_motif_join_weight(
+            best_selected.data(),
+            options.motif_join_pairs,
+            options.motif_join_weights,
+            n)
+        : 0.0f;
     if (refine_lex_better(
-            new_count, new_area, new_sum,
-            baseline_count, baseline_area, baseline_sum,
-            options.min_score_delta, use_area,
-            new_attract, baseline_attract, options.dg_aware_refine)) {
+            new_count,
+            new_area,
+            new_sum,
+            baseline_count,
+            baseline_area,
+            baseline_sum,
+            options.min_score_delta,
+            use_area,
+            new_attract,
+            baseline_attract,
+            options.dg_aware_refine,
+            new_join_w,
+            baseline_join_w,
+            use_join_w)) {
         selected = best_selected;
         recompute_selected_collisions(
             g.collisions, selected.data(), selected_collisions.data(), n);

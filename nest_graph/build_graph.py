@@ -1371,6 +1371,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         )
         propose_stats["accepted_patterns_n"] = len(archived_for_propose)
         propose_stats["motif_library_n"] = int(mcts_runner.motif_base.size())
+        propose_stats["motif_base"] = mcts_runner.motif_base
         propose_stats["motif_base_seed_n"] = int(
             mcts_telem.get("motif_base_seed_n", _mate_seed_n) or 0
         )

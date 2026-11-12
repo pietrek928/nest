@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "decision/action_gen.h"
+#include "decision/macro_path.h"
 #include "decision_arena.h"
 #include "decision_graph.h"
 #include "macro_niche_archive.h"
@@ -21,6 +22,8 @@
 #include "se2.h"
 
 constexpr float MCTS_LAMBDA_MISS = 0.5f;
+/** D3: mean-tie band for best_child survive_rank (below ~1-part Δcov). */
+constexpr float MCTS_BEST_CHILD_MEAN_EPS = 1e-3f;
 /** H2: soft-γ on AMAF + cohort_amaf when free_kind changes. */
 constexpr float MCTS_AMAF_FREE_KIND_GAMMA = 0.25f;
 /** H2e: GRAVE — use arena AMAF while cohort slot visits below ref (incl 0). */
@@ -72,6 +75,8 @@ struct MctsTelem {
     float ucb_beta_min = 1.f;
     // GE5: progressive-bias envelope fires (k/(visits+k) < 1)
     int32_t pb_decay_n = 0;
+    // D3: best_child mean-ε ties broken by higher survive_rank
+    int32_t survive_tie_n = 0;
 };
 
 struct MotifCohortEntry {
@@ -547,7 +552,7 @@ public:
         telem.amaf_miss += 1;
     }
 
-    int32_t best_child(int32_t node_id = -1) const {
+    int32_t best_child(int32_t node_id = -1) {
         if (arena == nullptr) {
             return -1;
         }
@@ -556,17 +561,38 @@ public:
         if (first < 0) {
             return root;
         }
+        MacroPathRealized path_r;
+        path_r.survive_by_motif = realized.survive_by_motif;
+        path_r.survive_motif_n = realized.survive_motif_n;
+        for (int k = 0; k < 4; ++k) {
+            path_r.kind[k] = realized.kind[static_cast<std::size_t>(k)];
+        }
         int32_t best_id = root;
         float best_mean = MCTS_NEG_INF;
+        float best_surv = MCTS_NEG_INF;
         bool found = false;
         int32_t child = first;
         while (child >= 0) {
             if (!is_tombstoned(child)) {
                 const int32_t visits = arena->node(child).visits;
                 if (visits > 0) {
-                    const float mean = arena->node(child).total_reward / static_cast<float>(visits);
-                    if (mean > best_mean) {
+                    const float mean =
+                        arena->node(child).total_reward / static_cast<float>(visits);
+                    const float surv =
+                        survive_rank(arena->node(child).action, path_r);
+                    const bool better_mean = mean > best_mean + MCTS_BEST_CHILD_MEAN_EPS;
+                    const bool tie_mean =
+                        std::fabs(mean - best_mean) <= MCTS_BEST_CHILD_MEAN_EPS;
+                    // Within ε: higher survive_rank wins; equal surv → higher mean.
+                    const bool survive_wins = tie_mean && surv > best_surv;
+                    const bool mean_wins_tie =
+                        tie_mean && surv == best_surv && mean > best_mean;
+                    if (!found || better_mean || survive_wins || mean_wins_tie) {
+                        if (found && survive_wins) {
+                            telem.survive_tie_n += 1;
+                        }
                         best_mean = mean;
+                        best_surv = surv;
                         best_id = child;
                         found = true;
                     }
@@ -577,7 +603,7 @@ public:
         return found ? best_id : root;
     }
 
-    int32_t deepest_best_child() const {
+    int32_t deepest_best_child() {
         if (arena == nullptr) {
             return -1;
         }

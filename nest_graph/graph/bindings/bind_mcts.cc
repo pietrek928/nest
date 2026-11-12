@@ -89,6 +89,7 @@ void sync_telem_to_agent(MctsAgent &agent, const nb::dict &telem) {
     t.ucb_beta_n = get_i("ucb_beta_n", t.ucb_beta_n);
     t.ucb_beta_min = get_f("ucb_beta_min", t.ucb_beta_min);
     t.pb_decay_n = get_i("pb_decay_n", t.pb_decay_n);
+    t.survive_tie_n = get_i("survive_tie_n", t.survive_tie_n);
 }
 
 void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
@@ -143,6 +144,9 @@ void sync_telem_from_agent(nb::dict &telem, const MctsAgent &agent) {
     }
     if (t.pb_decay_n > 0) {
         telem["pb_decay_n"] = t.pb_decay_n;
+    }
+    if (t.survive_tie_n > 0) {
+        telem["survive_tie_n"] = t.survive_tie_n;
     }
 }
 

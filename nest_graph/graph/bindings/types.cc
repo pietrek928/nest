@@ -48,7 +48,8 @@ void bind_graph_types(nb::module_ &m) {
         .def_rw("locked_indices", &RefineSelectionOptions::locked_indices)
         .def_rw("dg_aware_refine", &RefineSelectionOptions::dg_aware_refine)
         .def_rw("motif_fracture_penalty", &RefineSelectionOptions::motif_fracture_penalty)
-        .def_rw("motif_join_pairs", &RefineSelectionOptions::motif_join_pairs);
+        .def_rw("motif_join_pairs", &RefineSelectionOptions::motif_join_pairs)
+        .def_rw("motif_join_weights", &RefineSelectionOptions::motif_join_weights);
 
     nb::class_<FinalizeSelectionOptions>(m, "FinalizeSelectionOptions")
         .def(nb::init<>())

@@ -425,7 +425,8 @@ void bind_graph_decision(nb::module_ &m) {
         .def_rw("motif_id", &MotifJoin::motif_id)
         .def_rw("a", &MotifJoin::a)
         .def_rw("b", &MotifJoin::b)
-        .def_rw("realized", &MotifJoin::realized);
+        .def_rw("realized", &MotifJoin::realized)
+        .def_rw("gci", &MotifJoin::gci);
 
     nb::enum_<PathKind>(m, "PathKind")
         .value("Macro", PathKind::Macro)
@@ -496,7 +497,8 @@ void bind_graph_decision(nb::module_ &m) {
             &DecisionGraph::add_motif_join,
             nb::arg("motif_id"),
             nb::arg("a"),
-            nb::arg("b"))
+            nb::arg("b"),
+            nb::arg("gci") = 0.0f)
         .def("conflicts", &DecisionGraph::conflicts, nb::arg("u"), nb::arg("v"))
         .def(
             "conflict_p",

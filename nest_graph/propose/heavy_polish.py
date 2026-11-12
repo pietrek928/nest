@@ -48,13 +48,17 @@ def apply_dg_refine_options(
         getattr(propose_cfg, "motif_refine_fracture_penalty", 1.0) or 0.0
     )
     pairs: list[tuple[int, int]] = []
+    weights: list[float] = []
     if dg is not None:
         for m in getattr(dg, "motifs", ()) or ():
             a = int(getattr(m, "a", -1))
             b = int(getattr(m, "b", -1))
             if a >= 0 and b >= 0:
                 pairs.append((a, b))
+                gci = float(getattr(m, "gci", 0.0) or 0.0)
+                weights.append(1.0 + max(0.0, gci))
     opts.motif_join_pairs = pairs
+    opts.motif_join_weights = weights
     return opts
 
 

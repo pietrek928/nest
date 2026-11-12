@@ -121,6 +121,8 @@ struct RefineSelectionOptions {
     bool dg_aware_refine = false;
     float motif_fracture_penalty = 0.0f;
     std::vector<std::pair<Tvertex, Tvertex>> motif_join_pairs;
+    /** Parallel to motif_join_pairs: per-join weight (1+gci); empty → weight 1. */
+    std::vector<float> motif_join_weights;
 };
 
 struct FinalizeSelectionOptions {

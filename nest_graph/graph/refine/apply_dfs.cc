@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <numeric>
 
 #include "refine/finalize.h"
@@ -43,9 +44,12 @@ void apply_dg_refine_options(
     opts.dg_aware_refine = true;
     opts.motif_fracture_penalty = cfg.motif_refine_fracture_penalty;
     opts.motif_join_pairs.clear();
+    opts.motif_join_weights.clear();
     for (const MotifJoin &m : dg->motifs()) {
         if (m.a >= 0 && m.b >= 0) {
             opts.motif_join_pairs.push_back({m.a, m.b});
+            // D1: weight = 1+gci (gci=0 → weight 1, same as pre-D1 flat penalty).
+            opts.motif_join_weights.push_back(1.0f + std::max(0.0f, m.gci));
         }
     }
 }

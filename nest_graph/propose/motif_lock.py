@@ -519,8 +519,8 @@ def motif_adj_hits(
     """Count MotifBase-compatible contacts of lock vs packed (Wang adj).
 
     Uses ``find_nearest`` on relative SE2; optional ``accept_count`` weight.
-    W1: count only when probe octant agrees with ``rec.edge_a`` / ``edge_b``.
-    Flush +1 only on agree. Soft only — no hard reject.
+    W1: count nearest always; flush/corner bonus only when probe agrees edges.
+    Soft only — no hard reject. (Global agree-only skip dual-missed late med.)
     ``pose_areas`` must match MotifBase upsert areas so order-invariant agrees.
     """
     if motif_base is None or int(getattr(motif_base, "size", lambda: 0)()) <= 0:
@@ -591,7 +591,7 @@ def motif_adj_hits(
             agreed = (not labeled) or probe == ea or probe == eb
             if agreed:
                 agree_n += 1
-            # Soft: nearest hit always (S0 grow); corner bonus only on agree.
+            # Soft: nearest hit always (S0 grow); flush/corner bonus only on agree.
             if weight_accept:
                 hits += max(int(getattr(rec, "accept_count", 0) or 0), 1)
             else:
@@ -1656,6 +1656,7 @@ def sequential_accept_motif_cohorts(
             continue
         # F5a: within-tier −motif_adj_hits after hard/soft tier split. Wait until a
         # Motif seed lock exists so cold-start cohort order stays R2-only.
+        # D2 Wang agree-only / locked≥1 / anchor-only packed dual-missed → park.
         adj_key = None
         if len(locked) >= 2:
             # No telem here — sort probes would inflate wang_* census.
@@ -1931,7 +1932,15 @@ def stamp_cross_cohort_motif_joins(
                 continue
             ia, ib, mid = best_pair
             try:
-                dg.add_motif_join(int(mid), int(ia), int(ib))
+                gci = 0.0
+                mb = (telem or {}).get("motif_base") if isinstance(telem, dict) else None
+                if mb is not None and int(mid) >= 0:
+                    try:
+                        if int(mid) < int(mb.size()):
+                            gci = float(mb.at(int(mid)).gci)
+                    except Exception:
+                        gci = 0.0
+                dg.add_motif_join(int(mid), int(ia), int(ib), float(gci))
                 motifs_after = list(
                     dg.motifs() if callable(getattr(dg, "motifs", None)) else dg.motifs
                 )
