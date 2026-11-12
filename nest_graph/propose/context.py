@@ -10,7 +10,11 @@ from shapely.ops import unary_union
 from nest_graph.board import board_context_from_geometry, sheet_hole_polygons
 from nest_graph.config import ProposeConfig, RankingMode
 from nest_graph.free_kind_util import free_kind_from_any, free_kind_token, is_large_void
-from nest_graph.geometry import Geometry, find_polygon_distances_bipartite
+from nest_graph.geometry import (
+    Geometry,
+    aabb_tree_query_radius,
+    find_polygon_distances_bipartite,
+)
 from nest_graph.graph import FreeKind
 from nest_graph.placement.outline import outline_standoff_distance
 
@@ -1154,7 +1158,27 @@ def local_packed_near_target(
 ) -> BaseGeometry:
     """Packed subset within 3·part_max of a free-space target (GROUP_FIT cap)."""
     radius = max(3.0 * part_max_extent, 1e-6)
-    near = [p for p in placed if p is not None and not p.is_empty and float(p.distance(target)) <= radius]
+    if target is None or getattr(target, "is_empty", False):
+        return Polygon()
+    valid = [p for p in placed if p is not None and not p.is_empty]
+    if not valid:
+        return Polygon()
+    boxes = [tuple(map(float, g.bounds)) for g in valid]
+    # Slight AABB slack so ULP cannot drop a GEOS-boundary kiss; exact filter below.
+    radius_sq = (radius * (1.0 + 1e-12)) ** 2 + 1e-18
+    try:
+        cand_ids = aabb_tree_query_radius(
+            boxes, float(target.x), float(target.y), radius_sq
+        )
+    except ValueError:
+        cand_ids = list(range(len(valid)))
+    if not cand_ids:
+        return Polygon()
+    near = [
+        valid[i]
+        for i in cand_ids
+        if float(valid[i].distance(target)) <= radius
+    ]
     if not near:
         return Polygon()
     if len(near) == 1:

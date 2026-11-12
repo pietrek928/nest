@@ -1,10 +1,36 @@
-"""Hash-grid SE(2) NMS and STRtree conflict-degree ranking helpers."""
+"""Hash-grid SE(2) NMS and AABB conflict-degree ranking helpers."""
 
 import math
 from typing import Sequence
 
-from shapely.geometry import box
-from shapely.strtree import STRtree
+from nest_graph.geometry import aabb_tree_self_overlap_counts
+from nest_graph.utils import transform_poly
+
+
+def pose_nms_bins(
+    coords: tuple[float, float, float],
+    eps: float,
+    theta_tol: float,
+) -> tuple[int, int, int]:
+    two_pi = 2.0 * math.pi
+    th = float(coords[2]) % two_pi
+    if th < 0.0:
+        th += two_pi
+    return (int(coords[0] // eps), int(coords[1] // eps), int(th // theta_tol))
+
+
+def pose_nms_neighborhood_occupied(
+    grid: set[tuple[int, int, int]],
+    xb: int,
+    yb: int,
+    tb: int,
+) -> bool:
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            for dt in (-1, 0, 1):
+                if (xb + dx, yb + dy, tb + dt) in grid:
+                    return True
+    return False
 
 
 def apply_pose_nms(
@@ -29,25 +55,9 @@ def apply_pose_nms(
     kept: list[tuple[float, float, float]] = []
     grid: set[tuple[int, int, int]] = set()
     dropped = 0
-    two_pi = 2.0 * math.pi
-
-    def _bins(c: tuple[float, float, float]) -> tuple[int, int, int]:
-        th = float(c[2]) % two_pi
-        if th < 0.0:
-            th += two_pi
-        return (int(c[0] // eps), int(c[1] // eps), int(th // theta_tol))
-
-    def _neighborhood_occupied(xb: int, yb: int, tb: int) -> bool:
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for dt in (-1, 0, 1):
-                    if (xb + dx, yb + dy, tb + dt) in grid:
-                        return True
-        return False
-
     for cand in candidates:
-        xb, yb, tb = _bins(cand)
-        if _neighborhood_occupied(xb, yb, tb):
+        xb, yb, tb = pose_nms_bins(cand, eps, theta_tol)
+        if pose_nms_neighborhood_occupied(grid, xb, yb, tb):
             dropped += 1
             continue
         grid.add((xb, yb, tb))
@@ -70,7 +80,7 @@ def apply_conflict_degree_penalty(
     """Reweight scores by AABB conflict degree among the candidate pool.
 
     ``scored`` is (score, coords) with higher score better. Returns resorted
-    list. Uses STRtree on transformed part bounds — not exact polygon
+    list. Uses native AABB BVH on transformed part bounds — not exact polygon
     intersections.
     """
     if len(scored) <= 1 or lambda_pen <= 0.0:
@@ -78,30 +88,37 @@ def apply_conflict_degree_penalty(
             stats_out["conflict_penalty_applied"] = 0
         return list(scored)
 
-    from nest_graph.utils import transform_poly
-
-    geoms = []
+    boxes: list[tuple[float, float, float, float]] = []
     for _score, coords in scored:
         try:
             poly = transform_poly(shape_to_place, coords)
             minx, miny, maxx, maxy = poly.bounds
-            geoms.append(box(minx - pad, miny - pad, maxx + pad, maxy + pad))
+            boxes.append(
+                (
+                    float(minx) - pad,
+                    float(miny) - pad,
+                    float(maxx) + pad,
+                    float(maxy) + pad,
+                )
+            )
         except Exception:
-            geoms.append(box(coords[0], coords[1], coords[0] + 1e-3, coords[1] + 1e-3))
-    tree = STRtree(geoms)
+            boxes.append(
+                (
+                    float(coords[0]),
+                    float(coords[1]),
+                    float(coords[0]) + 1e-3,
+                    float(coords[1]) + 1e-3,
+                )
+            )
+    try:
+        overlaps = aabb_tree_self_overlap_counts(boxes)
+    except ValueError:
+        overlaps = [0] * len(boxes)
     penalized: list[tuple[float, tuple[float, float, float]]] = []
     applied = 0
     m_cap = max(int(max_overlap), 1)
     for i, (score, coords) in enumerate(scored):
-        try:
-            hits = tree.query(geoms[i])
-            # shapely 2 returns ndarray of indices; older may return geoms
-            if hasattr(hits, "tolist"):
-                overlap = max(0, len(hits) - 1)
-            else:
-                overlap = max(0, len(list(hits)) - 1)
-        except Exception:
-            overlap = 0
+        overlap = max(0, int(overlaps[i]))
         if overlap > 0:
             applied += 1
         factor = 1.0 - float(lambda_pen) * float(min(overlap, m_cap))

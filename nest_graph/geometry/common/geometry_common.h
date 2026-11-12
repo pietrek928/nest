@@ -62,6 +62,23 @@ inline typename VecType::Scalar circle_radius(const Circle<VecType>& c) {
         std::sqrt(static_cast<double>(c.square_radius())));
 }
 
+// Conservative AABB from a circle (contains the disk). out4 = LTRB.
+// pad covers Welzl is_inside slack (r²+1e-8) plus rotate/translate ULP drift.
+template <class VecType>
+inline void circle_ltrb(
+    const Circle<VecType>& c,
+    double* out4,
+    double pad = 1e-6
+) {
+    const double cx = static_cast<double>(c.center()[0]);
+    const double cy = static_cast<double>(c.center()[1]);
+    const double r = static_cast<double>(circle_radius(c)) + pad;
+    out4[0] = cx - r;
+    out4[1] = cy - r;
+    out4[2] = cx + r;
+    out4[3] = cy + r;
+}
+
 template <class VecType>
 inline typename VecType::Scalar circle_center_distance_sq(
     const Circle<VecType>& a,

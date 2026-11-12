@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <type_traits>
 
+#include "common/aabb_tree.h"
 #include "solid/solid_geometry.h"
 #include "common/geometry_common.h"
 #include "convex/cast.h"
@@ -126,8 +127,67 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
     const auto& active_poly = polygons[active_poly_idx];
     const auto& active_bounds = active_poly.get_bounding_circle();
 
+    // Swept-AABB prefilter: active circle AABB ∪ translated-by-(slide*max_t) AABB,
+    // then query static obstacle circle AABBs. Narrow phase unchanged.
+    AabbTree aabb_tree;
+    AabbTreeScratch aabb_scratch;
+    std::vector<double> obs_ltrb;
+    obs_ltrb.reserve(polygons.size() * 4);
+    std::vector<int> obs_ids;
+    obs_ids.reserve(polygons.size());
     for (size_t i = 0; i < polygons.size(); ++i) {
-        if (i == static_cast<size_t>(active_poly_idx)) continue;
+        if (i == static_cast<size_t>(active_poly_idx)) {
+            continue;
+        }
+        double box4[4];
+        circle_ltrb(polygons[i].get_bounding_circle(), box4);
+        obs_ltrb.insert(obs_ltrb.end(), box4, box4 + 4);
+        obs_ids.push_back(static_cast<int>(i));
+    }
+    const bool aabb_ok =
+        aabb_tree_rebuild_boxes(obs_ltrb.data(), obs_ids.size(), aabb_tree);
+    std::vector<int> cand_local(obs_ids.size());
+    double active_box[4];
+    circle_ltrb(active_bounds, active_box);
+    const double acx = 0.5 * (active_box[0] + active_box[2]);
+    const double acy = 0.5 * (active_box[1] + active_box[3]);
+    const double ar = 0.5 * (active_box[2] - active_box[0]);
+    const double sx = static_cast<double>(slide_vector[0]);
+    const double sy = static_cast<double>(slide_vector[1]);
+    const double tmax = static_cast<double>(max_t_limit);
+    std::vector<int> visit;
+    visit.reserve(obs_ids.size());
+    // Non-finite / overflowing swept box → full list (never treat as no-hit).
+    bool use_full = !aabb_ok || obs_ids.empty() || !std::isfinite(tmax);
+    double qminx = 0, qminy = 0, qmaxx = 0, qmaxy = 0;
+    if (!use_full) {
+        const double t_use = std::max(0.0, tmax);
+        const double ex = acx + sx * t_use;
+        const double ey = acy + sy * t_use;
+        qminx = std::min(acx, ex) - ar;
+        qminy = std::min(acy, ey) - ar;
+        qmaxx = std::max(acx, ex) + ar;
+        qmaxy = std::max(acy, ey) + ar;
+        if (!aabb2_ltrb_valid(qminx, qminy, qmaxx, qmaxy)) {
+            use_full = true;
+        }
+    }
+    if (use_full) {
+        for (int id : obs_ids) {
+            visit.push_back(id);
+        }
+    } else {
+        const std::size_t n_hit = aabb_tree_query_box(
+            aabb_tree,
+            aabb_scratch, qminx, qminy, qmaxx, qmaxy,
+            cand_local.data(), cand_local.size());
+        for (std::size_t h = 0; h < n_hit; ++h) {
+            visit.push_back(obs_ids[static_cast<std::size_t>(cand_local[h])]);
+        }
+    }
+
+    for (int oi : visit) {
+        const size_t i = static_cast<size_t>(oi);
         const auto& obstacle = polygons[i];
 
         // 1. Broad-Phase Capsule Culling (Dynamically shrinks as we find closer hits)
@@ -162,7 +222,7 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
                         closest_hit.t_exit = res.t_exit;
                         closest_hit.polyA_idx = active_poly_idx;
                         closest_hit.partA_idx = pA;
-                        closest_hit.polyB_idx = i;
+                        closest_hit.polyB_idx = static_cast<int>(i);
                         closest_hit.partB_idx = pB;
                     }
                 }

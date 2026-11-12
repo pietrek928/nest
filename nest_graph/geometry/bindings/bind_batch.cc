@@ -226,6 +226,7 @@ void bind_batch_api(nb::module_ &m) {
 
     // P1: margin-0 Penetrating batch (emit_packing_clear SoT). Not Scene
     // batch_check_validity (Q13/Q327 — Scene uses min_dist+ε margin).
+    // AABB BVH prefilters obstacle indices; narrow phase stays solids_packing_collide.
     m.def(
         "batch_packing_clear",
         [](const GeometryHolder &part,
@@ -236,12 +237,31 @@ void bind_batch_api(nb::module_ &m) {
                 return static_cast<long long>(std::llround(angle * 1e6));
             };
 
+            AabbTree aabb_tree;
+            AabbTreeScratch aabb_scratch;
+            std::vector<double> obs_ltrb(obstacles.size() * 4);
+            bool aabb_ok = false;
+            if (!obstacles.empty()) {
+                for (std::size_t i = 0; i < obstacles.size(); ++i) {
+                    solid_bounding_circle_ltrb(
+                        obstacles[i].solid, obs_ltrb.data() + 4 * i);
+                }
+                aabb_ok = aabb_tree_rebuild_boxes(
+                    obs_ltrb.data(), obstacles.size(), aabb_tree);
+            }
+            std::vector<int> cands(obstacles.size());
+
             std::vector<bool> out;
             out.reserve(transforms.size());
             const bool empty_obs = obstacles.empty();
             for (const auto &[x, y, angle] : transforms) {
                 if (empty_obs) {
                     out.push_back(true);
+                    continue;
+                }
+                // Non-finite pose: not clear (never treat invalid query as clear).
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(angle)) {
+                    out.push_back(false);
                     continue;
                 }
                 const long long key = angle_key(angle);
@@ -253,9 +273,38 @@ void bind_batch_api(nb::module_ &m) {
                 }
                 SolidGeometry2d placed = it->second;
                 placed = placed.translate(Vec2d({x, y}));
+                std::size_t n_hit = 0;
+                if (aabb_ok) {
+                    double pl[4];
+                    solid_bounding_circle_ltrb(placed, pl);
+                    if (aabb2_ltrb_valid(pl[0], pl[1], pl[2], pl[3])) {
+                        n_hit = aabb_tree_query_box(
+                            aabb_tree,
+                            aabb_scratch,
+                            pl[0],
+                            pl[1],
+                            pl[2],
+                            pl[3],
+                            cands.data(),
+                            cands.size());
+                    } else {
+                        // Invalid placed box → brute all indices.
+                        for (std::size_t i = 0; i < obstacles.size(); ++i) {
+                            cands[i] = static_cast<int>(i);
+                        }
+                        n_hit = obstacles.size();
+                    }
+                } else {
+                    for (std::size_t i = 0; i < obstacles.size(); ++i) {
+                        cands[i] = static_cast<int>(i);
+                    }
+                    n_hit = obstacles.size();
+                }
                 bool clear = true;
-                for (const auto &o : obstacles) {
-                    if (solids_packing_collide(placed, o.solid)) {
+                for (std::size_t i = 0; i < n_hit; ++i) {
+                    if (solids_packing_collide(
+                            placed,
+                            obstacles[static_cast<std::size_t>(cands[i])].solid)) {
                         clear = false;
                         break;
                     }

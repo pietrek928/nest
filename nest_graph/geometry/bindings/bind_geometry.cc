@@ -9,6 +9,7 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
+#include "common/aabb_tree.h"
 #include "common/polylabel.h"
 #include "common/sample_boundary.h"
 #include "common/voronoi_vertices.h"
@@ -21,6 +22,20 @@ namespace nb = nanobind;
 #include "solid/decompose.h"
 #include "solid/point_in_solid.h"
 #include "types.h"
+
+inline std::vector<double> aabb_bind_ltrb_from_tuples(
+    const std::vector<std::tuple<double, double, double, double>> &boxes
+) {
+    std::vector<double> ltrb;
+    ltrb.reserve(boxes.size() * 4);
+    for (const auto &b : boxes) {
+        ltrb.push_back(std::get<0>(b));
+        ltrb.push_back(std::get<1>(b));
+        ltrb.push_back(std::get<2>(b));
+        ltrb.push_back(std::get<3>(b));
+    }
+    return ltrb;
+}
 
 std::vector<std::vector<Vec2d>> rings_from_geometry(const GeometryHolder &g) {
     std::vector<std::vector<Vec2d>> outers;
@@ -752,4 +767,106 @@ void bind_geometry_class(nb::module_ &m) {
         },
         nb::arg("sites"),
         "Finite Voronoi vertices (Delaunay dual circumcenters), lex-sorted.");
+
+    m.def(
+        "aabb_tree_query_box",
+        [](const std::vector<std::tuple<double, double, double, double>> &boxes,
+           double minx,
+           double miny,
+           double maxx,
+           double maxy) {
+            const std::vector<double> ltrb = aabb_bind_ltrb_from_tuples(boxes);
+            AabbTree tree;
+            AabbTreeScratch scratch;
+            if (!aabb_tree_rebuild_boxes(ltrb.data(), boxes.size(), tree)) {
+                throw nb::value_error("aabb_tree_rebuild_boxes: invalid boxes");
+            }
+            std::vector<int> out(boxes.size());
+            const std::size_t n = aabb_tree_query_box(tree, scratch, minx, miny, maxx, maxy, out.data(), out.size());
+            out.resize(n);
+            return out;
+        },
+        nb::arg("boxes"),
+        nb::arg("minx"),
+        nb::arg("miny"),
+        nb::arg("maxx"),
+        nb::arg("maxy"),
+        "AABB BVH box overlap indices (ltrb tuples).");
+
+    m.def(
+        "aabb_tree_query_radius",
+        [](const std::vector<std::tuple<double, double, double, double>> &boxes,
+           double qx,
+           double qy,
+           double radius_sq) {
+            const std::vector<double> ltrb = aabb_bind_ltrb_from_tuples(boxes);
+            AabbTree tree;
+            AabbTreeScratch scratch;
+            if (!aabb_tree_rebuild_boxes(ltrb.data(), boxes.size(), tree)) {
+                throw nb::value_error("aabb_tree_rebuild_boxes: invalid boxes");
+            }
+            std::vector<int> out(boxes.size());
+            const std::size_t n = aabb_tree_query_radius(tree, scratch, qx, qy, radius_sq, out.data(), out.size());
+            out.resize(n);
+            return out;
+        },
+        nb::arg("boxes"),
+        nb::arg("qx"),
+        nb::arg("qy"),
+        nb::arg("radius_sq"),
+        "AABB BVH radius query (squared; inclusive).");
+
+    m.def(
+        "aabb_tree_knn",
+        [](const std::vector<std::tuple<double, double, double, double>> &boxes,
+           double qx,
+           double qy,
+           std::size_t k) {
+            const std::vector<double> ltrb = aabb_bind_ltrb_from_tuples(boxes);
+            AabbTree tree;
+            AabbTreeScratch scratch;
+            if (!aabb_tree_rebuild_boxes(ltrb.data(), boxes.size(), tree)) {
+                throw nb::value_error("aabb_tree_rebuild_boxes: invalid boxes");
+            }
+            const std::size_t kk = std::min(k, boxes.size());
+            std::vector<int> out(kk);
+            std::vector<double> dist(kk);
+            const std::size_t n =
+                aabb_tree_knn(tree, scratch, qx, qy, kk, out.data(), dist.data(), kk);
+            out.resize(n);
+            dist.resize(n);
+            return nb::make_tuple(out, dist);
+        },
+        nb::arg("boxes"),
+        nb::arg("qx"),
+        nb::arg("qy"),
+        nb::arg("k"),
+        "AABB BVH kNN → (indices, dist_sq).");
+
+    m.def(
+        "aabb_tree_self_overlap_counts",
+        [](const std::vector<std::tuple<double, double, double, double>> &boxes) {
+            const std::vector<double> ltrb = aabb_bind_ltrb_from_tuples(boxes);
+            AabbTree tree;
+            AabbTreeScratch scratch;
+            if (!aabb_tree_rebuild_boxes(ltrb.data(), boxes.size(), tree)) {
+                throw nb::value_error("aabb_tree_rebuild_boxes: invalid boxes");
+            }
+            std::vector<int> counts(boxes.size(), 0);
+            std::vector<int> hits(boxes.size());
+            for (std::size_t i = 0; i < boxes.size(); ++i) {
+                const auto &b = boxes[i];
+                const std::size_t n = aabb_tree_query_box(tree, scratch,
+                    std::get<0>(b),
+                    std::get<1>(b),
+                    std::get<2>(b),
+                    std::get<3>(b),
+                    hits.data(),
+                    hits.size());
+                counts[i] = static_cast<int>(n > 0 ? n - 1 : 0);
+            }
+            return counts;
+        },
+        nb::arg("boxes"),
+        "Per-box AABB overlap counts excluding self (one rebuild).");
 }
