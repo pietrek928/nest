@@ -1,0 +1,19 @@
+Maintainability series dual (post L0–L7′/L6a/L5′/L4′/L6b)
+
+Open bars (HEAD):
+  early med>=0.600 min>=0.577 indep
+  late Δ med>=+0.1924
+
+Series early void_fill seeds 0/1/2:
+  0.592 / 0.636 / 0.614  med=0.614 min=0.592 indep=True  PASS
+
+Series late N=3 (void_fill_seed0_iter20 +8):
+  +0.1924 / +0.1924 / +0.1996  med=+0.1924 min=+0.1924  PASS
+
+Letter telem (sample):
+  early: niche_pos, niche_rescue, pin, densify, 3a/3b, repack
+  late: path_ran, carved/hard, adopt, hold_tip, browse, void_leak props/pin
+  ITERS=2 smoke: completed no Traceback
+  warm key-set pytest: 3 passed
+
+L8 densify file-move: parked per plan

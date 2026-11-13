@@ -29,6 +29,18 @@ def test_add_collision_pair_symmetric():
     assert 1 in graph.collisions[2]
 
 
+def test_add_collisions_bulk_symmetric():
+    graph = PoseGraph()
+    for i in range(3):
+        graph.append_elem(0, Vec2(x=0.0, y=0.0), Circle.from_center_radius(0.0, 0.0, 1.0))
+    graph.add_collisions([(0, 1), (1, 2)])
+    assert 1 in graph.collisions[0]
+    assert 0 in graph.collisions[1]
+    assert 2 in graph.collisions[1]
+    assert 1 in graph.collisions[2]
+    assert int(graph.edge_count()) == 2
+
+
 def test_pose_graph_row_accessors():
     graph = PoseGraph()
     for i in range(3):

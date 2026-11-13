@@ -1,0 +1,15 @@
+   Building nest-graph @ file:///home/pietrek/Documents/nest
+      Built nest-graph @ file:///home/pietrek/Documents/nest
+Uninstalled 1 package in 0.47ms
+Installed 1 package in 0.35ms
+Telem log: artifacts/tune/bench_telem.log
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+  -> parts=60 area=0.614 kiss_s=0.26 kiss_o=0.80 auc=0.84 ok=True free=large_void/43.4 void=7/312/13/13 time=32.45s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=1...
+  -> parts=59 area=0.620 kiss_s=0.30 kiss_o=0.83 auc=0.88 ok=True free=large_void/50.1 void=0/347/9/9 time=33.40s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=2...
+  -> parts=61 area=0.615 kiss_s=0.33 kiss_o=0.89 auc=0.84 ok=True free=large_void/48.6 void=0/442/22/22 time=30.98s
+
+| Case | Demand | Propose | DFS | Parts | Area | ΔParts | KissS | KissO | AUC | Time | Indep |
+|------|--------|---------|-----|-------|------|--------|-------|-------|-----|------|-------|
+| demo_triangle_corner_cluster_s6 | 1.21 | shipped | merged_loose_tight | 60.0 | 0.616 | 54.0 | 0.30 | 0.84 | 0.85 | 32.28s | True |

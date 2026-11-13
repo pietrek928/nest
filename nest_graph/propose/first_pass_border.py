@@ -609,8 +609,8 @@ def build_pose_graph(
         hits = list(hits_t)
     else:
         hits = list(find_polygon_intersections(geom_list))
-    for i, j in hits:
-        graph.add_collision(i, j)
+    if hits:
+        graph.add_collisions([(int(i), int(j)) for i, j in hits])
     for item in attract_pairs or ():
         graph.add_attract(int(item[0]), int(item[1]), float(item[2]))
     return graph

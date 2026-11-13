@@ -1,0 +1,11 @@
+Telem log: artifacts/tune/bench_telem.log
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=0...
+  -> parts=61 area=0.586 kiss_s=0.27 kiss_o=0.82 auc=0.86 ok=True free=large_void/47.7 void=17/358/16/16 time=50.91s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=1...
+  -> parts=59 area=0.592 kiss_s=0.32 kiss_o=0.89 auc=0.86 ok=True free=large_void/46.5 void=1/313/11/11 time=44.04s
+Running demo_triangle_corner_cluster_s6 | shipped | merged_loose_tight | seed=2...
+  -> parts=58 area=0.591 kiss_s=0.31 kiss_o=0.85 auc=0.86 ok=True free=large_void/48.1 void=0/378/15/15 time=41.35s
+
+| Case | Demand | Propose | DFS | Parts | Area | ΔParts | KissS | KissO | AUC | Time | Indep |
+|------|--------|---------|-----|-------|------|--------|-------|-------|-----|------|-------|
+| demo_triangle_corner_cluster_s6 | 1.21 | shipped | merged_loose_tight | 59.3 | 0.590 | 53.3 | 0.30 | 0.85 | 0.86 | 45.44s | True |

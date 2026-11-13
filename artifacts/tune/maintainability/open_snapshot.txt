@@ -1,0 +1,17 @@
+Maintainability extracts open snapshot (fresh HEAD before L0 lock)
+Opened 2026-11-10
+
+early void_fill seeds 0 1 2 (artifacts/tune/maintainability/open_early.txt):
+  seed0 area=0.577 parts=58 indep=True
+  seed1 area=0.636 parts=60 indep=True
+  seed2 area=0.600 parts=60 indep=True
+  med area=0.600  min area=0.577
+  bars: med>=0.600 min>=0.577 independent_ok
+
+late N=3 from artifacts/checkpoints/void_fill_seed0_iter20.npz --extra-iters 8:
+  late1 Δcov=+0.1924 Δparts=+26
+  late2 Δcov=+0.1924 Δparts=+26
+  late3 Δcov=+0.1924 Δparts=+26
+  bars: median Δcov>=+0.1924
+
+Historical refs only (not bars): early med>=0.591 min>=0.569; late +0.1924

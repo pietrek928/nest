@@ -504,3 +504,31 @@ TEST_CASE("find_polygon_intersections ptr overload matches owned", "[poly_inters
     auto bp = find_polygon_intersections<Vec2>(a, b);
     REQUIRE(bo == bp);
 }
+
+TEST_CASE("A5a circle pre-push: grazing overlap kept, far-apart skipped", "[poly_intersect][a5a]") {
+    auto left = make_box(0.0, 0.0, 1.0, 1.0);
+    // Shallow overlap along +x (Penetrating).
+    auto grazing = make_box(1.5, 0.0, 1.0, 1.0);
+    auto far = make_box(40.0, 0.0, 1.0, 1.0);
+    // Same x-band as left so proj overlap still reaches circle gate.
+    auto far_same_band = make_box(40.0, 0.25, 1.0, 0.5);
+
+    REQUIRE_FALSE(find_polygon_intersections<Vec2>({left, grazing}).empty());
+    REQUIRE(find_polygon_intersections<Vec2>({left, far}).empty());
+
+    DebugTracer tr_far;
+    auto far_hits = find_polygon_intersections<Vec2>(
+        std::vector<SolidGeometry2>{left, far_same_band}, &tr_far);
+    REQUIRE(far_hits.empty());
+    REQUIRE(tr_far.stat_sweep_pairs == 0);
+
+    DebugTracer tr_grazing;
+    auto graz_hits = find_polygon_intersections<Vec2>(
+        std::vector<SolidGeometry2>{left, grazing}, &tr_grazing);
+    REQUIRE_FALSE(graz_hits.empty());
+    REQUIRE(tr_grazing.stat_sweep_pairs >= 1);
+
+    // Edge kiss is not Penetrating (packing intersect empty).
+    auto kiss = make_box(2.0, 0.0, 1.0, 1.0);
+    REQUIRE(find_polygon_intersections<Vec2>({left, kiss}).empty());
+}

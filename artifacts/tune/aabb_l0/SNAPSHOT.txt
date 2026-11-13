@@ -1,0 +1,3 @@
+L0 early areas: 0.569 0.600 0.608 med=0.592 min=0.569 parts med=60 min=58
+L0 late Δcov: +0.1924 +0.1909 +0.1534 med=+0.1909 min=+0.1534 Δparts med=+24 min=+22
+A4 early med/min area=0.611/0.569 parts=59/58 (L0 0.592/0.569 60/58); late Δ identical L0; prop_ms down ~5.5→4.0s typical

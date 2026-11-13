@@ -760,12 +760,22 @@ inline IntersectSweepResult<VecType> execute_intersect_sweep(
                 continue;
             }
 
+            const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
+            const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
+            // A5a: fail-fast whole-solid circles before counting / materializing.
+            // Margin matches circle_ltrb pad (Welzl can sit slightly inside solid).
+            using Scalar = typename VecType::Scalar;
+            if (!global_bounding_circles_overlap(
+                    *polyA,
+                    *polyB,
+                    static_cast<Scalar>(1e-6))) {
+                continue;
+            }
+
             if constexpr (!std::is_same_v<Tracer, NullTracer>) {
                 if (tracer) tracer->count_sweep_pair();
             }
 
-            const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
-            const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
             int partA = reverse ? elements[j].part_idx : elements[i].part_idx;
             int partB = reverse ? elements[i].part_idx : elements[j].part_idx;
 

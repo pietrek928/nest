@@ -345,6 +345,20 @@ void bind_graph_types(nb::module_ &m) {
             nb::arg("i"),
             nb::arg("j"))
         .def(
+            "add_collisions",
+            [](PoseGraph &g, const std::vector<std::pair<int, int>> &pairs) {
+                // A-tail: one C++ loop for mpg edge fill (same undirected edges).
+                for (const auto &pj : pairs) {
+                    const int i = pj.first;
+                    const int j = pj.second;
+                    g.collisions[static_cast<std::size_t>(i)].push_back(
+                        static_cast<Tvertex>(j));
+                    g.collisions[static_cast<std::size_t>(j)].push_back(
+                        static_cast<Tvertex>(i));
+                }
+            },
+            nb::arg("pairs"))
+        .def(
             "add_attract",
             [](PoseGraph &g, int i, int j, float w) {
                 if (w <= 0.0f || pose_pair_skip(g, i, j)) {

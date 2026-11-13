@@ -17,10 +17,6 @@ namespace nb = nanobind;
 #include "python_converters.h"
 #include "types.h"
 
-struct StaticCollisionSceneHolder {
-    StaticCollisionScene<Vec2d> scene;
-};
-
 void bind_batch_api(nb::module_ &m) {
     nb::class_<StaticCollisionSceneHolder>(m, "StaticCollisionScene")
         .def_static(

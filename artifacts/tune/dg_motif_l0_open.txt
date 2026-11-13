@@ -1,0 +1,14 @@
+# L0 open snapshots — DG motif compose boost series 2026-11-12
+# Fixture/seed unchanged; fresh dual after AABB land (same-result prefilter).
+# early: OMP=1 PYTHONHASHSEED=0 benchmark_pipeline --tags void_fill --seeds 0 1 2 --propose shipped --gate
+early_areas=0.577,0.598,0.606
+early_med_area=0.598
+early_min_area=0.577
+early_med_parts=58.7
+# gate reported area_coverage fail vs historical floor; indep OK; series gates vs this open
+
+# late: resume void_fill_seed0_iter20.npz --extra-iters 8, NEST_SEED 0 1 2
+late_iter20_dcov=+0.1924,+0.1909,+0.1534
+late_iter20_med_dcov=+0.1909
+late_iter20_min_dcov=+0.1534
+late_iter20_dparts=+26,+24,+22

@@ -1927,6 +1927,16 @@ def merge_phase_gate_telem(
     leak["pocket_ms"] = float(
         propose_stats.get("pocket_ms", leak.get("pocket_ms", 0.0)) or 0.0
     )
+    dens_pf = propose_stats.get("densify_stats") or {}
+    if not isinstance(dens_pf, dict):
+        dens_pf = {}
+    leak["prefilter_batch_n"] = int(
+        dens_pf.get(
+            "prefilter_batch_n",
+            propose_stats.get("prefilter_batch_n", leak.get("prefilter_batch_n", 0)),
+        )
+        or 0
+    )
 
 
 @dataclass
@@ -2482,6 +2492,7 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"fit_slack={float(leak.get('fit_slack', 0.0) or 0.0):.3f}/"
         f"d={float(leak.get('fit_slack_d', 0.0) or 0.0):.3f} "
         f"ray={float(leak.get('ray_ms', 0.0) or 0.0):.1f} "
+        f"pfb={int(leak.get('prefilter_batch_n', 0) or 0)} "
         f"vf={float(leak.get('valid_flags_ms', 0.0) or 0.0):.1f} "
         f"col={float(leak.get('colonize_ms', 0.0) or 0.0):.1f} "
         f"hold={int(leak.get('incumbent_hold', 0) or 0)}/"

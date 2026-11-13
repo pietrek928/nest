@@ -323,6 +323,12 @@ inline bool solids_packing_collide(
     const SolidGeometry<VecType> &b,
     Tracer *tracer = nullptr
 ) {
+    using Scalar = typename VecType::Scalar;
+    // A5a: same padded whole-solid circle gate as intersect-sweep pre-push.
+    if (!global_bounding_circles_overlap(
+            a, b, static_cast<Scalar>(1e-6))) {
+        return false;
+    }
     for (size_t i = 0; i < a.line_parts.size(); ++i) {
         if (a.line_parts[i].is_subtractive) {
             continue;

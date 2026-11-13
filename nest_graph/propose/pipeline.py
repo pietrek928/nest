@@ -1054,10 +1054,8 @@ def pre_filter_candidates(
         return []
     pool = list(candidates)
     if propose_geom.full_packed_geoms:
-        pool = [
-            c for c in pool
-            if propose_geom.passes_full_packed_collision(propose_geom.placed_at(c))
-        ]
+        flags = propose_geom.batch_passes_full_packed_collision(pool)
+        pool = [c for c, ok in zip(pool, flags, strict=True) if ok]
     if not pool or not trim_by_validity:
         return pool
     return _filter_valid_candidates(
@@ -1936,7 +1934,13 @@ def _collect_candidates(
             state.cascade_stats_out.get("valid_flags_ms", 0.0) or 0.0
         ) + float(getattr(ctx.propose_geom, "valid_flags_ms", 0.0) or 0.0)
         ctx.propose_geom.valid_flags_ms = 0.0
-    return _filter_distant_collisions(state.candidates, ctx.propose_geom)
+    out = _filter_distant_collisions(state.candidates, ctx.propose_geom)
+    if state.cascade_stats_out is not None:
+        state.cascade_stats_out["prefilter_batch_n"] = int(
+            state.cascade_stats_out.get("prefilter_batch_n", 0) or 0
+        ) + int(getattr(ctx.propose_geom, "prefilter_batch_n", 0) or 0)
+        ctx.propose_geom.prefilter_batch_n = 0
+    return out
 
 
 def _collect_inward_bridge_explorers(
@@ -2344,12 +2348,15 @@ def propose_coords_from_candidates(
             for coords in reserve_coords
         ]
         valid = set(filter_candidates_batch(geom, raw, pt_push))
-        for c in raw:
+        packed_ok = (
+            geom.batch_passes_full_packed_collision(raw)
+            if geom.full_packed_geoms
+            else [True] * len(raw)
+        )
+        for c, clear in zip(raw, packed_ok, strict=True):
             if c not in valid:
                 continue
-            if geom.full_packed_geoms and not geom.passes_full_packed_collision(
-                geom.placed_at(c)
-            ):
+            if not clear:
                 continue
             filtered_reserve.append(c)
     if filtered_reserve:
@@ -3784,6 +3791,9 @@ def proposed_transforms_for_groups(
         cascade_agg["pocket_ms"] = float(
             cascade_agg.get("pocket_ms", 0.0) or 0.0
         ) + float(group_cascade.get("pocket_ms", 0.0) or 0.0)
+        cascade_agg["prefilter_batch_n"] = int(
+            cascade_agg.get("prefilter_batch_n", 0) or 0
+        ) + int(group_cascade.get("prefilter_batch_n", 0) or 0)
         for k, v in group_diversity.items():
             if isinstance(v, (int, float)):
                 diversity_agg[k] = diversity_agg.get(k, 0) + v
@@ -4067,6 +4077,9 @@ def proposed_transforms_for_groups(
         )
         densify_stats_out["pocket_ms"] = float(
             cascade_agg.get("pocket_ms", 0.0) or 0.0
+        )
+        densify_stats_out["prefilter_batch_n"] = int(
+            cascade_agg.get("prefilter_batch_n", 0) or 0
         )
         densify_stats_out["nms_kept"] = int(diversity_agg.get("nms_kept", 0))
         densify_stats_out["nms_dropped"] = int(diversity_agg.get("nms_dropped", 0))

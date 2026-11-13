@@ -100,12 +100,13 @@ nfp_lite_relative(
     dirs.push_back(VecType({uy, -ux}));
     const Scalar polish_max = std::min(max_t, std::max(dist0, static_cast<Scalar>(1)));
     const VecType pole({ax, ay});
+    // A2a: reuse the inject Scene (defaults unchanged; no Motif drift).
     const auto polished = polish_se2_part(
         follow,
         pose_x,
         pose_y,
         pose_theta,
-        std::move(scene.obstacles),
+        scene,
         static_cast<const SolidGeometry<VecType> *>(nullptr),
         dirs,
         2,

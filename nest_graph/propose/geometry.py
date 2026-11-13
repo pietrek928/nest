@@ -12,6 +12,7 @@ from nest_graph.geometry import (
     GuidanceConfig,
     batch_evaluate_local_placement,
     batch_evaluate_local_placement_validity,
+    batch_packing_clear,
 )
 from nest_graph.placement.scene import (
     PLACEMENT_EPSILON_RATIO,
@@ -95,6 +96,8 @@ class ProposeGeometry:
         self._last_ray_min_span: float = -1.0
         self._last_ray_short_span_n: int = 0
         self._last_region_cache_hit: int = 0
+        # A4: rows screened via batch_packing_clear vs full_packed_geoms.
+        self.prefilter_batch_n: int = 0
 
     @staticmethod
     def _region_cache_key(region: BaseGeometry) -> tuple[float, float, float, float, float]:
@@ -242,6 +245,29 @@ class ProposeGeometry:
         if not self.full_packed_geoms:
             return True
         return not placed.intersects_any(self.full_packed_geoms)
+
+    def batch_passes_full_packed_collision(
+        self,
+        transforms: Sequence[Tuple[float, float, float]],
+    ) -> list[bool]:
+        """Penetrating clear vs ``full_packed_geoms`` (same SoT as scalar).
+
+        One AABB tree per batch via ``batch_packing_clear``; voids are not
+        included (parity with ``passes_full_packed_collision``).
+        """
+        if not transforms:
+            return []
+        if not self.full_packed_geoms:
+            return [True] * len(transforms)
+        if self.part is None:
+            return [False] * len(transforms)
+        rows = [
+            (float(t[0]), float(t[1]), float(t[2]))
+            for t in transforms
+        ]
+        flags = list(batch_packing_clear(self.part, rows, self.full_packed_geoms))
+        self.prefilter_batch_n = int(self.prefilter_batch_n or 0) + len(rows)
+        return flags
 
     def hits_base(self, placed: Geometry) -> bool:
         if not self.scene.base_geoms:

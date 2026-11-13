@@ -75,9 +75,12 @@ inline bool check_mutual_containment(
 template <class VecType>
 inline bool global_bounding_circles_overlap(
     const SolidGeometry<VecType>& polyA,
-    const SolidGeometry<VecType>& polyB
+    const SolidGeometry<VecType>& polyB,
+    typename VecType::Scalar margin = static_cast<typename VecType::Scalar>(0)
 ) {
-    return circles_overlap(polyA.get_bounding_circle(), polyB.get_bounding_circle());
+    // Optional margin covers Welzl is_inside slack (same idea as circle_ltrb pad).
+    return circles_overlap(
+        polyA.get_bounding_circle(), polyB.get_bounding_circle(), margin);
 }
 
 template <class VecType>

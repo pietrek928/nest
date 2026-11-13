@@ -1,0 +1,11 @@
+# DG motif compose boost — series close 2026-11-12
+L0 early med/min 0.598/0.577; late Δ med/min +0.1909/+0.1534
+D1 GCI MotifJoin fracture (softened): locked early med~0.599 late med 0.1909
+D2 Wang agree/locked≥1/anchor-only: dual-missed → parked (F5a locked≥2 nearest)
+D3 best_child survive ε-tie + equal-surv mean: early med 0.608 min 0.579; late med 0.1909 (seed0 +0.2076)
+D4 PLACE_COHORT lag: inject-sync/force-sticky dual-missed early↔late; parked as
+   stats-None ready preserve + agent-direct/cohort fallback. Park dual early med 0.613
+   min 0.584; late med 0.1909 min 0.1614
+D5 SKIP: arch_n at max_keep=4 but contact_grg_upserts/upref idle — no high-gci starve
+D6 SKIP: place_cohort_ready=0 on gate telem (need ready=1 and cohort_sig_amaf_visits≥4)
+D7 SKIP: compose_sz often 0; mat_motif>0 when joins present — flush chord not indicated

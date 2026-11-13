@@ -1,0 +1,10 @@
+A-tail (PoseGraph add_collisions bulk) — locked
+early void_fill seeds 0/1/2: area 0.585 / 0.591 / 0.592 → med 0.591 min 0.585 (L0 med/min 0.592/0.569)
+late Δ N=3: +0.1924 / +0.2004 / +0.1701 → med +0.1924 min +0.1701 (L0 med/min +0.1909/+0.1534)
+indep ok
+
+Shipped: graph.add_collisions(pairs) + build_pose_graph one-shot fill.
+Skipped (share <1% / cold): Scene element-subset AABB, cast AABB, find_all_polygon_casts prune.
+P1 parked: pocket valid=0% / bay_small — formulate_mandatory_ejection N/A.
+A3b nearest-first parked; farthest-first kept after revert dual.
+A3a: horizon+hi-first on (winner_legs off).

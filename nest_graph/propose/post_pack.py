@@ -445,6 +445,12 @@ def apply_post_pack_and_telem(
             se2_flat.get("attempted", 0) or 0
         )
         void_leak_stats["local_se2_moved"] = int(se2_flat.get("moved", 0) or 0)
+        void_leak_stats["se2_from_shapely_n"] = int(
+            se2_flat.get("se2_from_shapely_n", 0) or 0
+        )
+        void_leak_stats["se2_native_hits"] = int(
+            se2_flat.get("se2_native_hits", 0) or 0
+        )
         void_leak_stats["repack_attempted"] = int(
             (void_leak_stats["repack"] or {}).get("attempted", 0) or 0
         )

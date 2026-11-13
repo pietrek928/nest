@@ -11,7 +11,17 @@
 #include "distance/static_collision_scene.h"
 #include "solid/containment.h"
 
-// Thin SE(2) polish: one cast_slide for TOI/normal, tangent project, Scene authority.
+// A3a: optional horizon + winner legs. Defaults off so nfp_lite / Motif stay bit-stable.
+struct PolishSe2Opts {
+    bool exact_horizon = false;
+    bool winner_legs = false;
+    int max_legs = 2;
+    // Optional telem counter (Python binding may pass nullptr).
+    int *se2_legs_out = nullptr;
+};
+
+// Core SE(2) polish against a prebuilt Scene (A2a reuse). Obstacles must already
+// exclude the moving part (caller responsibility).
 template <class VecType>
 inline std::optional<std::tuple<
     typename VecType::Scalar,
@@ -22,14 +32,15 @@ polish_se2_part(
     typename VecType::Scalar pose_x,
     typename VecType::Scalar pose_y,
     typename VecType::Scalar pose_theta,
-    std::vector<SolidGeometry<VecType>> obstacles,
+    const StaticCollisionScene<VecType> &scene,
     const SolidGeometry<VecType> *board,
     const std::vector<VecType> &dirs,
     int n_angles,
     typename VecType::Scalar max_t,
     typename VecType::Scalar min_dist,
     std::string_view mode,
-    const VecType *pole
+    const VecType *pole,
+    PolishSe2Opts opts = {}
 ) {
     using Scalar = typename VecType::Scalar;
     constexpr Scalar kEps = static_cast<Scalar>(1e-9);
@@ -48,8 +59,6 @@ polish_se2_part(
         return std::nullopt;
     }
 
-    StaticCollisionScene<VecType> scene;
-    scene.build(std::move(obstacles), static_cast<Scalar>(0.5));
     const Scalar clearance = min_dist > static_cast<Scalar>(0) ? min_dist : static_cast<Scalar>(0);
     const Scalar margin_sq = clearance * clearance;
     const Scalar distance_margin = clearance;
@@ -61,10 +70,6 @@ polish_se2_part(
         }
         return !scene.query_any_violation(placed, margin_sq, distance_margin);
     };
-
-    SolidGeometry<VecType> start =
-        part.rotate(pose_theta).translate(VecType({pose_x, pose_y}));
-    (void)start;
 
     const VecType start_c = solid_centroid(
         part.rotate(pose_theta).translate(VecType({pose_x, pose_y})));
@@ -115,16 +120,60 @@ polish_se2_part(
         return true;
     };
 
+    // Bisect largest Scene-clear t in [0, travel_hi]; optionally test hi first.
+    auto bisect_clear_t = [&](
+        Scalar travel_hi,
+        const VecType &slide_dir,
+        Scalar theta,
+        bool hi_first
+    ) -> Scalar {
+        if (!(travel_hi > kEps)) {
+            return static_cast<Scalar>(0);
+        }
+        if (hi_first) {
+            const Scalar x = pose_x + slide_dir[0] * travel_hi;
+            const Scalar y = pose_y + slide_dir[1] * travel_hi;
+            SolidGeometry<VecType> placed =
+                part.rotate(theta).translate(VecType({x, y}));
+            if (pose_ok(placed)) {
+                return travel_hi;
+            }
+        }
+        Scalar lo = static_cast<Scalar>(0);
+        Scalar hi = travel_hi;
+        Scalar best_t = static_cast<Scalar>(0);
+        bool any_ok = false;
+        for (int iter = 0; iter < 12; ++iter) {
+            const Scalar mid = (lo + hi) * static_cast<Scalar>(0.5);
+            const Scalar x = pose_x + slide_dir[0] * mid;
+            const Scalar y = pose_y + slide_dir[1] * mid;
+            SolidGeometry<VecType> placed =
+                part.rotate(theta).translate(VecType({x, y}));
+            if (pose_ok(placed)) {
+                lo = mid;
+                best_t = mid;
+                any_ok = true;
+            } else {
+                hi = mid;
+            }
+        }
+        return any_ok ? best_t : static_cast<Scalar>(0);
+    };
+
     // Place at TOI-backoff along slide_dir; Scene is authority with one backoff retry.
     auto try_slide_from_cast = [&](
         const SolidGeometry<VecType> &seeded,
         Scalar theta,
         const VecType &slide_dir,
-        const auto &cast
+        const auto &cast,
+        Scalar cast_max_t
     ) {
-        Scalar travel = max_t;
+        Scalar travel = cast_max_t;
         if (cast.intersects_path) {
             travel = std::max(static_cast<Scalar>(0), cast.t_entry - clearance);
+        }
+        if (travel > cast_max_t) {
+            travel = cast_max_t;
         }
 
         auto place_at = [&](Scalar t, const VecType &dir) -> bool {
@@ -135,7 +184,6 @@ polish_se2_part(
             if (pose_ok(placed)) {
                 return try_accept(x, y, theta, t);
             }
-            // Scene reject: back off along inverse slide direction once.
             const Scalar bx = x - dir[0] * kSceneBackoff;
             const Scalar by = y - dir[1] * kSceneBackoff;
             SolidGeometry<VecType> backed =
@@ -147,33 +195,19 @@ polish_se2_part(
         };
 
         if (travel > kEps) {
-            // B: bisect largest Scene-clear t in [0, travel] (halving left
-            // oblique mates at ~half travel after Scene reject).
-            Scalar lo = static_cast<Scalar>(0);
-            Scalar hi = travel;
-            Scalar best_t = static_cast<Scalar>(0);
-            bool any_ok = false;
-            for (int iter = 0; iter < 12; ++iter) {
-                const Scalar mid = (lo + hi) * static_cast<Scalar>(0.5);
-                const Scalar x = pose_x + slide_dir[0] * mid;
-                const Scalar y = pose_y + slide_dir[1] * mid;
-                SolidGeometry<VecType> placed =
-                    part.rotate(theta).translate(VecType({x, y}));
-                if (pose_ok(placed)) {
-                    lo = mid;
-                    best_t = mid;
-                    any_ok = true;
-                } else {
-                    hi = mid;
-                }
-            }
-            if (any_ok && best_t > kEps) {
+            const Scalar best_t = bisect_clear_t(
+                travel, slide_dir, theta, /*hi_first=*/opts.exact_horizon);
+            if (best_t > kEps) {
                 place_at(best_t, slide_dir);
             }
             return;
         }
 
         // Primary ray jammed at contact: ±tangent from scene normal.
+        // (Legacy path; A3a winner_legs runs after the angle loop instead.)
+        if (opts.winner_legs && pole_mode) {
+            return;
+        }
         if (scene.obstacles.empty()) {
             return;
         }
@@ -209,15 +243,18 @@ polish_se2_part(
         const VecType t1({-nu[1], nu[0]});
         const VecType t2({nu[1], -nu[0]});
         for (const VecType &td : {t1, t2}) {
-            const auto tcast = cast_slide(seeded, scene.obstacles, td, max_t);
-            Scalar tt = max_t;
+            const auto tcast = cast_slide(seeded, scene.obstacles, td, cast_max_t);
+            Scalar tt = cast_max_t;
             if (tcast.intersects_path) {
                 tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
             }
             if (tt <= kEps) {
                 continue;
             }
-            place_at(tt, td);
+            const Scalar bt = bisect_clear_t(tt, td, theta, /*hi_first=*/true);
+            if (bt > kEps) {
+                place_at(bt, td);
+            }
         }
     };
 
@@ -237,8 +274,163 @@ polish_se2_part(
             SolidGeometry<VecType> seeded =
                 part.rotate(theta).translate(VecType({pose_x, pose_y}));
 
-            const auto cast = cast_slide(seeded, scene.obstacles, dir, max_t);
-            try_slide_from_cast(seeded, theta, dir, cast);
+            Scalar cast_max = max_t;
+            if (opts.exact_horizon && pole_mode) {
+                const VecType c_seed = solid_centroid(seeded);
+                const Scalar hx = (*pole)[0] - c_seed[0];
+                const Scalar hy = (*pole)[1] - c_seed[1];
+                const Scalar h = hx * dir[0] + hy * dir[1];
+                if (h <= kEps) {
+                    continue;
+                }
+                cast_max = std::min(max_t, h);
+            }
+
+            const auto cast = cast_slide(seeded, scene.obstacles, dir, cast_max);
+            try_slide_from_cast(seeded, theta, dir, cast, cast_max);
+        }
+    }
+
+    // A3a winner legs (pole only): tangent along contact then re-cast to pole.
+    if (opts.winner_legs && pole_mode && !scene.obstacles.empty()) {
+        Scalar cur_x = have_best ? best_x : pose_x;
+        Scalar cur_y = have_best ? best_y : pose_y;
+        Scalar cur_th = have_best ? best_theta : pose_theta;
+        int legs = 0;
+        const int max_legs = opts.max_legs > 0 ? opts.max_legs : 2;
+        while (legs < max_legs) {
+            SolidGeometry<VecType> seeded =
+                part.rotate(cur_th).translate(VecType({cur_x, cur_y}));
+            const auto hits = scene.query_placed(seeded, clearance * static_cast<Scalar>(2));
+            Scalar best_d = std::numeric_limits<Scalar>::infinity();
+            VecType normal{};
+            bool have_n = false;
+            for (const auto &h : hits) {
+                if (h.intersect) {
+                    if (h.mtv.len_sq() > kEps) {
+                        normal = h.mtv;
+                        have_n = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (h.distance_sq < best_d && h.closest_normal.len_sq() > kEps) {
+                    best_d = h.distance_sq;
+                    normal = h.closest_normal;
+                    have_n = true;
+                }
+            }
+            if (!have_n) {
+                break;
+            }
+            const Scalar nn = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(
+                    normal[0] * normal[0] + normal[1] * normal[1])));
+            if (nn <= kEps) {
+                break;
+            }
+            const VecType nu({normal[0] / nn, normal[1] / nn});
+            VecType t1({-nu[1], nu[0]});
+            VecType t2({nu[1], -nu[0]});
+            const VecType pc = solid_centroid(seeded);
+            const Scalar to_px = (*pole)[0] - pc[0];
+            const Scalar to_py = (*pole)[1] - pc[1];
+            // Prefer tangent toward the pole.
+            VecType td = t1;
+            if (t1[0] * to_px + t1[1] * to_py < t2[0] * to_px + t2[1] * to_py) {
+                td = t2;
+            }
+            Scalar h_tan = to_px * td[0] + to_py * td[1];
+            if (h_tan <= kEps) {
+                // Near-orthogonal: try both signs with sheet-scale budget.
+                h_tan = max_t;
+            }
+            const Scalar cast_max = opts.exact_horizon ? std::min(max_t, h_tan) : max_t;
+            const auto tcast = cast_slide(seeded, scene.obstacles, td, cast_max);
+            Scalar tt = cast_max;
+            if (tcast.intersects_path) {
+                tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
+            }
+            if (tt > cast_max) {
+                tt = cast_max;
+            }
+            bool moved = false;
+            if (tt > kEps) {
+                // Temporarily set pose origin for bisect helper via local place.
+                const Scalar save_x = pose_x;
+                const Scalar save_y = pose_y;
+                pose_x = cur_x;
+                pose_y = cur_y;
+                const Scalar bt = bisect_clear_t(tt, td, cur_th, /*hi_first=*/true);
+                pose_x = save_x;
+                pose_y = save_y;
+                if (bt > kEps) {
+                    const Scalar nx = cur_x + td[0] * bt;
+                    const Scalar ny = cur_y + td[1] * bt;
+                    const Scalar prev = best_pole_dist;
+                    if (try_accept(nx, ny, cur_th, bt)) {
+                        moved = true;
+                        cur_x = best_x;
+                        cur_y = best_y;
+                        cur_th = best_theta;
+                        (void)prev;
+                    }
+                }
+            }
+            // Re-cast toward pole from current best.
+            {
+                SolidGeometry<VecType> s2 =
+                    part.rotate(cur_th).translate(VecType({cur_x, cur_y}));
+                const VecType c2 = solid_centroid(s2);
+                Scalar pdx = (*pole)[0] - c2[0];
+                Scalar pdy = (*pole)[1] - c2[1];
+                const Scalar plen = static_cast<Scalar>(
+                    std::sqrt(static_cast<double>(pdx * pdx + pdy * pdy)));
+                if (plen > kEps) {
+                    const VecType pdir({pdx / plen, pdy / plen});
+                    Scalar cast_max_p = max_t;
+                    if (opts.exact_horizon) {
+                        cast_max_p = std::min(max_t, plen);
+                    }
+                    const auto pcast =
+                        cast_slide(s2, scene.obstacles, pdir, cast_max_p);
+                    Scalar pt = cast_max_p;
+                    if (pcast.intersects_path) {
+                        pt = std::max(
+                            static_cast<Scalar>(0), pcast.t_entry - clearance);
+                    }
+                    if (pt > cast_max_p) {
+                        pt = cast_max_p;
+                    }
+                    if (pt > kEps) {
+                        const Scalar save_x = pose_x;
+                        const Scalar save_y = pose_y;
+                        pose_x = cur_x;
+                        pose_y = cur_y;
+                        const Scalar bt =
+                            bisect_clear_t(pt, pdir, cur_th, /*hi_first=*/true);
+                        pose_x = save_x;
+                        pose_y = save_y;
+                        if (bt > kEps) {
+                            const Scalar nx = cur_x + pdir[0] * bt;
+                            const Scalar ny = cur_y + pdir[1] * bt;
+                            if (try_accept(nx, ny, cur_th, bt)) {
+                                moved = true;
+                                cur_x = best_x;
+                                cur_y = best_y;
+                                cur_th = best_theta;
+                            }
+                        }
+                    }
+                }
+            }
+            ++legs;
+            if (opts.se2_legs_out != nullptr) {
+                *opts.se2_legs_out += 1;
+            }
+            if (!moved) {
+                break;
+            }
         }
     }
 
@@ -255,4 +447,43 @@ polish_se2_part(
         out_theta = static_cast<Scalar>(th);
     }
     return std::make_tuple(best_x, best_y, out_theta);
+}
+
+// Thin SE(2) polish: builds a Scene from owned obstacles (legacy / Motif default).
+template <class VecType>
+inline std::optional<std::tuple<
+    typename VecType::Scalar,
+    typename VecType::Scalar,
+    typename VecType::Scalar>>
+polish_se2_part(
+    const SolidGeometry<VecType> &part,
+    typename VecType::Scalar pose_x,
+    typename VecType::Scalar pose_y,
+    typename VecType::Scalar pose_theta,
+    std::vector<SolidGeometry<VecType>> obstacles,
+    const SolidGeometry<VecType> *board,
+    const std::vector<VecType> &dirs,
+    int n_angles,
+    typename VecType::Scalar max_t,
+    typename VecType::Scalar min_dist,
+    std::string_view mode,
+    const VecType *pole,
+    PolishSe2Opts opts = {}
+) {
+    StaticCollisionScene<VecType> scene;
+    scene.build(std::move(obstacles), static_cast<typename VecType::Scalar>(0.5));
+    return polish_se2_part(
+        part,
+        pose_x,
+        pose_y,
+        pose_theta,
+        scene,
+        board,
+        dirs,
+        n_angles,
+        max_t,
+        min_dist,
+        mode,
+        pole,
+        opts);
 }

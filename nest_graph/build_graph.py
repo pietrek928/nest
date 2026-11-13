@@ -2171,6 +2171,8 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 f"{reloc_stats.get('attempted', 0)} "
                 f"se2={se2_stats.get('moved', 0)}/"
                 f"{se2_stats.get('attempted', 0)} "
+                f"se2_fs={se2_stats.get('se2_from_shapely_n', 0)} "
+                f"se2_nh={se2_stats.get('se2_native_hits', 0)} "
                 f"tan={se2_stats.get('tangent_moves', 0)} "
                 f"gls={se2_stats.get('gls_insert_moved', 0)}/"
                 f"{se2_stats.get('gls_separate_moved', 0)}/"

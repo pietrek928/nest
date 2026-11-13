@@ -11,7 +11,12 @@ from shapely.ops import nearest_points
 from nest_graph.board import board_context_from_geometry
 from nest_graph.config import ProposeConfig
 from nest_graph.free_kind_util import void_phantom
-from nest_graph.geometry import Geometry, polish_se2_part, snap_pose_to_ring
+from nest_graph.geometry import (
+    Geometry,
+    StaticCollisionScene,
+    polish_se2_part,
+    snap_pose_to_ring,
+)
 from nest_graph.placement.common import (
     as_geometry,
     dual_pose_from_base,
@@ -47,6 +52,31 @@ def _packed_from_sel(
         and polys[int(i)] is not None
         and not getattr(polys[int(i)], "is_empty", False)
     ]
+
+
+def _local_se2_floater_pole(
+    poly: BaseGeometry,
+    poles: Sequence | None,
+    fallback: Point | None,
+) -> Point | None:
+    if poly is None or getattr(poly, "is_empty", False):
+        return None
+    c = poly.centroid
+    return preferred_spine_pole(float(c.x), float(c.y), poles, fallback=fallback)
+
+
+def _local_se2_order_key(
+    i: int,
+    out_polys: Sequence,
+    poles: Sequence | None,
+    pole: Point | None,
+) -> float:
+    if out_polys[i] is None or getattr(out_polys[i], "is_empty", False):
+        return -1.0
+    p = _local_se2_floater_pole(out_polys[i], poles, pole)
+    if p is not None:
+        return float(out_polys[i].centroid.distance(p))
+    return 0.0
 
 
 def _restore_away_if_slack_flat(
@@ -122,86 +152,6 @@ def _clearance_at_pole(
         if d < best:
             best = d
     return 0.0 if best == float("inf") else best
-
-
-def _try_polish_accept(
-    *,
-    idx: int,
-    part_g: Geometry,
-    part: BaseGeometry,
-    tr: np.ndarray,
-    dirs: list[tuple[float, float]],
-    voids: Sequence,
-    locked: Sequence,
-    out_polys: list,
-    out_tr: list,
-    out_geoms: list,
-    sel: Sequence[int],
-    group_ids: Sequence[int],
-    min_dist: float,
-    max_t: float,
-    n_angles: int,
-    stats: dict,
-    mode: str = "slide",
-    pole: tuple[float, float] | None = None,
-    telem_key: str = "se2_native_accepted",
-) -> bool:
-    """One polish_se2 try + post_pack_overlap_ok restore (shared by pole/GLS)."""
-    others = [
-        out_polys[j]
-        for j in sel
-        if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
-    ]
-    packed = [
-        g for g in (as_geometry(p) for p in (list(locked) + others)) if g is not None
-    ]
-    obs_with_voids = [*voids, *packed]
-    polished = polish_se2_part(
-        part_g,
-        (float(tr[0]), float(tr[1]), float(tr[2])),
-        obs_with_voids,
-        None,
-        dirs,
-        n_angles=n_angles,
-        max_t=float(max_t),
-        min_dist=float(min_dist),
-        mode=mode,
-        pole=pole,
-    )
-    if polished is None:
-        return False
-    bx, by, bth = polished
-    cand_tr = np.asarray([bx, by, bth], dtype=np.float64)
-    if (
-        abs(cand_tr[0] - tr[0]) < 1e-12
-        and abs(cand_tr[1] - tr[1]) < 1e-12
-        and abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi) < 1e-12
-    ):
-        return False
-    _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
-    if not is_pose_clear_vs_fixed(_cand_g, locked):
-        return False
-    prev_p, prev_t = out_polys[idx], out_tr[idx]
-    prev_g = out_geoms[idx]
-    out_polys[idx] = cand
-    out_tr[idx] = cand_tr
-    out_geoms[idx] = _cand_g
-    ok = post_pack_overlap_ok(
-        out_polys,
-        sel,
-        fixed_obstacles=locked,
-        geoms=out_geoms,
-        telem=stats,
-    )
-    if not ok:
-        out_polys[idx] = prev_p
-        out_tr[idx] = prev_t
-        out_geoms[idx] = prev_g
-        return False
-    stats["accepted"] += 1
-    stats["moved"] += 1
-    stats[telem_key] = int(stats.get(telem_key, 0) or 0) + 1
-    return True
 
 
 def gls_insert_separate_pass(
@@ -463,6 +413,8 @@ def local_se2_selection(
         "hole_open_slack_post": 0.0,
         "hole_open_dfit": 0.0,
         "hole_open_slack_restore": 0,
+        "se2_from_shapely_n": 0,
+        "se2_legs": 0,
     }
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
@@ -528,15 +480,29 @@ def local_se2_selection(
 
     if void_geoms is None:
         _, void_geoms = board_context_from_geometry(sheet)
-    voids = [
-        g for g in (as_geometry(v) for v in (void_geoms or ()))
-        if g is not None
-    ]
-
-    locked = [
-        g for g in (fixed_obstacles or ())
-        if g is not None and not g.is_empty
-    ]
+    # One-time void/locked natives (not counted in se2_from_shapely_n).
+    voids: list[Geometry] = []
+    for v in (void_geoms or ()):
+        if v is None or getattr(v, "is_empty", False):
+            continue
+        if isinstance(v, Geometry):
+            voids.append(v)
+        else:
+            vg = as_geometry(v)
+            if vg is not None:
+                voids.append(vg)
+    locked_geoms: list[Geometry] = []
+    locked: list = []
+    for g in (fixed_obstacles or ()):
+        if g is None or getattr(g, "is_empty", False):
+            continue
+        locked.append(g)
+        if isinstance(g, Geometry):
+            locked_geoms.append(g)
+        else:
+            lg = as_geometry(g)
+            if lg is not None:
+                locked_geoms.append(lg)
     n_angles = max(1, int(propose_cfg.local_se2_n_angles))
 
     coarse_step = max(4.0 * float(min_dist), 1e-4)
@@ -554,22 +520,13 @@ def local_se2_selection(
             and is_board_adj(out_polys[i], sheet, min_dist, ring=board_ring)
         }
 
-    def _floater_pole(poly: BaseGeometry) -> Point | None:
-        if poly is None or poly.is_empty:
-            return None
-        c = poly.centroid
-        return preferred_spine_pole(float(c.x), float(c.y), poles, fallback=pole)
-
-    def _order_key(i: int) -> float:
-        if out_polys[i] is None or out_polys[i].is_empty:
-            return -1.0
-        p = _floater_pole(out_polys[i])
-        if p is not None:
-            return float(out_polys[i].centroid.distance(p))
-        return 0.0
-
-    order = sorted(sel, key=_order_key, reverse=True)
     part_geoms = part_base_geoms(part_by_group, part_bases=part_bases)
+    # A3b nearest-first dual-missed early; keep farthest-first (helpers retained).
+    order = sorted(
+        sel,
+        key=lambda i: _local_se2_order_key(i, out_polys, poles, pole),
+        reverse=True,
+    )
 
     for idx in order:
         poly = out_polys[idx]
@@ -588,7 +545,9 @@ def local_se2_selection(
             <= float(r_entry) + max(float(min_dist), 1e-3)
         ):
             is_rim = False
-        pull_pole = None if is_rim else _floater_pole(poly)
+        pull_pole = (
+            None if is_rim else _local_se2_floater_pole(poly, poles, pole)
+        )
         if not is_rim and (
             not propose_cfg.enable_gravity_compaction
             or pull_pole is None
@@ -659,15 +618,13 @@ def local_se2_selection(
                 dirs = _slide_dirs(ux, uy)
                 use_pole_metric = True
 
-        others = [
-            out_polys[j]
+        # A2a: reuse out_geoms / locked natives — no per-part as_geometry.
+        others_g = [
+            out_geoms[j]
             for j in sel
-            if int(j) != int(idx) and out_polys[j] is not None and not out_polys[j].is_empty
+            if int(j) != int(idx) and out_geoms[j] is not None
         ]
-        packed = [
-            g for g in (as_geometry(p) for p in (list(locked) + others)) if g is not None
-        ]
-        obs_with_voids = [*voids, *packed]
+        obs_with_voids = [*voids, *locked_geoms, *others_g]
         if gid not in part_geoms:
             continue
         part_g = part_geoms[gid]
@@ -678,10 +635,12 @@ def local_se2_selection(
             dist0 if use_pole_metric else 0.0,
             coarse_step * max_coarse,
         )
+        scene = StaticCollisionScene.build(obs_with_voids, 0.5)
+        # A3a: horizon+legs only for pole gravity (nfp_lite keeps defaults off).
         polished = polish_se2_part(
             part_g,
             (float(tr[0]), float(tr[1]), float(tr[2])),
-            obs_with_voids,
+            [],
             None,
             dirs,
             n_angles=n_angles,
@@ -693,6 +652,10 @@ def local_se2_selection(
                 if use_pole_metric and pull_pole is not None
                 else None
             ),
+            scene=scene,
+            exact_horizon=bool(use_pole_metric),
+            # Winner legs dual-missed vs A2a; keep horizon-only for A3a.
+            winner_legs=False,
         )
         if polished is None:
             continue
@@ -705,7 +668,9 @@ def local_se2_selection(
         ):
             continue
         _cand_g, cand = dual_pose_from_base(part_g, part, cand_tr)
-        if not is_pose_clear_vs_fixed(_cand_g, locked):
+        if not is_pose_clear_vs_fixed(
+            _cand_g, locked, fixed_geoms=locked_geoms
+        ):
             continue
         # C: when opening the void, never shrink clearance below r_entry.
         if (
@@ -714,23 +679,13 @@ def local_se2_selection(
             and float(pole.distance(cand)) + 1e-9 < float(r_entry)
         ):
             continue
-        prev_p, prev_t = out_polys[idx], out_tr[idx]
-        prev_g = out_geoms[idx]
+        # Move-path Penetrating vs packed+locked only (voids stay Scene/clearance).
+        packed_check = [*locked_geoms, *others_g]
+        if packed_check and _cand_g.intersects_any(packed_check):
+            continue
         out_polys[idx] = cand
         out_tr[idx] = cand_tr
         out_geoms[idx] = _cand_g
-        ok = post_pack_overlap_ok(
-            out_polys,
-            sel,
-            fixed_obstacles=locked,
-            geoms=out_geoms,
-            telem=stats,
-        )
-        if not ok:
-            out_polys[idx] = prev_p
-            out_tr[idx] = prev_t
-            out_geoms[idx] = prev_g
-            continue
         stats["accepted"] += 1
         stats["moved"] += 1
         stats["se2_native_accepted"] += 1
@@ -745,6 +700,18 @@ def local_se2_selection(
             dth = abs(((cand_tr[2] - tr[2] + math.pi) % (2 * math.pi)) - math.pi)
             if dth > 1e-9:
                 stats["theta_changed_count"] += 1
+
+    # Final independence SoT after the wave (moves used intersects_any).
+    if not post_pack_overlap_ok(
+        out_polys,
+        sel,
+        fixed_obstacles=locked,
+        geoms=out_geoms,
+        fixed_geoms=locked_geoms,
+        telem=stats,
+    ):
+        # Should be rare; telem marks the miss without reverting the wave.
+        stats["se2_final_overlap_fail"] = 1
 
     # force_hole is always True from apply_post_pack_and_telem; gate was a no-op.
     gls_insert_separate_pass(

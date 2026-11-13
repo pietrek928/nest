@@ -56,6 +56,9 @@ def test_pre_filter_drops_full_packed_collision():
     keys = {(round(c[0], 4), round(c[1], 4), round(c[2], 4)) for c in out}
     assert (10.0, 10.0, 0.0) not in keys
     assert (2.0, 2.0, 0.0) in keys
+    assert geom.prefilter_batch_n == 2
+    # Batch path matches scalar SoT.
+    assert geom.batch_passes_full_packed_collision([bad, ok]) == [False, True]
 
 
 def test_from_candidates_rejects_part_mismatch_and_dual_args():

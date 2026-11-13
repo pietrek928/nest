@@ -80,7 +80,10 @@ void bind_snap_api(nb::module_ &m) {
            double max_t,
            double min_dist,
            const std::string &mode,
-           nb::object pole) -> std::optional<std::tuple<double, double, double>> {
+           nb::object pole,
+           nb::object scene,
+           bool exact_horizon,
+           bool winner_legs) -> std::optional<std::tuple<double, double, double>> {
             double px = 0.0;
             double py = 0.0;
             double pth = 0.0;
@@ -107,6 +110,27 @@ void bind_snap_api(nb::module_ &m) {
                 pole_v = Vec2d({ox, oy});
                 pole_ptr = &pole_v;
             }
+            PolishSe2Opts opts;
+            opts.exact_horizon = exact_horizon;
+            opts.winner_legs = winner_legs;
+            if (!scene.is_none()) {
+                const auto &holder =
+                    nb::cast<const StaticCollisionSceneHolder &>(scene);
+                return polish_se2_part(
+                    part.solid,
+                    static_cast<Vec2d::Scalar>(px),
+                    static_cast<Vec2d::Scalar>(py),
+                    static_cast<Vec2d::Scalar>(pth),
+                    holder.scene,
+                    board_ptr,
+                    dir_vecs,
+                    n_angles,
+                    static_cast<Vec2d::Scalar>(max_t),
+                    static_cast<Vec2d::Scalar>(min_dist),
+                    mode,
+                    pole_ptr,
+                    opts);
+            }
             return polish_se2_part(
                 part.solid,
                 static_cast<Vec2d::Scalar>(px),
@@ -120,7 +144,8 @@ void bind_snap_api(nb::module_ &m) {
                 static_cast<Vec2d::Scalar>(max_t),
                 static_cast<Vec2d::Scalar>(min_dist),
                 mode,
-                pole_ptr);
+                pole_ptr,
+                opts);
         },
         nb::arg("part"),
         nb::arg("pose"),
@@ -131,7 +156,10 @@ void bind_snap_api(nb::module_ &m) {
         nb::arg("max_t"),
         nb::arg("min_dist") = 0.0,
         nb::arg("mode") = "pole",
-        nb::arg("pole") = nb::none());
+        nb::arg("pole") = nb::none(),
+        nb::arg("scene") = nb::none(),
+        nb::arg("exact_horizon") = false,
+        nb::arg("winner_legs") = false);
 
     m.def(
         "snap_pose_to_ring",

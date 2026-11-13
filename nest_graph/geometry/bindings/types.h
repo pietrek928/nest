@@ -13,6 +13,7 @@ namespace nb = nanobind;
 #include "python_converters.h"
 #include "solid/solid_geometry.h"
 #include "distance/polygon_distance.h"
+#include "distance/static_collision_scene.h"
 
 using SolidGeometry2d = SolidGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
@@ -34,6 +35,10 @@ struct GeometryHolder {
 
     explicit GeometryHolder(SolidGeometry2d mesh)
         : solid(std::move(mesh)), rng(std::random_device{}()) {}
+};
+
+struct StaticCollisionSceneHolder {
+    StaticCollisionScene<Vec2d> scene;
 };
 
 nb::tuple circle_bounds_tuple(const GeometryHolder &g);
