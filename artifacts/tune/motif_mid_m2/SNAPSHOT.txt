@@ -1,0 +1,5 @@
+M2 — contact lattice bases (no void-pole wipe of base_for_lattice)
+early areas: 0.614 / 0.589 / 0.604 → med 0.604 min 0.589 (vs M1 0.611/0.590; within ~0.02 same-code width)
+late Δ: +0.2011 / +0.1917 / +0.1693 → med +0.1917 min +0.1693 (vs M1 +0.1996/+0.1701)
+indep OK; rim ≥~0.89. densify late still void_clear_ok=0 / cluster_copy=0/0 — defer to M3 mix/claim.
+Mate-grain and near-pole filter/top_k-reserve improves dual-missed or overlap_ok; reverted.

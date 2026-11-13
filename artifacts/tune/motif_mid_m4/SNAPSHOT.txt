@@ -1,0 +1,5 @@
+M4 — fat-basin∧cohort-pair arms graph_to_nest_hollow (Scene≥2 still required)
+early: 0.590 / 0.620 / 0.605 → med 0.605 min 0.590 (≈ M3 0.614/0.598 within noise)
+late Δ: +0.2163 / +0.1773 / +0.1765 → med +0.1773 min +0.1765 (= M3 med; min ≈)
+telem: compose_sz≥2 on late + early seed2; seq_full/hollow_retry live; hollow=0 still (cc_pool starve)
+rim ≥0.896. packing-clear→lock not used (Q262).

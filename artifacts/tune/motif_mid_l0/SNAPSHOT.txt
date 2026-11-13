@@ -1,0 +1,9 @@
+L0 Middle motif compose — open snapshot 2026-11-13
+early void_fill seeds 0/1/2: area 0.569 / 0.600 / 0.577 → med 0.577 min 0.569; parts med 58.7; indep ok
+late Δ N=3: +0.2011 / +0.2083 / +0.1701 → med +0.2011 min +0.1701
+
+Funnel confirm:
+- same_gid_identity_primary=6 on densify iters (M1)
+- fit_bound_inradius≈4–40 vs fit_void_inradius≈1080 (M2 pole/sponge)
+- mix_floor=0 mid; late cluster_copy often 0/0; early letter telem can show compose_sz=2 + cc>0
+- seq_miss wired on dg_funnel; fit_bound_* on motif_skip

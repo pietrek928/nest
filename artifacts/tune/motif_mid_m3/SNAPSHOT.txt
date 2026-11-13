@@ -1,0 +1,5 @@
+M3 — mix floor on large_void ∧ void_seek (+ plateau ∨ last_leaf)
+early: 0.614 / 0.598 / 0.620 → med 0.614 min 0.598 (≥ M2 0.604/0.589, ≥ M1 0.611/0.590)
+late Δ: +0.1924 / +0.1773 / +0.1773 → med +0.1773 min +0.1773 (min ≥ M2 0.1693; med within same-code late width of M2 +0.1917)
+telem: mix_floor/cc_mix 18–20 mid-run early; compose_sz still sparse late — M4.
+Dry-skip broaden of Scene (fallback identity/leader) → overlap_ok; reverted.

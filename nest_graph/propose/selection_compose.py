@@ -918,10 +918,30 @@ def compose_and_nest_selection(
         )
         if n_void_graph_pre > 0:
             nest_void_ratio = float(n_void_nest_pre) / float(n_void_graph_pre)
-        graph_to_nest_hollow = bool(
+        # Classic hollow: graph void rich, nest starved.
+        ratio_hollow = bool(
             n_void_graph_pre > 20
             and n_void_nest_pre <= max(1, int(0.25 * n_void_graph_pre))
         )
+        # M4: when stamped cohorts already have ≥2 members and the free basin
+        # is fat, arm hollow even if nest_void_ratio is milder — Scene ≥2
+        # locks still required downstream (not packing-clear→lock).
+        cohort_pair = False
+        for _coh in merged_cohorts or ():
+            _mk = _coh.get("member_keys") if isinstance(_coh, dict) else None
+            if _mk is not None and len(_mk) >= 2:
+                cohort_pair = True
+                break
+        fat_basin = free_basin_is_fat(free_poly, part_areas)
+        fat_hollow = bool(
+            cohort_pair
+            and fat_basin
+            and n_void_graph_pre > 0
+            and nest_void_ratio <= 0.55
+        )
+        graph_to_nest_hollow = bool(ratio_hollow or fat_hollow)
+        if propose_stats is not None and fat_hollow and not ratio_hollow:
+            propose_stats["hollow_fat_cohort_arm"] = 1
         if propose_stats is not None:
             propose_stats["nest_void_ratio"] = float(nest_void_ratio)
             propose_stats["graph_to_nest_hollow"] = int(graph_to_nest_hollow)

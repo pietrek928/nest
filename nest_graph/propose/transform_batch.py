@@ -1027,14 +1027,18 @@ def build_transform_batch(
             propose_stats_out["hist_q"] = int(hist_q)
             propose_stats_out["mix_props"] = int(n_props)
             propose_stats_out["rim_skip"] = int(bool(rim_sat))
-        # Q186: under plateau (or last leaf) + inward bridge, hard floor
-        # motif/cluster_copy keys in mix. Short fixtures (iters < flat_iters) never
-        # reach PlateauTracker; last leaf still needs structure reuse.
+        # Q186/M3: inward bridge floors motif/cluster_copy keys in mix on
+        # plateau ∨ last leaf ∨ (large_void ∧ void_seek). Mid-run void_seek
+        # never hit PlateauTracker while arch_elite saturates without compose.
         motif_floor_n = 0
         last_leaf = bool((propose_stats_out or {}).get("is_last_leaf", False))
-        if bool(getattr(cfg.propose, "enable_inward_bridge", True)) and (
-            on_plateau or last_leaf
-        ):
+        void_seek_live = bool(
+            is_void_seek(mcts_zone)
+            or any(is_void_seek(z) or "void_seek" in str(z) for z in zones_used)
+        )
+        large_void_seek = bool(is_large_void(free_kind) and void_seek_live)
+        floor_arm = bool(on_plateau or last_leaf or large_void_seek)
+        if bool(getattr(cfg.propose, "enable_inward_bridge", True)) and floor_arm:
             motif_floor_n = int(
                 getattr(cfg.propose, "cluster_copy_mix_floor", 12) or 12
             )
@@ -1052,8 +1056,7 @@ def build_transform_batch(
                 and part_bases is not None
                 and (
                     on_plateau and is_large_void(free_kind)
-                    or is_void_seek(mcts_zone)
-                    or any(is_void_seek(z) or "void_seek" in str(z) for z in zones_used)
+                    or void_seek_live
                 )
             )
             motif_pin, _pin_keys = _motif_mix_floor_rows(
@@ -1073,7 +1076,7 @@ def build_transform_batch(
             proposal_pins = dedupe_transforms(
                 np.concatenate([motif_pin, proposal_pins], axis=0)
             )
-            if on_plateau or last_leaf:
+            if floor_arm:
                 sel = (
                     dedupe_transforms(np.concatenate([motif_pin, sel], axis=0))
                     if sel.shape[0]

@@ -1,0 +1,4 @@
+M5 — PARKED
+Gate: join_n>0 ∧ mat_motif=0 and/or SE2 θ scatter on joined parts after M4.
+M4 early letter: mix of mat_motif=0/1 with join_n=2–5; SE2 49–52 moved without
+joined-scatter telem. No refine MotifJoin restore / local_se2 motif_locked skip shipped.

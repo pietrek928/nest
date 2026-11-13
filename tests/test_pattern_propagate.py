@@ -5,6 +5,7 @@ import math
 from shapely.geometry import Polygon, Point, box
 
 from nest_graph.config import ProposeConfig
+from nest_graph.graph import FreeKind
 from nest_graph.propose.cluster_repack import extract_capped_subpatterns
 from nest_graph.propose.motif_lock import (
     LargeVoidMotifPlateau,

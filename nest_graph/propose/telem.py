@@ -301,6 +301,9 @@ def _motif_skip_snip(
         "fit_obs_inradius",
         "fit_void_inradius",
         "fit_part_max_extent",
+        "fit_bound_inradius",
+        "fit_bound_need",
+        "fit_bound_ok",
         "void_clear_rate",
         "void_clear_ok",
         "void_clear_try",
@@ -342,7 +345,14 @@ def _motif_skip_snip(
         seen_labels.update({"void_clear_rate", "void_clear_ok", "void_clear_try"})
     # T: always surface fit radii trio when densify fit probe ran.
     if int(skip.get("fit_probe_ok", 0) or 0) > 0 or int(skip.get("fit_probe_fail", 0) or 0) > 0:
-        for fk in ("fit_void_inradius", "fit_obs_inradius", "fit_part_max_extent"):
+        for fk in (
+            "fit_void_inradius",
+            "fit_obs_inradius",
+            "fit_part_max_extent",
+            "fit_bound_inradius",
+            "fit_bound_need",
+            "fit_bound_ok",
+        ):
             parts.append(f"{fk}={int(skip.get(fk, 0) or 0)}")
             seen_labels.add(fk)
     for k in keys:
@@ -1898,7 +1908,14 @@ def merge_phase_gate_telem(
     else:
         skip = propose_stats.get("motif_skip") or {}
     if isinstance(skip, dict):
-        for fk in ("fit_void_inradius", "fit_obs_inradius", "fit_part_max_extent"):
+        for fk in (
+            "fit_void_inradius",
+            "fit_obs_inradius",
+            "fit_part_max_extent",
+            "fit_bound_inradius",
+            "fit_bound_need",
+            "fit_bound_ok",
+        ):
             leak[fk] = int(skip.get(fk, leak.get(fk, 0)) or 0)
     leak["graph_edges_n"] = int(
         propose_stats.get("graph_edges_n", leak.get("graph_edges_n", 0)) or 0
@@ -2451,6 +2468,7 @@ def format_dg_expand_funnel(leak: Mapping[str, Any]) -> str:
         f"{int(leak.get('hybrid_pick_reject_area', 0) or 0)}/"
         f"{int(leak.get('hybrid_pick_join_soft', 0) or 0)} "
         f"compose_sz={int(leak.get('motif_compose_accepted_size', 0) or 0)} "
+        f"seq_miss={int(leak.get('motif_sequential_skipped_missing', 0) or 0)} "
         f"lock_new={int(leak.get('lock_new_n', 0) or 0)}/"
         f"{int(leak.get('lock_inc_n', 0) or 0)} "
         f"lock_rz={int(leak.get('lock_n_realize', 0) or 0)} "

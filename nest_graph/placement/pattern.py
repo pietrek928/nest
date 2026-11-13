@@ -16,6 +16,7 @@ from nest_graph.propose.context import (
     cluster_packed_indices,
     part_extents,
     placement_free_region,
+    void_fit_radii,
     void_fits_part,
     void_pole_seed_coords,
 )
@@ -50,7 +51,7 @@ class ClusterPattern:
     motif_ids: tuple[int, ...] = ()
 
 
-# H0: kiss MotifBase inject (ckpt Δxy≈0.1); classify dual same-gid collide.
+# Legacy absolute lim (tests without extent); M1 stamps use _same_gid_kiss_xy_lim.
 _SAME_GID_KISS_XY = 0.5
 _POLE_ANCHOR_RADIUS = 2.0
 
@@ -61,11 +62,27 @@ def _bump_skip(skip_reasons: dict[str, int] | None, key: str, n: int = 1) -> Non
     skip_reasons[key] = int(skip_reasons.get(key, 0) or 0) + int(n)
 
 
-def _same_gid_rels_kiss(rels: Sequence[tuple[float, float, float]]) -> bool:
+def _same_gid_kiss_xy_lim(*, min_extent: float, min_dist: float) -> float:
+    """Near-coincident lattice period only — not a full triangle-mate Δxy.
+
+    Absolute 0.5 ≫ 0.15×0.07 mate spacing on the 1.2×1.1 board and forced
+    identity-primary on every same-gid pair (same_gid_identity_primary=6).
+    """
+    e = max(float(min_extent), 1e-9)
+    d = max(float(min_dist), 0.0)
+    return float(min(0.25 * e, max(2.0 * d, 1e-6)))
+
+
+def _same_gid_rels_kiss(
+    rels: Sequence[tuple[float, float, float]],
+    *,
+    lim: float | None = None,
+) -> bool:
     """True when ≥2 same-gid relatives are near-coincident (kiss dual)."""
     if len(rels) < 2:
         return False
-    lim2 = _SAME_GID_KISS_XY * _SAME_GID_KISS_XY
+    lim_xy = float(_SAME_GID_KISS_XY if lim is None else lim)
+    lim2 = lim_xy * lim_xy
     for i, a in enumerate(rels):
         ax, ay = float(a[0]), float(a[1])
         for b in rels[i + 1 :]:
@@ -1541,11 +1558,8 @@ def void_seek_motif_anchors(
                     or via_union_any
                 )
             )
-            if use_2d and pole_xy is not None and min_step > 0.0:
-                # T1: grow from void pole (+ grain) when period floor is live.
-                base_for_lattice = list(
-                    void_pole_seed_coords(void_pole, num_angles=4)
-                ) + list(grain_bases)
+            # M2: keep topology/pocket/ref bases already collected — do not wipe
+            # base_for_lattice to void_pole_seed only (uncleared gutter pole).
             if not base_for_lattice:
                 base_for_lattice.append(pat.ref_transform)
             if not offsets or depth <= 0:
@@ -1806,6 +1820,7 @@ def stamp_motif_leader_follower(
     foreign_out: dict[int, list] | None = None,
     hard_packed_geoms: Sequence | None = None,
     void_pole: Point | None = None,
+    min_dist: float = 0.0,
 ) -> list[tuple[float, float, float]]:
     """Propose-side motif stamp: full-motif packing clear, else same-group leader only.
 
@@ -1875,12 +1890,17 @@ def stamp_motif_leader_follower(
         out.append(coords)
         return True
 
+    min_e, _max_e = part_extents(shape_to_place)
+    kiss_lim = _same_gid_kiss_xy_lim(
+        min_extent=float(min_e),
+        min_dist=float(min_dist),
+    )
     for pat in patterns:
         rels = [t_rel for gid, t_rel in pat.members if int(gid) == int(group_id)]
         if not rels:
             _bump_skip(skip_reasons, "no_rels")
             continue
-        kiss_dual = _same_gid_rels_kiss(rels)
+        kiss_dual = _same_gid_rels_kiss(rels, lim=kiss_lim)
         # H1: same-gid kiss → identity-primary leader only (kiss = lattice period).
         stamp_rels = (
             [_same_gid_leader_rel(rels)] if kiss_dual else list(rels)
@@ -2258,10 +2278,21 @@ def propose_placements_cluster_copy(
                     obs_r = d
             eff_r = min(float(in_r), float(obs_r))
             _min_e, max_e = part_extents(unlock_shape)
+            # L0: boundary SoT beside exterior (packed holes cut medial radius).
+            _fits_b, in_r_b, need_r_b = void_fit_radii(
+                void_poly,
+                shape=unlock_shape,
+                min_dist=float(min_dist),
+                at_pt=Point(px, py),
+                use_boundary=True,
+            )
             if skip_reasons is not None:
                 skip_reasons["fit_void_inradius"] = int(round(in_r * 1000.0))
                 skip_reasons["fit_obs_inradius"] = int(round(obs_r * 1000.0))
                 skip_reasons["fit_part_max_extent"] = int(round(float(max_e) * 1000.0))
+                skip_reasons["fit_bound_inradius"] = int(round(float(in_r_b) * 1000.0))
+                skip_reasons["fit_bound_need"] = int(round(float(need_r_b) * 1000.0))
+                skip_reasons["fit_bound_ok"] = 1 if _fits_b else 0
                 if float(max_e) > eff_r + 1e-9:
                     skip_reasons["fit_probe_fail"] = 1
                 else:
@@ -2321,4 +2352,5 @@ def propose_placements_cluster_copy(
         foreign_out=foreign_out,
         hard_packed_geoms=hard_packed_geoms,
         void_pole=pole,
+        min_dist=float(min_dist),
     )
