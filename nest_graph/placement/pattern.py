@@ -1398,6 +1398,42 @@ def _mirror_anchors(
     ]
 
 
+def _lattice_near_far_top_k(
+    lattice: Sequence[tuple[float, float, float]],
+    top_k: int,
+    pole_xy: tuple[float, float] | None,
+) -> list[tuple[float, float, float]]:
+    """Keep ``top_k`` lattice poses: nearest-half + farthest-half interleaved.
+
+    Pole-sort the full pool first, then take ``(top_k+1)//2`` nearest and
+    ``top_k//2`` farthest (reversed), interleaved as near0, far0, …. Replaces
+    nearest-only ``lattice[:top_k]``. When ``N <= top_k``, return the full list
+    (no duplicate indices).
+    """
+    if not lattice or top_k <= 0:
+        return list(lattice)
+    rows = list(lattice)
+    if pole_xy is not None:
+        px, py = float(pole_xy[0]), float(pole_xy[1])
+        rows.sort(
+            key=lambda a: (float(a[0]) - px) ** 2 + (float(a[1]) - py) ** 2,
+        )
+    n = len(rows)
+    if n <= top_k:
+        return rows
+    n_near = (top_k + 1) // 2
+    n_far = top_k // 2
+    near = rows[:n_near]
+    far = list(reversed(rows[-n_far:])) if n_far else []
+    out: list[tuple[float, float, float]] = []
+    for i in range(max(len(near), len(far))):
+        if i < len(near):
+            out.append(near[i])
+        if i < len(far):
+            out.append(far[i])
+    return out[:top_k]
+
+
 def _dedupe_anchors(
     anchors: Sequence[tuple[float, float, float]],
 ) -> list[tuple[float, float, float]]:
@@ -1592,14 +1628,8 @@ def void_seek_motif_anchors(
         elif cfg_min_step > 0.0 and depth > 0:
             top_k = max(top_k, min(64, depth * 8))
         if lattice and top_k > 0:
-            if pole_xy is not None:
-                px, py = pole_xy
-
-                def _dist(a: tuple[float, float, float]) -> float:
-                    return (float(a[0]) - px) ** 2 + (float(a[1]) - py) ** 2
-
-                lattice.sort(key=_dist)
-            lattice = lattice[:top_k]
+            # After live top_k co-scale: near/far interleave (not nearest-head cut).
+            lattice = _lattice_near_far_top_k(lattice, top_k, pole_xy)
             lattice_kept = len(lattice)
             lattice_kept_coords = list(lattice)
             anchors.extend(lattice)
@@ -1738,6 +1768,7 @@ def _foreign_member_packing_clear(
     return _foreign_member_packing_status(
         part, coords, propose_geom, obstacles=obstacles
     ) == "ok"
+
 
 
 def _full_motif_packing_clear(
@@ -2040,6 +2071,7 @@ def stamp_motif_leader_follower(
                 else:
                     _bump_skip(skip_reasons, "leader_fail")
     return out
+
 
 
 def propose_placements_cluster_copy(

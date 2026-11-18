@@ -777,22 +777,48 @@ public:
                 (it != cohort_amaf_.end() && it->second.visits > 0)
                     ? it->second.visits
                     : 0;
-            if (cohort_visits >= MCTS_AMAF_COHORT_REF) {
-                visits = cohort_visits;
-                mean = it->second.reward / static_cast<float>(visits);
-                misses = it->second.misses;
-                last_touch = it->second.last_touch;
+            // L3: continuous GRAVE blend w=min(1, cohort_visits/ref) vs hard step.
+            const float arena_mean =
+                (visits > 0)
+                    ? arena->amaf_mean(region_i, rule_id, motif_id, preset_id)
+                    : 0.f;
+            const int32_t arena_misses =
+                arena->amaf_misses(region_i, rule_id, motif_id, preset_id);
+            const int32_t arena_touch = arena->amaf_last_touch(
+                region_i, rule_id, motif_id, preset_id
+            );
+            if (cohort_visits > 0) {
+                const float cohort_mean =
+                    it->second.reward / static_cast<float>(cohort_visits);
+                const float w = std::min(
+                    1.f,
+                    static_cast<float>(cohort_visits)
+                        / static_cast<float>(MCTS_AMAF_COHORT_REF)
+                );
+                if (visits > 0) {
+                    mean = w * cohort_mean + (1.f - w) * arena_mean;
+                    misses = (w >= 0.5f) ? it->second.misses : arena_misses;
+                    last_touch =
+                        (w >= 0.5f) ? it->second.last_touch : arena_touch;
+                    visits = std::max(cohort_visits, visits);
+                    if (w < 1.f) {
+                        telem.amaf_cohort_fallback += 1;
+                    }
+                } else {
+                    mean = cohort_mean;
+                    misses = it->second.misses;
+                    last_touch = it->second.last_touch;
+                    visits = cohort_visits;
+                }
                 telem.cohort_sig_amaf_visits = std::max(
                     telem.cohort_sig_amaf_visits,
-                    visits
+                    cohort_visits
                 );
             } else if (visits > 0) {
-                // H2e GRAVE: cold/thin cohort → arena AMAF for same 4-tuple.
-                mean = arena->amaf_mean(region_i, rule_id, motif_id, preset_id);
-                misses = arena->amaf_misses(region_i, rule_id, motif_id, preset_id);
-                last_touch = arena->amaf_last_touch(
-                    region_i, rule_id, motif_id, preset_id
-                );
+                // H2e GRAVE: empty cohort slot → arena AMAF for same 4-tuple.
+                mean = arena_mean;
+                misses = arena_misses;
+                last_touch = arena_touch;
                 telem.amaf_cohort_fallback += 1;
             } else {
                 visits = 0;

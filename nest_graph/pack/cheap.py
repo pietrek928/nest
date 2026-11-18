@@ -167,6 +167,8 @@ def proven_compose_row(pack_cache: dict, action) -> dict | None:
         action,
         compose_sz=compose_sz,
         cohort_sig=int(cohort_sig),
+        # L4: indices-only fp stays order-invariant; pose arm parked until
+        # cheap_cache lookups appear on the gate tag (L0 cch=0/0).
         lock_fp=cheap_lock_fingerprint(pack_cache.get("motif_locked")),
         pack_preset_id=int(pack_pid) if pack_pid is not None else None,
     )
@@ -228,6 +230,9 @@ def compose_cached_selection(
     else:
         n_cc = 0
     pack_cache["cheap_cluster_copy_n"] = int(n_cc)
+    # Q264/mine3: persist inject/cohort fields onto pack_cache propose_stats
+    # (propose_stats_c is a copy — without write-back credit sees stale cohorts).
+    pack_cache["propose_stats"] = propose_stats_c
     rid = int(getattr(action, "rule_id", 0) or 0) if action is not None else 0
     active_rules = active_rule_set(rule_sets, rid)
     scores = list(score_elems(graph, active_rules))
@@ -276,7 +281,8 @@ def compose_cached_selection(
             packed_transform=ptf,
             last_leaf=False,
             void_geoms=void_geoms,
-            dg=pack_cache.get("dg"),
+            # Q259/mine3: cheap expand must not stamp MotifJoin onto shared DG.
+            dg=None,
             motif_base=pack_cache.get("motif_base"),
             survive_by_motif=pack_cache.get("survive_by_motif") or {},
             cheap_expand=True,
@@ -437,6 +443,7 @@ def pack_execute_snapshot(
         if isinstance(ps, dict):
             cohort_sig = int(ps.get("motif_cohort_sig", 0) or 0)
     pack_cache["cache_key_cohort_sig"] = int(cohort_sig)
+    # L4 park: pose-quantized fp deferred (same-packed miss rate already idle).
     lock_fp = cheap_lock_fingerprint(pack_cache.get("motif_locked"))
     pack_cache["cache_key_lock_fp"] = int(lock_fp)
     pack_pid = pack_cache.get("pack_preset_id")
@@ -471,6 +478,22 @@ def pack_execute_snapshot(
         lookup_n = int(pack_cache.get("cache_lookup_n", 0) or 0)
         hit_n = int(pack_cache.get("cache_hit_n", 0) or 0)
         pack_cache["cache_miss_rate"] = 1.0 - (float(hit_n) / float(lookup_n))
+        # Q264: hit skips compose_cached_selection — still feed cohort inject into
+        # pack_cache propose_stats (no compose / stamp / DG mutate on hit).
+        hit_pats = list(patterns or [])
+        hit_gid = pack_cache.get("compose_group_id")
+        hit_tf = pack_cache.get("compose_transform")
+        if hit_pats and hit_gid is not None and hit_tf is not None:
+            hit_ps = pack_cache.get("propose_stats")
+            if not isinstance(hit_ps, dict):
+                hit_ps = {}
+                pack_cache["propose_stats"] = hit_ps
+            pack_cache["cheap_cluster_copy_n"] = int(
+                inject_cohorts_from_patterns(
+                    hit_pats, hit_gid, hit_tf, hit_ps,
+                )
+            )
+            pack_cache["last_execute_telem"]["cache_hit_inject"] = 1
         return cached
 
     pack_cache["cache_miss_n"] = int(pack_cache.get("cache_miss_n", 0) or 0) + 1

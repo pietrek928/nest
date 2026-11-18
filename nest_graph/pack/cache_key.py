@@ -4,6 +4,7 @@ import zlib
 from typing import Any, Sequence
 
 from nest_graph.place_zone_util import place_zone_token
+from nest_graph.utils import transform_row_key
 
 
 def macro_motif_id(action: Any | None) -> int:
@@ -16,14 +17,37 @@ def macro_motif_id(action: Any | None) -> int:
     return int(raw)
 
 
-def cheap_lock_fingerprint(motif_locked: Sequence | None) -> int:
-    """Stable fingerprint of sorted lock indices (Q271 identity beyond compose_sz)."""
+def cheap_lock_fingerprint(
+    motif_locked: Sequence | None,
+    transforms: Sequence | None = None,
+) -> int:
+    """Order-invariant lock fingerprint (Q271/L4).
+
+    Indices alone when ``transforms`` is absent. With transforms, include
+    round-4 pose keys at locked idxs so distinct pocket clearances do not
+    alias under a permuted lock set (still commutative via sorted parts).
+    """
     if not motif_locked:
         return 0
     idxs = tuple(sorted(int(i) for i in motif_locked if int(i) >= 0))
     if not idxs:
         return 0
-    return int(zlib.crc32(",".join(str(i) for i in idxs).encode("utf-8")) & 0x7FFFFFFF)
+    if transforms is None:
+        payload = ",".join(str(i) for i in idxs)
+    else:
+        parts: list[str] = []
+        n_tf = len(transforms)
+        for i in idxs:
+            if i < n_tf:
+                try:
+                    x, y, th = transform_row_key(transforms[i])
+                    parts.append(f"{i}:{x},{y},{th}")
+                except Exception:
+                    parts.append(str(i))
+            else:
+                parts.append(str(i))
+        payload = "|".join(parts)
+    return int(zlib.crc32(payload.encode("utf-8")) & 0x7FFFFFFF)
 
 
 def cheap_pack_cache_key(

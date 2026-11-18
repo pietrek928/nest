@@ -635,8 +635,13 @@ def _void_seek_densify(
     densify_rank = (
         RankingMode.CONTACT_HYBRID if propose_cfg.use_pocket_fit else RankingMode.CLEARANCE
     )
-    # T1: densify may opt into motif_lattice_min_step via densify_cfg; do not force
-    # a default period (forcing 1.0 left late collide and noisy early area).
+    # T1 densify-only: arm lattice period from densify part AABB extents (not
+    # global default; hardcoded 1.0 over-strode late collide). Global stays 0.0.
+    # Unify (same letter): AABB max left lat=0/0 → geom-mean sqrt(min*max).
+    densify_min_e, densify_max_e = part_extents(part_poly)
+    densify_min_step = float(
+        (float(densify_min_e) * float(densify_max_e)) ** 0.5
+    )
     densify_cfg = densify_cfg.model_copy(update={
         "use_guidance_propositions": True,
         "guidance_use_tight_packing": True,
@@ -660,6 +665,7 @@ def _void_seek_densify(
         ),
         # Q146: inner densify collect must not Halton again; reuse / last-resort below.
         "use_free_space_cloud": False,
+        "motif_lattice_min_step": densify_min_step,
     })
     telem["densify_motif_lattice_min_step"] = float(
         getattr(densify_cfg, "motif_lattice_min_step", 0.0) or 0.0
@@ -3270,6 +3276,7 @@ def proposed_transforms_for_groups(
     densify_stats_union_new: int | None = None
     densify_stats_yield_tag: str | None = None
     densify_stats_xy_in: int = 0
+    densify_stats_min_step: float = 0.0
     densify_stats_cloud_skip: str = ""
     pocket_skips_all: list[str] = []
     cascade_agg: dict = {
@@ -3927,6 +3934,11 @@ def proposed_transforms_for_groups(
                 densify_stats_union_new = int(densify_telem.get("union_new_n") or 0)
                 densify_stats_yield_tag = densify_telem.get("void_yield_tag")
             densify_stats_xy_in += int(densify_telem.get("densify_xy_in", 0) or 0)
+            step_v = float(
+                densify_telem.get("densify_motif_lattice_min_step", 0.0) or 0.0
+            )
+            if step_v > densify_stats_min_step:
+                densify_stats_min_step = step_v
             skip_s = str(densify_telem.get("free_space_cloud_skip", "") or "")
             if skip_s:
                 densify_stats_cloud_skip = skip_s
@@ -4003,6 +4015,10 @@ def proposed_transforms_for_groups(
         densify_stats_out["motif_cohorts"] = list(motif_cohorts_agg)
         densify_stats_out["motif_coemit_followers"] = int(
             motif_skip_agg.get("motif_coemit_followers", 0)
+        )
+        # D1: surface densify-only lattice step in densify_stats (void_leak / letter).
+        densify_stats_out["densify_motif_lattice_min_step"] = float(
+            densify_stats_min_step
         )
         # V: all densify Motif groups fit-sterile after wedge grain.
         fit_fail = int(

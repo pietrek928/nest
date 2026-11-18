@@ -156,6 +156,32 @@ def test_lattice_offsets_and_pole_sort_top_k():
     assert int(stats.get("lattice_anchors_kept", 0)) <= 4
 
 
+def test_lattice_near_far_top_k_interleaves():
+    """D1: after co-scale, keep nearest-half + farthest-half interleaved."""
+    from nest_graph.placement.pattern import _lattice_near_far_top_k
+
+    # Distances from pole (0,0): 1,2,3,4,5,10
+    lattice = [
+        (1.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0),
+        (3.0, 0.0, 0.0),
+        (4.0, 0.0, 0.0),
+        (5.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+    ]
+    out = _lattice_near_far_top_k(lattice, top_k=4, pole_xy=(0.0, 0.0))
+    # n_near=2 → 1,2; n_far=2 → 10,5 reversed farthest-first → interleave 1,10,2,5
+    assert [(round(a[0], 1), round(a[1], 1)) for a in out] == [
+        (1.0, 0.0),
+        (10.0, 0.0),
+        (2.0, 0.0),
+        (5.0, 0.0),
+    ]
+    # N <= top_k → full list, no duplicates
+    small = _lattice_near_far_top_k(lattice[:3], top_k=4, pole_xy=(0.0, 0.0))
+    assert len(small) == 3
+
+
 def test_lattice_offsets_pi_kiss_scales_to_min_step():
     """MotifBase kiss Δxy≈0.1 with Δθ≈π → period-2 then min_step floor."""
     pat = ClusterPattern(

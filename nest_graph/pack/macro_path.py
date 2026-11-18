@@ -540,6 +540,31 @@ def _join_endpoints(step: Any) -> tuple[int, int]:
     )
 
 
+def _join_endpoint_gid_set(join_nbrs: Sequence[Any]) -> set[int]:
+    """Gid endpoints from ranked MotifJoin/Attach neighbors (L5 priority set)."""
+    out: set[int] = set()
+    for step in join_nbrs:
+        a, b = _join_endpoints(step)
+        if a >= 0:
+            out.add(a)
+        if b >= 0:
+            out.add(b)
+    return out
+
+
+def _macro_join_intersect(action: Any, join_gids: set[int]) -> int:
+    """1 if macro part_gid intersects join endpoints; priority sort only (not drop)."""
+    if not join_gids:
+        return 0
+    raw = getattr(action, "part_gid", None)
+    if raw is None:
+        return 0
+    gid = int(raw)
+    if gid < 0:
+        return 0
+    return 1 if gid in join_gids else 0
+
+
 def _validate_join_bonus(
     agent: Any, join_step: Any, baseline: float, telem: dict | None = None
 ) -> float:
@@ -671,9 +696,11 @@ def macro_increase_path(
     best_action: Any | None = None
     best_reward = float(baseline_reward)
     best_snap: BoardSnapshot | None = None
+    best_patterns: list = []
     best_motif_action: Any | None = None
     best_motif_reward = float(baseline_reward)
     best_motif_snap: BoardSnapshot | None = None
+    best_motif_patterns: list = []
     attempts = 0
     accept = 0
     swap_depth = 0
@@ -753,6 +780,11 @@ def macro_increase_path(
         # H3: after survive_rank, soft AMAF tie-break (hole-expand credit → path beam).
         # P1: void_fit_r / phantom omitted on path — placeable + phantom demotes dumped
         # early med (Letter A r1). Soft conflict_p consumes on UCB expand only.
+        # L5: join∩ endpoints = priority sort inside beam (not hard drop).
+        join_nbrs = _path_neighbors_ranked(runner, block_node, agent, telem)[
+            : max(int(beam), 1)
+        ]
+        join_gids = _join_endpoint_gid_set(join_nbrs)
         amaf_scores: dict[int, float] = {}
         for i_alt, alt_sc in enumerate(siblings):
             try:
@@ -766,14 +798,23 @@ def macro_increase_path(
                 )
             except Exception:
                 amaf_scores[i_alt] = 0.0
+        join_hits = 0
         order = sorted(
             range(len(siblings)),
             key=lambda i: (
+                -_macro_join_intersect(siblings[i], join_gids),
                 -survive_rank(siblings[i], realized),
                 -float(amaf_scores.get(i, 0.0)),
             ),
         )
         siblings = [siblings[i] for i in order]
+        if join_gids:
+            join_hits = sum(
+                _macro_join_intersect(a, join_gids) for a in siblings
+            )
+            telem["path_join_priority_n"] = int(
+                telem.get("path_join_priority_n", 0) or 0
+            ) + int(join_hits)
         telem["path_amaf_tiebreak"] = int(telem.get("path_amaf_tiebreak", 0) or 0) + 1
         beam_n = max(int(beam), 1)
         if motif_hold_tip:
@@ -791,9 +832,6 @@ def macro_increase_path(
         else:
             siblings = siblings[:beam_n]
         # Q386: MotifJoin/Attach neighbors validate-only (no pack).
-        join_nbrs = _path_neighbors_ranked(runner, block_node, agent, telem)[
-            : max(int(beam), 1)
-        ]
         path_step_attach_d = 0
         dg = getattr(runner, "dg", None)
         for join_step in join_nbrs:
@@ -897,6 +935,7 @@ def macro_increase_path(
                 best_reward = float(reward)
                 best_action = alt
                 best_snap = child_snap
+                best_patterns = list(path_patterns)
                 swap_depth = int(depth)
                 accept += 1
             # M: Motif on large_void — hold/plateau tip tracks cov non-regress
@@ -931,6 +970,7 @@ def macro_increase_path(
                     best_motif_reward = float(reward)
                     best_motif_action = alt
                     best_motif_snap = child_snap
+                    best_motif_patterns = list(path_patterns)
                     if accept == 0:
                         accept = 1
     # F2 leaf soft telem is via record_path_edge_census (lock_ov SoT).
@@ -977,9 +1017,12 @@ def macro_increase_path(
     # is gated in build_graph (Motif soft does not thrash late Δ). Early evaluator
     # keeps Void path winners (prefer_motif_return=False) to hold floors.
     if prefer_motif_return and best_motif_action is not None:
+        # Mine3/L1: winning sibling patterns for path-accept ContactGRG upsert.
+        telem["path_accept_patterns"] = list(best_motif_patterns)
         return best_motif_action, float(best_motif_reward), best_motif_snap
     if best_action is None and best_motif_action is None:
         telem["path_alt_none"] = int(telem.get("path_alt_none", 0) or 0) + 1
+    telem["path_accept_patterns"] = list(best_patterns)
     return best_action, best_reward, best_snap
 
 
@@ -1572,6 +1615,7 @@ def run_outer_path_probe(
                 if decision["upsert"] and path_accept_snap is not None:
                     # J: Q389 upsert on path-proven snap (incl. Motif soft tip).
                     # Pre-probe soft tip never reaches this block.
+                    # Mine3/L1: patterns from winning sibling (path_accept_patterns).
                     path_accept_contact_upsert(
                         mcts_runner,
                         path_accept_snap,
@@ -1595,6 +1639,9 @@ def run_outer_path_probe(
                         ),
                         pack_cache=_pack_cache,
                         telem=mcts_telem,
+                        patterns=list(
+                            mcts_telem.get("path_accept_patterns") or ()
+                        ),
                     )
         # T/R1: idle streak uses hard carve (soft tip must not freeze thrift).
         if int(mcts_telem.get("path_hard_carve", 0) or 0) <= 0:

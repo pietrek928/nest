@@ -2269,6 +2269,28 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             pattern_accept=bool(pattern_accept),
             motif_refine_n=int(motif_refine_n),
         )
+        # D1: peak densify lattice across iters — last iter often skips densify and
+        # would otherwise zero letter telem lat= even when mid-run kept>0.
+        if isinstance(propose_stats.get("void_leak"), dict):
+            leak = propose_stats["void_leak"]
+            lat_peak = propose_stats.setdefault("lattice_peak", {})
+            dens = propose_stats.get("densify_stats") or {}
+            for k in ("lattice_anchors_added", "lattice_anchors_kept"):
+                cur = max(
+                    int(leak.get(k, 0) or 0),
+                    int(motif_telem.get(k, 0) or 0),
+                )
+                lat_peak[k] = max(int(lat_peak.get(k, 0) or 0), cur)
+                leak[k] = int(lat_peak[k])
+            step_cur = float(dens.get("densify_motif_lattice_min_step", 0.0) or 0.0)
+            if step_cur > 0.0:
+                lat_peak["densify_motif_lattice_min_step"] = max(
+                    float(lat_peak.get("densify_motif_lattice_min_step", 0.0) or 0.0),
+                    step_cur,
+                )
+                leak["densify_motif_lattice_min_step"] = float(
+                    lat_peak["densify_motif_lattice_min_step"]
+                )
         cov = _selection_coverage_pct(
             selected_polys, group_id, part_areas, board_area,
         )

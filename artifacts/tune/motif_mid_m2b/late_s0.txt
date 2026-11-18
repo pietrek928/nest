@@ -1,0 +1,2 @@
+[checkpoint] resume artifacts/checkpoints/void_fill_seed0_iter20.npz iter=20 cov=0.4727 parts=54 +8 iters
+Nesting:   0%|          | 0/8 [00:00<?, ?iter/s]Nesting:   0%|          | 0/8 [00:14<?, ?iter/s, cov=53.0%, dfs=1, ordered=1, parts=63, pool=1732, refine=52->63]Nesting:  12%|█▎        | 1/8 [00:14<01:41, 14.54s/iter, cov=53.0%, dfs=1, ordered=1, parts=63, pool=1732, refine=52->63]

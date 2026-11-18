@@ -1000,8 +1000,14 @@ def path_accept_contact_upsert(
     motif_max_keep: int,
     pack_cache: dict,
     telem: dict,
+    patterns: list | None = None,
 ) -> int:
-    """Q389: masked ContactGRG upsert on macro_path accept (not multi-sim)."""
+    """Q389: masked ContactGRG upsert on macro_path accept (not multi-sim).
+
+    ``patterns`` (mine3/L1): optional leader-star / inject patterns from the
+    winning path sibling — same ``patterns=`` arm as ``upsert_from_repack_accept``.
+    Both-endpoints mask only (``mask_any_endpoint=False``).
+    """
     if runner is None or getattr(runner, "motif_base", None) is None:
         return 0
     packed_gids = tuple(getattr(snap, "packed_gids", ()) or ())
@@ -1064,6 +1070,7 @@ def path_accept_contact_upsert(
         telem=telem,
         selection_mask=mask,
         mask_any_endpoint=False,
+        patterns=list(patterns or ()),
     )
     note_motif_ref_anchors(runner.motif_base, gids_ok, tfs_ok)
     telem["path_contact_upserts"] = int(telem.get("path_contact_upserts", 0) or 0) + int(

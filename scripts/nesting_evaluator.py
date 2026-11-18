@@ -1492,6 +1492,9 @@ class NestingPipelineEvaluator:
                 "repack_attempted",
                 "cluster_copy_emitted",
                 "motif_hit",
+                # D1: densify lattice (motif_skip) — last iter often skips densify.
+                "lattice_anchors_added",
+                "lattice_anchors_kept",
             ):
                 cur = int(
                     propose_stats.get(key, 0)
@@ -1500,6 +1503,13 @@ class NestingPipelineEvaluator:
                     or (mcts_telem or {}).get(key, 0)
                     or 0
                 )
+                if key in ("lattice_anchors_added", "lattice_anchors_kept"):
+                    ms = densify.get("motif_skip") or {}
+                    cur = max(
+                        cur,
+                        int(ms.get(key, 0) or 0),
+                        int(ms.get(f"motif_{key}", 0) or 0),
+                    )
                 if key == "accepted_patterns_archived":
                     cur = max(
                         cur,
@@ -1543,6 +1553,23 @@ class NestingPipelineEvaluator:
             last_void_leak["repair_bp_delta"] = float(
                 letter_peak_state["repair_bp_delta"]
             )
+            # D1: peak densify-only lattice step across iters.
+            _step = float(
+                densify.get("densify_motif_lattice_min_step", 0.0)
+                or last_void_leak.get("densify_motif_lattice_min_step", 0.0)
+                or 0.0
+            )
+            if _step > 0.0:
+                letter_peak_state["densify_motif_lattice_min_step"] = max(
+                    float(
+                        letter_peak_state.get("densify_motif_lattice_min_step", 0.0)
+                        or 0.0
+                    ),
+                    _step,
+                )
+                last_void_leak["densify_motif_lattice_min_step"] = float(
+                    letter_peak_state["densify_motif_lattice_min_step"]
+                )
             skip_reason = str(propose_stats.get("archive_mix_skip_reason") or "")
             if skip_reason:
                 last_void_leak["archive_mix_skip_reason"] = skip_reason

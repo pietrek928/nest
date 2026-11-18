@@ -331,6 +331,12 @@ def _motif_skip_snip(
         "no_anchors",
         "fallback_leader",
         "full_motif_clear",
+        "lattice_anchors_added",
+        "lattice_anchors_kept",
+        "clear_xy_lattice_slide_seed",
+        "clear_xy_lattice_fallback_clear",
+        "clear_xy_lattice_fallback_refuse",
+        "anchor_clear_kept",
     )
     parts = []
     seen_labels: set[str] = set()

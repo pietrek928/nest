@@ -1,0 +1,37 @@
+{
+  "letter": "L0",
+  "tag": "void_fill",
+  "early": {
+    "seeds": [0, 1, 2],
+    "areas": [0.5837121212121211, 0.5909090909090909, 0.6083333333333334],
+    "parts": [58, 58, 62],
+    "median_area": 0.5909090909090909,
+    "min_area": 0.5837121212121211,
+    "median_parts": 58,
+    "independent_ok": true,
+    "census": {
+      "motif_compose_accepted_size": [2, 2, 0],
+      "materialized_motif": [1, 0, 0],
+      "lock_n_compose": [2, 2, 0],
+      "lock_n_refine": [0, 0, 0],
+      "pw_expand": [5, 5, 5],
+      "amaf_hits": [15, 15, 15],
+      "path_nest_adopt": [0, 0, 0],
+      "member_hits": [4, 0, 1],
+      "note": "path_join_labeled_n/cheap_cache_hit/amaf_cohort_fallback/mcts_cohort_macro_n absent from void_leak rows (unverified for gate until present)"
+    }
+  },
+  "late": {
+    "checkpoint": "artifacts/checkpoints/void_fill_seed0_iter20.npz",
+    "extra_iters": 8,
+    "N": 3,
+    "delta_cov": [0.2163, 0.2163, 0.2163],
+    "delta_parts": [29, 29, 29],
+    "median_delta_cov": 0.2163,
+    "min_delta_cov": 0.2163,
+    "final_cov": 0.6890,
+    "final_parts": 83,
+    "ckpt_cov": 0.4727,
+    "ckpt_parts": 54
+  }
+}
