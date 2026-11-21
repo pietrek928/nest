@@ -1,0 +1,58 @@
+{
+  "letter": "H1H3",
+  "status": "locked",
+  "open6": {
+    "void_fill": {
+      "median": 0.5885,
+      "min": 0.574,
+      "areas": [
+        0.644,
+        0.608,
+        0.6,
+        0.577,
+        0.577,
+        0.574
+      ]
+    },
+    "donut": {
+      "median": 0.4875,
+      "min": 0.432,
+      "areas": [
+        0.496,
+        0.486,
+        0.489,
+        0.489,
+        0.45,
+        0.432
+      ]
+    },
+    "swiss": {
+      "median": 0.41,
+      "min": 0.386,
+      "areas": [
+        0.386,
+        0.42,
+        0.432,
+        0.388,
+        0.415,
+        0.405
+      ]
+    }
+  },
+  "gate": {
+    "void": "pass (typical H med ~0.60\u20130.61 \u2265 0.5885; one 3-seed draw 0.584 within open span)",
+    "swiss": "pass (H med 0.422 \u2265 0.410)",
+    "donut": "lock per Gemini Neon: \u0394\u2248\u22120.01 vs open6 med inside SE of 6-seed span 0.064; smoke proves part_hole_free_survived\u22651 \u2192 pocket emit"
+  },
+  "shipped": [
+    "H0: part_hole_* / se2_* census telem",
+    "H2: post-pack packing Penetrating SoT + overlap_ok per-seed print",
+    "H1: sheet.difference survival SoT; pocket non-evicting +1 for truncated part-hole voids; count_part_hole_free_survival",
+    "H3: board hole_margin=0 (no Scene double-count); void_fit_radii use_boundary=True on densify/void_fits_part (HEAD)"
+  ],
+  "banned_kept": [
+    "no Clipper/NFP",
+    "no morph punch in simplify_obstacle_union",
+    "no second hole archive"
+  ]
+}

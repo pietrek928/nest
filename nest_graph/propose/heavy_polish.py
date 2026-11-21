@@ -35,6 +35,47 @@ def _shrink_independent_locks(idxs: Sequence[int], graph) -> list[int]:
     return out if len(out) >= 2 else []
 
 
+def _leader_kiss_lock_subset(
+    locked: set[int] | Sequence[int],
+    selected: Sequence[int],
+    nest_before: Sequence[int],
+    *,
+    polys: Sequence | None,
+    graph,
+) -> list[int]:
+    """M2 miss: leader + nearest kissing lock member still in refine or pre-nest."""
+    order = [int(i) for i in locked if int(i) >= 0]
+    if len(order) < 2:
+        return []
+    present = {int(i) for i in selected} | {int(i) for i in nest_before}
+    pool = [i for i in order if i in present]
+    if len(pool) < 2:
+        return []
+    leader = pool[0]
+    best_j = -1
+    best_d = float("inf")
+    for j in pool[1:]:
+        d = 0.0
+        if (
+            polys is not None
+            and 0 <= leader < len(polys)
+            and 0 <= j < len(polys)
+        ):
+            try:
+                d = float(polys[leader].distance(polys[j]))
+            except Exception:
+                d = 0.0
+        if d < best_d:
+            best_d = d
+            best_j = j
+    if best_j < 0:
+        return []
+    pair = [leader, best_j]
+    if graph is not None and not _packing_independent(pair, graph):
+        return []
+    return pair
+
+
 def apply_dg_refine_options(
     opts: RefineSelectionOptions,
     dg,
@@ -450,9 +491,20 @@ def apply_refine_with_restore(
             restore_refine = True
 
     locked_set = {int(i) for i in locked_indices if int(i) >= 0}
+    # M2: survival telem SoT = compose motif_locked ∩ selection (DFS args may be
+    # empty under refine_skip). Hold/escape still keys off DFS locked_set.
+    motif_lock_sot = {
+        int(i)
+        for i in (propose_stats.get("motif_locked") or ())
+        if int(i) >= 0
+    }
+    if not motif_lock_sot:
+        motif_lock_sot = set(locked_set)
     lock_n_compose = int(
-        propose_stats.get("lock_n_compose", len(locked_set)) or len(locked_set)
+        propose_stats.get("lock_n_compose", len(motif_lock_sot)) or len(motif_lock_sot)
     )
+    if lock_n_compose <= 0 and motif_lock_sot:
+        lock_n_compose = len(motif_lock_sot)
     motif_hold = (
         int(lock_n_compose) >= 2
         or int(propose_stats.get("compose_motif_hold", 0) or 0) > 0
@@ -567,6 +619,7 @@ def apply_refine_with_restore(
     if locked_set:
         final_set = set(selected_polys)
         dropped = [i for i in locked_set if i not in final_set]
+        surviving = [i for i in locked_set if i in final_set]
         if dropped and not restore_refine:
             if motif_lock_escape_ok(
                 locked_set=locked_set,
@@ -580,15 +633,29 @@ def apply_refine_with_restore(
                 void_fill_rise=void_fill_rise,
             ):
                 refine_lock_escape = 1
+            elif len(surviving) >= 2:
+                # M2: partial star keep when ≥2 DFS locks remain (no full restore).
+                propose_stats["refine_lock_partial_keep"] = 1
             else:
-                selected_polys = list(nest_before_refine)
-                restore_refine = True
-                refine_lock_hold = 1
-                propose_stats["refine_rejected"] = True
+                spoke_keep = _leader_kiss_lock_subset(
+                    locked_set,
+                    selected_polys,
+                    nest_before_refine,
+                    polys=polys,
+                    graph=graph,
+                )
+                if len(spoke_keep) >= 2 and set(spoke_keep) <= final_set:
+                    propose_stats["refine_lock_spoke_keep"] = 1
+                else:
+                    selected_polys = list(nest_before_refine)
+                    restore_refine = True
+                    refine_lock_hold = 1
+                    propose_stats["refine_rejected"] = True
         elif dropped and restore_refine:
             refine_lock_hold = 1
 
-    lock_n_refine = len([i for i in locked_set if i in set(selected_polys)])
+    final_set_n = set(selected_polys)
+    lock_n_refine = len([i for i in motif_lock_sot if i in final_set_n])
     lock_survive = (
         float(lock_n_refine) / float(max(lock_n_compose, 1))
         if lock_n_compose > 0

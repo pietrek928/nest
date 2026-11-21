@@ -153,6 +153,12 @@ from nest_graph.pack.checkpoint import (
     tip_board_snapshot,
     void_elite_from_ckpt,
 )
+from nest_graph.shapes_catalog import (
+    DemoPackingCase,
+    apply_demo_case_to_rules,
+    demo_case_from_flags,
+    demo_case_from_nest_like,
+)
 from nest_graph.pack.densify_preset import (
     apply_densify_preset,
     densify_preset_ids,
@@ -260,18 +266,35 @@ def nest_state_from_proven_compose(
     )
 
 
-def history_from_nest_state(nest_state: NestState) -> tuple:
+def history_from_nest_state(
+    nest_state: NestState,
+    *,
+    ngroups: int | None = None,
+) -> tuple:
     """Replace history with adopted selected transforms (relocate_accepted pattern)."""
-    buckets: list[list] = [[], []]
+    if ngroups is None:
+        gids = [
+            int(nest_state.group_id[int(i)])
+            for i in nest_state.selected_indices
+            if 0 <= int(i) < len(nest_state.group_id)
+        ]
+        ngroups = max(gids) + 1 if gids else 1
+    k = max(int(ngroups), 1)
+    buckets: list[list] = [[] for _ in range(k)]
     for i in nest_state.selected_indices:
         ii = int(i)
         if ii < 0 or ii >= len(nest_state.group_id) or ii >= len(nest_state.transform):
             continue
         gi = int(nest_state.group_id[ii])
-        if gi < 0 or gi > 1:
+        if gi < 0 or gi >= k:
             continue
         buckets[gi].append(nest_state.transform[ii])
-    return (np.array(buckets[0]), np.array(buckets[1]))
+    return tuple(
+        np.asarray(b, dtype=np.float64).reshape(-1, 3)
+        if b
+        else np.zeros((0, 3), dtype=np.float64)
+        for b in buckets
+    )
 
 
 
@@ -772,20 +795,43 @@ def _selection_budget_for_iter(
 
 
 
-def run_build_graph(cfg: BuildGraphConfig) -> None:
+def run_build_graph(
+    cfg: BuildGraphConfig,
+    *,
+    demo: DemoPackingCase | None = None,
+) -> None:
     """Demo build loop: propose → graph → rules → nest → DFS refine.
 
     Shipped defaults match nest-pipeline tuning (``SelectionConfig`` merged_loose_tight,
     ``dfs_passes=3``, ``improve_rules_rounds=4``). See docs/build_graph_tuning.md.
+
+    Optional ``demo`` supplies a multi-kind board/catalog (CLI / NestCase adapter).
+    When omitted, uses RulesConfig rect+tri on the demo triangle (unchanged default).
     """
+    group_allowed_angles: tuple[tuple[float, ...] | None, ...] = ()
+    if demo is not None:
+        cfg = cfg.model_copy(
+            update={"rules": apply_demo_case_to_rules(cfg.rules, demo)}
+        )
+        parts = list(demo.groups)
+        group_allowed_angles = tuple(demo.group_allowed_angles or ())
+    else:
+        p1 = cfg.rules.rect_polygon()
+        p2 = cfg.rules.tri_polygon()
+        parts = [(p1, 0), (p2, 1)]
+        cfg = cfg.model_copy(
+            update={
+                "rules": cfg.rules.model_copy(update={"ngroups": max(len(parts), 1)})
+            }
+        )
     p_outline = cfg.rules.board_polygon()
     user_holes = cfg.rules.board_holes
     p_sheet = cfg.rules.board_sheet_polygon()
     sheet_pad = cfg.rules.effective_sheet_padding()
-    p1 = cfg.rules.rect_polygon()
-    p2 = cfg.rules.tri_polygon()
-    parts = [(p1, 0), (p2, 1)]
-    part_bases = {0: Geometry.from_shapely(p1), 1: Geometry.from_shapely(p2)}
+    part_bases = {
+        int(gid): Geometry.from_shapely(poly) for poly, gid in parts
+    }
+    ngroups = max(len(parts), 1)
     max_verts = max(len(list(p.exterior.coords)) for p, _ in parts)
     max_interiors = max(len(getattr(p, "interiors", ()) or ()) for p, _ in parts)
     cfg = cfg.with_runtime_lean(
@@ -827,9 +873,9 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             rng = cfg.apply_seed()
             sc = cfg.sampling
 
-    selected_t: tuple[np.ndarray, ...] = (
-        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
-        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale,
+    selected_t: tuple[np.ndarray, ...] = tuple(
+        rng.uniform(-1, 1, (sc.initial_random, 3)) * sc.transform_scale
+        for _ in range(ngroups)
     )
     rule_sets = make_initial_rule_sets(cfg)
     render_size = (out.render_size, out.render_size)
@@ -840,19 +886,21 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         out.video_fps,
         render_size,
     )
-    history: tuple[np.ndarray, ...] = (np.zeros((1, 3)), np.zeros((1, 3)))
+    history: tuple[np.ndarray, ...] = tuple(
+        np.zeros((1, 3), dtype=np.float64) for _ in range(ngroups)
+    )
     graphs: list[PoseGraph] = []
     selection_window: list[tuple[np.ndarray, ...]] = []
     nest_state: NestState | None = None
     propose_feedback = ProposeFeedbackState()
     had_void_override = False
-    void_elite_by_group: dict[int, list[np.ndarray]] = {0: [], 1: []}
-    graph_valid_carry: tuple[np.ndarray, ...] = (
-        np.zeros((0, 3), dtype=np.float64),
-        np.zeros((0, 3), dtype=np.float64),
+    void_elite_by_group: dict[int, list[np.ndarray]] = {i: [] for i in range(ngroups)}
+    graph_valid_carry: tuple[np.ndarray, ...] = tuple(
+        np.zeros((0, 3), dtype=np.float64) for _ in range(ngroups)
     )
     board_area = p_sheet.area
-    part_areas = (p1.area, p2.area)
+    part_areas = tuple(float(p.area) for p, _ in parts)
+    part_by_group = {int(gid): poly for poly, gid in parts}
     plateau = PlateauTracker(
         flat_iters=int(getattr(sel, "plateau_flat_iters", 3) or 3),
         cov_eps=float(getattr(sel, "plateau_cov_eps", 0.05) or 0.05),
@@ -864,10 +912,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
     pin_all_blocked_streak = 0
     if resume_ckpt is not None:
         nest_state = nest_state_from_checkpoint(resume_ckpt, NestState)
-        history = history_tuple_from_ckpt(resume_ckpt)
-        graph_valid_carry = carry_tuple_from_ckpt(resume_ckpt)
-        void_elite_by_group = void_elite_from_ckpt(resume_ckpt)
-        selected_t = history if history[0].size or history[1].size else selected_t
+        history = history_tuple_from_ckpt(resume_ckpt, ngroups=ngroups)
+        graph_valid_carry = carry_tuple_from_ckpt(resume_ckpt, ngroups=ngroups)
+        void_elite_by_group = void_elite_from_ckpt(resume_ckpt, ngroups=ngroups)
+        if any(arm.size for arm in history):
+            selected_t = history
         n_extra = max(int(getattr(out, "extra_iters", 8) or 8), 1)
         start_it = int(resume_ckpt.iter)
         iters = tuple(range(start_it, start_it + n_extra))
@@ -905,6 +954,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         mcts_runner.motif_base,
         parts,
         min_dist=float(cfg.board_min_dist_for(p_sheet, first_pass=True)),
+        max_patterns=ngroups,
     )
     mcts_runner.store_snapshot(int(mcts_runner.arena.root_id()), mcts_root)
     mcts_parent_id = int(mcts_runner.arena.root_id())
@@ -1091,7 +1141,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 part_areas=part_areas,
                 nest_state=nest_state,
                 agent=mcts_runner.agent,
-                part_by_group={0: p1, 1: p2},
+                part_by_group=part_by_group,
                 seed_free=True,
                 seed_poles=False,
             )
@@ -1142,7 +1192,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             part_areas=part_areas,
             nest_state=nest_state,
             agent=mcts_runner.agent,
-            part_by_group={0: p1, 1: p2},
+            part_by_group=part_by_group,
             mcts_telem=mcts_telem,
             seed_free=True,
             seed_poles=True,
@@ -1286,7 +1336,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             (sat_info.sat_override or had_void_override)
             and bool(getattr(cfg.propose, "keep_history_on_void_sterile", True))
         )
-        ngroups = max(len(parts) if parts else len(selected_t), 2)
+        ngroups = max(len(parts) if parts else len(selected_t), 1)
         void_elite_t = void_elite_tuple_from_archive(void_elite_by_group, ngroups)
         elite_n = void_elite_count(void_elite_by_group)
         # Q137: under void_seek / large_void, merge MacroNicheArchive into elite niche.
@@ -1438,6 +1488,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             part_bases=part_bases,
             graph_valid_carry=graph_valid_carry,
             archived_patterns=archived_for_propose,
+            group_allowed_angles=group_allowed_angles,
         )
         propose_stats["propose_ms"] = (time.perf_counter() - _propose_t0) * 1000.0
         pin_keys = set(propose_stats.get("archive_mix_pin_keys") or ())
@@ -1452,9 +1503,13 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             propose_stats["attract_degree_capped"] = int(attract_deg)
         _mpg_t0 = time.perf_counter()
         mpg_natives: list = []
+        flat_parts = [
+            (parts[gi][0], selected_t[gi])
+            for gi in range(min(len(parts), len(selected_t)))
+        ]
         graph, polys, group_id, transform = make_polygon_graph(
             p_outline,
-            [(p1, selected_t[0]), (p2, selected_t[1])],
+            flat_parts,
             min_dist=cfg.board_min_dist_for(p_sheet, first_pass=first_pass),
             epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=first_pass),
             user_holes=user_holes,
@@ -1529,7 +1584,11 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         graphs.append(graph)
         graphs = graphs[-gc.graphs_window:]
         first_pass = nest_state is None
-        board_ctx_outline = board_context_from_geometry(p_outline, user_holes=user_holes)
+        board_ctx_outline = board_context_from_geometry(
+            p_outline,
+            user_holes=user_holes,
+            hole_margin=0.0,
+        )
         seed_rules = active_rule_set(make_seed_rule_sets(cfg))
         free_info = None
         # Ua: one improve call above first_pass / mid-pack fork.
@@ -1622,8 +1681,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 fp_ctx,
                 seed_rules=seed_rules,
                 parts=parts,
-                p1=p1,
-                p2=p2,
                 board_ctx_outline=board_ctx_outline,
                 sel_iter=sel_iter,
                 active_rules=_mcts_active_rules(rule_sets, mcts_action),
@@ -1654,7 +1711,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 min_dist=min_dist,
                 cfg_propose=cfg.propose,
                 nest_state=nest_state,
-                part_by_group={0: p1, 1: p2},
+                part_by_group=part_by_group,
                 remaining_gids=rem_mid,
             )
             assert free_prep is not None
@@ -1715,7 +1772,7 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 pack_ctx,
                 pack_box,
                 graph=graph,
-                part_by_group={0: p1, 1: p2},
+                part_by_group=part_by_group,
                 void_geoms_compose=void_geoms_compose,
                 archived_for_propose=archived_for_propose,
                 pin_all_blocked_streak=pin_all_blocked_streak,
@@ -1948,7 +2005,6 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         )
         min_dist = cfg.board_min_dist_for(p_sheet, first_pass=first_pass)
         sheet_compact, void_geoms_post = board_ctx_outline
-        part_by_group = {0: p1, 1: p2}
         seed_n = nest_state.seed_count if nest_state is not None else 0
         fixed_obs = list(nest_state.polys[:seed_n]) if nest_state is not None and seed_n else None
         relocate_accepted = False
@@ -2070,7 +2126,17 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                 or int(reloc_stats.get("accepted", 0))
                 or int(se2_stats.get("moved", 0))
             )
-            assert selection_pairwise_independent(polys, selected_polys)
+            # H2: same packing Penetrating SoT as post_pack_overlap_ok / local_se2 restore.
+            post_indep_telem: dict = {}
+            if not selection_pairwise_independent(
+                polys, selected_polys, telem=post_indep_telem
+            ):
+                propose_stats["post_pack_indep_fail"] = 1
+                propose_stats["post_pack_indep_telem"] = dict(post_indep_telem)
+                raise AssertionError(
+                    "post-pack selection not packing-independent "
+                    f"(telem={post_indep_telem})"
+                )
             propose_stats["repack"] = repack_stats
             propose_stats["relocate"] = reloc_stats
             propose_stats["local_se2"] = se2_stats
@@ -2150,6 +2216,16 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
                     "cheap_cache_lookup", _pack_cache.get("cache_lookup_n", 0)
                 )
                 or 0
+            )
+            propose_stats["cache_hit_inject"] = int(
+                mcts_telem.get(
+                    "cache_hit_inject",
+                    _pack_cache.get("cache_hit_inject_n", 0),
+                )
+                or 0
+            )
+            propose_stats["path_join_priority_n"] = int(
+                mcts_telem.get("path_join_priority_n", 0) or 0
             )
             propose_stats["path_compose_ms"] = float(
                 mcts_telem.get(
@@ -2474,11 +2550,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
         video.write(im)
         cv.imwrite(out.snapshot_path, im)
 
-        selected_arms: list[list[Any]] = [[], []]
+        selected_arms: list[list[Any]] = [[] for _ in range(ngroups)]
         for i in selected_polys:
             gi = int(group_id[i])
-            selected_arms[gi].append(transform[i])
-        selected_t = tuple(np.array(t) for t in selected_arms)
+            if 0 <= gi < len(selected_arms):
+                selected_arms[gi].append(transform[i])
+        selected_t = tuple(
+            np.asarray(t, dtype=np.float64) if t else np.zeros((0, 3), dtype=np.float64)
+            for t in selected_arms
+        )
         if relocate_accepted:
             # Drop stale window frames before appending post-move poses.
             selection_window.clear()
@@ -2490,16 +2570,15 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
             # swap material). Do not collapse to selected_t — local_se2 moves most
             # iters and would erase the propose-dip stabilizer.
         else:
-            if len(history[0]) and len(selected_t[0]):
-                history = (
-                    trim_history(history[0], selected_t[0], sc.history_max),
-                    history[1],
-                )
-            if len(history[1]) and len(selected_t[1]):
-                history = (
-                    history[0],
-                    trim_history(history[1], selected_t[1], sc.history_max),
-                )
+            hist_list = list(history)
+            while len(hist_list) < ngroups:
+                hist_list.append(np.zeros((0, 3), dtype=np.float64))
+            for gi in range(ngroups):
+                if gi < len(selected_t) and len(hist_list[gi]) and len(selected_t[gi]):
+                    hist_list[gi] = trim_history(
+                        hist_list[gi], selected_t[gi], sc.history_max,
+                    )
+            history = tuple(hist_list[:ngroups])
         seed_n = nest_state.seed_count if nest_state is not None else 0
         nest_natives = (
             list(mpg_natives)
@@ -2640,11 +2719,61 @@ def run_build_graph(cfg: BuildGraphConfig) -> None:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Nest Macro-MCTS build_graph demo")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Nest Macro-MCTS build_graph demo. "
+            "Optional catalog flags reuse PART_BUILDERS / CaseSpec builders; "
+            "omit them for the default triangle + rect/tri demo."
+        ),
+    )
     parser.add_argument("--checkpoint-iter", type=int, default=None)
     parser.add_argument("--checkpoint-path", type=str, default=None)
     parser.add_argument("--resume-checkpoint", type=str, default=None)
     parser.add_argument("--extra-iters", type=int, default=None)
+    parser.add_argument(
+        "--case",
+        type=str,
+        default=None,
+        help="Named NestCase name/family (demo convenience; does not mutate fixtures)",
+    )
+    parser.add_argument(
+        "--board",
+        type=str,
+        default=None,
+        help="rect:WxH | tri[:scale] | organic:size",
+    )
+    parser.add_argument(
+        "--parts",
+        type=str,
+        default=None,
+        help="name:scale[:count],… against PART_BUILDERS (e.g. rect:1:24,tri:1,L:0.8:6)",
+    )
+    parser.add_argument(
+        "--demand",
+        type=float,
+        default=None,
+        help="target_demand when --parts omits :count (clipped 0.5–1.6)",
+    )
+    parser.add_argument(
+        "--rotations",
+        type=int,
+        default=None,
+        help="discrete angles N in [0,2π); omit = continuous",
+    )
+    parser.add_argument(
+        "--min-dist",
+        type=float,
+        default=None,
+        help="absolute clearance override (both passes); omit = diagonal × ratio",
+    )
+    parser.add_argument(
+        "--holes",
+        type=str,
+        default=None,
+        help="none | center:WxH | swiss:n:r",
+    )
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--iters", type=int, default=None)
     args, _unknown = parser.parse_known_args()
     cfg = BuildGraphConfig.from_env()
     out_upd: dict[str, Any] = {}
@@ -2656,11 +2785,107 @@ def main():
         out_upd["resume_checkpoint"] = str(args.resume_checkpoint)
     if args.extra_iters is not None:
         out_upd["extra_iters"] = int(args.extra_iters)
+    if args.iters is not None:
+        out_upd["n_iters"] = int(args.iters)
     if out_upd:
         cfg = cfg.model_copy(
             update={"output": cfg.output.model_copy(update=out_upd)}
         )
-    run_build_graph(cfg)
+    if args.seed is not None:
+        cfg = cfg.model_copy(
+            update={
+                "sampling": cfg.sampling.model_copy(update={"seed": int(args.seed)})
+            }
+        )
+    if args.min_dist is not None:
+        cfg = cfg.model_copy(
+            update={
+                "propose": cfg.propose.model_copy(
+                    update={"absolute_min_dist": float(args.min_dist)}
+                )
+            }
+        )
+
+    demo: DemoPackingCase | None = None
+    want_cli = any(
+        x is not None
+        for x in (args.case, args.board, args.parts, args.holes, args.rotations, args.demand)
+    )
+    if want_cli:
+        if args.case:
+            # scripts.evaluator → build_graph; fixtures do not import build_graph
+            from scripts.nesting_fixtures import resolve_cases
+
+            matched = resolve_cases(queries=[str(args.case)])
+            if not matched:
+                raise SystemExit(f"no NestCase matched --case {args.case!r}")
+            demo = demo_case_from_nest_like(matched[0])
+            if args.iters is None and getattr(matched[0], "iters", 0):
+                cfg = cfg.model_copy(
+                    update={
+                        "output": cfg.output.model_copy(
+                            update={"n_iters": int(matched[0].iters)}
+                        )
+                    }
+                )
+        if args.board or args.parts or args.holes is not None or args.demand is not None:
+            overlay = demo_case_from_flags(
+                board=args.board,
+                parts=args.parts,
+                demand=args.demand,
+                holes=args.holes,
+                rotations=args.rotations,
+            )
+            if demo is None:
+                demo = overlay
+            else:
+                # Freeform flags override named-case board/parts when provided.
+                demo = DemoPackingCase(
+                    board=overlay.board if args.board else demo.board,
+                    board_holes=(
+                        overlay.board_holes if args.holes is not None else demo.board_holes
+                    ),
+                    groups=overlay.groups if args.parts else demo.groups,
+                    group_allowed_angles=(
+                        overlay.group_allowed_angles
+                        if args.rotations is not None
+                        else demo.group_allowed_angles
+                    ),
+                    group_counts=(
+                        overlay.group_counts if args.parts or args.demand is not None
+                        else demo.group_counts
+                    ),
+                    name=demo.name or overlay.name,
+                )
+        elif args.rotations is not None:
+            from nest_graph.shapes_catalog import rotations_to_angles
+
+            one = rotations_to_angles(int(args.rotations))
+            if demo is None:
+                hole_polys = tuple(
+                    Polygon(list(h)) for h in (cfg.rules.board_holes or ())
+                )
+                demo = DemoPackingCase(
+                    board=cfg.rules.board_polygon(),
+                    board_holes=hole_polys,
+                    groups=(
+                        (cfg.rules.rect_polygon(), 0),
+                        (cfg.rules.tri_polygon(), 1),
+                    ),
+                    group_allowed_angles=(one, one),
+                    name="default_rot",
+                )
+            else:
+                demo = DemoPackingCase(
+                    board=demo.board,
+                    board_holes=demo.board_holes,
+                    groups=demo.groups,
+                    group_allowed_angles=tuple(one for _ in demo.groups),
+                    group_counts=demo.group_counts,
+                    name=demo.name,
+                )
+
+    run_build_graph(cfg, demo=demo)
 
 
 if __name__ == "__main__":

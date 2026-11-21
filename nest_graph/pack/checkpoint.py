@@ -434,32 +434,47 @@ def tip_board_snapshot(ckpt: NestCheckpoint, *, arena_node_id: int = 0) -> Board
     )
 
 
-def history_tuple_from_ckpt(ckpt: NestCheckpoint) -> tuple[np.ndarray, ...]:
+def history_tuple_from_ckpt(
+    ckpt: NestCheckpoint,
+    *,
+    ngroups: int | None = None,
+) -> tuple[np.ndarray, ...]:
     arms = list(ckpt.history or [])
-    while len(arms) < 2:
+    k = int(ngroups) if ngroups is not None else max(len(arms), 2)
+    while len(arms) < k:
         arms.append([])
     return tuple(
         np.asarray(arm, dtype=np.float64).reshape(-1, 3)
         if arm
         else np.zeros((0, 3), dtype=np.float64)
-        for arm in arms[:2]
+        for arm in arms[:k]
     )
 
 
-def carry_tuple_from_ckpt(ckpt: NestCheckpoint) -> tuple[np.ndarray, ...]:
+def carry_tuple_from_ckpt(
+    ckpt: NestCheckpoint,
+    *,
+    ngroups: int | None = None,
+) -> tuple[np.ndarray, ...]:
     arms = list(ckpt.graph_valid_carry or [])
-    while len(arms) < 2:
+    k = int(ngroups) if ngroups is not None else max(len(arms), 2)
+    while len(arms) < k:
         arms.append([])
     return tuple(
         np.asarray(arm, dtype=np.float64).reshape(-1, 3)
         if arm
         else np.zeros((0, 3), dtype=np.float64)
-        for arm in arms[:2]
+        for arm in arms[:k]
     )
 
 
-def void_elite_from_ckpt(ckpt: NestCheckpoint) -> dict[int, list[np.ndarray]]:
-    out: dict[int, list[np.ndarray]] = {0: [], 1: []}
+def void_elite_from_ckpt(
+    ckpt: NestCheckpoint,
+    *,
+    ngroups: int | None = None,
+) -> dict[int, list[np.ndarray]]:
+    k = int(ngroups) if ngroups is not None else 2
+    out: dict[int, list[np.ndarray]] = {i: [] for i in range(max(k, 0))}
     for gid, rows in (ckpt.void_elite_by_group or {}).items():
         out[int(gid)] = [np.asarray(r, dtype=np.float64) for r in rows]
     return out

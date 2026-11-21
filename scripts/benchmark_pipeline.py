@@ -445,7 +445,36 @@ def main() -> None:
                                         "hybrid_pick_reject_indep",
                                         "hybrid_pick_reject_area",
                                         "hybrid_pick_adj_soft",
+                                        "hybrid_pick_sticky_soft",
                                         "motif_adj_hits",
+                                        "refine_lock_hold",
+                                        "refine_lock_escape",
+                                        "lock_survive_refine",
+                                        "lock_same_iter_cr",
+                                        "lock_same_iter_crm",
+                                        "lock_iter_c",
+                                        "lock_iter_r",
+                                        "lock_iter_m",
+                                        "place_cohort_ready",
+                                        "place_cohort_ready_hard",
+                                        "place_cohort_specs_n",
+                                        "mcts_cohort_macro_n",
+                                        "motif_join_n",
+                                        "motif_graph_hit_n",
+                                        "motif_cross_join_n",
+                                        "star_stitch_n",
+                                        "motif_beam_sets",
+                                        "cheap_cache_hit",
+                                        "cache_hit_inject",
+                                        "path_ran",
+                                        "path_tip_apply",
+                                        "path_join_signal",
+                                        "path_join_priority_n",
+                                        "stale_join_mid_n",
+                                        "amaf_cohort_fallback",
+                                        "cohort_sig_amaf_visits",
+                                        "wang_rank_flip_n",
+                                        "seq_clear",
                                     )
                                     if k in leak
                                 },
@@ -519,6 +548,7 @@ def main() -> None:
                         f"  -> parts={metrics.parts_final} area={metrics.area_coverage:.3f} "
                         f"kiss_s={metrics.kiss_seed:.2f} kiss_o={metrics.kiss_outline:.2f} "
                         f"auc={metrics.density_auc:.2f} ok={metrics.independent_ok} "
+                        f"overlap_ok={metrics.overlap_ok} "
                         f"free={metrics.free_kind}/{metrics.largest_free_over_part:.1f} "
                         f"void={metrics.void_props}/{metrics.void_graph}/"
                         f"{metrics.void_selected_nest}/{metrics.void_selected_refine} "
@@ -542,6 +572,8 @@ def main() -> None:
                         or leak.get("selection_expand_emitted")
                         or leak.get("densify_on_primary_void") is not None
                         or leak.get("rim_progress") is not None
+                        or leak.get("part_hole_raw_n")
+                        or leak.get("part_hole_free_survived")
                         or inward
                     ):
                         write_telem(
@@ -591,6 +623,9 @@ def main() -> None:
                             f"3b_rej={leak.get('block_hole_reject_reason', '') or '-'} "
                             f"3b_vd={float(leak.get('block_hole_victim_pole_d', -1.0) or -1.0):.2f} "
                             f"hole_gain={int(leak.get('hole_expand_gain', 0) or 0)} "
+                            f"part_hole={int(leak.get('part_hole_raw_n', 0) or 0)}/"
+                            f"{int(leak.get('part_hole_free_survived', 0) or 0)}/"
+                            f"{int(leak.get('part_hole_pocket_kept', 0) or 0)} "
                             f"repair_bp={float(leak.get('repair_bp_delta', 0.0) or 0.0):.4f} "
                             f"pvf={int(leak.get('prefer_void_facing', 0) or 0)} "
                             f"nfp={int(leak.get('nfp_lite_ok', 0) or 0)}/"
@@ -636,9 +671,16 @@ def main() -> None:
                             f"{leak.get('inject_pair_n', 0)} "
                             f"motif_hit={leak.get('motif_hit', 0)} "
                             f"path_tip={leak.get('path_tip_apply', 0)} "
-                            f"path_join={leak.get('path_join_signal', 0)} "
+                            f"path_join={leak.get('path_join_signal', 0)}/"
+                            f"{leak.get('path_join_priority_n', 0)} "
                             f"path_ran={leak.get('path_ran', 0)}/"
                             f"{leak.get('path_cache_miss', 0)} "
+                            f"chi={leak.get('cache_hit_inject', 0)} "
+                            f"same_iter={leak.get('lock_same_iter_cr', 0)}/"
+                            f"{leak.get('lock_same_iter_crm', 0)}/"
+                            f"{leak.get('lock_iter_c', 0)}/"
+                            f"{leak.get('lock_iter_r', 0)}/"
+                            f"{leak.get('lock_iter_m', 0)} "
                             f"path_carved={leak.get('path_carved', 0)}/"
                             f"{leak.get('path_carved_streak', 0)} "
                             f"path_alt0={leak.get('path_alt_none', 0)} "
@@ -708,7 +750,9 @@ def main() -> None:
                             f"{leak.get('lock_inc_n', 0)} "
                             f"lock_rz={leak.get('lock_n_realize', 0)} "
                             f"rlh={leak.get('refine_lock_hold', 0)}/"
+                            f"{leak.get('refine_lock_escape', 0)}/"
                             f"{int(bool(leak.get('refine_rejected', False)))} "
+                            f"lsr={float(leak.get('lock_survive_refine', 0.0) or 0.0):.2f} "
                             f"lead_fail={leak.get('leader_fail', 0)} "
                             f"lat={leak.get('lattice_anchors_added', 0)}/"
                             f"{leak.get('lattice_anchors_kept', 0)} "

@@ -1607,14 +1607,8 @@ class NestingPipelineEvaluator:
                 propose_stats["amaf_hits"] = int(mcts_box.get("amaf_hits", 0) or 0)
             mcts_runner.niche_archive.age(1)
             last_void_leak.update({
-                "motif_sequential_full": int(
-                    propose_stats.get("motif_sequential_full", 0) or 0
-                ),
                 "motif_sequential_repin": int(
                     propose_stats.get("motif_sequential_repin", 0) or 0
-                ),
-                "motif_sequential_partial": int(
-                    propose_stats.get("motif_sequential_partial", 0) or 0
                 ),
                 "motif_cohorts_n": len(propose_stats.get("motif_cohorts") or []),
                 "void_core_accepted": int(
@@ -1626,6 +1620,92 @@ class NestingPipelineEvaluator:
                     propose_stats.get("contact_grg_upserts", 0) or 0
                 ),
             })
+            # M0: peak compose/lock/path census across iters (same-iter co-occur too).
+            for _m0k in (
+                "motif_compose_accepted_size",
+                "lock_n_compose",
+                "lock_n_refine",
+                "lock_n_materialize",
+                "hollow_pattern_locks",
+                "motif_sequential_full",
+                "motif_sequential_partial",
+                "motif_sequential_clear_fail",
+                "seq_clear",
+                "hybrid_pick_wins",
+                "hybrid_pick_trials",
+                "hybrid_pick_reject_indep",
+                "hybrid_pick_reject_area",
+                "hybrid_pick_sticky_soft",
+                "refine_lock_hold",
+                "refine_lock_escape",
+                "lock_same_iter_cr",
+                "lock_same_iter_crm",
+                "place_cohort_ready",
+                "place_cohort_ready_hard",
+                "place_cohort_specs_n",
+                "mcts_cohort_macro_n",
+                "motif_join_n",
+                "motif_graph_hit_n",
+                "motif_cross_join_n",
+                "star_stitch_n",
+                "motif_beam_sets",
+                "cheap_cache_hit",
+                "cheap_cache_lookup",
+                "cache_hit_inject",
+                "path_ran",
+                "path_tip_apply",
+                "path_join_signal",
+                "path_join_priority_n",
+                "stale_join_mid_n",
+                "amaf_cohort_fallback",
+                "cohort_sig_amaf_visits",
+                "wang_rank_flip_n",
+            ):
+                if _m0k in last_void_leak:
+                    _cur = int(last_void_leak.get(_m0k) or 0)
+                elif _m0k in propose_stats:
+                    _cur = int(propose_stats.get(_m0k) or 0)
+                elif isinstance(mcts_telem, dict) and _m0k in mcts_telem:
+                    _cur = int(mcts_telem.get(_m0k) or 0)
+                else:
+                    _cur = 0
+                letter_peak_state[_m0k] = max(
+                    int(letter_peak_state.get(_m0k, 0) or 0), _cur
+                )
+                last_void_leak[_m0k] = int(letter_peak_state[_m0k])
+            # Keep compose_sz peak aligned with lock_n_compose (same writer).
+            _cpeak = max(
+                int(letter_peak_state.get("motif_compose_accepted_size", 0) or 0),
+                int(letter_peak_state.get("lock_n_compose", 0) or 0),
+            )
+            letter_peak_state["motif_compose_accepted_size"] = _cpeak
+            letter_peak_state["lock_n_compose"] = _cpeak
+            last_void_leak["motif_compose_accepted_size"] = _cpeak
+            last_void_leak["lock_n_compose"] = _cpeak
+            _lsr = float(
+                last_void_leak.get("lock_survive_refine", 0.0)
+                or propose_stats.get("lock_survive_refine", 0.0)
+                or 0.0
+            )
+            letter_peak_state["lock_survive_refine"] = max(
+                float(letter_peak_state.get("lock_survive_refine", 0.0) or 0.0),
+                _lsr,
+            )
+            last_void_leak["lock_survive_refine"] = float(
+                letter_peak_state["lock_survive_refine"]
+            )
+            # Preserve last-iter lock snapshot next to peaked maxes.
+            last_void_leak["lock_iter_c"] = int(
+                propose_stats.get("motif_compose_accepted_size", 0)
+                or propose_stats.get("lock_n_compose", 0)
+                or 0
+            )
+            last_void_leak["lock_iter_r"] = int(
+                propose_stats.get("lock_n_refine", 0) or 0
+            )
+            last_void_leak["lock_iter_m"] = int(
+                propose_stats.get("lock_n_materialize", 0) or 0
+            )
             if int(propose_stats.get("graph_to_nest_hollow", 0) or 0):
                 last_void_leak["graph_to_nest_hollow_iters"] = int(
                     last_void_leak.get("graph_to_nest_hollow_iters", 0) or 0
@@ -1881,15 +1961,24 @@ class NestingPipelineEvaluator:
                 propose_stats.get("motif_cohort_sig", 0) or 0
             )
             if isinstance(last_void_leak, dict):
-                last_void_leak["place_cohort_ready"] = int(
-                    propose_stats.get("place_cohort_ready", 0) or 0
-                )
-                last_void_leak["place_cohort_specs_n"] = int(
-                    propose_stats.get("place_cohort_specs_n", 0) or 0
-                )
-                last_void_leak["motif_cohort_sig"] = int(
-                    propose_stats.get("motif_cohort_sig", 0) or 0
-                )
+                for _pck, _pcv in (
+                    (
+                        "place_cohort_ready",
+                        int(propose_stats.get("place_cohort_ready", 0) or 0),
+                    ),
+                    (
+                        "place_cohort_specs_n",
+                        int(propose_stats.get("place_cohort_specs_n", 0) or 0),
+                    ),
+                    (
+                        "motif_cohort_sig",
+                        int(propose_stats.get("motif_cohort_sig", 0) or 0),
+                    ),
+                ):
+                    letter_peak_state[_pck] = max(
+                        int(letter_peak_state.get(_pck, 0) or 0), int(_pcv)
+                    )
+                    last_void_leak[_pck] = int(letter_peak_state[_pck])
             # Q185/Q189 archive telem after Motif upsert site (post-expand).
             lib_n = int(mcts_runner.motif_base.size())
             motif_refine_n = 0

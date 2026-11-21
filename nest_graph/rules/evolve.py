@@ -478,26 +478,50 @@ def score_rule_sets_with_dfs(
     return out
 
 
+def _group_place_weight(rc, gi: int) -> float:
+    if gi == 0:
+        return float(rc.weight_rect)
+    if gi == 1:
+        return float(rc.weight_tri)
+    return float(rc.weight_tri)
+
+
 def make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
     rc = cfg.rules
     r = rc.place_rule_radius
-    wrect = rc.weight_rect
-    wtri = rc.weight_tri
-    aw = rc.angle_rule_weight_scale * wtri
+    ng = max(int(rc.ngroups), 1)
+    xmin, ymin, xmax, ymax = rc.board_polygon().bounds
+    bw = max(float(xmax - xmin), 1e-9)
+    bh = max(float(ymax - ymin), 1e-9)
+    # Map legacy demo-triangle positions so default K=2 board stays identical.
+    def _pt(x: float, y: float) -> Vec2:
+        return Vec2(x=float(xmin + (x / 1.2) * bw), y=float(ymin + (y / 1.1) * bh))
+
     rule_set = PlacementRuleSet()
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=r, w=wrect, group=0))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0.7, y=0.7), r=r, w=wtri, group=1))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=0, y=1.1), r=r, w=wtri, group=1))
-    rule_set.append_rule(PointPlaceRule(pos=Vec2(x=1.2, y=0), r=r, w=wtri, group=1))
-    for gi, wgt in ((0, wrect), (1, wtri)):
+    w0 = _group_place_weight(rc, 0)
+    wtri = float(rc.weight_tri)
+    aw_base = rc.angle_rule_weight_scale * wtri
+    rule_set.append_rule(PointPlaceRule(pos=_pt(0.0, 0.0), r=r, w=w0, group=0))
+    if ng >= 2:
+        w1 = _group_place_weight(rc, 1)
+        rule_set.append_rule(PointPlaceRule(pos=_pt(0.7, 0.7), r=r, w=w1, group=1))
+        rule_set.append_rule(PointPlaceRule(pos=_pt(0.0, 1.1), r=r, w=w1, group=1))
+        rule_set.append_rule(PointPlaceRule(pos=_pt(1.2, 0.0), r=r, w=w1, group=1))
+    for gi in range(ng):
+        wgt = _group_place_weight(rc, gi)
+        if gi >= 2:
+            # Corner seed for extra kinds (g0/g1 keep legacy place rules above).
+            rule_set.append_rule(
+                PointPlaceRule(pos=_pt(0.35, 0.35), r=r, w=wgt, group=gi),
+            )
         for k in range(8):
             a = float(2.0 * np.pi * k / 8.0)
             rule_set.append_rule(
                 PointAngleRule(
-                    pos=Vec2(x=0.6, y=0.55),
+                    pos=_pt(0.6, 0.55),
                     r=r,
                     a=a,
-                    w=aw * wgt,
+                    w=aw_base * wgt,
                     group=gi,
                 ),
             )
@@ -506,8 +530,9 @@ def make_demo_rule_set(cfg: BuildGraphConfig) -> PlacementRuleSet:
 
 def make_seed_rule_sets(cfg: BuildGraphConfig) -> list[PlacementRuleSet]:
     first = PlacementRuleSet()
-    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=0))
-    first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=1))
+    ng = max(int(cfg.rules.ngroups), 1)
+    for gi in range(ng):
+        first.append_rule(PointPlaceRule(pos=Vec2(x=0, y=0), r=0.1, w=0.1, group=gi))
     return [first]
 
 

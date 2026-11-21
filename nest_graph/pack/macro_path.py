@@ -1210,12 +1210,16 @@ def run_outer_path_probe(
     mcts_telem["path_refine_ms"] = 0.0
     mcts_telem["cheap_cache_hit"] = 0
     mcts_telem["cheap_cache_lookup"] = 0
+    mcts_telem["path_join_priority_n"] = 0
     _pack_cache["path_compose_ms"] = 0.0
     _pack_cache["path_refine_ms"] = 0.0
     # Snapshot multi-sim lookups before path (path adds on top).
     mcts_telem["cheap_cache_hit"] = int(_pack_cache.get("cache_hit_n", 0) or 0)
     mcts_telem["cheap_cache_lookup"] = int(
         _pack_cache.get("cache_lookup_n", 0) or 0
+    )
+    mcts_telem["cache_hit_inject"] = int(
+        _pack_cache.get("cache_hit_inject_n", 0) or 0
     )
     # P: per-iter census reset (was cumulative max → false nbr/cut growth).
     mcts_telem["path_nbr_macro"] = 0
@@ -1371,6 +1375,7 @@ def run_outer_path_probe(
                 _path_telem.get("cache_lookup_n", 0) or 0
             )
         # E0/F0: census after probe (outside pack_cache isolation — telem only).
+        # M4: run census before accept so path_nbr_pose fuels tip/eligible.
         mcts_telem["motif_join_from_base"] = max(
             int(mcts_telem.get("motif_join_from_base", 0) or 0),
             int(

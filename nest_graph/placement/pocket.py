@@ -14,6 +14,7 @@ from nest_graph.propose.context import (
     cluster_packed_indices,
     iter_polygons,
     part_extents,
+    part_interior_polygons,
 )
 from nest_graph.propose.geometry import ProposeGeometry, filter_candidates_batch
 from nest_graph.placement.pattern import ClusterPattern
@@ -44,6 +45,22 @@ _L_SHAPE_MRR_AREA = 0.6
 
 # Back-compat alias for callers that used the private name.
 _touches_sheet_exterior = touches_sheet_exterior
+
+
+def _void_rep_in_part_holes(
+    void_poly: Polygon,
+    part_holes: Sequence[Polygon],
+) -> bool:
+    if void_poly is None or void_poly.is_empty or not part_holes:
+        return False
+    try:
+        pt = void_poly.representative_point()
+    except Exception:
+        return False
+    for hole in part_holes:
+        if hole.contains(pt) or hole.covers(pt):
+            return True
+    return False
 
 
 def mrr_major_axis_angle(poly: Polygon) -> float:
@@ -389,6 +406,7 @@ def propose_placements_pocket_fit(
     attempts_out: list[int] | None = None,
     free_space: FreeSpaceSnapshot | None = None,
     skip_reasons_out: list[str] | None = None,
+    telem_out: dict | None = None,
 ) -> List[Tuple[float, float, float]]:
     """Emit SE(2) teleports into trapped voids / hull bays + motif holes."""
     if not propose_cfg.use_pocket_fit or sheet is None or sheet.is_empty:
@@ -397,6 +415,10 @@ def propose_placements_pocket_fit(
     max_targets = int(propose_cfg.pocket_fit_max_targets)
     part_area = float(shape_to_place.area)
     skips: list[str] = []
+    part_holes = part_interior_polygons(packed)
+    part_hole_raw_n = int(len(part_holes))
+    part_hole_free_survived = 0
+    part_hole_pocket_kept = 0
 
     if free_space is not None:
         voids = list(free_space.trapped_voids)
@@ -406,6 +428,10 @@ def propose_placements_pocket_fit(
         voids = trapped_void_polygons(sheet, packed)
         bays = hull_bay_polygons(packed, min_dist=min_dist, sheet=sheet)
         analysis = None
+    if part_holes and voids:
+        part_hole_free_survived = sum(
+            1 for v in voids if _void_rep_in_part_holes(v, part_holes)
+        )
     if not voids:
         skips.append("no_trapped")
     # Drop oversized open bays (hull-diff can dwarf the part); keep trapped voids.
@@ -455,7 +481,26 @@ def propose_placements_pocket_fit(
             pockets = []
     else:
         pockets.sort(key=lambda p: float(p.area), reverse=True)
-        pockets = pockets[:max_targets]
+        cut = pockets[:max_targets]
+        # H1 non-evicting +1: if a part-hole void was truncated out of the
+        # largest-first cut, append one (does not displace exterior voids).
+        # No-op when part_holes is empty (void_fill).
+        if part_holes:
+            kept_ids = {id(p) for p in cut}
+            extras = [
+                p
+                for p in pockets[max_targets:]
+                if _void_rep_in_part_holes(p, part_holes) and id(p) not in kept_ids
+            ]
+            extras.sort(key=lambda p: float(p.area), reverse=True)
+            # Non-evicting +1 only (+2 pulled donut median down vs open6).
+            if extras:
+                cut = list(cut) + [extras[0]]
+                skips.append("part_hole_plus1")
+            part_hole_pocket_kept = sum(
+                1 for p in cut if _void_rep_in_part_holes(p, part_holes)
+            )
+        pockets = cut
 
     # Separate channel: exterior-touching Mode A target (do not mutate trapped_voids).
     open_voids: list[Polygon] = []
@@ -581,4 +626,8 @@ def propose_placements_pocket_fit(
         attempts_out.append(attempted)
     if skip_reasons_out is not None:
         skip_reasons_out.extend(skips)
+    if telem_out is not None:
+        telem_out["part_hole_raw_n"] = int(part_hole_raw_n)
+        telem_out["part_hole_free_survived"] = int(part_hole_free_survived)
+        telem_out["part_hole_pocket_kept"] = int(part_hole_pocket_kept)
     return out

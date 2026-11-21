@@ -185,7 +185,7 @@ def border_saturation_transform_batch(
     board: BaseGeometry,
     parts: list[tuple[Polygon, int]],
     nest_state: "NestState | _FirstPassNestSnapshot",
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, ...]:
     """Propose-only batch for outline saturation (no random/history noise).
 
     Primary path is ``proposed_transforms_for_groups(border_only=True)``.
@@ -204,9 +204,11 @@ def border_saturation_transform_batch(
     transform = nest_state.transform
     part_by_gid = {gid: poly for poly, gid in parts}
     pack_polys = [polys[i] for i in selected]
-    phase1_by_group: list[list[np.ndarray]] = [[], []]
+    phase1_by_group: list[list[np.ndarray]] = [[] for _ in range(max(len(parts), 1))]
     for idx in selected:
-        phase1_by_group[group_id[idx]].append(transform[idx])
+        gi = int(group_id[idx])
+        if 0 <= gi < len(phase1_by_group):
+            phase1_by_group[gi].append(transform[idx])
     native = nest_state.native_geoms
     packed_list = [
         native[i] for i in selected if 0 <= i < len(native)
@@ -312,7 +314,9 @@ def border_saturation_transform_batch(
             extra = extra[:room]
         merged = dedupe_transforms(np.concatenate([phase1, extra], axis=0))
         out.append(merged)
-    return (out[0], out[1])
+    if not out:
+        return (np.zeros((0, 3), dtype=np.float64),)
+    return tuple(out)
 
 
 def outline_anchor_inward(
@@ -1216,8 +1220,6 @@ def first_pass_layered_selection(
     parts: list[tuple[Polygon, int]],
     *,
     graph: PoseGraph,
-    p1: Polygon,
-    p2: Polygon,
     polys: list,
     group_id: list[int],
     transform: list[np.ndarray],
@@ -1229,30 +1231,34 @@ def first_pass_layered_selection(
     dg=None,
     make_polygon_graph_fn: Callable | None = None,
     native_geoms_fn: Callable | None = None,
+    p1: Polygon | None = None,
+    p2: Polygon | None = None,
 ) -> tuple[PoseGraph, list, list[int], list[np.ndarray], list[int]]:
     """Rebuild with packed obstacles; saturate outline-kiss placements along the perimeter."""
     if make_polygon_graph_fn is None or native_geoms_fn is None:
         raise ValueError("make_polygon_graph_fn and native_geoms_fn required")
     from nest_graph.pack.epoch import bind_epoch  # cycle: epoch → execute → block_replace → first_pass_border
 
+    del p1, p2  # legacy kwargs; parts list is the SoT
     min_dist = cfg.board_min_dist(first_pass=True)
     outline = board
     sheet, voids = board_context_from_geometry(board)
     board_geom = as_geometry(sheet)
     part_by_gid = {gid: poly for poly, gid in parts}
-    if len(parts) >= 2:
-        part_by_gid = {0: parts[0][0], 1: parts[1][0]}
     part_bases = part_base_geoms(part_by_gid)
     polys_cur = polys
     group_id_cur = group_id
     transform_cur = transform
     sel_cur = list(phase1_selected)
     passes = max(cfg.propose.first_pass_border_saturation_passes, 0)
+    k_parts = max(len(parts), 1)
 
     for _ in range(passes):
-        phase1_by_group: list[list[np.ndarray]] = [[], []]
+        phase1_by_group: list[list[np.ndarray]] = [[] for _ in range(k_parts)]
         for idx in sel_cur:
-            phase1_by_group[group_id_cur[idx]].append(transform_cur[idx])
+            gi = int(group_id_cur[idx])
+            if 0 <= gi < len(phase1_by_group):
+                phase1_by_group[gi].append(transform_cur[idx])
         phase1_t = tuple(
             np.asarray(rows, dtype=np.float64) if rows else np.zeros((0, 3))
             for rows in phase1_by_group
@@ -1274,13 +1280,21 @@ def first_pass_layered_selection(
             parts,
             nest_snap,
         )
-        combined = (
-            prepend_group_transforms(phase1_t[0], batch2[0]),
-            prepend_group_transforms(phase1_t[1], batch2[1]),
+        while len(batch2) < k_parts:
+            batch2 = batch2 + (np.zeros((0, 3), dtype=np.float64),)
+        combined = tuple(
+            prepend_group_transforms(
+                phase1_t[gi] if gi < len(phase1_t) else np.zeros((0, 3)),
+                batch2[gi],
+            )
+            for gi in range(k_parts)
         )
+        flat_parts = [
+            (parts[gi][0], combined[gi]) for gi in range(min(len(parts), k_parts))
+        ]
         graph2, polys2, group_id2, transform2 = make_polygon_graph_fn(
             board,
-            [(p1, combined[0]), (p2, combined[1])],
+            flat_parts,
             min_dist=min_dist,
             epsilon_ratio=cfg.placement_epsilon_ratio(first_pass=True),
             propose_stats=propose_stats,

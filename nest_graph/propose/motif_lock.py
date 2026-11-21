@@ -1493,9 +1493,13 @@ def resolve_hollow_cc_lock_sets(
     motif_base: Any | None = None,
     survive_by_motif: Mapping[int, int] | None = None,
 ) -> tuple[list[list[int]], dict]:
-    """One gate: build pattern lock sets when cc gap + hollow basin."""
+    """One gate: build pattern lock sets when cc gap + hollow basin.
+
+    M1: arm while nest lacks a full cc pair (``cc_nest_n < 2``). A lone
+    ``cc_nest_n==1`` used to starve ``hollow_cc_gap`` (seed0 cc=5/1).
+    """
     telem: dict = {"hollow_cc_gap": 0}
-    if not graph_to_nest_hollow or int(cc_nest_n) > 0:
+    if not graph_to_nest_hollow or int(cc_nest_n) >= 2:
         return [], telem
     key_map = pose_key_to_index(group_id, transform)
     cc_pool = cluster_copy_lock_pool(

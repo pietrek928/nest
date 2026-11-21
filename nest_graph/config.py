@@ -307,10 +307,14 @@ class RulesConfig(BaseModel):
 
     def board_void_geometries(self):
         sheet = self.board_sheet_polygon()
+        # H3: keep hole solids unbuffered — Scene already applies min_dist margin;
+        # inflating here double-counts clearance and starves swiss nestable area.
+        # Depth SoT is void_fit_radii(use_boundary=True) for sponge/swiss free.
         return board_void_geometries(
             sheet,
             outline=self.board_polygon(),
             padding=self.effective_sheet_padding(),
+            hole_margin=0.0,
         )
 
     def rect_polygon(self) -> Polygon:
@@ -402,6 +406,9 @@ class ProposeConfig(BaseModel):
     min_dist_ratio: float = 0.002
     first_pass_min_dist_ratio: float = 0.0008
     """Tighter standoff on iteration 1 for denser outline packing."""
+    absolute_min_dist: float | None = None
+    """Optional absolute clearance override (both passes); None → diagonal × ratio."""
+
     first_pass_clearance_epsilon_ratio: float = 0.02
     first_pass_candidate_pool: int = 256
     first_pass_max_proposals: int = 128
@@ -1016,6 +1023,9 @@ class BuildGraphConfig(BaseModel):
         first_pass: bool = False,
     ) -> float:
         """Clearance from sheet diagonal × min_dist_ratio (use the nest sheet, not demo rules)."""
+        abs_md = getattr(self.propose, "absolute_min_dist", None)
+        if abs_md is not None:
+            return float(abs_md)
         xmin, ymin, xmax, ymax = board.bounds
         diag = float(np.hypot(xmax - xmin, ymax - ymin))
         ratio = self.propose.min_dist_ratio

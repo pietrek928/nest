@@ -760,6 +760,13 @@ def _void_seek_densify(
     telem["motif_skip"] = dict(densify_pocket.get("motif_skip") or {})
     telem["motif_cohorts"] = list(densify_pocket.get("motif_cohorts") or [])
     telem["pocket_skips"] = [str(sk) for sk in (densify_pocket.get("pocket_skip") or [])]
+    telem["part_hole_raw_n"] = int(densify_pocket.get("part_hole_raw_n", 0) or 0)
+    telem["part_hole_free_survived"] = int(
+        densify_pocket.get("part_hole_free_survived", 0) or 0
+    )
+    telem["part_hole_pocket_kept"] = int(
+        densify_pocket.get("part_hole_pocket_kept", 0) or 0
+    )
 
     densify_arr = propositions_to_ndarray(densify_coords)
     yield_poly = _free_space_target_poly(part_free_space)
@@ -1202,6 +1209,7 @@ def _collect_pocket_candidates(
         tags: list[str] = []
         attempts: list[int] = []
         skips: list[str] = []
+        pocket_telem: dict = {}
         _pocket_t0 = time.perf_counter()
         pocket_coords = propose_placements_pocket_fit(
             ctx.shape_to_place,
@@ -1221,6 +1229,7 @@ def _collect_pocket_candidates(
             attempts_out=attempts,
             free_space=extras.free_space,
             skip_reasons_out=skips,
+            telem_out=pocket_telem,
         )
         state.pocket_ms += (time.perf_counter() - _pocket_t0) * 1000.0
         state.ext("pocket_fit", pocket_coords, max_items=len(pocket_coords))
@@ -1230,6 +1239,18 @@ def _collect_pocket_candidates(
                 stats.attempts = int(attempts[0])
             for sk in skips:
                 stats.skip_reasons[str(sk)] = stats.skip_reasons.get(str(sk), 0) + 1
+            stats.part_hole_raw_n = max(
+                int(stats.part_hole_raw_n),
+                int(pocket_telem.get("part_hole_raw_n", 0) or 0),
+            )
+            stats.part_hole_free_survived = max(
+                int(stats.part_hole_free_survived),
+                int(pocket_telem.get("part_hole_free_survived", 0) or 0),
+            )
+            stats.part_hole_pocket_kept = max(
+                int(stats.part_hole_pocket_kept),
+                int(pocket_telem.get("part_hole_pocket_kept", 0) or 0),
+            )
 
     if (
         _proposer_enabled("cluster_copy", ctx.enabled_proposers)
@@ -2636,6 +2657,13 @@ def propose_coords_with_strategy(
         pocket_stats_out["emitted_by_proposer"] = {
             n: len(ks) for n, ks in local_proposer_keys.items()
         }
+        pocket_stats_out["part_hole_raw_n"] = int(pocket_stats.part_hole_raw_n)
+        pocket_stats_out["part_hole_free_survived"] = int(
+            pocket_stats.part_hole_free_survived
+        )
+        pocket_stats_out["part_hole_pocket_kept"] = int(
+            pocket_stats.part_hole_pocket_kept
+        )
     return result
 
 
@@ -3087,7 +3115,9 @@ def _prepare_group_propose(
     archived_patterns: Sequence | None = None,
 ) -> tuple:
     """Shared pre-loop setup for ``proposed_transforms_for_groups`` (behavior-neutral)."""
-    sheet, _ = board_context_from_geometry(board, user_holes=user_holes)
+    sheet, _ = board_context_from_geometry(
+        board, user_holes=user_holes, hole_margin=0.0
+    )
     placed = [selected_polys[i] for i in selected_indices]
     n_holes = len(getattr(sheet, "interiors", ()) or ())
     sheet_vertices = len(list(sheet.exterior.coords)) if hasattr(sheet, "exterior") else 0
@@ -3262,6 +3292,9 @@ def proposed_transforms_for_groups(
     pocket_emitted = 0
     pocket_attempted = 0
     pocket_accepted = 0
+    part_hole_raw_n_max = 0
+    part_hole_free_survived_max = 0
+    part_hole_pocket_kept_max = 0
     pocket_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     motif_keys_by_group: dict[int, set[tuple[float, float, float]]] = {}
     motif_skip_agg: dict[str, int] = {}
@@ -3727,6 +3760,17 @@ def proposed_transforms_for_groups(
         pocket_emitted += int(pocket_stats.get("emitted", 0))
         pocket_attempted += int(pocket_stats.get("attempted", 0))
         pocket_accepted += int(pocket_stats.get("selected", 0))
+        part_hole_raw_n_max = max(
+            part_hole_raw_n_max, int(pocket_stats.get("part_hole_raw_n", 0) or 0)
+        )
+        part_hole_free_survived_max = max(
+            part_hole_free_survived_max,
+            int(pocket_stats.get("part_hole_free_survived", 0) or 0),
+        )
+        part_hole_pocket_kept_max = max(
+            part_hole_pocket_kept_max,
+            int(pocket_stats.get("part_hole_pocket_kept", 0) or 0),
+        )
         for sk in pocket_stats.get("pocket_skip") or []:
             pocket_skips_all.append(str(sk))
         for mk, mv in (pocket_stats.get("motif_skip") or {}).items():
@@ -3914,6 +3958,18 @@ def proposed_transforms_for_groups(
             pocket_emitted += int(densify_telem["pocket_emitted"])
             pocket_attempted += int(densify_telem["pocket_attempted"])
             pocket_accepted += int(densify_telem["pocket_accepted"])
+            part_hole_raw_n_max = max(
+                part_hole_raw_n_max,
+                int(densify_telem.get("part_hole_raw_n", 0) or 0),
+            )
+            part_hole_free_survived_max = max(
+                part_hole_free_survived_max,
+                int(densify_telem.get("part_hole_free_survived", 0) or 0),
+            )
+            part_hole_pocket_kept_max = max(
+                part_hole_pocket_kept_max,
+                int(densify_telem.get("part_hole_pocket_kept", 0) or 0),
+            )
             for pk in densify_telem["pocket_keys"]:
                 pocket_keys_by_group.setdefault(int(group_id), set()).add(tuple(pk))
             fold_emit_motif_keys(
@@ -4093,6 +4149,21 @@ def proposed_transforms_for_groups(
         )
         densify_stats_out["pocket_ms"] = float(
             cascade_agg.get("pocket_ms", 0.0) or 0.0
+        )
+        # H1 census: cheap ring count on hot path; full survival via
+        # H1: live part_hole_* from pocket_fit telem; cheap ring-count fallback.
+        densify_stats_out["part_hole_raw_n"] = max(
+            int(part_hole_raw_n_max),
+            sum(
+                len(getattr(p, "interiors", ()) or ())
+                for p in placed
+                if p is not None and not getattr(p, "is_empty", False)
+            ),
+        )
+        densify_stats_out["part_hole_free_survived"] = int(part_hole_free_survived_max)
+        densify_stats_out["part_hole_pocket_kept"] = int(part_hole_pocket_kept_max)
+        densify_stats_out["free_comp_n"] = int(
+            densify_stats_out.get("free_comp_n", 0) or 0
         )
         densify_stats_out["prefilter_batch_n"] = int(
             cascade_agg.get("prefilter_batch_n", 0) or 0

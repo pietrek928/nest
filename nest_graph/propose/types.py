@@ -23,6 +23,9 @@ class PocketStats:
     attempts: int = 0
     skip_reasons: dict = field(default_factory=dict)
     motif_cohorts: list = field(default_factory=list)
+    part_hole_raw_n: int = 0
+    part_hole_free_survived: int = 0
+    part_hole_pocket_kept: int = 0
 
 
 @dataclass

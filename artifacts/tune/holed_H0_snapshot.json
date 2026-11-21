@@ -1,0 +1,45 @@
+{
+  "letter": "H0",
+  "note": "Open early baselines before H2/H1/H3 predicate changes; census telem added in same series",
+  "holed_parts": {
+    "donut_parts_pack": {
+      "seeds": [0, 1, 2],
+      "areas": [0.497, 0.477, 0.502],
+      "parts": [232, 222, 224],
+      "median_area": 0.497,
+      "min_area": 0.477,
+      "median_parts": 224,
+      "independent_ok": true
+    },
+    "holed_parts_in_swiss": {
+      "seeds": [0, 1, 2],
+      "areas": [0.400, 0.393, 0.395],
+      "parts": [230, 197, 226],
+      "median_area": 0.395,
+      "min_area": 0.393,
+      "median_parts": 226,
+      "independent_ok": true
+    }
+  },
+  "void_fill": {
+    "ref": "artifacts/tune/parametrize_P0_snapshot.json",
+    "seeds": [0, 1, 2],
+    "areas": [0.644, 0.569, 0.608],
+    "parts": [61, 58, 61],
+    "median_area": 0.608,
+    "min_area": 0.569,
+    "median_parts": 61,
+    "independent_ok": true
+  },
+  "census_keys": [
+    "part_hole_raw_n",
+    "part_hole_free_survived",
+    "free_comp_n",
+    "pocket_fit_emitted",
+    "pocket_fit_selected",
+    "se2_final_overlap_fail",
+    "se2_overlap_restored",
+    "scene_vs_penetrating_mismatch",
+    "post_pack_indep_fail"
+  ]
+}

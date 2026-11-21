@@ -122,8 +122,13 @@ def board_void_geometries(
     *,
     outline: Polygon | None = None,
     padding: float = 0.0,
+    hole_margin: float = 0.0,
 ) -> list[Geometry]:
-    """Forbidden void regions as Geometry solids (overlap => invalid)."""
+    """Forbidden void regions as Geometry solids (overlap => invalid).
+
+    ``hole_margin`` inflates sheet-hole solids toward the Scene clearance
+    family so packing Penetrating and Scene agree near swiss/center holes.
+    """
     geoms: list[Geometry] = []
     if outline is not None:
         geoms.extend(board_void_obstacles(outline, padding))
@@ -131,10 +136,20 @@ def board_void_geometries(
     if void.is_empty:
         return geoms
     parts = void.geoms if hasattr(void, "geoms") else [void]
+    margin = max(float(hole_margin), 0.0)
     for g in parts:
         if g.is_empty or g.geom_type != "Polygon":
             continue
-        geoms.append(Geometry.from_shapely(g))
+        solid = g.buffer(margin) if margin > 0.0 else g
+        if solid.is_empty:
+            continue
+        if solid.geom_type == "MultiPolygon":
+            for piece in solid.geoms:
+                if not piece.is_empty and piece.geom_type == "Polygon":
+                    geoms.append(Geometry.from_shapely(piece))
+            continue
+        if solid.geom_type == "Polygon":
+            geoms.append(Geometry.from_shapely(solid))
     return geoms
 
 
@@ -144,6 +159,7 @@ def board_context_from_geometry(
     padding: float = 0.0,
     min_padding_ratio: float = 0.08,
     user_holes: tuple[tuple[tuple[float, float], ...], ...] = (),
+    hole_margin: float = 0.0,
 ) -> tuple[Polygon, list[Geometry]]:
     if not isinstance(board, Polygon):
         board = Polygon(board)
@@ -154,5 +170,10 @@ def board_context_from_geometry(
         board,
         user_holes=user_holes,
     )
-    void_geoms = board_void_geometries(sheet, outline=board, padding=pad)
+    void_geoms = board_void_geometries(
+        sheet,
+        outline=board,
+        padding=pad,
+        hole_margin=float(hole_margin),
+    )
     return sheet, void_geoms

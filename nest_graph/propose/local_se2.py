@@ -415,7 +415,11 @@ def local_se2_selection(
         "hole_open_slack_restore": 0,
         "se2_from_shapely_n": 0,
         "se2_legs": 0,
+        "se2_final_overlap_fail": 0,
+        "se2_overlap_restored": 0,
+        "scene_vs_penetrating_mismatch": 0,
     }
+    stats.setdefault("scene_vs_penetrating_mismatch", 0)
     out_polys = list(polys)
     out_tr = [np.asarray(t, dtype=np.float64).reshape(3) for t in transforms]
     out_geoms: list[Geometry | None] = [
@@ -479,7 +483,7 @@ def local_se2_selection(
             )
 
     if void_geoms is None:
-        _, void_geoms = board_context_from_geometry(sheet)
+        _, void_geoms = board_context_from_geometry(sheet, hole_margin=0.0)
     # One-time void/locked natives (not counted in se2_from_shapely_n).
     voids: list[Geometry] = []
     for v in (void_geoms or ()):
@@ -710,7 +714,7 @@ def local_se2_selection(
         fixed_geoms=locked_geoms,
         telem=stats,
     ):
-        # Should be rare; telem marks the miss without reverting the wave.
+        # H2: telem miss; post_pack overlap_revert is the commit restore.
         stats["se2_final_overlap_fail"] = 1
 
     # force_hole is always True from apply_post_pack_and_telem; gate was a no-op.

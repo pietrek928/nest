@@ -494,6 +494,9 @@ def pack_execute_snapshot(
                 )
             )
             pack_cache["last_execute_telem"]["cache_hit_inject"] = 1
+            pack_cache["cache_hit_inject_n"] = int(
+                pack_cache.get("cache_hit_inject_n", 0) or 0
+            ) + 1
         return cached
 
     pack_cache["cache_miss_n"] = int(pack_cache.get("cache_miss_n", 0) or 0) + 1

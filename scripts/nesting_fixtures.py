@@ -6,10 +6,29 @@ import re
 from dataclasses import dataclass, field, replace
 
 import numpy as np
-from shapely.geometry import Point, Polygon, box
-from shapely.ops import unary_union
+from shapely.geometry import Polygon, box
 
-from nest_graph.utils import normalize_poly, transform_poly
+from nest_graph.shapes_catalog import (
+    PART_BUILDERS,
+    build_board as _build_board,
+    build_holes as _build_holes,
+    counts_for_demand as _counts_for_demand,
+    make_c_shape as _make_c_shape,
+    make_cross as _make_cross,
+    make_donut_part as _make_donut_part,
+    make_frame as _make_frame,
+    make_l_shape as _make_l_shape,
+    make_needle as _make_needle,
+    make_organic_board as _make_organic_board,
+    make_rect as _make_rect,
+    make_star as _make_star,
+    make_t_shape as _make_t_shape,
+    make_tri as _make_tri,
+    make_u_shape as _make_u_shape,
+    make_wedge as _make_wedge,
+    separated_holes as _separated_holes,
+)
+from nest_graph.utils import transform_poly
 
 
 @dataclass(frozen=True)
@@ -88,229 +107,7 @@ class CaseSpec:
     floors: NestFloors = field(default_factory=NestFloors)
 
 
-# ---------------------------------------------------------------------------
-# Shape / board builders
-# ---------------------------------------------------------------------------
-
-
-def _make_rect(w: float, h: float) -> Polygon:
-    return normalize_poly(box(0, 0, w, h))
-
-
-def _make_tri(w: float, h: float) -> Polygon:
-    return normalize_poly(Polygon([(0, 0), (w, 0), (0, h)]))
-
-
-def _make_l_shape(w: float, h: float, t: float) -> Polygon:
-    return normalize_poly(Polygon([(0, 0), (w, 0), (w, t), (t, t), (t, h), (0, h)]))
-
-
-def _make_c_shape(w: float = 2.0, h: float = 2.0, t: float = 0.5) -> Polygon:
-    return normalize_poly(
-        Polygon([
-            (0, 0), (w, 0), (w, t), (t, t), (t, h - t), (w, h - t), (w, h), (0, h),
-        ])
-    )
-
-
-def _make_u_shape(w: float = 2.0, h: float = 2.0, t: float = 0.5) -> Polygon:
-    return normalize_poly(
-        Polygon([
-            (0, 0), (w, 0), (w, h), (w - t, h), (w - t, t), (t, t), (t, h), (0, h),
-        ])
-    )
-
-
-def _make_t_shape(w: float = 2.0, h: float = 2.0, t: float = 0.6) -> Polygon:
-    stem = (w - t) / 2.0
-    merged = unary_union([box(0, h - t, w, h), box(stem, 0, stem + t, h - t)])
-    if merged.geom_type != "Polygon":
-        merged = max(merged.geoms, key=lambda g: g.area)
-    return normalize_poly(merged)
-
-
-def _make_star(r_outer: float = 1.0, r_inner: float = 0.4, points: int = 5) -> Polygon:
-    pts = []
-    for i in range(points * 2):
-        r = r_outer if i % 2 == 0 else r_inner
-        a = math.pi * i / points - math.pi / 2
-        pts.append((r * math.cos(a), r * math.sin(a)))
-    return normalize_poly(Polygon(pts))
-
-
-def _make_cross(arm: float = 2.0, t: float = 0.6) -> Polygon:
-    c = arm / 2.0
-    ht = t / 2.0
-    return normalize_poly(
-        Polygon([
-            (-ht, -c), (ht, -c), (ht, -ht), (c, -ht), (c, ht), (ht, ht),
-            (ht, c), (-ht, c), (-ht, ht), (-c, ht), (-c, -ht), (-ht, -ht),
-        ])
-    )
-
-
-def _make_donut_part(outer: float = 1.5, inner: float = 0.6) -> Polygon:
-    shell = list(Point(0, 0).buffer(outer, resolution=4).exterior.coords)
-    hole = list(Point(0, 0).buffer(inner, resolution=4).exterior.coords)
-    return normalize_poly(Polygon(shell, [hole]))
-
-
-def _make_frame(w: float = 2.0, h: float = 2.0, t: float = 0.35) -> Polygon:
-    shell = [(0, 0), (w, 0), (w, h), (0, h)]
-    hole = [(t, t), (w - t, t), (w - t, h - t), (t, h - t)]
-    return normalize_poly(Polygon(shell, [hole]))
-
-
-def _make_needle(length: float = 4.0, thickness: float = 0.25) -> Polygon:
-    return normalize_poly(box(0, 0, length, thickness))
-
-
-def _make_wedge(w: float = 2.0, h: float = 0.6) -> Polygon:
-    return normalize_poly(Polygon([(0, 0), (w, 0), (w * 0.5, h)]))
-
-
-def _make_organic_board(
-    size: float = 16.0,
-    n_verts: int = 18,
-    noise: float = 0.22,
-    seed: int = 7,
-) -> Polygon:
-    """Deterministic jagged simple polygon (hide/leather-like outline)."""
-    rng = np.random.default_rng(seed)
-    cx = cy = size * 0.5
-    base_r = size * 0.42
-    pts = []
-    for i in range(n_verts):
-        a = 2.0 * math.pi * i / n_verts
-        r = base_r * (1.0 + float(rng.uniform(-noise, noise)))
-        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
-    poly = Polygon(pts)
-    if not poly.is_valid or poly.area <= 0:
-        poly = poly.buffer(0)
-    if poly.is_empty or not poly.is_valid:
-        raise ValueError("organic board generation failed")
-    if poly.geom_type == "MultiPolygon":
-        poly = max(poly.geoms, key=lambda g: g.area)
-    return poly
-
-
-PART_BUILDERS = {
-    "rect": lambda s=1.0, **_: _make_rect(1.0 * s, 1.0 * s),
-    "tri": lambda s=1.0, **_: _make_tri(1.5 * s, 0.7 * s),
-    "strip": lambda s=1.0, **_: _make_rect(2.5 * s, 0.35 * s),
-    "L": lambda s=1.0, **_: _make_l_shape(2.0 * s, 2.0 * s, 0.8 * s),
-    "C": lambda s=1.0, **_: _make_c_shape(2.0 * s, 2.0 * s, 0.5 * s),
-    "U": lambda s=1.0, **_: _make_u_shape(2.0 * s, 2.0 * s, 0.5 * s),
-    "T": lambda s=1.0, **_: _make_t_shape(2.0 * s, 2.0 * s, 0.6 * s),
-    "star": lambda s=1.0, **_: _make_star(1.0 * s, 0.4 * s),
-    "cross": lambda s=1.0, **_: _make_cross(2.0 * s, 0.6 * s),
-    "donut": lambda s=1.0, **_: _make_donut_part(1.4 * s, 0.55 * s),
-    "frame": lambda s=1.0, **_: _make_frame(2.0 * s, 2.0 * s, 0.35 * s),
-    "needle": lambda s=1.0, **_: _make_needle(4.0 * s, 0.25 * s),
-    "wedge": lambda s=1.0, **_: _make_wedge(2.0 * s, 0.55 * s),
-    "small_rect": lambda s=1.0, **_: _make_rect(0.8 * s, 0.8 * s),
-    "filler": lambda s=1.0, **_: _make_rect(0.95 * s, 0.95 * s),
-}
-
-
-def _build_board(kind: str, params: tuple) -> Polygon:
-    if kind == "rect":
-        w, h = (params + (12.0, 12.0))[:2]
-        return box(0, 0, float(w), float(h))
-    if kind == "tri":
-        scale = float(params[0]) if params else 1.0
-        return Polygon([(0, 0), (1.2 * scale, 0), (0, 1.1 * scale)])
-    if kind == "organic":
-        size = float(params[0]) if params else 16.0
-        n_verts = int(params[1]) if len(params) > 1 else 18
-        noise = float(params[2]) if len(params) > 2 else 0.22
-        seed = int(params[3]) if len(params) > 3 else 7
-        return _make_organic_board(size=size, n_verts=n_verts, noise=noise, seed=seed)
-    raise ValueError(f"unknown board kind: {kind}")
-
-
-def _build_holes(board: Polygon, layout: str, params: tuple) -> tuple[Polygon, ...]:
-    if layout in ("", "none"):
-        return ()
-    minx, miny, maxx, maxy = board.bounds
-    cx, cy = 0.5 * (minx + maxx), 0.5 * (miny + maxy)
-    if layout == "center":
-        hx = float(params[0]) if params else 4.0
-        hy = float(params[1]) if len(params) > 1 else hx
-        return (box(cx - hx / 2, cy - hy / 2, cx + hx / 2, cy + hy / 2),)
-    if layout == "swiss":
-        n = int(params[0]) if params else 5
-        r = float(params[1]) if len(params) > 1 else 1.4
-        seed = int(params[2]) if len(params) > 2 else 42
-        gap = float(params[3]) if len(params) > 3 else max(1.2, 0.7 * r)
-        return tuple(_separated_holes(board, n, r, seed=seed, min_gap=gap))
-    if layout == "trap":
-        hw = float(params[0]) if params else 10.0
-        hh = float(params[1]) if len(params) > 1 else hw
-        hole = transform_poly(_make_rect(hw, hh), (cx, cy, 0.0))
-        return (hole,)
-    if layout == "corridor":
-        hw = float(params[0]) if params else 14.0
-        hh = float(params[1]) if len(params) > 1 else 6.0
-        dy = float(params[2]) if len(params) > 2 else 4.0
-        h1 = transform_poly(_make_rect(hw, hh), (cx, cy - dy, 0.0))
-        h2 = transform_poly(_make_rect(hw, hh), (cx, cy + dy, 0.0))
-        return (h1, h2)
-    raise ValueError(f"unknown hole_layout: {layout}")
-
-
-def _counts_for_demand(
-    parts: list[Polygon],
-    usable_area: float,
-    target_demand: float,
-    mix: tuple[float, ...],
-    *,
-    max_per_group: int = 80,
-) -> tuple[int, ...]:
-    """Allocate integer counts so sum(area_i * count_i) ≈ target_demand * usable_area."""
-    if usable_area <= 0 or target_demand <= 0:
-        return tuple(1 for _ in parts)
-    weights = np.asarray(mix if mix else (1.0,) * len(parts), dtype=np.float64)
-    weights = weights / weights.sum()
-    budget = target_demand * usable_area
-    counts: list[int] = []
-    for part, w in zip(parts, weights):
-        n = int(round(budget * w / max(part.area, 1e-12)))
-        counts.append(int(min(max_per_group, max(1, n))))
-    return tuple(counts)
-
-
-def _separated_holes(
-    board: Polygon,
-    num_holes: int,
-    hole_radius: float,
-    *,
-    seed: int,
-    min_gap: float,
-    max_tries: int = 400,
-) -> list[Polygon]:
-    """Sample non-overlapping holes with a clearance corridor between them."""
-    minx, miny, maxx, maxy = board.bounds
-    margin = hole_radius + min_gap
-    rng = np.random.default_rng(seed)
-    holes: list[Polygon] = []
-    for _ in range(max_tries):
-        if len(holes) >= num_holes:
-            break
-        cx = float(rng.uniform(minx + margin, maxx - margin))
-        cy = float(rng.uniform(miny + margin, maxy - margin))
-        cand = Point(cx, cy).buffer(hole_radius, resolution=3)
-        if any(cand.distance(h) < min_gap for h in holes):
-            continue
-        if not board.contains(cand):
-            continue
-        holes.append(cand)
-    if len(holes) < num_holes:
-        raise ValueError(
-            f"could only place {len(holes)}/{num_holes} separated holes "
-            f"(radius={hole_radius}, min_gap={min_gap})"
-        )
-    return holes
+# Shape / board builders live in nest_graph.shapes_catalog (re-exported above).
 
 
 def _seed_min_dist(board: Polygon) -> float:

@@ -1309,10 +1309,11 @@ def merge_phase_gate_telem(
             int(mt.get("motif_join_spoke_n", leak.get("motif_join_spoke_n", 0)) or 0),
             int(propose_stats.get("motif_join_spoke_n", 0) or 0),
         )
-        # L0 MotifJoin identity census.
+        # L0 MotifJoin identity census (+ M0 path_join_priority / cache_hit_inject).
         for _k in (
             "path_join_labeled_n",
             "path_join_mid_unique_n",
+            "path_join_priority_n",
             "join_stack_n",
             "stale_join_mid_n",
             "path_upsert_prefer_gap",
@@ -1321,6 +1322,7 @@ def merge_phase_gate_telem(
             "star_spoke_n",
             "star_mid_unique_n",
             "prefer_from_path_n",
+            "cache_hit_inject",
         ):
             leak[_k] = max(
                 int(mt.get(_k, leak.get(_k, 0)) or 0),
@@ -1588,6 +1590,7 @@ def merge_phase_gate_telem(
         "star_mid_unique_n",
         "path_join_labeled_n",
         "path_join_mid_unique_n",
+        "path_join_priority_n",
         "join_stack_n",
         "stale_join_mid_n",
         "path_upsert_prefer_gap",
@@ -1597,6 +1600,10 @@ def merge_phase_gate_telem(
         "motif_cohort_sig",
         "cache_invalidate_cohort",
         "cache_key_cohort_sig",
+        "cache_hit_inject",
+        "motif_beam_sets",
+        "motif_join_n",
+        "motif_graph_hit_n",
         "motif_union_lock_n",
         "motif_union_beam_prepend",
         "motif_union_beam_win",
@@ -1624,6 +1631,8 @@ def merge_phase_gate_telem(
         "cache_invalidate_compose",
         "cohort_sig_amaf_visits",
         "mcts_cohort_macro_n",
+        "lock_same_iter_cr",
+        "lock_same_iter_crm",
         "grow_reject_first_obstacle",
         "grow_reject_first_void",
         "grow_reject_first_packed",
@@ -1680,6 +1689,29 @@ def merge_phase_gate_telem(
             float(leak.get("lock_survive_refine", 0.0) or 0.0),
             float(propose_stats.get("lock_survive_refine", 0.0) or 0.0),
         )
+    # M0: same-iter co-occurrence (this propose_stats snapshot, not cross-iter max).
+    _iter_c = int(propose_stats.get("motif_compose_accepted_size", 0) or 0)
+    if _iter_c <= 0:
+        _iter_c = int(propose_stats.get("lock_n_compose", 0) or 0)
+    _iter_r = int(propose_stats.get("lock_n_refine", 0) or 0)
+    _iter_m = int(propose_stats.get("lock_n_materialize", 0) or 0)
+    leak["lock_iter_c"] = int(_iter_c)
+    leak["lock_iter_r"] = int(_iter_r)
+    leak["lock_iter_m"] = int(_iter_m)
+    _same_cr = 1 if (_iter_c >= 2 and _iter_r >= 2) else 0
+    _same_crm = 1 if (_iter_c >= 2 and _iter_r >= 2 and _iter_m >= 2) else 0
+    leak["lock_same_iter_cr"] = max(
+        int(leak.get("lock_same_iter_cr", 0) or 0), int(_same_cr)
+    )
+    leak["lock_same_iter_crm"] = max(
+        int(leak.get("lock_same_iter_crm", 0) or 0), int(_same_crm)
+    )
+    # Plan alias: seq_clear → sequential clear-fail count.
+    leak["seq_clear"] = max(
+        int(leak.get("seq_clear", 0) or 0),
+        int(leak.get("motif_sequential_clear_fail", 0) or 0),
+        int(propose_stats.get("motif_sequential_clear_fail", 0) or 0),
+    )
     leak["archive_mix_pin_survive_n"] = max(
         int(leak.get("archive_mix_pin_survive_n", 0) or 0),
         int(propose_stats.get("archive_mix_pin_survive_n", 0) or 0),
@@ -1742,6 +1774,40 @@ def merge_phase_gate_telem(
             int(leak.get("local_se2_moved", 0) or 0),
             int(se2.get("moved", 0) or 0),
         )
+        leak["se2_final_overlap_fail"] = max(
+            int(leak.get("se2_final_overlap_fail", 0) or 0),
+            int(se2.get("se2_final_overlap_fail", 0) or 0),
+        )
+        leak["se2_overlap_restored"] = max(
+            int(leak.get("se2_overlap_restored", 0) or 0),
+            int(se2.get("se2_overlap_restored", 0) or 0),
+        )
+        leak["scene_vs_penetrating_mismatch"] = max(
+            int(leak.get("scene_vs_penetrating_mismatch", 0) or 0),
+            int(se2.get("scene_vs_penetrating_mismatch", 0) or 0),
+        )
+    densify = propose_stats.get("densify_stats") or {}
+    if isinstance(densify, dict):
+        leak["part_hole_raw_n"] = max(
+            int(leak.get("part_hole_raw_n", 0) or 0),
+            int(densify.get("part_hole_raw_n", 0) or 0),
+        )
+        leak["part_hole_free_survived"] = max(
+            int(leak.get("part_hole_free_survived", 0) or 0),
+            int(densify.get("part_hole_free_survived", 0) or 0),
+        )
+        leak["part_hole_pocket_kept"] = max(
+            int(leak.get("part_hole_pocket_kept", 0) or 0),
+            int(densify.get("part_hole_pocket_kept", 0) or 0),
+        )
+        leak["free_comp_n"] = max(
+            int(leak.get("free_comp_n", 0) or 0),
+            int(densify.get("free_comp_n", 0) or 0),
+        )
+    leak["post_pack_indep_fail"] = max(
+        int(leak.get("post_pack_indep_fail", 0) or 0),
+        int(propose_stats.get("post_pack_indep_fail", 0) or 0),
+    )
     leak["multi_pole_count"] = max(
         int(leak.get("multi_pole_count", 0) or 0),
         int(

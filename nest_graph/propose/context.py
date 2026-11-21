@@ -100,10 +100,12 @@ def void_fit_radii(
     at_pt: Point | None = None,
     use_boundary: bool = False,
 ) -> tuple[bool, float, float]:
-    """Return (fits, in_r, need_r). ``use_boundary`` includes holes (letter A).
+    """Return (fits, in_r, need_r). Pass ``use_boundary=True`` to include holes (H3).
 
     Prefer ``shape`` → ``part_extents`` max (same as densify ``_fit_probe_ok``).
     When only ``part_area`` is known, use equal-area disk radius.
+    Callers that classify sponge/swiss free should pass ``use_boundary=True``
+    (``void_fits_part`` / densify already do).
     """
     del min_dist  # reserved for future clearance floor; need_r is extents today
     if void_poly is None or getattr(void_poly, "is_empty", True):
@@ -120,7 +122,7 @@ def void_fit_radii(
         pt = at_pt
         if pt is None or getattr(pt, "is_empty", True):
             pt = void_poly.representative_point()
-        # A: boundary = exterior ∪ holes (MultiPolygon already used boundary).
+        # H3/A: boundary = exterior ∪ holes (MultiPolygon already used boundary).
         if bool(use_boundary) or not (
             hasattr(void_poly, "exterior") and void_poly.exterior is not None
         ):
@@ -181,6 +183,7 @@ def _pick_fit_target(
 
     Kind classification still uses the max-area component separately. Placeability
     ORs across components so a rounder pocket is not hidden by a larger crescent.
+    H1 part-in-part uses trapped_voids → pocket_fit (not a Mode-A retarget ban).
     """
     if not components:
         return True, 0.0, 0.0, None, None
@@ -1099,11 +1102,76 @@ def obstacle_shape_for_propose(
     return simplify_obstacle_union(polys, min_dist)
 
 
+def part_interior_polygons(
+    polys: Sequence[BaseGeometry],
+) -> list[Polygon]:
+    """Shapely hole rings of packed parts (donut/frame interiors)."""
+    out: list[Polygon] = []
+    for p in polys:
+        if p is None or getattr(p, "is_empty", False):
+            continue
+        for ring in getattr(p, "interiors", ()) or ():
+            hole = Polygon(ring)
+            if not hole.is_empty and float(hole.area) > 0.0:
+                out.append(hole)
+    return out
+
+
+def count_part_hole_free_survival(
+    sheet: Polygon | None,
+    placed: Sequence[BaseGeometry],
+    min_dist: float,
+    *,
+    obstacle: BaseGeometry | None = None,
+) -> dict[str, int]:
+    """H0/H1 census: free components whose representative sits in a part hole.
+
+    Default free SoT is ``sheet.difference(unary_union(placed))`` (same as
+    analyze_free_space / trapped_voids), not morph-simplified obstacles — those
+    intentionally coalesce and must not drive the primary void pole.
+    """
+    del min_dist  # reserved; free SoT is raw difference unless obstacle given
+    raw = part_interior_polygons(placed)
+    if not raw or sheet is None or getattr(sheet, "is_empty", True):
+        return {
+            "part_hole_raw_n": int(len(raw)),
+            "part_hole_free_survived": 0,
+            "free_comp_n": 0,
+        }
+    if obstacle is not None:
+        free = sheet.difference(obstacle)
+    else:
+        valid = [p for p in placed if p is not None and not getattr(p, "is_empty", False)]
+        free = sheet.difference(unary_union(valid)) if valid else sheet
+    comps = _polygon_components(free)
+    survived = 0
+    for comp in comps:
+        if comp is None or comp.is_empty:
+            continue
+        pt = comp.representative_point()
+        for hole in raw:
+            if hole.contains(pt) or hole.covers(pt):
+                survived += 1
+                break
+    return {
+        "part_hole_raw_n": int(len(raw)),
+        "part_hole_free_survived": int(survived),
+        "free_comp_n": int(len(comps)),
+    }
+
+
 def simplify_obstacle_union(
     polys: Sequence[BaseGeometry],
     min_dist: float,
 ) -> BaseGeometry:
-    """Merge packed parts; hull only for very dense clusters to keep proposers cheap."""
+    """Merge packed parts; hull only for very dense clusters to keep proposers cheap.
+
+    H1: do not punch morph-filled part interiors here (that steals the Mode-A
+    void pole into donut holes). Part-in-part free survival is gated on
+    ``sheet.difference(union(placed))`` → trapped_voids → pocket_fit — see
+    ``count_part_hole_free_survival``. Hull still skipped when area would blow
+    up (rim/donut fill).
+    """
     if not polys:
         return Polygon()
     if len(polys) == 1:

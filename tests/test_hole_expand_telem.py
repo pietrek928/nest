@@ -7,6 +7,7 @@ from nest_graph.propose.telem import (
     assemble_void_leak,
     build_void_leak_dict,
     format_void_leak_line,
+    merge_phase_gate_telem,
 )
 from nest_graph.graph import FreeKind
 
@@ -130,3 +131,35 @@ def test_void_leak_payload_line_and_dict_hijack_types():
     assert line2 == line
     assert leak2["hijack"] is True
     assert "funnel" in leak2
+
+
+def test_m0_void_leak_same_iter_and_path_join_keys():
+    """M0 census: same-iter lock co-occur + path_join_priority / cache_hit_inject."""
+    p = _sample_payload()
+    p.propose_stats.update(
+        {
+            "motif_compose_accepted_size": 2,
+            "lock_n_compose": 2,
+            "lock_n_refine": 2,
+            "lock_n_materialize": 0,
+            "path_join_priority_n": 3,
+            "cache_hit_inject": 1,
+            "motif_join_n": 4,
+            "motif_graph_hit_n": 2,
+            "motif_beam_sets": 2,
+            "motif_sequential_clear_fail": 5,
+        }
+    )
+    _line, leak = assemble_void_leak(p)
+    merge_phase_gate_telem(leak, None, p.propose_stats)
+    assert leak["lock_iter_c"] == 2
+    assert leak["lock_iter_r"] == 2
+    assert leak["lock_iter_m"] == 0
+    assert leak["lock_same_iter_cr"] == 1
+    assert leak["lock_same_iter_crm"] == 0
+    assert leak["path_join_priority_n"] == 3
+    assert leak["cache_hit_inject"] == 1
+    assert leak["motif_join_n"] == 4
+    assert leak["motif_graph_hit_n"] == 2
+    assert leak["motif_beam_sets"] == 2
+    assert leak["seq_clear"] == 5

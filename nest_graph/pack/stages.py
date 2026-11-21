@@ -246,6 +246,8 @@ def _refine_from_ctx(ctx: PackIterCtx, box: RefinePackBox) -> None:
         node_areas=node_areas,
         refine_seed=int(ctx.refine_seed),
         # F1: hold_cohort sticky fuels 3a/PLACE_COHORT without refine 1.05× tax.
+        # M2 survival telem uses motif_locked SoT inside apply_refine_with_restore
+        # even when refine_skip clears DFS locked_indices.
         locked_indices=(
             []
             if int(ctx.propose_stats.get("refine_skip_motif_lock", 0) or 0) > 0
@@ -471,15 +473,16 @@ def run_first_pass_border_pack(
     *,
     seed_rules: Any,
     parts: list,
-    p1,
-    p2,
     board_ctx_outline: tuple,
     sel_iter: Any,
     active_rules: Any,
     make_polygon_graph_fn: Callable,
+    p1=None,
+    p2=None,
 ) -> FirstPassBorderResult:
     """First-pass border ring → layered saturation → optional Uh post-rim compose."""
     assert ctx.native_geoms_fn is not None
+    del p1, p2  # legacy kwargs; parts list is the SoT
     scores = list(score_elems(ctx.graph, seed_rules))
     sheet, void_geoms_uh = board_ctx_outline
     min_dist = ctx.cfg.board_min_dist_for(ctx.sheet, first_pass=True)
@@ -498,8 +501,6 @@ def run_first_pass_border_pack(
             ctx.sheet,
             parts,
             graph=graph,
-            p1=p1,
-            p2=p2,
             polys=polys,
             group_id=group_id,
             transform=transform,

@@ -808,6 +808,19 @@ def compose_and_nest_selection(
                             propose_stats.get("beamed_won_n", 0) or 0
                         ) + 1
                     continue
+                # M1: seq_full Scene-clear cohort already in nest — pin keep
+                # (hybrid re-nest often reject_area; hygiene seq_keep mirrors).
+                if seq_full and len(pinned) >= 2:
+                    locked_motif = list(pinned)
+                    motif_beam_wins += 1
+                    beamed_sigs.add(sig)
+                    if propose_stats is not None:
+                        propose_stats["motif_lock_source"] = "beam_pin_seq"
+                        propose_stats["seq_full_beam_pin_keep"] = 1
+                        propose_stats["beamed_won_n"] = int(
+                            propose_stats.get("beamed_won_n", 0) or 0
+                        ) + 1
+                    continue
                 # Incumbent-only pin: fall through to nest+hybrid for new members.
             cand = _nest_with_locks(
                 graph,
@@ -838,9 +851,6 @@ def compose_and_nest_selection(
                 group_id=group_id,
                 part_areas=part_areas,
             )
-            # Count guard: sticky/soft floors must not drop parts vs current nest
-            # (do not re-loosen cancelled D1–D6 area floors via 0.90× sticky alone).
-            count_ok = len(cand) >= len(selected_nest)
             hybrid_ok = hybrid_compose_pick(
                 graph=graph,
                 lock=lock,
@@ -857,7 +867,10 @@ def compose_and_nest_selection(
                 motif_complete=True,
                 survive_mid=survive_mid_n,
             )
-            if hybrid_ok and (lex_win or (seq_full and count_ok)):
+            # M1: trust Q362 hybrid_compose_pick fully — outer lex/count gates were
+            # dropping soft wins (pick>0, beam_won=0, compose_sz=0). join_prefer
+            # already gates count inside the helper when seq_full.
+            if hybrid_ok:
                 selected_nest = cand
                 locked_motif = list(lock)
                 motif_beam_wins += 1
@@ -2077,8 +2090,16 @@ def compose_and_nest_selection(
                         )
                         > 0
                     )
+                    # M1: seq_full Scene-clear sticky — same hygiene keep without
+                    # requiring hollow/wang (seed0 pick wins were cleared here).
+                    seq_keep = (
+                        int(propose_stats.get("motif_sequential_full", 0) or 0) > 0
+                        and len(lock_idxs) >= 2
+                    )
                     if hollow_keep:
                         propose_stats["hollow_agree_lock_keep"] = 1
+                    elif seq_keep:
+                        propose_stats["seq_full_lock_keep"] = 1
                     else:
                         locked_motif = []
                         propose_stats["lock_new_n"] = 0
