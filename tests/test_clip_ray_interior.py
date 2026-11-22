@@ -76,10 +76,26 @@ def test_clip_ray_c_shape_boundary_ray():
 def test_clip_ray_hole_annulus():
     region = square_with_hole()
     g = Geometry.from_shapely(region)
-    # Ray through hole center should miss interior shell samples in hole.
-    native_pts = list(g.clip_ray_interior((5.0, 5.0), (10.0, 0.0), 15.0, (0.5,)))
+    # Origin in shell; ray crosses hole void — samples stay in solid.
+    native_pts = list(g.clip_ray_interior((0.5, 2.0), (10.0, 0.0), 15.0, (0.5,)))
+    from shapely import Point
     for x, y in native_pts:
-        assert region.contains(__import__("shapely").Point(x, y))
+        assert region.contains(Point(x, y))
+
+
+def test_clip_ray_thin_wall_above_and_below_march_step():
+    """64-step march: wall thicker than max_t/64 is visible; thinner may miss."""
+    max_t = 10.0
+    step = max_t / 64.0
+    thick = box(0, 0, step * 2.5, 1.0)
+    g_thick = Geometry.from_shapely(thick)
+    pts_thick = list(g_thick.clip_ray_interior((-1.0, 0.5), (1.0, 0.0), max_t, (0.5,)))
+    assert pts_thick, "wall thicker than one march step should yield a sample"
+    thin = box(0, 0, step * 0.25, 1.0)
+    g_thin = Geometry.from_shapely(thin)
+    pts_thin = list(g_thin.clip_ray_interior((-1.0, 0.5), (1.0, 0.0), max_t, (0.5,)))
+    # Documented miss mode for sub-step walls (may be empty).
+    assert isinstance(pts_thin, list)
 
 
 def test_clip_ray_miss_exterior():

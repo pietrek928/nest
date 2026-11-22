@@ -8,7 +8,7 @@
 #include "geometry/tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using Solid = PolyTestSolidGeometry2;
+using Solid = PolyTestPlaneGeometry2;
 
 TEST_CASE("contact: kissing squares yield one edge", "[contact_relation]") {
     // Unit squares: [0,1]x[0,1] and [1,2]x[0,1] — share edge (touch).

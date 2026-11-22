@@ -9,7 +9,7 @@
 
 #include "../bindings/geometry_factory.h"
 #include "distance/static_collision_scene.h"
-#include "solid/containment.h"
+#include "plane/containment.h"
 
 // A3a: optional horizon + winner legs. Defaults off so nfp_lite / Motif stay bit-stable.
 struct PolishSe2Opts {
@@ -28,12 +28,12 @@ inline std::optional<std::tuple<
     typename VecType::Scalar,
     typename VecType::Scalar>>
 polish_se2_part(
-    const SolidGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &part,
     typename VecType::Scalar pose_x,
     typename VecType::Scalar pose_y,
     typename VecType::Scalar pose_theta,
     const StaticCollisionScene<VecType> &scene,
-    const SolidGeometry<VecType> *board,
+    const PlaneGeometry<VecType> *board,
     const std::vector<VecType> &dirs,
     int n_angles,
     typename VecType::Scalar max_t,
@@ -63,7 +63,7 @@ polish_se2_part(
     const Scalar margin_sq = clearance * clearance;
     const Scalar distance_margin = clearance;
 
-    auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
+    auto pose_ok = [&](const PlaneGeometry<VecType> &placed) -> bool {
         (void)board;  // board membership via void solids in obstacles
         if (scene.obstacles.empty()) {
             return true;
@@ -71,8 +71,9 @@ polish_se2_part(
         return !scene.query_any_violation(placed, margin_sq, distance_margin);
     };
 
-    const VecType start_c = solid_centroid(
-        part.rotate(pose_theta).translate(VecType({pose_x, pose_y})));
+    PlaneGeometry<VecType> pose_rotated = part.rotate(pose_theta);
+    const VecType start_c = plane_centroid(
+        pose_rotated.translate(VecType({pose_x, pose_y})));
     Scalar best_pole_dist = std::numeric_limits<Scalar>::infinity();
     if (pole_mode) {
         const Scalar dx0 = start_c[0] - (*pole)[0];
@@ -89,16 +90,20 @@ polish_se2_part(
     const Scalar two_pi =
         static_cast<Scalar>(2) * static_cast<Scalar>(std::acos(static_cast<Scalar>(-1)));
 
+    // G3: hoist rotate(theta); translate scratch from the rotated solid only.
+    const PlaneGeometry<VecType> *rotated_for_theta = &pose_rotated;
+
     auto try_accept = [&](
         Scalar x, Scalar y, Scalar theta, Scalar travel_score
     ) -> bool {
-        SolidGeometry<VecType> placed =
-            part.rotate(theta).translate(VecType({x, y}));
+        (void)theta;
+        PlaneGeometry<VecType> placed =
+            rotated_for_theta->translate(VecType({x, y}));
         if (!pose_ok(placed)) {
             return false;
         }
         if (pole_mode) {
-            const VecType pc = solid_centroid(placed);
+            const VecType pc = plane_centroid(placed);
             const Scalar dx = pc[0] - (*pole)[0];
             const Scalar dy = pc[1] - (*pole)[1];
             const Scalar d = static_cast<Scalar>(
@@ -130,11 +135,12 @@ polish_se2_part(
         if (!(travel_hi > kEps)) {
             return static_cast<Scalar>(0);
         }
+        (void)theta;
         if (hi_first) {
             const Scalar x = pose_x + slide_dir[0] * travel_hi;
             const Scalar y = pose_y + slide_dir[1] * travel_hi;
-            SolidGeometry<VecType> placed =
-                part.rotate(theta).translate(VecType({x, y}));
+            PlaneGeometry<VecType> placed =
+                rotated_for_theta->translate(VecType({x, y}));
             if (pose_ok(placed)) {
                 return travel_hi;
             }
@@ -147,8 +153,8 @@ polish_se2_part(
             const Scalar mid = (lo + hi) * static_cast<Scalar>(0.5);
             const Scalar x = pose_x + slide_dir[0] * mid;
             const Scalar y = pose_y + slide_dir[1] * mid;
-            SolidGeometry<VecType> placed =
-                part.rotate(theta).translate(VecType({x, y}));
+            PlaneGeometry<VecType> placed =
+                rotated_for_theta->translate(VecType({x, y}));
             if (pose_ok(placed)) {
                 lo = mid;
                 best_t = mid;
@@ -162,7 +168,7 @@ polish_se2_part(
 
     // Place at TOI-backoff along slide_dir; Scene is authority with one backoff retry.
     auto try_slide_from_cast = [&](
-        const SolidGeometry<VecType> &seeded,
+        const PlaneGeometry<VecType> &seeded,
         Scalar theta,
         const VecType &slide_dir,
         const auto &cast,
@@ -179,15 +185,15 @@ polish_se2_part(
         auto place_at = [&](Scalar t, const VecType &dir) -> bool {
             const Scalar x = pose_x + dir[0] * t;
             const Scalar y = pose_y + dir[1] * t;
-            SolidGeometry<VecType> placed =
-                part.rotate(theta).translate(VecType({x, y}));
+            PlaneGeometry<VecType> placed =
+                rotated_for_theta->translate(VecType({x, y}));
             if (pose_ok(placed)) {
                 return try_accept(x, y, theta, t);
             }
             const Scalar bx = x - dir[0] * kSceneBackoff;
             const Scalar by = y - dir[1] * kSceneBackoff;
-            SolidGeometry<VecType> backed =
-                part.rotate(theta).translate(VecType({bx, by}));
+            PlaneGeometry<VecType> backed =
+                rotated_for_theta->translate(VecType({bx, by}));
             if (!pose_ok(backed)) {
                 return false;
             }
@@ -243,7 +249,7 @@ polish_se2_part(
         const VecType t1({-nu[1], nu[0]});
         const VecType t2({nu[1], -nu[0]});
         for (const VecType &td : {t1, t2}) {
-            const auto tcast = cast_slide(seeded, scene.obstacles, td, cast_max_t);
+            const auto tcast = scene.cast_closest(seeded, td, cast_max_t);
             Scalar tt = cast_max_t;
             if (tcast.intersects_path) {
                 tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
@@ -271,12 +277,14 @@ polish_se2_part(
             const Scalar dtheta =
                 two_pi * static_cast<Scalar>(k) / static_cast<Scalar>(n_angles);
             const Scalar theta = pose_theta + dtheta;
-            SolidGeometry<VecType> seeded =
-                part.rotate(theta).translate(VecType({pose_x, pose_y}));
+            PlaneGeometry<VecType> rotated = part.rotate(theta);
+            rotated_for_theta = &rotated;
+            PlaneGeometry<VecType> seeded =
+                rotated.translate(VecType({pose_x, pose_y}));
 
             Scalar cast_max = max_t;
             if (opts.exact_horizon && pole_mode) {
-                const VecType c_seed = solid_centroid(seeded);
+                const VecType c_seed = plane_centroid(seeded);
                 const Scalar hx = (*pole)[0] - c_seed[0];
                 const Scalar hy = (*pole)[1] - c_seed[1];
                 const Scalar h = hx * dir[0] + hy * dir[1];
@@ -286,7 +294,7 @@ polish_se2_part(
                 cast_max = std::min(max_t, h);
             }
 
-            const auto cast = cast_slide(seeded, scene.obstacles, dir, cast_max);
+            const auto cast = scene.cast_closest(seeded, dir, cast_max);
             try_slide_from_cast(seeded, theta, dir, cast, cast_max);
         }
     }
@@ -299,8 +307,10 @@ polish_se2_part(
         int legs = 0;
         const int max_legs = opts.max_legs > 0 ? opts.max_legs : 2;
         while (legs < max_legs) {
-            SolidGeometry<VecType> seeded =
-                part.rotate(cur_th).translate(VecType({cur_x, cur_y}));
+            PlaneGeometry<VecType> rotated = part.rotate(cur_th);
+            rotated_for_theta = &rotated;
+            PlaneGeometry<VecType> seeded =
+                rotated.translate(VecType({cur_x, cur_y}));
             const auto hits = scene.query_placed(seeded, clearance * static_cast<Scalar>(2));
             Scalar best_d = std::numeric_limits<Scalar>::infinity();
             VecType normal{};
@@ -332,7 +342,7 @@ polish_se2_part(
             const VecType nu({normal[0] / nn, normal[1] / nn});
             VecType t1({-nu[1], nu[0]});
             VecType t2({nu[1], -nu[0]});
-            const VecType pc = solid_centroid(seeded);
+            const VecType pc = plane_centroid(seeded);
             const Scalar to_px = (*pole)[0] - pc[0];
             const Scalar to_py = (*pole)[1] - pc[1];
             // Prefer tangent toward the pole.
@@ -346,7 +356,7 @@ polish_se2_part(
                 h_tan = max_t;
             }
             const Scalar cast_max = opts.exact_horizon ? std::min(max_t, h_tan) : max_t;
-            const auto tcast = cast_slide(seeded, scene.obstacles, td, cast_max);
+            const auto tcast = scene.cast_closest(seeded, td, cast_max);
             Scalar tt = cast_max;
             if (tcast.intersects_path) {
                 tt = std::max(static_cast<Scalar>(0), tcast.t_entry - clearance);
@@ -379,9 +389,9 @@ polish_se2_part(
             }
             // Re-cast toward pole from current best.
             {
-                SolidGeometry<VecType> s2 =
+                PlaneGeometry<VecType> s2 =
                     part.rotate(cur_th).translate(VecType({cur_x, cur_y}));
-                const VecType c2 = solid_centroid(s2);
+                const VecType c2 = plane_centroid(s2);
                 Scalar pdx = (*pole)[0] - c2[0];
                 Scalar pdy = (*pole)[1] - c2[1];
                 const Scalar plen = static_cast<Scalar>(
@@ -393,7 +403,7 @@ polish_se2_part(
                         cast_max_p = std::min(max_t, plen);
                     }
                     const auto pcast =
-                        cast_slide(s2, scene.obstacles, pdir, cast_max_p);
+                        scene.cast_closest(s2, pdir, cast_max_p);
                     Scalar pt = cast_max_p;
                     if (pcast.intersects_path) {
                         pt = std::max(
@@ -456,12 +466,12 @@ inline std::optional<std::tuple<
     typename VecType::Scalar,
     typename VecType::Scalar>>
 polish_se2_part(
-    const SolidGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &part,
     typename VecType::Scalar pose_x,
     typename VecType::Scalar pose_y,
     typename VecType::Scalar pose_theta,
-    std::vector<SolidGeometry<VecType>> obstacles,
-    const SolidGeometry<VecType> *board,
+    std::vector<PlaneGeometry<VecType>> obstacles,
+    const PlaneGeometry<VecType> *board,
     const std::vector<VecType> &dirs,
     int n_angles,
     typename VecType::Scalar max_t,

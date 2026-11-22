@@ -27,7 +27,7 @@ pytest tests/
 
 The `geometry` target writes `nest_graph/geometry*.so`. C++ unit tests: `cmake --build build --target geometry_cpp_tests && ./build/nest_graph/geometry/geometry_cpp_tests`.
 
-**Polygon holes:** `decompose_complex_polygon` decomposes outer rings (additive) and hole rings (reversed winding, `is_subtractive` on each `line_part`). `is_point_inside_solid_space` uses signed ray crossings so hole interiors are void. Hole boundary segments are **not** swept as colliders (only additive `line_parts` enter broad-phase).
+**Polygon holes:** `decompose_complex_polygon` decomposes outer rings (additive) and hole rings (reversed winding, `is_subtractive` on each `line_part`). `is_point_inside_plane_space` uses signed ray crossings so hole interiors are void. Hole boundary segments are **not** swept as colliders (only additive `line_parts` enter broad-phase).
 
 **Solid geometry model:** Use `Geometry.from_shapely` or one outer ring plus holes via `decompose_complex_polygon`. Multiple separate `add_boundary_ring` calls on disjoint rectangles do **not** form a union solid (e.g. a manual C-shape built from three rings does not fill the cavity as one region). For union-like shapes, supply a single outer boundary (possibly concave) and holes only.
 

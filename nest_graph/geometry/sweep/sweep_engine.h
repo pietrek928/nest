@@ -7,9 +7,9 @@
 #include <utility>
 #include <vector>
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 #include "common/geometry_common.h"
-#include "solid/containment.h"
+#include "plane/containment.h"
 #include "convex/intersect.h"
 #include "convex/penetration.h"
 #include "convex/distance.h"
@@ -23,7 +23,7 @@ template <class VecType>
 inline void append_poly_parts_to_sweep(
     int poly_idx,
     int group_id,
-    const SolidGeometry<VecType>& poly,
+    const PlaneGeometry<VecType>& poly,
     const VecType& sweep_axis,
     typename VecType::Scalar axis_len_sqrt,
     std::vector<PartSweepElement<VecType>>& out_elements,
@@ -32,7 +32,10 @@ inline void append_poly_parts_to_sweep(
 ) {
     using Scalar = typename VecType::Scalar;
     for (size_t part = 0; part < poly.line_parts.size(); ++part) {
-        if (poly.line_parts[part].is_subtractive) continue;
+        if (poly.line_parts[part].is_subtractive
+            || poly.line_parts[part].role != ChainRole::FilledConvex) {
+            continue;
+        }
 
         const auto& bounds = poly.line_parts[part].bounding_circle;
         const Scalar proj = bounds.center().dp(sweep_axis);
@@ -69,7 +72,7 @@ inline SweepContext<VecType> prepare_sweep_axis(Args&&... args) {
 
 template <class VecType>
 inline size_t calculate_exact_sweep_capacity(
-    const std::vector<SolidGeometry<VecType>>& polys
+    const std::vector<PlaneGeometry<VecType>>& polys
 ) {
     size_t capacity = 0;
     for (const auto& p : polys) {
@@ -80,7 +83,7 @@ inline size_t calculate_exact_sweep_capacity(
 
 template <class VecType>
 inline size_t calculate_exact_sweep_capacity(
-    const std::vector<const SolidGeometry<VecType>*>& polys
+    const std::vector<const PlaneGeometry<VecType>*>& polys
 ) {
     size_t capacity = 0;
     for (const auto *p : polys) {
@@ -206,8 +209,8 @@ inline ContactResult<typename VecType::Scalar> evaluate_narrow_phase(
 template <class VecType>
 inline bool contact_edge_mid_interior_witness(
     const VecType* pts, int n,
-    const SolidGeometry<VecType>& owner,
-    const SolidGeometry<VecType>& other
+    const PlaneGeometry<VecType>& owner,
+    const PlaneGeometry<VecType>& other
 ) {
     using Scalar = typename VecType::Scalar;
     if (n < 2) {
@@ -231,7 +234,7 @@ inline bool contact_edge_mid_interior_witness(
         const VecType probe({
             mid[0] + toward[0] * (nudge / tlen),
             mid[1] + toward[1] * (nudge / tlen)});
-        if (is_point_inside_solid_space(probe, other)) {
+        if (is_point_inside_plane_space(probe, other)) {
             return true;
         }
     }
@@ -240,8 +243,8 @@ inline bool contact_edge_mid_interior_witness(
 
 template <class VecType, class Tracer = DefaultTracer>
 inline ContactResult<typename VecType::Scalar> evaluate_narrow_phase_parts(
-    const SolidGeometry<VecType>& polyA, int a_idx,
-    const SolidGeometry<VecType>& polyB, int b_idx,
+    const PlaneGeometry<VecType>& polyA, int a_idx,
+    const PlaneGeometry<VecType>& polyB, int b_idx,
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
@@ -287,8 +290,8 @@ enum class PartIntersectKind {
 
 template <class VecType, class Tracer = DefaultTracer>
 inline PartIntersectKind check_part_vs_part_intersect_kind(
-    const SolidGeometry<VecType>& polyA, int a_idx,
-    const SolidGeometry<VecType>& polyB, int b_idx,
+    const PlaneGeometry<VecType>& polyA, int a_idx,
+    const PlaneGeometry<VecType>& polyB, int b_idx,
     Tracer* tracer = nullptr
 ) {
     const auto cr = evaluate_narrow_phase_parts<VecType, Tracer>(
@@ -304,8 +307,8 @@ inline PartIntersectKind check_part_vs_part_intersect_kind(
 
 template <class VecType, class Tracer = DefaultTracer>
 inline bool check_part_vs_part_intersect(
-    const SolidGeometry<VecType>& polyA, int a_idx,
-    const SolidGeometry<VecType>& polyB, int b_idx,
+    const PlaneGeometry<VecType>& polyA, int a_idx,
+    const PlaneGeometry<VecType>& polyB, int b_idx,
     Tracer* tracer = nullptr
 ) {
     return evaluate_narrow_phase_parts<VecType, Tracer>(
@@ -319,8 +322,8 @@ template <class VecType>
 struct IntersectCandidate {
     std::pair<int, int> pair_id;
     int partA_idx, partB_idx;
-    const SolidGeometry<VecType>* polyA;
-    const SolidGeometry<VecType>* polyB;
+    const PlaneGeometry<VecType>* polyA;
+    const PlaneGeometry<VecType>* polyB;
 
     bool operator<(const IntersectCandidate& o) const {
         return pair_id < o.pair_id;
@@ -357,8 +360,8 @@ struct DistanceCandidate {
     using Scalar = typename VecType::Scalar;
     std::pair<int, int> pair_id;
     int partA_idx, partB_idx;
-    const SolidGeometry<VecType>* polyA;
-    const SolidGeometry<VecType>* polyB;
+    const PlaneGeometry<VecType>* polyA;
+    const PlaneGeometry<VecType>* polyB;
     Scalar center_dist_sq;
     Scalar r_sum;
 
@@ -526,8 +529,8 @@ inline std::vector<ComplexDistanceResult<VecType>> execute_distance_sweep(
 
     std::pair<int, int> current_pair = candidates[0].pair_id;
     ComplexDistanceResult<VecType> best_eval;
-    const SolidGeometry<VecType>* current_polyA = nullptr;
-    const SolidGeometry<VecType>* current_polyB = nullptr;
+    const PlaneGeometry<VecType>* current_polyA = nullptr;
+    const PlaneGeometry<VecType>* current_polyB = nullptr;
     bool has_eval = false;
 
     auto commit_best_eval = [&]() {
@@ -620,90 +623,122 @@ inline bool execute_distance_sweep_any_violation(
     Tracer* tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
-    scratch.distance_candidates.clear();
+    (void)scratch;
     if (elements.empty()) return false;
 
     std::sort(elements.begin(), elements.end(), [](const auto& a, const auto& b) {
         return a.min_proj < b.min_proj;
     });
 
-    collect_distance_candidates(
-        elements, aura_multiplier, distance_margin, mode, bipartite_set_a_size,
-        scratch.distance_candidates);
-    auto &candidates = scratch.distance_candidates;
-    if (candidates.empty()) return false;
+    // G5/G6: stream interval pairs; early-exit on first violation. Margin-0 uses
+    // Penetrating GJK only (skip follow-up distance GJK). Margin>0 uses distance.
+    std::pair<int, int> current_pair = {-1, -1};
+    const PlaneGeometry<VecType>* current_polyA = nullptr;
+    const PlaneGeometry<VecType>* current_polyB = nullptr;
+    bool pair_had_parts = false;
+    bool pair_penetrating = false;
 
-    std::pair<int, int> current_pair = candidates[0].pair_id;
-    ComplexDistanceResult<VecType> best_eval;
-    const SolidGeometry<VecType>* current_polyA = nullptr;
-    const SolidGeometry<VecType>* current_polyB = nullptr;
-    bool has_eval = false;
+    auto flush_pair_containment = [&]() -> bool {
+        if (!pair_had_parts || pair_penetrating) {
+            return false;
+        }
+        if (current_polyA != nullptr && current_polyB != nullptr
+            && check_mutual_containment(*current_polyA, *current_polyB)) {
+            return true;
+        }
+        return false;
+    };
 
-    auto pair_violates = [&]() -> bool {
-        if (!has_eval) return false;
-        if (!best_eval.intersect && current_polyA != nullptr && current_polyB != nullptr) {
-            if (check_mutual_containment(*current_polyA, *current_polyB)) {
+    for (size_t i = 0; i < elements.size(); ++i) {
+        for (size_t j = i + 1; j < elements.size(); ++j) {
+            if (elements[j].min_proj > elements[i].max_proj) {
+                break;
+            }
+            if (elements[i].poly_idx == elements[j].poly_idx) {
+                continue;
+            }
+
+            std::pair<int, int> pair_id;
+            bool reverse = false;
+            if (!resolve_sweep_pair_id(
+                    elements[i], elements[j], mode, bipartite_set_a_size, pair_id,
+                    reverse)) {
+                continue;
+            }
+
+            const auto* polyA = reverse ? elements[j].poly_ptr : elements[i].poly_ptr;
+            const auto* polyB = reverse ? elements[i].poly_ptr : elements[j].poly_ptr;
+            int partA = reverse ? elements[j].part_idx : elements[i].part_idx;
+            int partB = reverse ? elements[i].part_idx : elements[j].part_idx;
+
+            const auto& circleA = polyA->line_parts[static_cast<size_t>(partA)].bounding_circle;
+            const auto& circleB = polyB->line_parts[static_cast<size_t>(partB)].bounding_circle;
+            const Scalar rA = circle_radius(circleA);
+            const Scalar rB = circle_radius(circleB);
+            const Scalar r_sum = rA + rB;
+            const Scalar center_dist_sq = circle_center_distance_sq(circleA, circleB);
+            const Scalar dynamic_threshold =
+                r_sum + (rA * aura_multiplier) + (rB * aura_multiplier) + distance_margin;
+            if (center_dist_sq > dynamic_threshold * dynamic_threshold) {
+                continue;
+            }
+
+            if (pair_id != current_pair) {
+                if (flush_pair_containment()) {
+                    return true;
+                }
+                current_pair = pair_id;
+                current_polyA = polyA;
+                current_polyB = polyB;
+                pair_had_parts = false;
+                pair_penetrating = false;
+            }
+            pair_had_parts = true;
+
+            const VecType* ptsA = polyA->get_part_points(static_cast<size_t>(partA));
+            const int nA = polyA->get_part_size(static_cast<size_t>(partA));
+            const VecType* ptsB = polyB->get_part_points(static_cast<size_t>(partB));
+            const int nB = polyB->get_part_size(static_cast<size_t>(partB));
+            const bool circles_may_overlap = center_dist_sq <= r_sum * r_sum;
+
+            if (margin_sq <= static_cast<Scalar>(0)) {
+                if (!circles_may_overlap) {
+                    continue;
+                }
+                if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+                    if (tracer) {
+                        tracer->count_gjk_eval();
+                    }
+                }
+                auto cr = evaluate_narrow_phase_parts<VecType, Tracer>(
+                    *polyA, partA, *polyB, partB, tracer);
+                if (cr.state == ContactState::Penetrating) {
+                    return true;
+                }
+                continue;
+            }
+
+            // Scene margin: distance-only narrow phase (G6). Use convex GJK
+            // directly (narrow_phase_distance lives above this header).
+            if constexpr (!std::is_same_v<Tracer, NullTracer>) {
+                if (tracer) {
+                    tracer->count_gjk_eval();
+                }
+            }
+            const bool swapped = (nA > nB);
+            const VecType* p1 = swapped ? ptsB : ptsA;
+            const int s1 = swapped ? nB : nA;
+            const VecType* p2 = swapped ? ptsA : ptsB;
+            const int s2 = swapped ? nA : nB;
+            auto dist_res = (s1 + s2 > nest_gjk_gradient_threshold)
+                ? convex_linestrings_distance_gjk_gradient<VecType>(p1, s1, p2, s2)
+                : convex_linestrings_distance_gjk<VecType>(p1, s1, p2, s2);
+            if (dist_res.intersect || dist_res.distance_sq < margin_sq) {
                 return true;
             }
         }
-        if (best_eval.intersect) return true;
-        return margin_sq > static_cast<Scalar>(0)
-            && best_eval.distance_sq < margin_sq;
-    };
-
-    for (size_t i = 0; i < candidates.size(); ++i) {
-        const auto& cand = candidates[i];
-
-        if (cand.pair_id != current_pair) {
-            if (pair_violates()) return true;
-            current_pair = cand.pair_id;
-            has_eval = false;
-            current_polyA = nullptr;
-            current_polyB = nullptr;
-        }
-
-        if (has_eval && best_eval.intersect) {
-            continue;
-        }
-        if (has_eval && !best_eval.intersect
-            && margin_sq > static_cast<Scalar>(0)
-            && best_eval.distance_sq < margin_sq) {
-            return true;
-        }
-        if (has_eval && !best_eval.intersect) {
-            const Scalar center_dist = static_cast<Scalar>(
-                std::sqrt(static_cast<double>(cand.center_dist_sq)));
-            const Scalar min_possible_dist = std::max(
-                static_cast<Scalar>(0), center_dist - cand.r_sum);
-            if (margin_sq > static_cast<Scalar>(0)
-                && min_possible_dist * min_possible_dist >= margin_sq
-                && min_possible_dist * min_possible_dist >= best_eval.distance_sq) {
-                continue;
-            }
-            if (min_possible_dist * min_possible_dist >= best_eval.distance_sq) {
-                continue;
-            }
-        }
-
-        auto current_eval = evaluate_distance_candidate<VecType, Tracer>(cand, tracer);
-        if (current_eval.intersect) {
-            return true;
-        }
-        if (margin_sq > static_cast<Scalar>(0)
-            && current_eval.distance_sq < margin_sq) {
-            return true;
-        }
-
-        if (!has_eval) {
-            best_eval = current_eval;
-            current_polyA = cand.polyA;
-            current_polyB = cand.polyB;
-            has_eval = true;
-        } else if (current_eval.distance_sq < best_eval.distance_sq) {
-            best_eval = current_eval;
-        }
     }
-    return pair_violates();
+    return flush_pair_containment();
 }
 
 template <class VecType, class Tracer = DefaultTracer>
@@ -787,11 +822,27 @@ inline IntersectSweepResult<VecType> execute_intersect_sweep(
 
     std::pair<int, int> current_pair = {-1, -1};
     bool current_pair_hit = false;
+    const PlaneGeometry<VecType>* pair_polyA = nullptr;
+    const PlaneGeometry<VecType>* pair_polyB = nullptr;
+
+    auto flush_pair_edge_overlap = [&]() {
+        if (current_pair_hit || pair_polyA == nullptr || pair_polyB == nullptr) {
+            return;
+        }
+        // G2: once per polygon pair (not per part candidate).
+        if (planes_boundary_edge_overlap(*pair_polyA, *pair_polyB)) {
+            scratch.confirmed_collisions.push_back(current_pair);
+            current_pair_hit = true;
+        }
+    };
 
     for (const auto& cand : candidates) {
         if (cand.pair_id != current_pair) {
+            flush_pair_edge_overlap();
             current_pair = cand.pair_id;
             current_pair_hit = false;
+            pair_polyA = cand.polyA;
+            pair_polyB = cand.polyB;
         }
 
         if (current_pair_hit) continue;
@@ -807,6 +858,7 @@ inline IntersectSweepResult<VecType> execute_intersect_sweep(
             scratch.potential_containments.push_back(cand.pair_id);
         }
     }
+    flush_pair_edge_overlap();
 
     std::sort(
         scratch.potential_containments.begin(), scratch.potential_containments.end());

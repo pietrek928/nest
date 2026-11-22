@@ -5,6 +5,7 @@
 #include <Python.h>
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
@@ -18,9 +19,10 @@ namespace nb = nanobind;
 #include "intersect/polygon_intersect.h"
 #include "python_converters.h"
 #include "shapely.h"
-#include "solid/containment.h"
-#include "solid/decompose.h"
-#include "solid/point_in_solid.h"
+#include "plane/containment.h"
+#include "plane/decompose.h"
+#include "plane/point_in_plane.h"
+#include "plane/validity.h"
 #include "types.h"
 
 inline std::vector<double> aabb_bind_ltrb_from_tuples(
@@ -40,7 +42,7 @@ inline std::vector<double> aabb_bind_ltrb_from_tuples(
 std::vector<std::vector<Vec2d>> rings_from_geometry(const GeometryHolder &g) {
     std::vector<std::vector<Vec2d>> outers;
     std::vector<std::vector<Vec2d>> holes;
-    for (const auto &ring : g.solid.boundary_rings) {
+    for (const auto &ring : g.plane.boundary_rings) {
         if (ring.points.size() < 2) {
             continue;
         }
@@ -57,12 +59,7 @@ std::vector<std::vector<Vec2d>> rings_from_geometry(const GeometryHolder &g) {
     std::size_t best = 0;
     double best_area = -1.0;
     for (std::size_t i = 0; i < outers.size(); ++i) {
-        double area = 0.0;
-        const auto &ring = outers[i];
-        for (std::size_t k = 0, j = ring.size() - 1; k < ring.size(); j = k++) {
-            area += static_cast<double>(ring[j][0] * ring[k][1] - ring[k][0] * ring[j][1]);
-        }
-        area = std::abs(area) * 0.5;
+        const double area = static_cast<double>(ring_shoelace_abs_area(outers[i]));
         if (area > best_area) {
             best_area = area;
             best = i;
@@ -107,7 +104,7 @@ struct ClipRayScratch {
 //           Safe UB: out_cap_xy >= 2 * n_fracs * 33.
 //   return: written doubles (even), or 0 if empty/fail/cap too small (no write).
 inline std::size_t clip_ray_interior_samples_xy(
-    const SolidGeometry2d &solid,
+    const PlaneGeometry2d &solid,
     double ox,
     double oy,
     double dx,
@@ -137,7 +134,7 @@ inline std::size_t clip_ray_interior_samples_xy(
         const double t = f * max_t;
         const double x = ox + ux * t;
         const double y = oy + uy * t;
-        const bool inside = is_point_inside_solid_space(Vec2d({x, y}), solid);
+        const bool inside = is_point_inside_plane_space(Vec2d({x, y}), solid);
         if (inside && !prev_inside) {
             interval_start = t;
         } else if (!inside && prev_inside) {
@@ -188,7 +185,7 @@ inline std::size_t clip_ray_interior_samples_xy(
 }
 
 inline std::vector<Vec2d> clip_ray_interior_samples(
-    const SolidGeometry2d &solid,
+    const PlaneGeometry2d &solid,
     double ox,
     double oy,
     double dx,
@@ -225,19 +222,19 @@ void bind_geometry_class(nb::module_ &m) {
                         "from_convex_polygon: need at least 3 distinct points");
                 }
                 GeometryHolder holder;
-                holder.solid.add_boundary_ring(pts);
+                holder.plane.add_boundary_ring(pts);
                 std::vector<Vec2d> closed = pts;
                 const Vec2d &first = closed.front();
                 const Vec2d &last = closed.back();
                 if (first[0] != last[0] || first[1] != last[1]) {
                     closed.push_back(first);
                 }
-                holder.solid.append_line_poly(
+                holder.plane.append_line_poly(
                     closed.data(),
                     static_cast<int>(closed.size()),
                     holder.rng,
                     false);
-                holder.solid.finalize(holder.rng);
+                holder.plane.finalize(holder.rng);
                 return holder;
             },
             nb::arg("points"))
@@ -255,27 +252,26 @@ void bind_geometry_class(nb::module_ &m) {
             nb::arg("rings"))
         .def_static(
             "from_shapely",
-            [](nb::handle geom) {
-                const std::string gtype = geom_type_string(geom);
-                if (gtype == "LineString" || gtype == "LinearRing") {
-                    return geometry_from_line_coords(
-                        ring_from_coords(geom.attr("coords")));
-                }
-                std::vector<std::vector<Vec2d>> outers;
-                std::vector<std::vector<Vec2d>> holes;
-                collect_from_shapely(geom, outers, holes, true);
-                if (outers.empty()) {
-                    throw nb::value_error(
-                        "Geometry.from_shapely: no usable polygon rings "
-                        "(empty or unsupported geometry types are skipped)");
-                }
-                return GeometryHolder(decompose_complex_polygon<Vec2d>(outers, holes));
-            },
+            [](nb::handle geom) { return geometry_holder_from_shapely(geom); },
             nb::arg("geom"))
+        .def_static(
+            "from_string",
+            [](const std::string &wkt) {
+                nb::object loads = nb::module_::import_("shapely.wkt").attr("loads");
+                return geometry_holder_from_shapely(loads(wkt.c_str()));
+            },
+            nb::arg("wkt"))
+        .def_static(
+            "from_wkt",
+            [](const std::string &wkt) {
+                nb::object loads = nb::module_::import_("shapely.wkt").attr("loads");
+                return geometry_holder_from_shapely(loads(wkt.c_str()));
+            },
+            nb::arg("wkt"))
         .def_static(
             "from_shapely_outline",
             [](nb::handle geom) {
-                // Exterior ring(s) only — line Geometry for standoff / kiss (C0).
+                // Exterior ring(s) only — filled Geometry for standoff / kiss (C0).
                 const std::string gtype = geom_type_string(geom);
                 if (gtype == "LineString" || gtype == "LinearRing") {
                     return geometry_from_line_coords(
@@ -297,10 +293,25 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "append_convex_poly",
             [](GeometryHolder &holder, nb::handle points) {
+                // Mirror from_convex_polygon: boundary_ring + filled part so
+                // append_convex_poly + append_convex_hole + finalize ≡ from_shapely donut.
                 std::vector<Vec2d> pts;
                 points_from_iterable(points, pts);
-                holder.solid.append_line_poly(
-                    pts.data(), static_cast<int>(pts.size()), holder.rng, false);
+                if (pts.size() < 3) {
+                    return;
+                }
+                holder.plane.add_boundary_ring(pts, false);
+                std::vector<Vec2d> closed = pts;
+                const Vec2d &first = closed.front();
+                const Vec2d &last = closed.back();
+                if (first[0] != last[0] || first[1] != last[1]) {
+                    closed.push_back(first);
+                }
+                holder.plane.append_line_poly(
+                    closed.data(),
+                    static_cast<int>(closed.size()),
+                    holder.rng,
+                    false);
             },
             nb::arg("points"))
         .def(
@@ -311,28 +322,28 @@ void bind_geometry_class(nb::module_ &m) {
                     return;
                 }
                 auto reversed = reverse_ring(ring);
-                holder.solid.add_boundary_ring(reversed, true);
+                holder.plane.add_boundary_ring(reversed, true);
                 process_boundary_to_convex_segments<Vec2d>(
-                    reversed, holder.solid, holder.rng, true);
+                    reversed, holder.plane, holder.rng, true);
             },
             nb::arg("points"))
         .def(
             "finalize",
-            [](GeometryHolder &holder) { holder.solid.finalize(holder.rng); })
+            [](GeometryHolder &holder) { holder.plane.finalize(holder.rng); })
         .def(
             "area",
             [](const GeometryHolder &holder) {
-                return static_cast<double>(holder.solid.area());
+                return static_cast<double>(holder.plane.area());
             })
         .def(
             "convex_hull_area",
             [](const GeometryHolder &holder) {
-                return static_cast<double>(solid_convex_hull_area(holder.solid));
+                return static_cast<double>(plane_convex_hull_area(holder.plane));
             })
         .def(
             "translate",
             [](const GeometryHolder &g, double dx, double dy) {
-                return GeometryHolder(g.solid.translate(Vec2d({dx, dy})));
+                return GeometryHolder(g.plane.translate(Vec2d({dx, dy})));
             },
             nb::arg("dx"),
             nb::arg("dy"))
@@ -345,7 +356,7 @@ void bind_geometry_class(nb::module_ &m) {
                     throw nb::type_error(
                         "translate(offset): expected a length-2 tuple or sequence");
                 }
-                return GeometryHolder(g.solid.translate(Vec2d({x, y})));
+                return GeometryHolder(g.plane.translate(Vec2d({x, y})));
             },
             nb::arg("offset"))
         .def(
@@ -361,7 +372,7 @@ void bind_geometry_class(nb::module_ &m) {
                     }
                     o = Vec2d({x, y});
                 }
-                return GeometryHolder(g.solid.rotate(angle, o));
+                return GeometryHolder(g.plane.rotate(angle, o));
             },
             nb::arg("angle"),
             nb::arg("origin") = nb::none())
@@ -371,33 +382,20 @@ void bind_geometry_class(nb::module_ &m) {
                 double x = 0.0;
                 double y = 0.0;
                 double angle = 0.0;
-                auto apply_se2 = [](const SolidGeometry2d &solid, double x, double y,
+                auto apply_se2 = [](const PlaneGeometry2d &mesh, double x, double y,
                                     double angle) {
-                    // Single-clone SE2: rotate then translate in place on the copy.
-                    SolidGeometry2d out = solid.rotate(static_cast<Vec2d::Scalar>(angle));
-                    const Vec2d offset({x, y});
-                    for (auto &p : out.line_points) {
-                        p = p + offset;
-                    }
-                    for (auto &ring : out.boundary_rings) {
-                        for (auto &p : ring.points) {
-                            p = p + offset;
-                        }
-                    }
-                    for (auto &part : out.line_parts) {
-                        part.bounding_circle.c = part.bounding_circle.c + offset;
-                    }
-                    out.bounding_circle.c = out.bounding_circle.c + offset;
-                    return GeometryHolder(std::move(out));
+                    // Single-clone SE2: rotate then translate via PlaneGeometry helpers.
+                    PlaneGeometry2d out = mesh.rotate(static_cast<Vec2d::Scalar>(angle));
+                    return GeometryHolder(out.translate(Vec2d({x, y})));
                 };
                 if (args.size() == 1 && read_transform(args[0], x, y, angle)) {
-                    return apply_se2(g.solid, x, y, angle);
+                    return apply_se2(g.plane, x, y, angle);
                 }
                 if (args.size() == 3) {
                     x = nb::cast<double>(args[0]);
                     y = nb::cast<double>(args[1]);
                     angle = nb::cast<double>(args[2]);
-                    return apply_se2(g.solid, x, y, angle);
+                    return apply_se2(g.plane, x, y, angle);
                 }
                 throw nb::type_error(
                     "apply_transform: expected (x, y, angle) or a length-3 sequence");
@@ -405,13 +403,13 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "centroid",
             [](const GeometryHolder &g) {
-                const auto cen = solid_centroid(g.solid);
+                const auto cen = plane_centroid(g.plane);
                 return nb::make_tuple(cen[0], cen[1]);
             })
         .def(
             "center",
             [](const GeometryHolder &g) {
-                const auto &c = g.solid.get_bounding_circle();
+                const auto &c = g.plane.get_bounding_circle();
                 auto cen = c.center();
                 return nb::make_tuple(cen[0], cen[1]);
             })
@@ -419,15 +417,15 @@ void bind_geometry_class(nb::module_ &m) {
             "radius",
             [](const GeometryHolder &g) {
                 return std::sqrt(
-                    static_cast<double>(g.solid.get_bounding_circle().square_radius()));
+                    static_cast<double>(g.plane.get_bounding_circle().square_radius()));
             })
         .def("bounds", &circle_bounds_tuple)
-        .def("aabb", &solid_aabb_tuple)
+        .def("aabb", &plane_aabb_tuple)
         .def(
             "vertices",
             [](const GeometryHolder &g) {
                 nb::list out;
-                for (const auto &p : g.solid.line_points) {
+                for (const auto &p : g.plane.line_points) {
                     out.append(nb::make_tuple(p[0], p[1]));
                 }
                 return out;
@@ -436,7 +434,7 @@ void bind_geometry_class(nb::module_ &m) {
             "boundary_rings",
             [](const GeometryHolder &g) {
                 nb::list out;
-                for (const auto &ring : g.solid.boundary_rings) {
+                for (const auto &ring : g.plane.boundary_rings) {
                     nb::list coords;
                     for (const auto &p : ring.points) {
                         coords.append(nb::make_tuple(p[0], p[1]));
@@ -453,7 +451,7 @@ void bind_geometry_class(nb::module_ &m) {
                 nb::list offsets;
                 nb::list subtractive;
                 offsets.append(0);
-                for (const auto &ring : g.solid.boundary_rings) {
+                for (const auto &ring : g.plane.boundary_rings) {
                     for (const auto &p : ring.points) {
                         coords.append(static_cast<double>(p[0]));
                         coords.append(static_cast<double>(p[1]));
@@ -466,7 +464,7 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "contains_point",
             [](const GeometryHolder &g, double x, double y) {
-                return is_point_inside_solid_space(Vec2d({x, y}), g.solid);
+                return is_point_inside_plane_space(Vec2d({x, y}), g.plane);
             },
             nb::arg("x"),
             nb::arg("y"))
@@ -483,7 +481,7 @@ void bind_geometry_class(nb::module_ &m) {
                 }
                 std::vector<uint8_t> flags(pts.size(), 0);
                 contains_points_batch_xy(
-                    g.solid, xy.data(), xy.size(), flags.data(), flags.size());
+                    g.plane, xy.data(), xy.size(), flags.data(), flags.size());
                 nb::list out;
                 for (const auto f : flags) {
                     out.append(f != 0);
@@ -497,10 +495,10 @@ void bind_geometry_class(nb::module_ &m) {
             [](const GeometryHolder &g, double step, bool exteriors_only) {
                 // Contract: out_xy capacity >= 2 * sample_boundary_rings_n.
                 const std::size_t n_pts =
-                    sample_boundary_rings_n(g.solid, step, exteriors_only);
+                    sample_boundary_rings_n(g.plane, step, exteriors_only);
                 std::vector<double> xy(n_pts * 2, 0.0);
                 const std::size_t wrote = sample_boundary_rings_xy(
-                    g.solid, step, exteriors_only, xy.data(), xy.size());
+                    g.plane, step, exteriors_only, xy.data(), xy.size());
                 std::vector<std::tuple<double, double>> out;
                 out.reserve(wrote / 2);
                 for (std::size_t i = 0; i + 1 < wrote; i += 2) {
@@ -524,7 +522,7 @@ void bind_geometry_class(nb::module_ &m) {
                 const double dy = nb::cast<double>(direction_xy[1]);
                 const std::vector<double> fracs = sample_fracs_from_python(sample_fracs);
                 const auto pts = clip_ray_interior_samples(
-                    g.solid, ox, oy, dx, dy, max_t, fracs);
+                    g.plane, ox, oy, dx, dy, max_t, fracs);
                 nb::list out;
                 for (const auto &p : pts) {
                     out.append(nb::make_tuple(p[0], p[1]));
@@ -585,7 +583,7 @@ void bind_geometry_class(nb::module_ &m) {
                     const double dx = dirs[2 * i];
                     const double dy = dirs[2 * i + 1];
                     const std::size_t wrote = clip_ray_interior_samples_xy(
-                        g.solid, ox, oy, dx, dy, max_t,
+                        g.plane, ox, oy, dx, dy, max_t,
                         fracs.data(), fracs.size(), scratch,
                         ray_buf.data(), ray_buf.size());
                     for (std::size_t k = 0; k < wrote; ++k) {
@@ -607,20 +605,20 @@ void bind_geometry_class(nb::module_ &m) {
             "boundary_clearance",
             [](const GeometryHolder &g, double x, double y) {
                 return static_cast<double>(
-                    point_boundary_clearance(Vec2d({x, y}), g.solid));
+                    point_boundary_clearance(Vec2d({x, y}), g.plane));
             },
             nb::arg("x"),
             nb::arg("y"))
         .def(
             "footprint_inside",
             [](const GeometryHolder &inner, const GeometryHolder &outer) {
-                return solid_footprint_inside(inner.solid, outer.solid);
+                return plane_footprint_inside(inner.plane, outer.plane);
             },
             nb::arg("container"))
         .def(
             "fully_inside",
             [](const GeometryHolder &inner, const GeometryHolder &outer) {
-                return is_solid_fully_contained(inner.solid, outer.solid);
+                return is_plane_fully_contained(inner.plane, outer.plane);
             },
             nb::arg("container"))
         .def(
@@ -629,7 +627,7 @@ void bind_geometry_class(nb::module_ &m) {
                 // Avoid deep-copying all inners into a temporary solid vector.
                 nb::list out;
                 for (const auto &h : inners) {
-                    out.append(solid_footprint_inside(h.solid, outer.solid));
+                    out.append(plane_footprint_inside(h.plane, outer.plane));
                 }
                 return out;
             },
@@ -637,14 +635,14 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "intersects",
             [](const GeometryHolder &a, const GeometryHolder &b) {
-                return solids_packing_collide(a.solid, b.solid);
+                return planes_packing_collide(a.plane, b.plane);
             },
             nb::arg("other"))
         .def(
             "intersects_any",
             [](const GeometryHolder &a, const std::vector<GeometryHolder> &others) {
                 for (const auto &o : others) {
-                    if (solids_packing_collide(a.solid, o.solid)) {
+                    if (planes_packing_collide(a.plane, o.plane)) {
                         return true;
                     }
                 }
@@ -654,7 +652,7 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "distance",
             [](const GeometryHolder &a, const GeometryHolder &b) {
-                const auto pair = min_distance_pair(a.solid, b.solid);
+                const auto pair = min_distance_pair(a.plane, b.plane);
                 if (pair.core.intersect) {
                     return 0.0;
                 }
@@ -664,13 +662,13 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "min_distance",
             [](const GeometryHolder &a, const GeometryHolder &b) {
-                return min_distance_pair(a.solid, b.solid);
+                return min_distance_pair(a.plane, b.plane);
             },
             nb::arg("other"))
         .def(
             "standoff_distance",
             [](const GeometryHolder &part, const GeometryHolder &ring) {
-                const auto pair = standoff_distance_pair(part.solid, ring.solid);
+                const auto pair = standoff_distance_pair(part.plane, ring.plane);
                 if (pair.core.intersect) {
                     return 0.0;
                 }
@@ -680,7 +678,7 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "standoff_min_distance",
             [](const GeometryHolder &part, const GeometryHolder &ring) {
-                return standoff_distance_pair(part.solid, ring.solid);
+                return standoff_distance_pair(part.plane, ring.plane);
             },
             nb::arg("ring"))
         .def(
@@ -691,8 +689,8 @@ void bind_geometry_class(nb::module_ &m) {
                double max_t) {
                 const Vec2d slide_vec = slide_vector_from_handle(slide);
                 return cast_slide(
-                    active.solid,
-                    solid_ptrs_from_holders(obstacles),
+                    active.plane,
+                    plane_ptrs_from_holders(obstacles),
                     slide_vec,
                     static_cast<Vec2d::Scalar>(max_t));
             },
@@ -702,11 +700,34 @@ void bind_geometry_class(nb::module_ &m) {
         .def(
             "get_bounding_circle",
             [](const GeometryHolder &poly) {
-                const auto &c = poly.solid.get_bounding_circle();
+                const auto &c = poly.plane.get_bounding_circle();
                 auto cen = c.center();
                 double r = std::sqrt(static_cast<double>(c.square_radius()));
                 return nb::make_tuple(cen[0], cen[1], r);
             })
+        .def(
+            "to_string",
+            [](const GeometryHolder &g) { return geometry_to_wkt(g); })
+        .def(
+            "to_wkt",
+            [](const GeometryHolder &g) { return geometry_to_wkt(g); })
+        .def(
+            "is_valid",
+            [](const GeometryHolder &g) { return plane_is_valid(g.plane); })
+        .def_static(
+            "are_valid",
+            [](const std::vector<GeometryHolder> &geoms) {
+                // Zero-margin topology + non-penetrating only — not Scene clearance.
+                try {
+                    return planes_are_valid(plane_ptrs_from_holders(geoms));
+                } catch (const std::invalid_argument &ex) {
+                    throw nb::value_error(ex.what());
+                }
+            },
+            nb::arg("geoms"),
+            "Topology-valid and no Penetrating packing pairs (kiss OK). "
+            "Rejects Point/Stroke inputs. Not PlacementScene clearance.")
+        .def("__str__", [](const GeometryHolder &g) { return geometry_to_wkt(g); })
         .def("__repr__", [](const GeometryHolder &) {
             return "<nest_graph.geometry.Geometry>";
         });

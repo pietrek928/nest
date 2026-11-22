@@ -6,7 +6,7 @@
 #include <limits>
 #include <string>
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 #include "distance/polygon_distance.h"
 #include "polygon_cast.h"
 
@@ -115,7 +115,7 @@ struct PhysicsContext {
 template <class VecType>
 inline void aggregate_physics_feedback(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const std::vector<ComplexDistanceResult<VecType>>& results,
     const GuidanceConfig<VecType>& config,
     PhysicsContext<VecType>& ctx
@@ -239,9 +239,9 @@ inline void aggregate_physics_feedback(
 template <class VecType>
 inline void formulate_mandatory_ejection(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const PhysicsContext<VecType>& ctx,
-    const SolidGeometry<VecType>& placed_poly,
+    const PlaneGeometry<VecType>& placed_poly,
     const GuidanceConfig<VecType>& config,
     std::vector<PlacementProposition<VecType>>& raw_propositions
 ) {
@@ -262,7 +262,7 @@ inline void formulate_mandatory_ejection(
         raw_propositions.push_back({primary_ejection - (tangent * slide_mag), 0.0, 80.0, "Slide Escape R", -1});
 
         Scalar eject_mag = std::sqrt(ctx.max_mtv_sq);
-        std::vector<SolidGeometry<VecType>> ejected_polys = all_polygons;
+        std::vector<PlaneGeometry<VecType>> ejected_polys = all_polygons;
         ejected_polys[placed_poly_idx] =
             ejected_polys[placed_poly_idx].translate(primary_ejection);
 
@@ -304,7 +304,7 @@ inline void formulate_mandatory_ejection(
 // -------------------------------------------------------------------------
 template <class VecType>
 inline void collect_edge_endpoints(
-    const SolidGeometry<VecType>& poly,
+    const PlaneGeometry<VecType>& poly,
     int max_edges,
     std::vector<VecType>& out_pts
 ) {
@@ -345,7 +345,7 @@ inline void collect_edge_endpoints(
 template <class VecType>
 inline bool try_cast_move(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const VecType& dir_norm,
     typename VecType::Scalar max_t,
     typename VecType::Scalar min_dist,
@@ -369,7 +369,7 @@ inline bool try_cast_move(
 template <class VecType>
 inline void formulate_exact_casting_translation(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const VecType& current_position,
     const PhysicsContext<VecType>& ctx,
     const GuidanceConfig<VecType>& config,
@@ -595,7 +595,7 @@ inline void formulate_exact_casting_translation(
 template <class VecType>
 inline void formulate_rotations(
     const PhysicsContext<VecType>& ctx,
-    const SolidGeometry<VecType>& placed_poly,
+    const PlaneGeometry<VecType>& placed_poly,
     const GuidanceConfig<VecType>& config,
     PhysicsContext<VecType>& out_ctx
 ) {
@@ -655,7 +655,7 @@ inline std::vector<PlacementProposition<VecType>> synthesize_propositions(
     const PhysicsContext<VecType>& ctx,
     const GuidanceConfig<VecType>& config,
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons
+    const std::vector<PlaneGeometry<VecType>>& all_polygons
 ) {
     using Scalar = typename VecType::Scalar;
     std::vector<PlacementProposition<VecType>> cross_product_props;
@@ -736,7 +736,7 @@ inline std::vector<PlacementProposition<VecType>> synthesize_propositions(
 template <class VecType>
 inline PlacementProposition<VecType> formulate_gravity_fallback(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const GuidanceConfig<VecType>& config
 ) {
     using Scalar = typename VecType::Scalar;
@@ -765,7 +765,7 @@ inline PlacementProposition<VecType> formulate_gravity_fallback(
 template <class VecType, class Tracer = DefaultTracer>
 inline PlacementGuidance<VecType> evaluate_local_placement_validity(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const GuidanceConfig<VecType>& config = GuidanceConfig<VecType>{},
     Tracer* tracer = nullptr
 ) {
@@ -796,7 +796,7 @@ inline PlacementGuidance<VecType> evaluate_local_placement_validity(
 template <class VecType, class Tracer = DefaultTracer>
 inline PlacementGuidance<VecType> evaluate_local_placement(
     int placed_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& all_polygons,
+    const std::vector<PlaneGeometry<VecType>>& all_polygons,
     const VecType& current_position,
     const GuidanceConfig<VecType>& config = GuidanceConfig<VecType>{},
     Tracer* tracer = nullptr
@@ -844,7 +844,7 @@ inline PlacementGuidance<VecType> evaluate_local_placement(
         constexpr Scalar rot_decay = static_cast<Scalar>(0.95);
 
         // One working copy of the scene; only the placed slot changes per rotation.
-        std::vector<SolidGeometry<VecType>> working_polys = all_polygons;
+        std::vector<PlaneGeometry<VecType>> working_polys = all_polygons;
         auto sweep_ctx = prepare_sweep_axis<VecType>(all_polygons);
         std::vector<PartSweepElement<VecType>> obstacle_elements;
         obstacle_elements.reserve(all_polygons.size() * 4);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstring>
 #include <utility>
 
 #include <circle.h>
@@ -56,10 +57,21 @@ inline std::pair<int, int> make_sorted_pair(int a, int b) {
     return (a < b) ? std::make_pair(a, b) : std::make_pair(b, a);
 }
 
+// Exact angle cache key (canonicalize -0.0). Do not quantize — llround(angle*1e6)
+// aliases neighbors within packing eps at large radius.
+inline long long angle_cache_key_bits(double angle) {
+    if (angle == 0.0) {
+        angle = 0.0;
+    }
+    long long bits = 0;
+    static_assert(sizeof(double) == sizeof(long long), "angle key needs 64-bit double");
+    std::memcpy(&bits, &angle, sizeof(bits));
+    return bits;
+}
+
 template <class VecType>
 inline typename VecType::Scalar circle_radius(const Circle<VecType>& c) {
-    return static_cast<typename VecType::Scalar>(
-        std::sqrt(static_cast<double>(c.square_radius())));
+    return c.radius();
 }
 
 // Conservative AABB from a circle (contains the disk). out4 = LTRB.

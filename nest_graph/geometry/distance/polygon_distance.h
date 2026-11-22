@@ -4,7 +4,7 @@
 #include <cmath>
 #include <type_traits>
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 #include "common/geometry_common.h"
 #include "sweep/sweep_engine.h"
 #include "convex/distance.h"
@@ -103,7 +103,7 @@ inline PenetrationResult<VecType> narrow_phase_penetration(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
@@ -127,7 +127,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     const std::vector<int>& active_indices,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
@@ -159,8 +159,8 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<SolidGeometry<VecType>>& setA,
-    const std::vector<SolidGeometry<VecType>>& setB,
+    const std::vector<PlaneGeometry<VecType>>& setA,
+    const std::vector<PlaneGeometry<VecType>>& setB,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
@@ -190,7 +190,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr
@@ -217,7 +217,7 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     const std::vector<int>& active_indices,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
@@ -252,8 +252,8 @@ std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexDistanceResult<VecType>> find_polygon_distances(
-    const std::vector<const SolidGeometry<VecType>*>& setA,
-    const std::vector<const SolidGeometry<VecType>*>& setB,
+    const std::vector<const PlaneGeometry<VecType>*>& setA,
+    const std::vector<const PlaneGeometry<VecType>*>& setB,
     typename VecType::Scalar aura_multiplier = static_cast<typename VecType::Scalar>(0.5),
     typename VecType::Scalar distance_margin = static_cast<typename VecType::Scalar>(0),
     Tracer* tracer = nullptr

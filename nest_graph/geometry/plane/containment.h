@@ -5,8 +5,8 @@
 #include <vector>
 #include <algorithm>
 
-#include "solid/solid_geometry.h"
-#include "solid/point_in_solid.h"
+#include "plane/plane_geometry.h"
+#include "plane/point_in_plane.h"
 #include "common/geometry_common.h"
 #include "convex/intersect.h"
 
@@ -17,8 +17,8 @@
 template <class VecType>
 inline bool narrow_phase_contain(
     const VecType* inner_pts, int inner_n,
-    const SolidGeometry<VecType>& owner,
-    const SolidGeometry<VecType>& outer
+    const PlaneGeometry<VecType>& owner,
+    const PlaneGeometry<VecType>& outer
 ) {
     if (inner_n <= 0) {
         return false;
@@ -39,13 +39,13 @@ inline bool narrow_phase_contain(
             pt[0] + toward[0] * (nudge / tlen),
             pt[1] + toward[1] * (nudge / tlen)});
     }
-    return is_point_inside_solid_space(probe, outer);
+    return is_point_inside_plane_space(probe, outer);
 }
 
 template <class VecType>
 inline bool check_mutual_containment(
-    const SolidGeometry<VecType>& polyA,
-    const SolidGeometry<VecType>& polyB
+    const PlaneGeometry<VecType>& polyA,
+    const PlaneGeometry<VecType>& polyB
 ) {
     if (polyA.line_parts.empty() || polyB.line_parts.empty()) return false;
 
@@ -74,8 +74,8 @@ inline bool check_mutual_containment(
 
 template <class VecType>
 inline bool global_bounding_circles_overlap(
-    const SolidGeometry<VecType>& polyA,
-    const SolidGeometry<VecType>& polyB,
+    const PlaneGeometry<VecType>& polyA,
+    const PlaneGeometry<VecType>& polyB,
     typename VecType::Scalar margin = static_cast<typename VecType::Scalar>(0)
 ) {
     // Optional margin covers Welzl is_inside slack (same idea as circle_ltrb pad).
@@ -85,16 +85,76 @@ inline bool global_bounding_circles_overlap(
 
 template <class VecType>
 inline bool try_add_containment_collision(
-    const SolidGeometry<VecType>& polyA,
-    const SolidGeometry<VecType>& polyB
+    const PlaneGeometry<VecType>& polyA,
+    const PlaneGeometry<VecType>& polyB
 ) {
     if (!global_bounding_circles_overlap(polyA, polyB)) return false;
     return check_mutual_containment(polyA, polyB);
 }
 
+// G2: concave-hole bars can cross solid with all vertices in the void. Additive
+// GJK skips hole contours; edge midpoints of boundary_rings catch material hit.
+template <class VecType>
+inline bool boundary_edge_mid_in_plane(
+    const PlaneGeometry<VecType>& probe,
+    const PlaneGeometry<VecType>& solid
+) {
+    using Scalar = typename VecType::Scalar;
+    for (const auto& ring : probe.boundary_rings) {
+        const int n = static_cast<int>(ring.points.size());
+        if (n < 2) {
+            continue;
+        }
+        for (int i = 0; i < n; ++i) {
+            const auto& p1 = ring.points[static_cast<size_t>(i)];
+            const auto& p2 = ring.points[static_cast<size_t>((i + 1) % n)];
+            const VecType mid({
+                (p1[0] + p2[0]) * static_cast<Scalar>(0.5),
+                (p1[1] + p2[1]) * static_cast<Scalar>(0.5)});
+            if (is_point_inside_plane_space(mid, solid)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+template <class VecType>
+inline bool plane_has_subtractive_ring(const PlaneGeometry<VecType>& solid) {
+    for (const auto& ring : solid.boundary_rings) {
+        if (ring.is_subtractive) {
+            return true;
+        }
+    }
+    return false;
+}
+
+template <class VecType>
+inline bool planes_boundary_edge_overlap(
+    const PlaneGeometry<VecType>& a,
+    const PlaneGeometry<VecType>& b
+) {
+    // Only for holed solids: shared-edge kiss mids lie on the boundary and
+    // would false-promote packing collide on solid–solid Touch.
+    // Sample the non-holed probe's edges into the holed solid (cheap); avoid
+    // walking large holed board rings against every emit candidate.
+    const bool a_hole = plane_has_subtractive_ring(a);
+    const bool b_hole = plane_has_subtractive_ring(b);
+    if (!a_hole && !b_hole) {
+        return false;
+    }
+    if (a_hole && !b_hole) {
+        return boundary_edge_mid_in_plane(b, a);
+    }
+    if (b_hole && !a_hole) {
+        return boundary_edge_mid_in_plane(a, b);
+    }
+    return boundary_edge_mid_in_plane(a, b) || boundary_edge_mid_in_plane(b, a);
+}
+
 template <class VecType>
 inline void promote_containment_pairs(
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     const std::vector<std::pair<int, int>>& potential_containments,
     std::vector<std::pair<int, int>>& collisions
 ) {
@@ -107,7 +167,7 @@ inline void promote_containment_pairs(
 
 template <class VecType>
 inline void promote_containment_pairs(
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     const std::vector<std::pair<int, int>>& potential_containments,
     std::vector<std::pair<int, int>>& collisions
 ) {
@@ -125,8 +185,8 @@ inline void promote_containment_pairs(
 
 template <class VecType>
 inline void promote_containment_pairs_bipartite(
-    const std::vector<SolidGeometry<VecType>>& setA,
-    const std::vector<SolidGeometry<VecType>>& setB,
+    const std::vector<PlaneGeometry<VecType>>& setA,
+    const std::vector<PlaneGeometry<VecType>>& setB,
     const std::vector<std::pair<int, int>>& potential_containments,
     std::vector<std::pair<int, int>>& collisions
 ) {
@@ -139,8 +199,8 @@ inline void promote_containment_pairs_bipartite(
 
 template <class VecType>
 inline void promote_containment_pairs_bipartite(
-    const std::vector<const SolidGeometry<VecType>*>& setA,
-    const std::vector<const SolidGeometry<VecType>*>& setB,
+    const std::vector<const PlaneGeometry<VecType>*>& setA,
+    const std::vector<const PlaneGeometry<VecType>*>& setB,
     const std::vector<std::pair<int, int>>& potential_containments,
     std::vector<std::pair<int, int>>& collisions
 ) {
@@ -162,8 +222,8 @@ inline void promote_containment_pairs_bipartite(
 
 template <class VecType>
 inline bool boundaries_intersect(
-    const SolidGeometry<VecType>& poly_a,
-    const SolidGeometry<VecType>& poly_b
+    const PlaneGeometry<VecType>& poly_a,
+    const PlaneGeometry<VecType>& poly_b
 ) {
     using Scalar = typename VecType::Scalar;
     const Scalar touch_eps_sq = nest_touch_eps_sq<Scalar>();
@@ -202,9 +262,9 @@ inline bool boundaries_intersect(
 }
 
 template <class VecType>
-inline bool is_solid_fully_contained(
-    const SolidGeometry<VecType>& inner,
-    const SolidGeometry<VecType>& outer
+inline bool is_plane_fully_contained(
+    const PlaneGeometry<VecType>& inner,
+    const PlaneGeometry<VecType>& outer
 ) {
     if (!global_bounding_circles_overlap(inner, outer)) return false;
 
@@ -217,7 +277,7 @@ inline bool is_solid_fully_contained(
         if (inner_n <= 0) continue;
 
         for (int v = 0; v < inner_n; ++v) {
-            if (!is_point_inside_solid_space(inner_pts[v], outer)) {
+            if (!is_point_inside_plane_space(inner_pts[v], outer)) {
                 return false;
             }
             any_inside = true;
@@ -225,7 +285,7 @@ inline bool is_solid_fully_contained(
 
         for (int e = 0; e < std::max(0, inner_n - 1); ++e) {
             const VecType mid = (inner_pts[e] + inner_pts[e + 1]) * static_cast<typename VecType::Scalar>(0.5);
-            if (!is_point_inside_solid_space(mid, outer)) {
+            if (!is_point_inside_plane_space(mid, outer)) {
                 return false;
             }
         }
@@ -236,22 +296,22 @@ inline bool is_solid_fully_contained(
 }
 
 template <class VecType>
-inline bool solid_footprint_inside(
-    const SolidGeometry<VecType>& inner,
-    const SolidGeometry<VecType>& outer
+inline bool plane_footprint_inside(
+    const PlaneGeometry<VecType>& inner,
+    const PlaneGeometry<VecType>& outer
 ) {
-    return is_solid_fully_contained(inner, outer);
+    return is_plane_fully_contained(inner, outer);
 }
 
 template <class VecType>
-inline std::vector<bool> solid_footprint_inside(
-    const std::vector<SolidGeometry<VecType>>& inners,
-    const SolidGeometry<VecType>& outer
+inline std::vector<bool> plane_footprint_inside(
+    const std::vector<PlaneGeometry<VecType>>& inners,
+    const PlaneGeometry<VecType>& outer
 ) {
     int n_inners = static_cast<int>(inners.size());
     std::vector<bool> results(n_inners, false);
     for (int i = 0; i < n_inners; ++i) {
-        results[i] = is_solid_fully_contained(inners[i], outer);
+        results[i] = is_plane_fully_contained(inners[i], outer);
     }
     return results;
 }

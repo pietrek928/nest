@@ -10,7 +10,7 @@
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 bool has_move_type(const std::vector<PlacementProposition<Vec2>>& props, const std::string& tag) {
     for (const auto& p : props) {
@@ -32,7 +32,7 @@ int count_move_type(const std::vector<PlacementProposition<Vec2>>& props, const 
 }
 
 TEST_CASE("guide forward gravity snap toward obstacle", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.5, 0.5),
         make_box(5.0, 0.0, 0.5, 0.5),
     };
@@ -61,7 +61,7 @@ TEST_CASE("guide forward gravity snap toward obstacle", "[guide]") {
 }
 
 TEST_CASE("guide behind-ray cast is a miss", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.5, 0.5),
         make_box(-5.0, 0.0, 0.5, 0.5),
     };
@@ -74,7 +74,7 @@ TEST_CASE("guide behind-ray cast is a miss", "[guide]") {
 }
 
 TEST_CASE("guide overlap triggers primary ejection", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.5, 0.5),
         make_box(0.2, 0.0, 0.5, 0.5),
     };
@@ -90,7 +90,7 @@ TEST_CASE("guide overlap triggers primary ejection", "[guide]") {
 }
 
 TEST_CASE("guide non-empty menu without attractor", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.5, 0.5),
         make_box(5.0, 0.0, 0.5, 0.5),
     };
@@ -107,7 +107,7 @@ TEST_CASE("guide non-empty menu without attractor", "[guide]") {
 }
 
 TEST_CASE("guide secondary neighbor snap between two obstacles", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(5.0, 5.0, 0.5, 0.5),
         make_box(2.0, 5.0, 0.5, 0.5),
         make_box(8.0, 5.0, 0.5, 0.5),
@@ -130,7 +130,7 @@ TEST_CASE("guide secondary neighbor snap between two obstacles", "[guide]") {
 }
 
 TEST_CASE("guide post-rotation cast yields alt-angle propositions", "[guide]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(1.5, 1.5, 0.35, 0.35),
         make_box(0.0, 0.0, 0.08, 2.0),
         make_box(0.0, 0.0, 2.0, 0.08),
@@ -157,7 +157,7 @@ TEST_CASE("guide post-rotation cast yields alt-angle propositions", "[guide]") {
     REQUIRE(has_alt_angle);
 }
 
-PolyTestSolidGeometry2 make_star_polygon(double cx, double cy, double outer_r, int points = 8) {
+PolyTestPlaneGeometry2 make_star_polygon(double cx, double cy, double outer_r, int points = 8) {
     std::vector<PolyTestVec2> ring;
     ring.reserve(static_cast<size_t>(points) * 2 + 1);
     for (int i = 0; i < points * 2; ++i) {
@@ -169,7 +169,7 @@ PolyTestSolidGeometry2 make_star_polygon(double cx, double cy, double outer_r, i
         });
     }
     ring.push_back(ring.front());
-    PolyTestSolidGeometry2 poly;
+    PolyTestPlaneGeometry2 poly;
     std::mt19937 gen(42);
     poly.append_line_poly(ring.data(), static_cast<int>(ring.size()), gen);
     poly.finalize(gen);
@@ -177,7 +177,7 @@ PolyTestSolidGeometry2 make_star_polygon(double cx, double cy, double outer_r, i
 }
 
 TEST_CASE("guide star ring cavity neighbor snap", "[guide][hardened]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_star_polygon(0.0, 0.0, 0.35, 8),
     };
     const double ring_r = 1.4;
@@ -209,7 +209,7 @@ TEST_CASE("guide star ring cavity neighbor snap", "[guide][hardened]") {
 }
 
 TEST_CASE("guide gear pinch penetrating escape menu", "[guide][hardened]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.35, 0.35),
         make_box(-0.55, 0.0, 0.35, 0.35),
         make_box(1.5, 0.0, 0.35, 0.35),
@@ -234,7 +234,7 @@ TEST_CASE("guide gear pinch penetrating escape menu", "[guide][hardened]") {
 }
 
 TEST_CASE("guide post-ejection cast along escape normal", "[guide][hardened]") {
-    std::vector<SolidGeometry2> polys{
+    std::vector<PlaneGeometry2> polys{
         make_box(0.0, 0.0, 0.5, 0.5),
         make_box(-0.45, 0.0, 0.5, 0.5),
         make_box(1.2, 0.0, 0.5, 0.5),

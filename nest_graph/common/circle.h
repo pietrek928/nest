@@ -17,10 +17,21 @@ public:
 
     VecType c;
     Scalar r_sq;
+    // Cached sqrt(r_sq); invalidated when r_sq changes (G6 hygiene).
+    mutable Scalar r_lin = static_cast<Scalar>(-1);
 
-    Circle() : c(), r_sq(static_cast<Scalar>(0)) {}
+    Circle() : c(), r_sq(static_cast<Scalar>(0)), r_lin(static_cast<Scalar>(0)) {}
 
-    Circle(const VecType& center, Scalar r_sq_in) : c(center), r_sq(r_sq_in) {}
+    Circle(const VecType& center, Scalar r_sq_in)
+        : c(center), r_sq(r_sq_in), r_lin(static_cast<Scalar>(-1)) {}
+
+    Scalar radius() const {
+        if (r_lin < static_cast<Scalar>(0)) {
+            r_lin = static_cast<Scalar>(
+                std::sqrt(static_cast<double>(r_sq)));
+        }
+        return r_lin;
+    }
 
     // 2-point fallback (Diameter)
     static Circle from(const VecType& A, const VecType& B) {

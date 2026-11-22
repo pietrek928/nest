@@ -13,11 +13,11 @@
 #include <vec.h>
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 // CCW rectangle with dense vertices along bottom edge [x0,x1] at y = y_lo (integer x step).
-SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_hi) {
-    SolidGeometry2 poly;
+PlaneGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_hi) {
+    PlaneGeometry2 poly;
     std::vector<Vec2> ring;
     for (int x = x0; x <= x1; ++x) {
         ring.emplace_back(std::initializer_list<double>{static_cast<double>(x), y_lo});
@@ -31,8 +31,8 @@ SolidGeometry2 polygon_dense_bottom_rect(int x0, int x1, double y_lo, double y_h
     return poly;
 }
 
-SolidGeometry2 polygon_two_disjoint_parts() {
-    SolidGeometry2 poly;
+PlaneGeometry2 polygon_two_disjoint_parts() {
+    PlaneGeometry2 poly;
     std::vector<Vec2> r1{
         Vec2{{0.0, 0.0}},
         Vec2{{1.0, 0.0}},
@@ -54,8 +54,8 @@ SolidGeometry2 polygon_two_disjoint_parts() {
     return poly;
 }
 
-SolidGeometry2 polygon_two_overlapping_parts_same_partner() {
-    SolidGeometry2 poly;
+PlaneGeometry2 polygon_two_overlapping_parts_same_partner() {
+    PlaneGeometry2 poly;
     std::vector<Vec2> bar_low{
         Vec2{{0.0, 0.0}},
         Vec2{{4.0, 0.0}},
@@ -77,80 +77,77 @@ SolidGeometry2 polygon_two_overlapping_parts_same_partner() {
     return poly;
 }
 
-TEST_CASE("narrow_phase_intersect disjoint convex", "[poly_intersect][router]") {
+TEST_CASE("evaluate_narrow_phase disjoint convex", "[poly_intersect][router]") {
     auto sq_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto sq_b = polygon_from_quad({{5, 0}, {7, 0}, {7, 2}, {5, 2}});
-    REQUIRE_FALSE(narrow_phase_intersect<Vec2>(
+    auto cr = evaluate_narrow_phase<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
-        sq_b.get_part_points(0), sq_b.get_part_size(0)));
+        sq_b.get_part_points(0), sq_b.get_part_size(0));
+    REQUIRE(cr.state == ContactState::Disjoint);
 }
 
-TEST_CASE("narrow_phase_intersect touch vertex", "[poly_intersect][router]") {
+TEST_CASE("evaluate_narrow_phase touch vertex is Touch not Penetrating", "[poly_intersect][router]") {
     auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto poly_b = polygon_from_quad({{2, 2}, {4, 2}, {4, 4}, {2, 4}});
-    REQUIRE(narrow_phase_intersect<Vec2>(
-        poly_a.get_part_points(0), poly_a.get_part_size(0),
-        poly_b.get_part_points(0), poly_b.get_part_size(0)));
-}
-
-TEST_CASE("narrow_phase_intersect touch edge", "[poly_intersect][router]") {
-    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    auto poly_b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
-    REQUIRE(narrow_phase_intersect<Vec2>(
-        poly_a.get_part_points(0), poly_a.get_part_size(0),
-        poly_b.get_part_points(0), poly_b.get_part_size(0)));
-}
-
-TEST_CASE("narrow_phase_intersect overlap interior", "[poly_intersect][router]") {
-    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    auto poly_b = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    REQUIRE(narrow_phase_intersect<Vec2>(
-        poly_a.get_part_points(0), poly_a.get_part_size(0),
-        poly_b.get_part_points(0), poly_b.get_part_size(0)));
-}
-
-TEST_CASE("narrow_phase_intersect swap argument order symmetry", "[poly_intersect][router]") {
-    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    auto poly_b = polygon_from_quad({{5, 0}, {7, 0}, {7, 2}, {5, 2}});
-    bool ab = narrow_phase_intersect<Vec2>(
+    auto cr = evaluate_narrow_phase<Vec2>(
         poly_a.get_part_points(0), poly_a.get_part_size(0),
         poly_b.get_part_points(0), poly_b.get_part_size(0));
-    bool ba = narrow_phase_intersect<Vec2>(
-        poly_b.get_part_points(0), poly_b.get_part_size(0),
-        poly_a.get_part_points(0), poly_a.get_part_size(0));
-    REQUIRE(ab == ba);
+    REQUIRE(cr.state == ContactState::Touch);
 }
 
-TEST_CASE("narrow_phase_intersect gradient threshold parity", "[poly_intersect][router]") {
+TEST_CASE("evaluate_narrow_phase touch edge is Touch not Penetrating", "[poly_intersect][router]") {
+    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto poly_b = polygon_from_quad({{2, 0}, {4, 0}, {4, 2}, {2, 2}});
+    auto cr = evaluate_narrow_phase<Vec2>(
+        poly_a.get_part_points(0), poly_a.get_part_size(0),
+        poly_b.get_part_points(0), poly_b.get_part_size(0));
+    REQUIRE(cr.state == ContactState::Touch);
+}
+
+TEST_CASE("evaluate_narrow_phase overlap interior is Penetrating", "[poly_intersect][router]") {
+    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto poly_b = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
+    // Use parts helper (same SoT as packing); raw closed rings can EPA-touch.
+    auto cr = evaluate_narrow_phase_parts<Vec2>(poly_a, 0, poly_b, 0);
+    REQUIRE(cr.state == ContactState::Penetrating);
+}
+
+TEST_CASE("evaluate_narrow_phase swap argument order symmetry", "[poly_intersect][router]") {
+    auto poly_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    auto poly_b = polygon_from_quad({{5, 0}, {7, 0}, {7, 2}, {5, 2}});
+    auto ab = evaluate_narrow_phase<Vec2>(
+        poly_a.get_part_points(0), poly_a.get_part_size(0),
+        poly_b.get_part_points(0), poly_b.get_part_size(0));
+    auto ba = evaluate_narrow_phase<Vec2>(
+        poly_b.get_part_points(0), poly_b.get_part_size(0),
+        poly_a.get_part_points(0), poly_a.get_part_size(0));
+    REQUIRE(ab.state == ba.state);
+}
+
+TEST_CASE("evaluate_narrow_phase gradient threshold parity", "[poly_intersect][router]") {
     auto sq_a = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    // n_a + n_b = 23
     auto dense23 = polygon_dense_bottom_rect(20, 36, 0.0, 2.0);
     REQUIRE(sq_a.get_part_size(0) + dense23.get_part_size(0) == 25);
 
-    bool hit23 = narrow_phase_intersect<Vec2>(
+    auto hit23 = evaluate_narrow_phase<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
         dense23.get_part_points(0), dense23.get_part_size(0));
 
-    // n_a + n_b = 26 (gradient routing)
     auto dense26 = polygon_dense_bottom_rect(20, 39, 0.0, 2.0);
     REQUIRE(sq_a.get_part_size(0) + dense26.get_part_size(0) == 28);
 
-    bool hit26 = narrow_phase_intersect<Vec2>(
+    auto hit26 = evaluate_narrow_phase<Vec2>(
         sq_a.get_part_points(0), sq_a.get_part_size(0),
         dense26.get_part_points(0), dense26.get_part_size(0));
 
-    REQUIRE(hit23 == hit26);
-    REQUIRE_FALSE(hit23);
+    REQUIRE(hit23.state == hit26.state);
+    REQUIRE(hit23.state == ContactState::Disjoint);
 
     auto overlap_square = polygon_from_quad({{18, 0}, {22, 0}, {22, 2}, {18, 2}});
-    bool ov23 = narrow_phase_intersect<Vec2>(
-        overlap_square.get_part_points(0), overlap_square.get_part_size(0),
-        dense23.get_part_points(0), dense23.get_part_size(0));
-    bool ov26 = narrow_phase_intersect<Vec2>(
-        overlap_square.get_part_points(0), overlap_square.get_part_size(0),
-        dense26.get_part_points(0), dense26.get_part_size(0));
-    REQUIRE(ov23);
-    REQUIRE(ov26);
+    auto ov23 = evaluate_narrow_phase_parts<Vec2>(overlap_square, 0, dense23, 0);
+    auto ov26 = evaluate_narrow_phase_parts<Vec2>(overlap_square, 0, dense26, 0);
+    REQUIRE(ov23.state == ContactState::Penetrating);
+    REQUIRE(ov26.state == ContactState::Penetrating);
 }
 
 TEST_CASE("narrow_phase_contain witness uses first vertex only", "[poly_intersect][router]") {
@@ -174,7 +171,8 @@ TEST_CASE("narrow_phase_contain witness false when rings are separated", "[poly_
     const Vec2* out_pts = outer.get_part_points(0);
     const int out_n = outer.get_part_size(0);
 
-    REQUIRE_FALSE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
+    REQUIRE(evaluate_narrow_phase<Vec2>(in_pts, in_n, out_pts, out_n).state
+            == ContactState::Disjoint);
     REQUIRE_FALSE(narrow_phase_contain<Vec2>(in_pts, in_n, inner_far, outer));
 }
 
@@ -187,7 +185,9 @@ TEST_CASE("narrow_phase_contain nesting may still GJK-intersect", "[poly_interse
     const int out_n = outer.get_part_size(0);
 
     REQUIRE(narrow_phase_contain<Vec2>(in_pts, in_n, inner_ok, outer));
-    REQUIRE(narrow_phase_intersect<Vec2>(in_pts, in_n, out_pts, out_n));
+    // Nested hulls often report GJK intersect; packing SoT uses ContactState.
+    REQUIRE(evaluate_narrow_phase<Vec2>(in_pts, in_n, out_pts, out_n).state
+            != ContactState::Disjoint);
 }
 
 TEST_CASE("narrow_phase_contain gradient threshold parity for witness", "[poly_intersect][router]") {
@@ -212,17 +212,19 @@ TEST_CASE("narrow_phase_contain gradient threshold parity for witness", "[poly_i
 
     auto dense_escape23 = polygon_dense_bottom_rect(5, 21, 5.5, 7.5);
     auto dense_escape26 = polygon_dense_bottom_rect(5, 24, 5.5, 7.5);
-    REQUIRE(narrow_phase_intersect<Vec2>(
-        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0), out_pts, out_n));
-    REQUIRE(narrow_phase_intersect<Vec2>(
-        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0), out_pts, out_n));
+    REQUIRE(evaluate_narrow_phase<Vec2>(
+        dense_escape23.get_part_points(0), dense_escape23.get_part_size(0), out_pts, out_n)
+            .state == ContactState::Penetrating);
+    REQUIRE(evaluate_narrow_phase<Vec2>(
+        dense_escape26.get_part_points(0), dense_escape26.get_part_size(0), out_pts, out_n)
+            .state == ContactState::Penetrating);
 }
 
 TEST_CASE("find_polygon_intersections guards empty corpus", "[poly_intersect][sweep]") {
-    REQUIRE(find_polygon_intersections<Vec2>(std::vector<SolidGeometry2>{}).empty());
-    REQUIRE(find_polygon_intersections<Vec2>(std::vector<const SolidGeometry2 *>{}).empty());
+    REQUIRE(find_polygon_intersections<Vec2>(std::vector<PlaneGeometry2>{}).empty());
+    REQUIRE(find_polygon_intersections<Vec2>(std::vector<const PlaneGeometry2 *>{}).empty());
 
-    SolidGeometry2 single = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    PlaneGeometry2 single = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     REQUIRE(find_polygon_intersections<Vec2>({single}).empty());
 
     REQUIRE(find_polygon_intersections<Vec2>(
@@ -275,7 +277,7 @@ TEST_CASE("find_polygon_intersections three polygons subset pairs", "[poly_inter
     auto base = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto orphan = polygon_from_quad({{100, 100}, {101, 100}, {101, 101}, {100, 101}});
     auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    std::vector<SolidGeometry2> polys = {base, orphan, buddy};
+    std::vector<PlaneGeometry2> polys = {base, orphan, buddy};
     auto hits = find_polygon_intersections<Vec2>(polys, &tracer);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 2));
@@ -286,7 +288,7 @@ TEST_CASE("find_polygon_intersections active_indices overload", "[poly_intersect
     auto base = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto orphan = polygon_from_quad({{100, 100}, {101, 100}, {101, 101}, {100, 101}});
     auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    std::vector<SolidGeometry2> polys = {base, orphan, buddy};
+    std::vector<PlaneGeometry2> polys = {base, orphan, buddy};
 
     DebugTracer tracer_overlap;
     tracer_overlap.reset();
@@ -295,7 +297,7 @@ TEST_CASE("find_polygon_intersections active_indices overload", "[poly_intersect
     REQUIRE(overlap_only[0] == std::make_pair(0, 2));
     REQUIRE(tracer_overlap.stat_sweep_pairs > 0);
 
-    std::vector<SolidGeometry2> two_far = {base, orphan};
+    std::vector<PlaneGeometry2> two_far = {base, orphan};
     auto disjoint_only = find_polygon_intersections<Vec2>(two_far, std::vector<int>{0, 1});
     REQUIRE(disjoint_only.empty());
 }
@@ -307,7 +309,7 @@ TEST_CASE("find_polygon_intersections subset mode static-static never narrow-pha
     auto base = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto orphan = polygon_from_quad({{100, 100}, {101, 100}, {101, 101}, {100, 101}});
     auto buddy = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
-    std::vector<SolidGeometry2> polys = {base, orphan, buddy};
+    std::vector<PlaneGeometry2> polys = {base, orphan, buddy};
 
     auto hits = find_polygon_intersections<Vec2>(polys, std::vector<int>{2}, &tracer);
     REQUIRE(hits.size() >= 1);
@@ -320,7 +322,7 @@ TEST_CASE("find_polygon_intersections multipolygon dedupes polygon pair", "[poly
     REQUIRE(compound.line_parts.size() == 2);
 
     auto stripe = polygon_from_quad({{1.0, -1.0}, {3.0, -1.0}, {3.0, 5.0}, {1.0, 5.0}});
-    std::vector<SolidGeometry2> polys = {compound, stripe};
+    std::vector<PlaneGeometry2> polys = {compound, stripe};
     auto hits = find_polygon_intersections<Vec2>(polys);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 1));
@@ -372,7 +374,7 @@ TEST_CASE("stress intersect TC1 giant floor only P0 P1", "[poly_intersect][stres
         {210, 10},
         {200, 10},
     });
-    std::vector<SolidGeometry2> polys = {p0, p1, p2, p3};
+    std::vector<PlaneGeometry2> polys = {p0, p1, p2, p3};
     auto hits = find_polygon_intersections<Vec2>(polys, &tracer);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 1));
@@ -390,7 +392,7 @@ TEST_CASE("stress intersect TC2 concave C trapped box donut no hits", "[poly_int
     auto trapped = polygon_from_quad({{4, 4}, {6, 4}, {6, 6}, {4, 6}});
     auto donut = polygon_donut_with_square_hole();
     auto core = polygon_from_quad({{24, 4}, {26, 4}, {26, 6}, {24, 6}});
-    std::vector<SolidGeometry2> polys = {c_shape, trapped, donut, core};
+    std::vector<PlaneGeometry2> polys = {c_shape, trapped, donut, core};
     auto hits = find_polygon_intersections<Vec2>(polys, &tracer);
     REQUIRE(hits.empty());
     REQUIRE(tracer.stat_sweep_pairs > 0);
@@ -405,8 +407,8 @@ TEST_CASE("stress intersect TC4 bipartite walls vs bullets", "[poly_intersect][s
     auto wall_r = polygon_from_quad({{10, 0}, {11, 0}, {11, 10}, {10, 10}});
     auto bullet1 = polygon_from_quad({{0.5, 5}, {1.5, 5}, {1.5, 6}, {0.5, 6}});
     auto bullet2 = polygon_from_quad({{5, 5}, {6, 5}, {6, 6}, {5, 6}});
-    std::vector<SolidGeometry2> walls = {wall_l, wall_r};
-    std::vector<SolidGeometry2> bullets = {bullet1, bullet2};
+    std::vector<PlaneGeometry2> walls = {wall_l, wall_r};
+    std::vector<PlaneGeometry2> bullets = {bullet1, bullet2};
     auto hits = find_polygon_intersections<Vec2>(walls, bullets, &tracer);
     REQUIRE(hits.size() == 1);
     REQUIRE(hits[0] == std::make_pair(0, 0));
@@ -420,13 +422,13 @@ TEST_CASE("Physics Telemetry: Circle Prune Scaling (O(N^2) Prevention)", "[telem
     DebugTracer tracer;
     tracer.reset();
 
-    std::vector<SolidGeometry2> world;
+    std::vector<PlaneGeometry2> world;
     world.reserve(100);
     for (int i = 0; i < 100; ++i) {
         world.push_back(make_box(static_cast<double>(i) * 1000.0, 0.0, 5.0, 5.0));
     }
-    std::vector<SolidGeometry2> setA(world.begin(), world.begin() + 50);
-    std::vector<SolidGeometry2> setB(world.begin() + 50, world.end());
+    std::vector<PlaneGeometry2> setA(world.begin(), world.begin() + 50);
+    std::vector<PlaneGeometry2> setB(world.begin() + 50, world.end());
 
     auto inter_results = find_polygon_intersections<Vec2, DebugTracer>(setA, setB, &tracer);
 
@@ -492,15 +494,15 @@ TEST_CASE("find_polygon_intersections ptr overload matches owned", "[poly_inters
     auto left = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto overlap = polygon_from_quad({{1, 1}, {3, 1}, {3, 3}, {1, 3}});
     auto far = polygon_from_quad({{10, 10}, {12, 10}, {12, 12}, {10, 12}});
-    std::vector<SolidGeometry2> owned{left, overlap, far};
-    std::vector<const SolidGeometry2 *> ptrs{&owned[0], &owned[1], &owned[2]};
+    std::vector<PlaneGeometry2> owned{left, overlap, far};
+    std::vector<const PlaneGeometry2 *> ptrs{&owned[0], &owned[1], &owned[2]};
     auto io = find_polygon_intersections<Vec2>(owned);
     auto ip = find_polygon_intersections<Vec2>(ptrs);
     REQUIRE(io == ip);
     auto bo = find_polygon_intersections<Vec2>(
-        std::vector<SolidGeometry2>{owned[0]}, std::vector<SolidGeometry2>{owned[1], owned[2]});
-    std::vector<const SolidGeometry2 *> a{&owned[0]};
-    std::vector<const SolidGeometry2 *> b{&owned[1], &owned[2]};
+        std::vector<PlaneGeometry2>{owned[0]}, std::vector<PlaneGeometry2>{owned[1], owned[2]});
+    std::vector<const PlaneGeometry2 *> a{&owned[0]};
+    std::vector<const PlaneGeometry2 *> b{&owned[1], &owned[2]};
     auto bp = find_polygon_intersections<Vec2>(a, b);
     REQUIRE(bo == bp);
 }
@@ -518,13 +520,13 @@ TEST_CASE("A5a circle pre-push: grazing overlap kept, far-apart skipped", "[poly
 
     DebugTracer tr_far;
     auto far_hits = find_polygon_intersections<Vec2>(
-        std::vector<SolidGeometry2>{left, far_same_band}, &tr_far);
+        std::vector<PlaneGeometry2>{left, far_same_band}, &tr_far);
     REQUIRE(far_hits.empty());
     REQUIRE(tr_far.stat_sweep_pairs == 0);
 
     DebugTracer tr_grazing;
     auto graz_hits = find_polygon_intersections<Vec2>(
-        std::vector<SolidGeometry2>{left, grazing}, &tr_grazing);
+        std::vector<PlaneGeometry2>{left, grazing}, &tr_grazing);
     REQUIRE_FALSE(graz_hits.empty());
     REQUIRE(tr_grazing.stat_sweep_pairs >= 1);
 

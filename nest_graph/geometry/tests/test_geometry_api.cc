@@ -4,8 +4,8 @@
 #include <random>
 
 #include "geometry/common/sample_boundary.h"
-#include "geometry/solid/containment.h"
-#include "geometry/solid/point_in_solid.h"
+#include "geometry/plane/containment.h"
+#include "geometry/plane/point_in_plane.h"
 #include "geometry/intersect/polygon_intersect.h"
 #include "geometry/tests/geometry_test_helpers.h"
 
@@ -13,11 +13,11 @@
 #include <vector>
 
 using PolyTestVec2 = Vec<2, double>;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 constexpr double kTol = 1e-6;
 
-PolyTestVec2 find_corner(const SolidGeometry2& g, double x, double y) {
+PolyTestVec2 find_corner(const PlaneGeometry2& g, double x, double y) {
     for (const auto& p : g.line_points) {
         if (polytest_near(p[0], x, kTol) && polytest_near(p[1], y, kTol)) {
             return p;
@@ -27,7 +27,7 @@ PolyTestVec2 find_corner(const SolidGeometry2& g, double x, double y) {
 }
 
 TEST_CASE("Geometry API: from_convex_polygon", "[geometry_api]") {
-    SolidGeometry2 g = polygon_from_quad({
+    PlaneGeometry2 g = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
@@ -41,7 +41,7 @@ TEST_CASE("Geometry API: from_convex_polygon", "[geometry_api]") {
 }
 
 TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]") {
-    SolidGeometry2 open_only;
+    PlaneGeometry2 open_only;
     std::vector<PolyTestVec2> open_pts{
         {0, 0},
         {1, 0},
@@ -57,7 +57,7 @@ TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]
     open_only.finalize(gen);
     REQUIRE(open_only.boundary_rings.empty());
 
-    SolidGeometry2 closed = polygon_from_quad({
+    PlaneGeometry2 closed = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
@@ -67,38 +67,38 @@ TEST_CASE("Geometry API: from_convex_polygon has boundary ring", "[geometry_api]
 }
 
 TEST_CASE("Geometry API: apply_transform translate", "[geometry_api]") {
-    SolidGeometry2 g = polygon_from_quad({
+    PlaneGeometry2 g = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
         {0, 1},
     });
-    SolidGeometry2 moved = g.translate(PolyTestVec2({2.0, 3.0}));
+    PlaneGeometry2 moved = g.translate(PolyTestVec2({2.0, 3.0}));
     REQUIRE(polytest_near(find_corner(moved, 2.0, 3.0)[0], 2.0));
     REQUIRE(polytest_near(find_corner(moved, 3.0, 4.0)[0], 3.0));
 }
 
 TEST_CASE("Geometry API: apply_transform rotate 90 degrees", "[geometry_api]") {
-    SolidGeometry2 g = polygon_from_quad({
+    PlaneGeometry2 g = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
         {0, 1},
     });
     const double half_pi = 0.5 * M_PI;
-    SolidGeometry2 rotated = g.rotate(half_pi);
+    PlaneGeometry2 rotated = g.rotate(half_pi);
     REQUIRE(polytest_near(find_corner(rotated, 0.0, 1.0)[1], 1.0));
 }
 
 TEST_CASE("Geometry API: rotate then translate matches placement order", "[geometry_api]") {
-    SolidGeometry2 g = polygon_from_quad({
+    PlaneGeometry2 g = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
         {0, 1},
     });
-    SolidGeometry2 chained = g.rotate(0.25).translate(PolyTestVec2({1.0, 2.0}));
-    SolidGeometry2 placed = g.rotate(0.25);
+    PlaneGeometry2 chained = g.rotate(0.25).translate(PolyTestVec2({1.0, 2.0}));
+    PlaneGeometry2 placed = g.rotate(0.25);
     placed = placed.translate(PolyTestVec2({1.0, 2.0}));
     REQUIRE(polytest_near(
         find_corner(chained, find_corner(placed, 0, 0)[0], find_corner(placed, 0, 0)[1])[0],
@@ -106,7 +106,7 @@ TEST_CASE("Geometry API: rotate then translate matches placement order", "[geome
 }
 
 TEST_CASE("Geometry API: bounding circle bounds consistency", "[geometry_api]") {
-    SolidGeometry2 g = polygon_from_quad({
+    PlaneGeometry2 g = polygon_from_quad({
         {0, 0},
         {2, 0},
         {2, 2},
@@ -122,27 +122,27 @@ TEST_CASE("Geometry API: bounding circle bounds consistency", "[geometry_api]") 
 }
 
 TEST_CASE("Geometry API: contains_point triangle", "[geometry_api]") {
-    SolidGeometry2 tri = polygon_from_quad({
+    PlaneGeometry2 tri = polygon_from_quad({
         {0, 0},
         {2, 0},
         {1, 1},
         {0, 0},
     });
-    REQUIRE(is_point_inside_solid_space(PolyTestVec2({1.0, 0.2}), tri));
-    REQUIRE_FALSE(is_point_inside_solid_space(PolyTestVec2({5.0, 5.0}), tri));
+    REQUIRE(is_point_inside_plane_space(PolyTestVec2({1.0, 0.2}), tri));
+    REQUIRE_FALSE(is_point_inside_plane_space(PolyTestVec2({5.0, 5.0}), tri));
 }
 
 TEST_CASE("Geometry API: contains_point donut hole", "[geometry_api][holes]") {
-    SolidGeometry2 donut = make_donut(
+    PlaneGeometry2 donut = make_donut(
         {{0, 0}, {6, 0}, {6, 6}, {0, 6}},
         {{2, 2}, {4, 2}, {4, 4}, {2, 4}}
     );
-    REQUIRE(is_point_inside_solid_space(PolyTestVec2({1.0, 1.0}), donut));
-    REQUIRE_FALSE(is_point_inside_solid_space(PolyTestVec2({3.0, 3.0}), donut));
+    REQUIRE(is_point_inside_plane_space(PolyTestVec2({1.0, 1.0}), donut));
+    REQUIRE_FALSE(is_point_inside_plane_space(PolyTestVec2({3.0, 3.0}), donut));
 }
 
 TEST_CASE("Geometry API: boundary_clearance rectangle", "[geometry_api]") {
-    SolidGeometry2 rect = polygon_from_quad({
+    PlaneGeometry2 rect = polygon_from_quad({
         {0, 0},
         {10, 0},
         {10, 10},
@@ -157,31 +157,31 @@ TEST_CASE("Geometry API: boundary_clearance rectangle", "[geometry_api]") {
 }
 
 TEST_CASE("Geometry API: footprint_inside rectangle", "[geometry_api]") {
-    SolidGeometry2 board = polygon_from_quad({
+    PlaneGeometry2 board = polygon_from_quad({
         {0, 0},
         {10, 0},
         {10, 10},
         {0, 10},
     });
-    SolidGeometry2 inside = make_box(5.0, 5.0, 0.5, 0.5);
-    SolidGeometry2 outside = make_box(12.0, 5.0, 0.5, 0.5);
-    REQUIRE(solid_footprint_inside(inside, board));
-    REQUIRE_FALSE(solid_footprint_inside(outside, board));
+    PlaneGeometry2 inside = make_box(5.0, 5.0, 0.5, 0.5);
+    PlaneGeometry2 outside = make_box(12.0, 5.0, 0.5, 0.5);
+    REQUIRE(plane_footprint_inside(inside, board));
+    REQUIRE_FALSE(plane_footprint_inside(outside, board));
 }
 
 TEST_CASE("Geometry API: footprint_inside donut hole", "[geometry_api][holes]") {
-    SolidGeometry2 donut = make_donut(
+    PlaneGeometry2 donut = make_donut(
         {{0, 0}, {6, 0}, {6, 6}, {0, 6}},
         {{2, 2}, {4, 2}, {4, 4}, {2, 4}}
     );
-    SolidGeometry2 in_ring = make_box(1.0, 1.0, 0.2, 0.2);
-    SolidGeometry2 in_hole = make_box(3.0, 3.0, 0.2, 0.2);
-    REQUIRE(solid_footprint_inside(in_ring, donut));
-    REQUIRE_FALSE(solid_footprint_inside(in_hole, donut));
+    PlaneGeometry2 in_ring = make_box(1.0, 1.0, 0.2, 0.2);
+    PlaneGeometry2 in_hole = make_box(3.0, 3.0, 0.2, 0.2);
+    REQUIRE(plane_footprint_inside(in_ring, donut));
+    REQUIRE_FALSE(plane_footprint_inside(in_hole, donut));
 }
 
 TEST_CASE("Geometry API: footprint_inside concave c_shape gap", "[geometry_api][holes]") {
-    SolidGeometry2 c_shape = polygon_from_ring({
+    PlaneGeometry2 c_shape = polygon_from_ring({
         {0, 0},
         {10, 0},
         {10, 2},
@@ -191,50 +191,50 @@ TEST_CASE("Geometry API: footprint_inside concave c_shape gap", "[geometry_api][
         {10, 10},
         {0, 10},
     });
-    SolidGeometry2 in_gap = make_box(5.0, 5.0, 1.0, 1.0);
-    SolidGeometry2 spans_gap = polygon_from_quad({
+    PlaneGeometry2 in_gap = make_box(5.0, 5.0, 1.0, 1.0);
+    PlaneGeometry2 spans_gap = polygon_from_quad({
         {1, 1},
         {9, 1},
         {9, 9},
         {1, 9},
     });
-    SolidGeometry2 in_leg = make_box(1.0, 1.0, 0.5, 0.5);
-    REQUIRE(solid_footprint_inside(in_leg, c_shape));
-    REQUIRE_FALSE(solid_footprint_inside(in_gap, c_shape));
-    REQUIRE_FALSE(solid_footprint_inside(spans_gap, c_shape));
+    PlaneGeometry2 in_leg = make_box(1.0, 1.0, 0.5, 0.5);
+    REQUIRE(plane_footprint_inside(in_leg, c_shape));
+    REQUIRE_FALSE(plane_footprint_inside(in_gap, c_shape));
+    REQUIRE_FALSE(plane_footprint_inside(spans_gap, c_shape));
 }
 
 TEST_CASE("Geometry API: footprint_inside_batch", "[geometry_api]") {
-    SolidGeometry2 board = polygon_from_quad({
+    PlaneGeometry2 board = polygon_from_quad({
         {0, 0},
         {10, 0},
         {10, 10},
         {0, 10},
     });
-    SolidGeometry2 a = make_box(2.0, 2.0, 0.5, 0.5);
-    SolidGeometry2 b = make_box(12.0, 2.0, 0.5, 0.5);
-    SolidGeometry2 c = make_box(7.0, 7.0, 0.5, 0.5);
-    auto batch = solid_footprint_inside(std::vector<SolidGeometry2>{a, b, c}, board);
+    PlaneGeometry2 a = make_box(2.0, 2.0, 0.5, 0.5);
+    PlaneGeometry2 b = make_box(12.0, 2.0, 0.5, 0.5);
+    PlaneGeometry2 c = make_box(7.0, 7.0, 0.5, 0.5);
+    auto batch = plane_footprint_inside(std::vector<PlaneGeometry2>{a, b, c}, board);
     REQUIRE(batch.size() == 3);
     REQUIRE(batch[0]);
     REQUIRE_FALSE(batch[1]);
     REQUIRE(batch[2]);
-    REQUIRE(batch[0] == solid_footprint_inside(a, board));
-    REQUIRE(batch[1] == solid_footprint_inside(b, board));
-    REQUIRE(batch[2] == solid_footprint_inside(c, board));
+    REQUIRE(batch[0] == plane_footprint_inside(a, board));
+    REQUIRE(batch[1] == plane_footprint_inside(b, board));
+    REQUIRE(batch[2] == plane_footprint_inside(c, board));
 }
 
 TEST_CASE("Geometry API: intersects disjoint and overlap", "[geometry_api]") {
-    SolidGeometry2 left = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
-    SolidGeometry2 right_sep = polygon_from_quad({{4, 0}, {6, 0}, {6, 2}, {4, 2}});
-    SolidGeometry2 overlap = polygon_from_quad({{1, 0}, {3, 0}, {3, 2}, {1, 2}});
+    PlaneGeometry2 left = polygon_from_quad({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
+    PlaneGeometry2 right_sep = polygon_from_quad({{4, 0}, {6, 0}, {6, 2}, {4, 2}});
+    PlaneGeometry2 overlap = polygon_from_quad({{1, 0}, {3, 0}, {3, 2}, {1, 2}});
 
     REQUIRE(find_polygon_intersections<PolyTestVec2>({left, right_sep}).empty());
     REQUIRE_FALSE(find_polygon_intersections<PolyTestVec2>({left, overlap}).empty());
 }
 
 TEST_CASE("Geometry API: sample_boundary count equals fill", "[geometry_api][voronoi]") {
-    SolidGeometry2 rect = polygon_from_quad({
+    PlaneGeometry2 rect = polygon_from_quad({
         {0, 0},
         {10, 0},
         {10, 4},
@@ -254,7 +254,7 @@ TEST_CASE("Geometry API: sample_boundary count equals fill", "[geometry_api][vor
 }
 
 TEST_CASE("Geometry API: contains_points_batch_xy ptr", "[geometry_api][voronoi]") {
-    SolidGeometry2 rect = polygon_from_quad({
+    PlaneGeometry2 rect = polygon_from_quad({
         {0, 0},
         {10, 0},
         {10, 10},

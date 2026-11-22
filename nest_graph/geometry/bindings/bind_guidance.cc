@@ -92,7 +92,7 @@ void bind_guidance_api(nb::module_ &m) {
                 cfg = nb::cast<GuidanceConfig2d>(config);
             }
             return evaluate_local_placement<Vec2d>(
-                placed_poly_idx, solids_from_holders(std::move(polygons)), pos, cfg);
+                placed_poly_idx, planes_from_holders(std::move(polygons)), pos, cfg);
         },
         nb::arg("placed_poly_idx"),
         nb::arg("polygons"),
@@ -116,7 +116,7 @@ void bind_guidance_api(nb::module_ &m) {
             DebugTracer tracer;
             tracer.reset();
             auto guidance = evaluate_local_placement<Vec2d, DebugTracer>(
-                placed_poly_idx, solids_from_holders(std::move(polygons)), pos, cfg, &tracer);
+                placed_poly_idx, planes_from_holders(std::move(polygons)), pos, cfg, &tracer);
             return std::make_tuple(
                 guidance,
                 tracer.stat_sweep_pairs,

@@ -39,8 +39,8 @@ void bind_cast_api(nb::module_ &m) {
            double max_t) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide(
-                active.solid,
-                solid_ptrs_from_holders(obstacles),
+                active.plane,
+                plane_ptrs_from_holders(obstacles),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -57,8 +57,8 @@ void bind_cast_api(nb::module_ &m) {
            double max_t) {
             const Vec2d slide_vec = slide_vector_from_handle(slide);
             return cast_slide_all(
-                active.solid,
-                solid_ptrs_from_holders(obstacles),
+                active.plane,
+                plane_ptrs_from_holders(obstacles),
                 slide_vec,
                 static_cast<Vec2d::Scalar>(max_t));
         },
@@ -90,9 +90,9 @@ void bind_snap_api(nb::module_ &m) {
             if (!read_transform(pose, px, py, pth)) {
                 throw nb::value_error("polish_se2_part: pose needs (x, y, theta)");
             }
-            const SolidGeometry2d *board_ptr = nullptr;
+            const PlaneGeometry2d *board_ptr = nullptr;
             if (!board.is_none()) {
-                board_ptr = &nb::cast<const GeometryHolder &>(board).solid;
+                board_ptr = &nb::cast<const GeometryHolder &>(board).plane;
             }
             std::vector<Vec2d> dir_vecs;
             dir_vecs.reserve(dirs.size());
@@ -117,7 +117,7 @@ void bind_snap_api(nb::module_ &m) {
                 const auto &holder =
                     nb::cast<const StaticCollisionSceneHolder &>(scene);
                 return polish_se2_part(
-                    part.solid,
+                    part.plane,
                     static_cast<Vec2d::Scalar>(px),
                     static_cast<Vec2d::Scalar>(py),
                     static_cast<Vec2d::Scalar>(pth),
@@ -132,12 +132,12 @@ void bind_snap_api(nb::module_ &m) {
                     opts);
             }
             return polish_se2_part(
-                part.solid,
+                part.plane,
                 static_cast<Vec2d::Scalar>(px),
                 static_cast<Vec2d::Scalar>(py),
                 static_cast<Vec2d::Scalar>(pth),
                 // Polish Scene: move-into-build (D2); not sync-query ptr spans.
-                solids_from_holders(std::move(obstacles)),
+                planes_from_holders(std::move(obstacles)),
                 board_ptr,
                 dir_vecs,
                 n_angles,
@@ -186,9 +186,9 @@ void bind_snap_api(nb::module_ &m) {
                 nb::cast<double>(iseq[1]),
             });
 
-            const SolidGeometry2d *board_ptr = nullptr;
+            const PlaneGeometry2d *board_ptr = nullptr;
             if (!board.is_none()) {
-                board_ptr = &nb::cast<const GeometryHolder &>(board).solid;
+                board_ptr = &nb::cast<const GeometryHolder &>(board).plane;
             }
 
             std::optional<double> pad;
@@ -197,8 +197,8 @@ void bind_snap_api(nb::module_ &m) {
             }
 
             return snap_pose_to_ring(
-                part.solid,
-                boundary_ring.solid,
+                part.plane,
+                boundary_ring.plane,
                 contact_v,
                 inward_v,
                 static_cast<Vec2d::Scalar>(angle),
@@ -232,13 +232,13 @@ void bind_snap_api(nb::module_ &m) {
                 throw nb::value_error("nfp_lite_relative: pose needs (x, y, theta)");
             }
             const auto out = nfp_lite_relative(
-                follow.solid,
+                follow.plane,
                 static_cast<Vec2d::Scalar>(px),
                 static_cast<Vec2d::Scalar>(py),
                 static_cast<Vec2d::Scalar>(pth),
-                anchor.solid,
+                anchor.plane,
                 // NFP Scene: move-into-build (D2).
-                solids_from_holders(std::move(other_obstacles)),
+                planes_from_holders(std::move(other_obstacles)),
                 static_cast<Vec2d::Scalar>(min_dist),
                 static_cast<Vec2d::Scalar>(max_t));
             return {
@@ -271,10 +271,10 @@ void bind_snap_api(nb::module_ &m) {
                 throw nb::value_error("nfp_lite_pair_relative: poses need (x, y, theta)");
             }
             const Se2 rel = nfp_lite_pair_relative(
-                follow.solid,
+                follow.plane,
                 Se2{static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(aa)},
                 Se2{static_cast<float>(bx), static_cast<float>(by), static_cast<float>(ba)},
-                anchor.solid,
+                anchor.plane,
                 static_cast<Vec2d::Scalar>(min_dist));
             return {static_cast<double>(rel.x), static_cast<double>(rel.y), static_cast<double>(rel.a)};
         },

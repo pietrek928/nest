@@ -1,10 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
-#include "geometry/solid/point_in_solid.h"
-#include "geometry/solid/decompose.h"
+#include "geometry/plane/point_in_plane.h"
+#include "geometry/plane/decompose.h"
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 TEST_CASE("point in solid bug", "[bug]") {
     std::vector<Vec2> ring12 = {
@@ -13,10 +13,10 @@ TEST_CASE("point in solid bug", "[bug]") {
     
     std::vector<std::vector<Vec2>> outers12 = {ring12};
     std::vector<std::vector<Vec2>> holes12;
-    SolidGeometry2 shape12 = decompose_complex_polygon<Vec2>(outers12, holes12);
+    PlaneGeometry2 shape12 = decompose_complex_polygon<Vec2>(outers12, holes12);
     
     Vec2 pt{{15.752508947292101, -6.016435457590436}};
     
-    bool inside = is_point_inside_solid_space(pt, shape12);
+    bool inside = is_point_inside_plane_space(pt, shape12);
     REQUIRE(inside == true);
 }

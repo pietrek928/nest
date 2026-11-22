@@ -1,6 +1,6 @@
 #pragma once
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 #include "common/geometry_common.h"
 
 #include <cmath>
@@ -9,7 +9,7 @@
 #include <vector>
 
 template<class VecType>
-inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<VecType>& poly) {
+inline bool is_point_inside_plane_space(const VecType& pt, const PlaneGeometry<VecType>& poly) {
     if (!poly.boundary_rings.empty()) {
         int winding = 0;
 
@@ -37,6 +37,9 @@ inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<V
     // Fallback for manually built geometry without stored rings
     int winding = 0;
     for (size_t part = 0; part < poly.line_parts.size(); ++part) {
+        if (poly.line_parts[part].role != ChainRole::FilledConvex) {
+            continue;
+        }
         const VecType* pts = poly.get_part_points(part);
         int n = poly.get_part_size(part);
         const int delta = poly.line_parts[part].is_subtractive ? -1 : 1;
@@ -54,7 +57,7 @@ inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<V
     return (winding & 1) != 0;
 }
 
-// Batch contains: same SoT as contains_point / is_point_inside_solid_space.
+// Batch contains: same SoT as contains_point / is_point_inside_plane_space.
 //
 // Buffer contract:
 //   xy:    n_xy doubles, interleaved (x0,y0,...); n_xy even; n_points = n_xy/2.
@@ -64,7 +67,7 @@ inline bool is_point_inside_solid_space(const VecType& pt, const SolidGeometry<V
 //   return: void. Does not allocate.
 template <class VecType>
 inline void contains_points_batch_xy(
-    const SolidGeometry<VecType> &poly,
+    const PlaneGeometry<VecType> &poly,
     const double *xy,
     std::size_t n_xy,
     uint8_t *flags,
@@ -83,17 +86,17 @@ inline void contains_points_batch_xy(
     for (std::size_t i = 0; i < n_points; ++i) {
         const VecType pt({static_cast<typename VecType::Scalar>(xy[2 * i]),
                           static_cast<typename VecType::Scalar>(xy[2 * i + 1])});
-        flags[i] = is_point_inside_solid_space(pt, poly) ? 1 : 0;
+        flags[i] = is_point_inside_plane_space(pt, poly) ? 1 : 0;
     }
 }
 
 template<class VecType>
 inline typename VecType::Scalar point_boundary_clearance(
     const VecType& pt,
-    const SolidGeometry<VecType>& poly
+    const PlaneGeometry<VecType>& poly
 ) {
     using Scalar = typename VecType::Scalar;
-    if (!is_point_inside_solid_space(pt, poly)) {
+    if (!is_point_inside_plane_space(pt, poly)) {
         return static_cast<Scalar>(0);
     }
     Scalar min_dist_sq = std::numeric_limits<Scalar>::infinity();

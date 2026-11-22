@@ -10,19 +10,20 @@
 #include "common/tracer.h"
 #include "distance/polygon_distance.h"
 #include "guide/polygon_cast.h"
-#include "solid/decompose.h"
-#include "solid/containment.h"
-#include "solid/solid_geometry.h"
+#include "plane/decompose.h"
+#include "plane/containment.h"
+#include "plane/plane_geometry.h"
 #include "sweep/sweep_engine.h"
 
 template <class VecType>
-inline VecType solid_centroid(const SolidGeometry<VecType> &solid) {
+inline VecType plane_centroid(const PlaneGeometry<VecType> &solid) {
     using Scalar = typename VecType::Scalar;
     Scalar sx = static_cast<Scalar>(0);
     Scalar sy = static_cast<Scalar>(0);
     std::size_t count = 0;
     for (std::size_t i = 0; i < solid.line_parts.size(); ++i) {
-        if (solid.line_parts[i].is_subtractive) {
+        if (solid.line_parts[i].is_subtractive
+            || solid.line_parts[i].role != ChainRole::FilledConvex) {
             continue;
         }
         const VecType *pts = solid.get_part_points(i);
@@ -42,50 +43,50 @@ inline VecType solid_centroid(const SolidGeometry<VecType> &solid) {
 }
 
 template <class VecType>
-inline SolidGeometry<VecType> solid_from_rings_coords(
+inline PlaneGeometry<VecType> plane_from_rings_coords(
     const std::vector<std::vector<VecType>> &rings,
     std::mt19937 &rng
 ) {
-    SolidGeometry<VecType> solid;
+    PlaneGeometry<VecType> mesh;
     std::size_t added = 0;
     for (const auto &ring_pts : rings) {
         if (ring_pts.size() < 2) {
             continue;
         }
-        solid.add_boundary_ring(ring_pts, false);
+        mesh.add_boundary_ring(ring_pts, false);
         std::vector<VecType> closed = ring_pts;
         const VecType &first = closed.front();
         const VecType &last = closed.back();
         if (first[0] != last[0] || first[1] != last[1]) {
             closed.push_back(first);
         }
-        process_boundary_to_convex_segments<VecType>(closed, solid, rng, false);
+        process_boundary_to_convex_segments<VecType>(closed, mesh, rng, false);
         ++added;
     }
     if (added == 0) {
         throw std::invalid_argument(
             "from_rings: need at least one ring with 2+ points");
     }
-    solid.finalize(rng);
-    return solid;
+    mesh.finalize(rng);
+    return mesh;
 }
 
 template <class VecType>
-inline SolidGeometry<VecType> solid_from_ring_coords(
+inline PlaneGeometry<VecType> plane_from_ring_coords(
     const std::vector<VecType> &ring_pts,
     std::mt19937 &rng
 ) {
     if (ring_pts.size() < 2) {
         throw std::invalid_argument("from_ring: need at least 2 distinct points");
     }
-    return solid_from_rings_coords<VecType>({{ring_pts}}, rng);
+    return plane_from_rings_coords<VecType>({{ring_pts}}, rng);
 }
 
 template <class VecType>
 inline std::pair<VecType, VecType> closest_points_between_parts(
-    const SolidGeometry<VecType> &poly_a,
+    const PlaneGeometry<VecType> &poly_a,
     int part_a,
-    const SolidGeometry<VecType> &poly_b,
+    const PlaneGeometry<VecType> &poly_b,
     int part_b
 ) {
     using Scalar = typename VecType::Scalar;
@@ -113,12 +114,61 @@ inline std::pair<VecType, VecType> closest_points_between_parts(
         return {best_a, best_b};
     }
 
-    for (int i = 0; i < std::max(1, n_a - 1); ++i) {
-        const VecType a0 = pts_a[i];
-        const VecType a1 = pts_a[std::min(i + 1, n_a - 1)];
-        for (int j = 0; j < std::max(1, n_b - 1); ++j) {
+    const auto role_a = poly_a.line_parts[static_cast<std::size_t>(part_a)].role;
+    const auto role_b = poly_b.line_parts[static_cast<std::size_t>(part_b)].role;
+    const bool closed_a = role_a == ChainRole::Stroke
+        && poly_a.line_parts[static_cast<std::size_t>(part_a)].closed;
+    const bool closed_b = role_b == ChainRole::Stroke
+        && poly_b.line_parts[static_cast<std::size_t>(part_b)].closed;
+    const int edges_a = (n_a <= 1) ? 0 : (closed_a ? n_a : std::max(1, n_a - 1));
+    const int edges_b = (n_b <= 1) ? 0 : (closed_b ? n_b : std::max(1, n_b - 1));
+
+    auto edge_end = [](const VecType *pts, int n, int i, bool closed) -> VecType {
+        if (closed) {
+            return pts[(i + 1) % n];
+        }
+        return pts[std::min(i + 1, n - 1)];
+    };
+
+    if (edges_a == 0 && n_a == 1) {
+        for (int j = 0; j < edges_b; ++j) {
             const VecType b0 = pts_b[j];
-            const VecType b1 = pts_b[std::min(j + 1, n_b - 1)];
+            const VecType b1 = edge_end(pts_b, n_b, j, closed_b);
+            VecType pa;
+            VecType pb;
+            Scalar dsq = static_cast<Scalar>(0);
+            closest_points_between_segments(pts_a[0], pts_a[0], b0, b1, pa, pb, dsq);
+            if (dsq < best_sq) {
+                best_sq = dsq;
+                best_a = pa;
+                best_b = pb;
+            }
+        }
+        return {best_a, best_b};
+    }
+    if (edges_b == 0 && n_b == 1) {
+        for (int i = 0; i < edges_a; ++i) {
+            const VecType a0 = pts_a[i];
+            const VecType a1 = edge_end(pts_a, n_a, i, closed_a);
+            VecType pa;
+            VecType pb;
+            Scalar dsq = static_cast<Scalar>(0);
+            closest_points_between_segments(a0, a1, pts_b[0], pts_b[0], pa, pb, dsq);
+            if (dsq < best_sq) {
+                best_sq = dsq;
+                best_a = pa;
+                best_b = pb;
+            }
+        }
+        return {best_a, best_b};
+    }
+
+    for (int i = 0; i < edges_a; ++i) {
+        const VecType a0 = pts_a[i];
+        const VecType a1 = edge_end(pts_a, n_a, i, closed_a);
+        for (int j = 0; j < edges_b; ++j) {
+            const VecType b0 = pts_b[j];
+            const VecType b1 = edge_end(pts_b, n_b, j, closed_b);
             VecType pa;
             VecType pb;
             Scalar dsq = static_cast<Scalar>(0);
@@ -144,8 +194,8 @@ struct PairDistanceResult {
 // GEOS-compatible polygon-outline to open-ring distance (segment-only, no fill).
 template <class VecType>
 inline PairDistanceResult<VecType> standoff_distance_pair(
-    const SolidGeometry<VecType> &part,
-    const SolidGeometry<VecType> &ring
+    const PlaneGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &ring
 ) {
     using Scalar = typename VecType::Scalar;
     PairDistanceResult<VecType> out{};
@@ -199,8 +249,8 @@ inline PairDistanceResult<VecType> standoff_distance_pair(
 
 template <class VecType>
 inline PairDistanceResult<VecType> min_distance_pair(
-    const SolidGeometry<VecType> &a,
-    const SolidGeometry<VecType> &b,
+    const PlaneGeometry<VecType> &a,
+    const PlaneGeometry<VecType> &b,
     typename VecType::Scalar aura = static_cast<typename VecType::Scalar>(0.5)
 ) {
     using Scalar = typename VecType::Scalar;
@@ -273,8 +323,8 @@ inline PairDistanceResult<VecType> min_distance_pair(
 
 template <class VecType>
 inline ComplexCastResult<VecType> cast_slide(
-    const SolidGeometry<VecType> &active,
-    const std::vector<SolidGeometry<VecType>> &obstacles,
+    const PlaneGeometry<VecType> &active,
+    const std::vector<PlaneGeometry<VecType>> &obstacles,
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
@@ -285,8 +335,8 @@ inline ComplexCastResult<VecType> cast_slide(
 
 template <class VecType>
 inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
-    const SolidGeometry<VecType> &active,
-    const std::vector<SolidGeometry<VecType>> &obstacles,
+    const PlaneGeometry<VecType> &active,
+    const std::vector<PlaneGeometry<VecType>> &obstacles,
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
@@ -296,8 +346,8 @@ inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
 
 template <class VecType>
 inline ComplexCastResult<VecType> cast_slide(
-    const SolidGeometry<VecType> &active,
-    const std::vector<const SolidGeometry<VecType> *> &obstacles,
+    const PlaneGeometry<VecType> &active,
+    const std::vector<const PlaneGeometry<VecType> *> &obstacles,
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
@@ -307,8 +357,8 @@ inline ComplexCastResult<VecType> cast_slide(
 
 template <class VecType>
 inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
-    const SolidGeometry<VecType> &active,
-    const std::vector<const SolidGeometry<VecType> *> &obstacles,
+    const PlaneGeometry<VecType> &active,
+    const std::vector<const PlaneGeometry<VecType> *> &obstacles,
     const VecType &slide,
     typename VecType::Scalar max_t
 ) {
@@ -318,9 +368,9 @@ inline std::vector<ComplexCastResult<VecType>> cast_slide_all(
 
 // Packing collide for two solids without owned 2-element sweep vectors.
 template <class VecType, class Tracer = DefaultTracer>
-inline bool solids_packing_collide(
-    const SolidGeometry<VecType> &a,
-    const SolidGeometry<VecType> &b,
+inline bool planes_packing_collide(
+    const PlaneGeometry<VecType> &a,
+    const PlaneGeometry<VecType> &b,
     Tracer *tracer = nullptr
 ) {
     using Scalar = typename VecType::Scalar;
@@ -330,11 +380,13 @@ inline bool solids_packing_collide(
         return false;
     }
     for (size_t i = 0; i < a.line_parts.size(); ++i) {
-        if (a.line_parts[i].is_subtractive) {
+        if (a.line_parts[i].is_subtractive
+            || a.line_parts[i].role != ChainRole::FilledConvex) {
             continue;
         }
         for (size_t j = 0; j < b.line_parts.size(); ++j) {
-            if (b.line_parts[j].is_subtractive) {
+            if (b.line_parts[j].is_subtractive
+                || b.line_parts[j].role != ChainRole::FilledConvex) {
                 continue;
             }
             if (check_part_vs_part_intersect<VecType, Tracer>(
@@ -343,5 +395,8 @@ inline bool solids_packing_collide(
             }
         }
     }
-    return try_add_containment_collision(a, b);
+    if (try_add_containment_collision(a, b)) {
+        return true;
+    }
+    return planes_boundary_edge_overlap(a, b);
 }

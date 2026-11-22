@@ -25,7 +25,7 @@ void bind_batch_api(nb::module_ &m) {
                 // Scene owns solids: move-into-build. No pointer Scene + keep_alive.
                 StaticCollisionSceneHolder holder;
                 holder.scene.build(
-                    solids_from_holders(std::move(obstacles)),
+                    planes_from_holders(std::move(obstacles)),
                     static_cast<Vec2d::Scalar>(aura));
                 return holder;
             },
@@ -50,7 +50,7 @@ void bind_batch_api(nb::module_ &m) {
                     throw nb::value_error(
                         "is_valid_placement: provide min_dist or margin_sq");
                 }
-                return self.scene.is_valid_placement(part.solid, ms);
+                return self.scene.is_valid_placement(part.plane, ms);
             },
             nb::arg("part"),
             nb::arg("min_dist") = nb::none(),
@@ -82,7 +82,7 @@ void bind_batch_api(nb::module_ &m) {
                         "query_any_violation: provide min_dist or margin_sq");
                 }
                 return self.scene.query_any_violation(
-                    part.solid, ms, distance_margin);
+                    part.plane, ms, distance_margin);
             },
             nb::arg("part"),
             nb::arg("min_dist") = nb::none(),
@@ -106,12 +106,12 @@ void bind_batch_api(nb::module_ &m) {
             // Scene owns solids via move-into-build (not solid-only extract / ptr Scene).
             // search_radius is a distance margin / cast horizon, NOT an aura multiplier.
             scene.build(
-                solids_from_holders(std::move(obstacles)),
+                planes_from_holders(std::move(obstacles)),
                 static_cast<Vec2d::Scalar>(0.5));
 
-            std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
+            std::unordered_map<long long, PlaneGeometry2d> rotated_by_angle_key;
             auto angle_key = [](double angle) -> long long {
-                return static_cast<long long>(std::llround(angle * 1e6));
+                return angle_cache_key_bits(angle);
             };
 
             // Buffer contract: flags[i] for transforms[i]; n_flags == n_transforms.
@@ -126,11 +126,11 @@ void bind_batch_api(nb::module_ &m) {
                 const long long key = angle_key(angle);
                 auto it = rotated_by_angle_key.find(key);
                 if (it == rotated_by_angle_key.end()) {
-                    SolidGeometry2d rotated = part.solid;
+                    PlaneGeometry2d rotated = part.plane;
                     rotated = rotated.rotate(static_cast<Vec2d::Scalar>(angle));
                     it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
                 }
-                SolidGeometry2d placed = it->second;
+                PlaneGeometry2d placed = it->second;
                 placed = placed.translate(Vec2d({x, y}));
                 flags[i] = scene.is_valid_placement(
                                placed, static_cast<Vec2d::Scalar>(margin_sq))
@@ -159,14 +159,14 @@ void bind_batch_api(nb::module_ &m) {
            nb::handle current_position,
            const GuidanceConfig2d &config) {
             (void)current_position;
-            std::vector<SolidGeometry2d> polys =
-                solids_from_holders(std::move(obstacles));
-            polys.insert(polys.begin(), SolidGeometry2d{});
+            std::vector<PlaneGeometry2d> polys =
+                planes_from_holders(std::move(obstacles));
+            polys.insert(polys.begin(), PlaneGeometry2d{});
 
             std::vector<PlacementGuidance2d> out;
             out.reserve(transforms.size());
             for (const auto &[x, y, angle] : transforms) {
-                polys[0] = part.solid.rotate(static_cast<Vec2d::Scalar>(angle))
+                polys[0] = part.plane.rotate(static_cast<Vec2d::Scalar>(angle))
                                .translate(Vec2d({x, y}));
                 out.push_back(evaluate_local_placement<Vec2d>(
                     0, polys, Vec2d({x, y}), config));
@@ -186,13 +186,13 @@ void bind_batch_api(nb::module_ &m) {
            const std::vector<std::tuple<double, double, double>> &transforms,
            std::vector<GeometryHolder> obstacles,
            const GuidanceConfig2d &config) {
-            std::vector<SolidGeometry2d> polys =
-                solids_from_holders(std::move(obstacles));
-            polys.insert(polys.begin(), SolidGeometry2d{});
+            std::vector<PlaneGeometry2d> polys =
+                planes_from_holders(std::move(obstacles));
+            polys.insert(polys.begin(), PlaneGeometry2d{});
 
-            std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
+            std::unordered_map<long long, PlaneGeometry2d> rotated_by_angle_key;
             auto angle_key = [](double angle) -> long long {
-                return static_cast<long long>(std::llround(angle * 1e6));
+                return angle_cache_key_bits(angle);
             };
 
             std::vector<std::tuple<bool, double>> out;
@@ -201,11 +201,11 @@ void bind_batch_api(nb::module_ &m) {
                 const long long key = angle_key(angle);
                 auto it = rotated_by_angle_key.find(key);
                 if (it == rotated_by_angle_key.end()) {
-                    SolidGeometry2d rotated = part.solid;
+                    PlaneGeometry2d rotated = part.plane;
                     rotated = rotated.rotate(static_cast<Vec2d::Scalar>(angle));
                     it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
                 }
-                SolidGeometry2d placed = it->second;
+                PlaneGeometry2d placed = it->second;
                 placed = placed.translate(Vec2d({x, y}));
                 polys[0] = placed;
                 PlacementGuidance2d g =
@@ -222,15 +222,15 @@ void bind_batch_api(nb::module_ &m) {
 
     // P1: margin-0 Penetrating batch (emit_packing_clear SoT). Not Scene
     // batch_check_validity (Q13/Q327 — Scene uses min_dist+ε margin).
-    // AABB BVH prefilters obstacle indices; narrow phase stays solids_packing_collide.
+    // AABB BVH prefilters obstacle indices; narrow phase stays planes_packing_collide.
     m.def(
         "batch_packing_clear",
         [](const GeometryHolder &part,
            const std::vector<std::tuple<double, double, double>> &transforms,
            const std::vector<GeometryHolder> &obstacles) {
-            std::unordered_map<long long, SolidGeometry2d> rotated_by_angle_key;
+            std::unordered_map<long long, PlaneGeometry2d> rotated_by_angle_key;
             auto angle_key = [](double angle) -> long long {
-                return static_cast<long long>(std::llround(angle * 1e6));
+                return angle_cache_key_bits(angle);
             };
 
             AabbTree aabb_tree;
@@ -239,8 +239,8 @@ void bind_batch_api(nb::module_ &m) {
             bool aabb_ok = false;
             if (!obstacles.empty()) {
                 for (std::size_t i = 0; i < obstacles.size(); ++i) {
-                    solid_bounding_circle_ltrb(
-                        obstacles[i].solid, obs_ltrb.data() + 4 * i);
+                    plane_bounding_circle_ltrb(
+                        obstacles[i].plane, obs_ltrb.data() + 4 * i);
                 }
                 aabb_ok = aabb_tree_rebuild_boxes(
                     obs_ltrb.data(), obstacles.size(), aabb_tree);
@@ -263,16 +263,16 @@ void bind_batch_api(nb::module_ &m) {
                 const long long key = angle_key(angle);
                 auto it = rotated_by_angle_key.find(key);
                 if (it == rotated_by_angle_key.end()) {
-                    SolidGeometry2d rotated = part.solid;
+                    PlaneGeometry2d rotated = part.plane;
                     rotated = rotated.rotate(static_cast<Vec2d::Scalar>(angle));
                     it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
                 }
-                SolidGeometry2d placed = it->second;
+                PlaneGeometry2d placed = it->second;
                 placed = placed.translate(Vec2d({x, y}));
                 std::size_t n_hit = 0;
                 if (aabb_ok) {
                     double pl[4];
-                    solid_bounding_circle_ltrb(placed, pl);
+                    plane_bounding_circle_ltrb(placed, pl);
                     if (aabb2_ltrb_valid(pl[0], pl[1], pl[2], pl[3])) {
                         n_hit = aabb_tree_query_box(
                             aabb_tree,
@@ -298,9 +298,9 @@ void bind_batch_api(nb::module_ &m) {
                 }
                 bool clear = true;
                 for (std::size_t i = 0; i < n_hit; ++i) {
-                    if (solids_packing_collide(
+                    if (planes_packing_collide(
                             placed,
-                            obstacles[static_cast<std::size_t>(cands[i])].solid)) {
+                            obstacles[static_cast<std::size_t>(cands[i])].plane)) {
                         clear = false;
                         break;
                     }

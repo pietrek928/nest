@@ -4,11 +4,11 @@
 #include "geometry/tests/geometry_test_helpers.h"
 
 using PolyTestVec2 = Vec<2, double>;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 constexpr double kTol = 1e-9;
 
-PolyTestVec2 find_point(const SolidGeometry2& g, double x, double y) {
+PolyTestVec2 find_point(const PlaneGeometry2& g, double x, double y) {
     for (const auto& p : g.line_points) {
         if (polytest_near(p[0], x, kTol) && polytest_near(p[1], y, kTol)) {
             return p;
@@ -17,15 +17,15 @@ PolyTestVec2 find_point(const SolidGeometry2& g, double x, double y) {
     return PolyTestVec2({-1e9, -1e9});
 }
 
-TEST_CASE("SolidGeometry: translate moves line points", "[transform]") {
-    SolidGeometry2 square = polygon_from_quad({
+TEST_CASE("PlaneGeometry: translate moves line points", "[transform]") {
+    PlaneGeometry2 square = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
         {0, 1},
     });
 
-    SolidGeometry2 moved = square.translate(PolyTestVec2({1.0, 2.0}));
+    PlaneGeometry2 moved = square.translate(PolyTestVec2({1.0, 2.0}));
 
     REQUIRE(find_point(moved, 1.0, 2.0)[0] == 1.0);
     REQUIRE(find_point(moved, 2.0, 2.0)[0] == 2.0);
@@ -33,8 +33,8 @@ TEST_CASE("SolidGeometry: translate moves line points", "[transform]") {
     REQUIRE(find_point(moved, 1.0, 3.0)[0] == 1.0);
 }
 
-TEST_CASE("SolidGeometry: rotate 90 degrees about origin", "[transform]") {
-    SolidGeometry2 square = polygon_from_quad({
+TEST_CASE("PlaneGeometry: rotate 90 degrees about origin", "[transform]") {
+    PlaneGeometry2 square = polygon_from_quad({
         {0, 0},
         {1, 0},
         {1, 1},
@@ -42,7 +42,7 @@ TEST_CASE("SolidGeometry: rotate 90 degrees about origin", "[transform]") {
     });
 
     const double half_pi = 0.5 * M_PI;
-    SolidGeometry2 rotated = square.rotate(half_pi);
+    PlaneGeometry2 rotated = square.rotate(half_pi);
 
     REQUIRE(polytest_near(find_point(rotated, 0.0, 1.0)[0], 0.0));
     REQUIRE(polytest_near(find_point(rotated, 0.0, 1.0)[1], 1.0));
@@ -50,8 +50,8 @@ TEST_CASE("SolidGeometry: rotate 90 degrees about origin", "[transform]") {
     REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[1], 0.0));
 }
 
-TEST_CASE("SolidGeometry: rotate about arbitrary origin", "[transform]") {
-    SolidGeometry2 square = polygon_from_quad({
+TEST_CASE("PlaneGeometry: rotate about arbitrary origin", "[transform]") {
+    PlaneGeometry2 square = polygon_from_quad({
         {0, 0},
         {2, 0},
         {2, 2},
@@ -60,7 +60,7 @@ TEST_CASE("SolidGeometry: rotate about arbitrary origin", "[transform]") {
 
     PolyTestVec2 origin({1.0, 1.0});
     const double angle = M_PI;
-    SolidGeometry2 rotated = square.rotate(angle, origin);
+    PlaneGeometry2 rotated = square.rotate(angle, origin);
 
     REQUIRE(polytest_near(find_point(rotated, 2.0, 2.0)[0], 2.0));
     REQUIRE(polytest_near(find_point(rotated, 2.0, 2.0)[1], 2.0));
@@ -68,8 +68,8 @@ TEST_CASE("SolidGeometry: rotate about arbitrary origin", "[transform]") {
     REQUIRE(polytest_near(find_point(rotated, 0.0, 0.0)[1], 0.0));
 }
 
-TEST_CASE("SolidGeometry: translate preserves boundary ring metadata", "[transform]") {
-    SolidGeometry2 poly = polygon_from_quad({
+TEST_CASE("PlaneGeometry: translate preserves boundary ring metadata", "[transform]") {
+    PlaneGeometry2 poly = polygon_from_quad({
         {0, 0},
         {4, 0},
         {4, 4},
@@ -86,7 +86,7 @@ TEST_CASE("SolidGeometry: translate preserves boundary ring metadata", "[transfo
     const std::size_t ring_count = poly.boundary_rings.size();
     REQUIRE(ring_count >= 2);
 
-    SolidGeometry2 moved = poly.translate(PolyTestVec2({10.0, -5.0}));
+    PlaneGeometry2 moved = poly.translate(PolyTestVec2({10.0, -5.0}));
 
     REQUIRE(moved.boundary_rings.size() == ring_count);
     bool found_subtractive = false;

@@ -1,6 +1,8 @@
 """Pure Shapely geometry factories for tests (no pytest)."""
 
-from shapely.geometry import Polygon, box
+import math
+
+from shapely.geometry import MultiPolygon, Polygon, box
 
 from nest_graph.utils import normalize_poly
 
@@ -41,6 +43,27 @@ def donut(
     return box(0, 0, outer, outer).difference(box(hole_min, hole_min, hole_max, hole_max))
 
 
+def off_center_donut() -> Polygon:
+    """Outer 0..10 with hole shifted to expose centroid bias."""
+    return Polygon(
+        shell=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        holes=[[(1, 1), (4, 1), (4, 4), (1, 4)]],
+    )
+
+
+def plate_with_l_hole() -> Polygon:
+    """Square plate with concave L-shaped hole (G2 concave-hole bar case)."""
+    return Polygon(
+        shell=[(0, 0), (10, 0), (10, 10), (0, 10)],
+        holes=[[(2, 2), (8, 2), (8, 4), (4, 4), (4, 8), (2, 8)]],
+    )
+
+
+def concave_hole_crossing_bar() -> Polygon:
+    """All vertices in L-hole void; body crosses solid peninsula."""
+    return Polygon([(2.5, 5), (3.5, 5), (5.5, 3), (4.5, 3)])
+
+
 def l_shape() -> Polygon:
     return normalize_poly(Polygon([(0, 0), (4, 0), (4, 2), (2, 2), (2, 4), (0, 4)]))
 
@@ -63,6 +86,50 @@ def c_shape() -> Polygon:
             (0, 6),
         ]
     )
+
+
+def c_shape_10() -> Polygon:
+    """10x10 C matching C++ polygon_c_shape_three_parts silhouette."""
+    return Polygon(
+        [
+            (0, 0),
+            (10, 0),
+            (10, 2),
+            (2, 2),
+            (2, 8),
+            (10, 8),
+            (10, 10),
+            (0, 10),
+        ]
+    )
+
+
+def multi_unit_squares() -> MultiPolygon:
+    return MultiPolygon(
+        [
+            Polygon([(0, 0), (1, 0), (1, 1), (0, 1)]),
+            Polygon([(3, 0), (4, 0), (4, 1), (3, 1)]),
+        ]
+    )
+
+
+def cw_hole_donut() -> Polygon:
+    """Explicit CW hole ring (Shapely may normalize; exterior CCW)."""
+    outer = [(0, 0), (6, 0), (6, 6), (0, 6)]
+    hole_cw = [(2, 2), (2, 4), (4, 4), (4, 2)]  # CW
+    return Polygon(shell=outer, holes=[hole_cw])
+
+
+def skinny_rect() -> Polygon:
+    return box(0.0, 0.0, 100.0, 1.0)
+
+
+def tessellated_circle(num_segments: int = 128, radius: float = 5.0) -> Polygon:
+    pts = []
+    for i in range(num_segments):
+        angle = 2.0 * math.pi * i / num_segments
+        pts.append((radius * math.cos(angle), radius * math.sin(angle)))
+    return Polygon(pts)
 
 
 def notch_square() -> Polygon:

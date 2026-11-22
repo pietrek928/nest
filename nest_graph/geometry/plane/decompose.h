@@ -4,7 +4,7 @@
 #include <cmath>
 #include <random>
 #include <vector>
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 
 template <class VecType>
@@ -34,7 +34,7 @@ inline typename VecType::Scalar compute_turn_direction(
 template <class VecType>
 inline void process_boundary_to_convex_segments(
     const std::vector<VecType>& loop,
-    SolidGeometry<VecType>& out_mesh,
+    PlaneGeometry<VecType>& out_mesh,
     std::mt19937& gen,
     bool subtractive = false,
     typename VecType::Scalar epsilon = static_cast<typename VecType::Scalar>(1e-6)
@@ -134,12 +134,13 @@ inline void process_boundary_to_convex_segments(
 // FACTORY DISPATCHER
 // -------------------------------------------------------------------------
 template <class VecType>
-SolidGeometry<VecType> decompose_complex_polygon(
+PlaneGeometry<VecType> decompose_complex_polygon(
     const std::vector<std::vector<VecType>>& outer_boundaries,
     const std::vector<std::vector<VecType>>& holes
 ) {
-    SolidGeometry<VecType> composed_mesh;
-    std::mt19937 gen(std::random_device{}());
+    PlaneGeometry<VecType> composed_mesh;
+    // Fixed seed: Welzl shuffle is hygiene/repro only (not a dual bit-identity gate).
+    std::mt19937 gen(42u);
 
     for (const auto& outer : outer_boundaries) {
         composed_mesh.add_boundary_ring(outer, /*subtractive=*/false);

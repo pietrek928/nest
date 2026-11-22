@@ -5,7 +5,7 @@
 
 #include "se2.h"
 
-/** Contact GRG edge metadata (no SolidGeometry deps — bindable from graph). */
+/** Contact GRG edge metadata (no PlaneGeometry deps — bindable from graph). */
 
 struct ContactEdge {
     int32_t gid_a = -1;

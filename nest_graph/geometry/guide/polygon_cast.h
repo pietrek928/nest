@@ -6,7 +6,7 @@
 #include <type_traits>
 
 #include "common/aabb_tree.h"
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 #include "common/geometry_common.h"
 #include "convex/cast.h"
 
@@ -108,7 +108,7 @@ inline bool moving_circle_intersects_static_circle(
 template <class VecType, class Tracer = DefaultTracer>
 ComplexCastResult<VecType> find_closest_polygon_cast(
     int active_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -238,7 +238,7 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
     int active_poly_idx,
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -303,8 +303,8 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts(
 // Cast active vs obstacles without packing into a combined owned vector.
 template <class VecType, class Tracer = DefaultTracer>
 ComplexCastResult<VecType> find_closest_polygon_cast_vs_obstacles(
-    const SolidGeometry<VecType>& active_poly,
-    const std::vector<SolidGeometry<VecType>>& obstacles,
+    const PlaneGeometry<VecType>& active_poly,
+    const std::vector<PlaneGeometry<VecType>>& obstacles,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -364,8 +364,8 @@ ComplexCastResult<VecType> find_closest_polygon_cast_vs_obstacles(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexCastResult<VecType>> find_all_polygon_casts_vs_obstacles(
-    const SolidGeometry<VecType>& active_poly,
-    const std::vector<SolidGeometry<VecType>>& obstacles,
+    const PlaneGeometry<VecType>& active_poly,
+    const std::vector<PlaneGeometry<VecType>>& obstacles,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -426,7 +426,7 @@ std::vector<ComplexCastResult<VecType>> find_all_polygon_casts_vs_obstacles(
 template <class VecType, class Tracer = DefaultTracer>
 ComplexCastResult<VecType> find_closest_polygon_cast(
     int active_poly_idx,
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -495,8 +495,8 @@ ComplexCastResult<VecType> find_closest_polygon_cast(
 
 template <class VecType, class Tracer = DefaultTracer>
 ComplexCastResult<VecType> find_closest_polygon_cast_vs_obstacles(
-    const SolidGeometry<VecType>& active_poly,
-    const std::vector<const SolidGeometry<VecType>*>& obstacles,
+    const PlaneGeometry<VecType>& active_poly,
+    const std::vector<const PlaneGeometry<VecType>*>& obstacles,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr
@@ -559,8 +559,8 @@ ComplexCastResult<VecType> find_closest_polygon_cast_vs_obstacles(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<ComplexCastResult<VecType>> find_all_polygon_casts_vs_obstacles(
-    const SolidGeometry<VecType>& active_poly,
-    const std::vector<const SolidGeometry<VecType>*>& obstacles,
+    const PlaneGeometry<VecType>& active_poly,
+    const std::vector<const PlaneGeometry<VecType>*>& obstacles,
     const VecType& slide_vector,
     typename VecType::Scalar max_t_limit = std::numeric_limits<typename VecType::Scalar>::max(),
     Tracer* tracer = nullptr

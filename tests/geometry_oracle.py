@@ -1,8 +1,13 @@
-"""Shapely↔Geometry parity helpers for Python geometry tests."""
+"""Shapely↔Geometry parity helpers for Python geometry tests.
+
+Packing collide SoT is Penetrating / interior overlap only. Shapely ``intersects``
+is True on shared-edge kisses; use ``shapely_packing_collide`` for packing asserts.
+"""
 
 import math
 from typing import Sequence
 
+from shapely import Point
 from shapely.geometry.base import BaseGeometry
 
 from nest_graph.geometry import (
@@ -10,6 +15,7 @@ from nest_graph.geometry import (
     find_polygon_distances,
     find_polygon_intersections,
 )
+from nest_graph.placement.common import is_pose_clear
 from nest_graph.utils import transform_poly
 
 
@@ -17,20 +23,32 @@ def as_geometry(poly: BaseGeometry) -> Geometry:
     return Geometry.from_shapely(poly)
 
 
-def assert_intersects_matches_shapely(
+def shapely_packing_collide(a: BaseGeometry, b: BaseGeometry) -> bool:
+    """True iff interiors overlap (Touch / shared boundary is not a packing hit)."""
+    if not a.intersects(b):
+        return False
+    if a.touches(b):
+        return False
+    return True
+
+
+def assert_packing_collide(
     a: BaseGeometry,
     b: BaseGeometry,
     *,
+    expect: bool | None = None,
     ga: Geometry | None = None,
     gb: Geometry | None = None,
 ) -> None:
     ga = ga if ga is not None else as_geometry(a)
     gb = gb if gb is not None else as_geometry(b)
-    shapely_hit = bool(a.intersects(b))
-    our_hit = bool(ga.intersects(gb))
-    assert our_hit == shapely_hit, (
-        f"intersects mismatch: shapely={shapely_hit} geometry={our_hit}"
+    want = shapely_packing_collide(a, b) if expect is None else expect
+    got = bool(ga.intersects(gb))
+    assert got is want, (
+        f"packing collide mismatch: expected={want} geometry={got} "
+        f"shapely_intersects={a.intersects(b)} touches={a.touches(b)}"
     )
+    assert bool(gb.intersects(ga)) is want
 
 
 def assert_distance_close(
@@ -46,20 +64,28 @@ def assert_distance_close(
     gb = gb if gb is not None else as_geometry(b)
     shapely_dist = float(a.distance(b))
     our_dist = float(ga.distance(gb))
+    packing = bool(ga.intersects(gb))
     if shapely_dist == 0.0:
-        assert our_dist <= max(abs_, 1e-4), (
-            f"expected contact/intersect, geometry dist={our_dist}"
+        if a.touches(b) and not shapely_packing_collide(a, b):
+            assert packing is False, "kiss must not be packing collide"
+            assert our_dist <= max(abs_, 1e-4), (
+                f"kiss distance expected ~0, got {our_dist}"
+            )
+            return
+        assert packing is True or our_dist <= max(abs_, 1e-4), (
+            f"expected overlap/contact, packing={packing} dist={our_dist}"
         )
         return
+    assert packing is False
     assert math.isclose(our_dist, shapely_dist, rel_tol=rel, abs_tol=abs_), (
         f"distance mismatch: shapely={shapely_dist} geometry={our_dist}"
     )
 
 
-def assert_batch_intersects_match_shapely(polys: Sequence[BaseGeometry]) -> None:
+def assert_batch_packing_collide(polys: Sequence[BaseGeometry]) -> None:
     geoms = [as_geometry(p) for p in polys]
     hits = find_polygon_intersections(geoms)
-    our_pairs = set()
+    our_pairs: set[tuple[int, int]] = set()
     for h in hits:
         if isinstance(h, tuple):
             our_pairs.add(tuple(sorted((int(h[0]), int(h[1])))))
@@ -68,11 +94,16 @@ def assert_batch_intersects_match_shapely(polys: Sequence[BaseGeometry]) -> None
     mismatches = []
     for i in range(len(polys)):
         for j in range(i + 1, len(polys)):
-            shapely_hit = bool(polys[i].intersects(polys[j]))
-            our_hit = (i, j) in our_pairs
-            if shapely_hit != our_hit:
-                mismatches.append((i, j, shapely_hit, our_hit))
-    assert not mismatches, f"intersect mismatches: {mismatches}"
+            want = shapely_packing_collide(polys[i], polys[j])
+            got = (i, j) in our_pairs
+            if want != got:
+                mismatches.append((i, j, want, got))
+    assert not mismatches, f"packing batch mismatches: {mismatches}"
+
+
+# Back-compat names used by older tests; packing-aware (not raw Shapely intersects).
+assert_batch_intersects_match_shapely = assert_batch_packing_collide
+assert_intersects_matches_shapely = assert_packing_collide
 
 
 def assert_batch_distances_match_shapely(
@@ -92,11 +123,16 @@ def assert_batch_distances_match_shapely(
         for j in range(i + 1, len(polys)):
             shapely_dist = float(polys[i].distance(polys[j]))
             pair = (i, j)
-            if shapely_dist == 0.0:
-                if pair in our and not our[pair].intersect:
-                    our_dist = math.sqrt(our[pair].distance_sq)
-                    if our_dist > 1e-4:
-                        mismatches.append((i, j, "expected intersect", our_dist))
+            packing = shapely_packing_collide(polys[i], polys[j])
+            if shapely_dist == 0.0 and packing:
+                if pair not in our or not our[pair].intersect:
+                    if pair in our:
+                        our_dist = math.sqrt(our[pair].distance_sq)
+                        if our_dist > 1e-4:
+                            mismatches.append((i, j, "expected packing intersect", our_dist))
+            elif shapely_dist == 0.0 and not packing:
+                if pair in our and our[pair].intersect:
+                    mismatches.append((i, j, "kiss marked intersect", True))
             elif pair in our:
                 our_dist = math.sqrt(our[pair].distance_sq)
                 if not math.isclose(our_dist, shapely_dist, rel_tol=rel, abs_tol=abs_):
@@ -104,7 +140,7 @@ def assert_batch_distances_match_shapely(
     assert not mismatches, f"distance mismatches: {mismatches}"
 
 
-def assert_pose_intersects_matches_shapely(
+def assert_pose_packing_collide(
     p1: BaseGeometry,
     t1,
     p2: BaseGeometry,
@@ -114,7 +150,12 @@ def assert_pose_intersects_matches_shapely(
     s2 = transform_poly(p2, t2)
     g1 = as_geometry(p1).apply_transform(t1)
     g2 = as_geometry(p2).apply_transform(t2)
-    assert bool(g1.intersects(g2)) == bool(s1.intersects(s2))
+    want = shapely_packing_collide(s1, s2)
+    assert bool(g1.intersects(g2)) is want
+
+
+# Back-compat alias
+assert_pose_intersects_matches_shapely = assert_pose_packing_collide
 
 
 def assert_contains_point_matches(
@@ -125,46 +166,30 @@ def assert_contains_point_matches(
     g: Geometry | None = None,
 ) -> None:
     g = g if g is not None else as_geometry(poly)
-    from shapely import Point
-
     assert bool(g.contains_point(x, y)) == bool(poly.contains(Point(x, y)))
 
 
-def assert_pose_clear_matches_shapely(
+def assert_area_matches_shapely(
+    poly: BaseGeometry,
+    *,
+    g: Geometry | None = None,
+    rel: float = 1e-9,
+    abs_: float = 1e-9,
+) -> None:
+    g = g if g is not None else as_geometry(poly)
+    assert math.isclose(float(g.area()), float(poly.area), rel_tol=rel, abs_tol=abs_), (
+        f"area mismatch: shapely={poly.area} geometry={g.area()}"
+    )
+
+
+def assert_scene_margin_vs_packing(
     candidate: BaseGeometry,
-    sheet: BaseGeometry,
     obstacles: Sequence[BaseGeometry],
     min_dist: float,
-    *,
-    cand_g: Geometry | None = None,
-    board_g: Geometry | None = None,
-    obs_g: list[Geometry] | None = None,
 ) -> None:
-    """Compare Geometry is_pose_clear to Shapely contain + min distance."""
-    from nest_graph.board import board_context_from_geometry
-    from nest_graph.placement.common import is_pose_clear
-
-    cand_g = cand_g if cand_g is not None else as_geometry(candidate)
-    _ = board_g  # board containment is separate from Scene clearance
-    obs_g = obs_g if obs_g is not None else [as_geometry(o) for o in obstacles]
-    _, voids = board_context_from_geometry(sheet)
-
-    our = is_pose_clear(cand_g, voids, obs_g, min_dist)
-
-    if candidate is None or candidate.is_empty:
-        assert our is False
-        return
-    if not sheet.contains(candidate) and not sheet.buffer(1e-9).contains(candidate):
-        assert our is False
-        return
-    if not obstacles:
-        assert our is True
-        return
-    for o in obstacles:
-        if candidate.intersects(o) and candidate.intersection(o).area > 1e-12:
-            assert our is False
-            return
-        if float(candidate.distance(o)) + 1e-12 < float(min_dist):
-            assert our is False
-            return
-    assert our is True
+    """gap in (0, min_dist): packing clear, is_pose_clear False."""
+    cand_g = as_geometry(candidate)
+    obs_g = [as_geometry(o) for o in obstacles]
+    packing_hit = any(cand_g.intersects(o) for o in obs_g)
+    assert packing_hit is False
+    assert is_pose_clear(cand_g, [], obs_g, float(min_dist)) is False

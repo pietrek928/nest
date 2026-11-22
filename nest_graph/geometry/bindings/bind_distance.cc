@@ -83,7 +83,7 @@ void bind_distance_api(nb::module_ &m) {
         "find_polygon_distances",
         [](std::vector<GeometryHolder> polygons, double aura, double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solid_ptrs_from_holders(polygons),
+                plane_ptrs_from_holders(polygons),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },
@@ -98,7 +98,7 @@ void bind_distance_api(nb::module_ &m) {
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solid_ptrs_from_holders(polygons),
+                plane_ptrs_from_holders(polygons),
                 active_indices,
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
@@ -115,8 +115,8 @@ void bind_distance_api(nb::module_ &m) {
            double aura,
            double distance_margin) {
             return find_polygon_distances<Vec2d>(
-                solid_ptrs_from_holders(set_a),
-                solid_ptrs_from_holders(set_b),
+                plane_ptrs_from_holders(set_a),
+                plane_ptrs_from_holders(set_b),
                 static_cast<Vec2d::Scalar>(aura),
                 static_cast<Vec2d::Scalar>(distance_margin));
         },
@@ -128,7 +128,7 @@ void bind_distance_api(nb::module_ &m) {
     m.def(
         "min_distance_pair",
         [](const GeometryHolder &a, const GeometryHolder &b) {
-            return min_distance_pair(a.solid, b.solid);
+            return min_distance_pair(a.plane, b.plane);
         },
         nb::arg("a"),
         nb::arg("b"));
@@ -136,7 +136,7 @@ void bind_distance_api(nb::module_ &m) {
     m.def(
         "standoff_distance_pair",
         [](const GeometryHolder &part, const GeometryHolder &ring) {
-            return standoff_distance_pair(part.solid, ring.solid);
+            return standoff_distance_pair(part.plane, ring.plane);
         },
         nb::arg("part"),
         nb::arg("ring"));

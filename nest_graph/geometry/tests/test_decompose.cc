@@ -6,13 +6,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include "geometry/solid/decompose.h"
-#include "geometry/solid/point_in_solid.h"
-#include "geometry/solid/solid_geometry.h"
+#include "geometry/plane/decompose.h"
+#include "geometry/plane/point_in_plane.h"
+#include "geometry/plane/plane_geometry.h"
 #include <vec.h>
 
 using Vec2f = Vec<2, float>;
-using SolidGeometry2f = SolidGeometry<Vec2f>;
+using PlaneGeometry2f = PlaneGeometry<Vec2f>;
 
 void log_poly_xy_stderr(const char* tag, const std::vector<Vec2f>& poly) {
     if (!std::getenv("NEST_DECOMPOSE_DEBUG")) {
@@ -58,7 +58,7 @@ bool is_strictly_convex(const std::vector<VecType>& poly) {
     return true;
 }
 
-std::vector<std::vector<Vec2f>> mesh_line_parts(const SolidGeometry<Vec2f>& mesh) {
+std::vector<std::vector<Vec2f>> mesh_line_parts(const PlaneGeometry<Vec2f>& mesh) {
     std::vector<std::vector<Vec2f>> parts;
     parts.reserve(mesh.line_parts.size());
     for (size_t i = 0; i < mesh.line_parts.size(); ++i) {
@@ -69,8 +69,8 @@ std::vector<std::vector<Vec2f>> mesh_line_parts(const SolidGeometry<Vec2f>& mesh
     return parts;
 }
 
-void require_loads_into_solid_geometry(const std::vector<std::vector<Vec2f>>& parts) {
-    SolidGeometry2f poly;
+void require_loads_into_plane_geometry(const std::vector<std::vector<Vec2f>>& parts) {
+    PlaneGeometry2f poly;
     std::mt19937 gen(42);
     for (const auto& part : parts) {
         REQUIRE(part.size() >= 2u);
@@ -90,7 +90,7 @@ TEST_CASE("Geometry: Hertel-Mehlhorn L-Shape Optimization", "[decomposition]") {
         {{0.f, 0.f}}, {{6.f, 0.f}}, {{6.f, 2.f}}, {{2.f, 2.f}}, {{2.f, 6.f}}, {{0.f, 6.f}}};
 
     log_poly_xy_stderr("L-shape", l_shape);
-    SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({l_shape}, {});
+    PlaneGeometry2f mesh = decompose_complex_polygon<Vec2f>({l_shape}, {});
     auto convex_parts = mesh_line_parts(mesh);
 
     // More segments than HM convex pieces: boundary split at inflection, concavity, and >90° turns.
@@ -112,13 +112,13 @@ TEST_CASE("Geometry: The Bridge-Builder Donut Test", "[decomposition][holes]") {
 
     log_poly_xy_stderr("Donut outer", outer);
     log_holes_xy_stderr("Donut holes", holes);
-    SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({outer}, holes);
+    PlaneGeometry2f mesh = decompose_complex_polygon<Vec2f>({outer}, holes);
     auto convex_parts = mesh_line_parts(mesh);
 
     // Outer and hole rings each split into multiple convex linestrings.
     REQUIRE(convex_parts.size() == 8);
-    REQUIRE(is_point_inside_solid_space(Vec2f{{-3.f, -3.f}}, mesh));
-    REQUIRE_FALSE(is_point_inside_solid_space(Vec2f{{0.f, 0.f}}, mesh));
+    REQUIRE(is_point_inside_plane_space(Vec2f{{-3.f, -3.f}}, mesh));
+    REQUIRE_FALSE(is_point_inside_plane_space(Vec2f{{0.f, 0.f}}, mesh));
 }
 
 TEST_CASE("Geometry: Winding Order Auto-Correction", "[decomposition]") {
@@ -126,18 +126,18 @@ TEST_CASE("Geometry: Winding Order Auto-Correction", "[decomposition]") {
         {{0.f, 10.f}}, {{10.f, 0.f}}, {{0.f, 0.f}}};
 
     log_poly_xy_stderr("CW triangle", cw_triangle);
-    SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({cw_triangle}, {});
+    PlaneGeometry2f mesh = decompose_complex_polygon<Vec2f>({cw_triangle}, {});
     auto convex_parts = mesh_line_parts(mesh);
 
     REQUIRE(convex_parts.size() == 3); // CW triangle splits at every turn because it's seen as concave
     // REQUIRE(is_strictly_convex(convex_parts[0])); // Parts are just edges now, not strictly convex polygons
 }
 
-TEST_CASE("Geometry: Decomposition loads into SolidGeometry", "[decomposition]") {
+TEST_CASE("Geometry: Decomposition loads into PlaneGeometry", "[decomposition]") {
     std::vector<Vec2f> l_shape = {
         {{0.f, 0.f}}, {{6.f, 0.f}}, {{6.f, 2.f}}, {{2.f, 2.f}}, {{2.f, 6.f}}, {{0.f, 6.f}}};
     log_poly_xy_stderr("L-shape (polygon load)", l_shape);
-    require_loads_into_solid_geometry(mesh_line_parts(decompose_complex_polygon<Vec2f>({l_shape}, {})));
+    require_loads_into_plane_geometry(mesh_line_parts(decompose_complex_polygon<Vec2f>({l_shape}, {})));
 
     std::vector<Vec2f> outer = {
         {{-5.f, -5.f}}, {{5.f, -5.f}}, {{5.f, 5.f}}, {{-5.f, 5.f}}};
@@ -145,7 +145,7 @@ TEST_CASE("Geometry: Decomposition loads into SolidGeometry", "[decomposition]")
         {{-2.f, -2.f}}, {{2.f, -2.f}}, {{2.f, 2.f}}, {{-2.f, 2.f}}};
     log_poly_xy_stderr("Donut outer (polygon load)", outer);
     log_holes_xy_stderr("Donut holes (polygon load)", std::vector<std::vector<Vec2f>>{hole});
-    require_loads_into_solid_geometry(
+    require_loads_into_plane_geometry(
         mesh_line_parts(decompose_complex_polygon<Vec2f>({outer}, {hole})));
 }
 
@@ -166,7 +166,7 @@ TEST_CASE("Geometry: Complex Star Decomposition", "[decomposition][stress]") {
     };
 
     log_poly_xy_stderr("Star shape", star);
-    SolidGeometry2f mesh = decompose_complex_polygon<Vec2f>({star}, {});
+    PlaneGeometry2f mesh = decompose_complex_polygon<Vec2f>({star}, {});
     auto convex_parts = mesh_line_parts(mesh);
 
     // The greedy algorithm splits at every concave turn.

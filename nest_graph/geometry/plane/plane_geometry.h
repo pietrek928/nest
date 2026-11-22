@@ -1,11 +1,18 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 #include <cmath>
 #include <random>
 
 #include "circle.h" // Changed from <circle.h> to standard local include
+
+enum class ChainRole : uint8_t {
+    FilledConvex = 0,
+    Stroke = 1,
+    Point = 2
+};
 
 template <class VecType>
 inline VecType rotate_point_2d(
@@ -23,14 +30,44 @@ inline VecType rotate_point_2d(
     });
 }
 
+template <class VecType>
+inline typename VecType::Scalar ring_shoelace_abs_area(
+    const VecType *pts,
+    int n
+) {
+    using Scalar = typename VecType::Scalar;
+    if (pts == nullptr || n < 3) {
+        return static_cast<Scalar>(0);
+    }
+    Scalar ring_area = static_cast<Scalar>(0);
+    for (int i = 0; i < n; ++i) {
+        const auto &p1 = pts[i];
+        const auto &p2 = pts[(i + 1) % n];
+        ring_area += (p1[0] * p2[1]) - (p1[1] * p2[0]);
+    }
+    const Scalar signed_half = ring_area * static_cast<Scalar>(0.5);
+    return signed_half < static_cast<Scalar>(0) ? -signed_half : signed_half;
+}
+
+template <class VecType>
+inline typename VecType::Scalar ring_shoelace_abs_area(
+    const std::vector<VecType> &pts
+) {
+    return ring_shoelace_abs_area<VecType>(
+        pts.data(), static_cast<int>(pts.size()));
+}
+
 template<class VecType>
-class SolidGeometry {
+class PlaneGeometry {
     using Scalar = typename VecType::Scalar;
 
-    struct LineSolidGeometryEntry {
-        std::size_t start_point;
+public:
+    struct LinePlaneGeometryEntry {
+        std::size_t start_point = 0;
         Circle<VecType> bounding_circle;
         bool is_subtractive = false;  // hole boundary segments (void interior)
+        ChainRole role = ChainRole::FilledConvex;
+        bool closed = false;  // Stroke only: include last→first edge
     };
 
     struct BoundaryRing {
@@ -38,8 +75,7 @@ class SolidGeometry {
         bool is_subtractive = false;
     };
 
-public:
-    std::vector<LineSolidGeometryEntry> line_parts;
+    std::vector<LinePlaneGeometryEntry> line_parts;
     std::vector<VecType> line_points;
     std::vector<BoundaryRing> boundary_rings;
     Circle<VecType> bounding_circle;
@@ -56,12 +92,53 @@ public:
         std::mt19937& gen,
         bool subtractive = false
     ) {
-        line_parts.push_back({
-            line_points.size(),
-            compute_exact_bounding_circle<VecType>(line, n, gen),
-            subtractive
-        });
+        LinePlaneGeometryEntry entry;
+        entry.start_point = line_points.size();
+        entry.bounding_circle = compute_exact_bounding_circle<VecType>(line, n, gen);
+        entry.is_subtractive = subtractive;
+        entry.role = ChainRole::FilledConvex;
+        entry.closed = false;
+        line_parts.push_back(entry);
         line_points.insert(line_points.end(), line, line + n);
+    }
+
+    void append_stroke(
+        const VecType* line,
+        int n,
+        std::mt19937& gen,
+        bool closed = false
+    ) {
+        if (line == nullptr || n < 2) {
+            return;
+        }
+        LinePlaneGeometryEntry entry;
+        entry.start_point = line_points.size();
+        entry.bounding_circle = compute_exact_bounding_circle<VecType>(line, n, gen);
+        entry.is_subtractive = false;
+        entry.role = ChainRole::Stroke;
+        entry.closed = closed;
+        line_parts.push_back(entry);
+        line_points.insert(line_points.end(), line, line + n);
+    }
+
+    void append_point(const VecType& pt, std::mt19937& gen) {
+        LinePlaneGeometryEntry entry;
+        entry.start_point = line_points.size();
+        entry.bounding_circle = compute_exact_bounding_circle<VecType>(&pt, 1, gen);
+        entry.is_subtractive = false;
+        entry.role = ChainRole::Point;
+        entry.closed = false;
+        line_parts.push_back(entry);
+        line_points.push_back(pt);
+    }
+
+    bool has_non_filled_parts() const {
+        for (const auto& part : line_parts) {
+            if (part.role != ChainRole::FilledConvex) {
+                return true;
+            }
+        }
+        return false;
     }
 
     void finalize(std::mt19937& gen) {
@@ -92,26 +169,18 @@ public:
     // GEOMETRIC PROPERTIES
     // -------------------------------------------------------------------------
 
-    // Calculates exact net area. Because rings have proper winding directions,
-    // the Shoelace formula automatically yields negative area for holes,
-    // providing the exact physical mass footprint of the shape.
+    // Net footprint area. Holes are reverse_ring'd to the same winding as
+    // outers in decompose_complex_polygon, so shoelace sign alone is wrong —
+    // apply is_subtractive (outer add, hole subtract).
     Scalar area() const {
         Scalar total_area = 0;
 
         for (const auto& ring : boundary_rings) {
-            Scalar ring_area = 0;
-            int n = static_cast<int>(ring.points.size());
-            if (n < 3) continue;
-
-            for (int i = 0; i < n; ++i) {
-                const auto& p1 = ring.points[i];
-                const auto& p2 = ring.points[(i + 1) % n];
-                ring_area += (p1[0] * p2[1]) - (p1[1] * p2[0]);
-            }
-            total_area += ring_area;
+            const Scalar mag = ring_shoelace_abs_area(ring.points);
+            total_area += ring.is_subtractive ? -mag : mag;
         }
 
-        return total_area * static_cast<Scalar>(0.5);
+        return total_area;
     }
 
     const Circle<VecType>& get_bounding_circle() const {
@@ -135,8 +204,8 @@ public:
     // -------------------------------------------------------------------------
     // TRANSFORMATIONS
     // -------------------------------------------------------------------------
-    SolidGeometry translate(const VecType& offset) const {
-        SolidGeometry out = *this;
+    PlaneGeometry translate(const VecType& offset) const {
+        PlaneGeometry out = *this;
         for (auto& p : out.line_points) p = p + offset;
 
         for (auto& ring : out.boundary_rings) {
@@ -151,15 +220,15 @@ public:
         return out;
     }
 
-    SolidGeometry rotate(
+    PlaneGeometry rotate(
         Scalar angle,
         const VecType& origin = VecType({0, 0})
     ) const {
-        static_assert(VecType::dim == 2, "SolidGeometry::rotate requires 2D VecType");
+        static_assert(VecType::dim == 2, "PlaneGeometry::rotate requires 2D VecType");
 
         const Scalar cos_a = std::cos(angle);
         const Scalar sin_a = std::sin(angle);
-        SolidGeometry out = *this;
+        PlaneGeometry out = *this;
 
         for (auto& p : out.line_points) {
             p = rotate_point_2d(p, cos_a, sin_a, origin);

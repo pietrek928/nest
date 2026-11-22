@@ -1,9 +1,9 @@
 #pragma once
 
-// Arc-length densify of SolidGeometry boundary rings → interleaved xy sites.
+// Arc-length densify of PlaneGeometry boundary rings → interleaved xy sites.
 // Unifies Python densify_points / exterior perimeter sampling for Voronoi.
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 #include <cmath>
 #include <cstddef>
@@ -192,7 +192,7 @@ inline std::size_t sample_open_polyline_xy(
 //   return: number of sample *points* (not doubles). Does not allocate.
 template <class VecType>
 inline std::size_t sample_boundary_rings_n(
-    const SolidGeometry<VecType> &poly,
+    const PlaneGeometry<VecType> &poly,
     double step,
     bool exteriors_only
 ) {
@@ -241,7 +241,7 @@ inline std::size_t sample_boundary_rings_n(
 //   If out_cap_xy too small: write nothing, return 0.
 template <class VecType>
 inline std::size_t sample_boundary_rings_xy(
-    const SolidGeometry<VecType> &poly,
+    const PlaneGeometry<VecType> &poly,
     double step,
     bool exteriors_only,
     double *out_xy,

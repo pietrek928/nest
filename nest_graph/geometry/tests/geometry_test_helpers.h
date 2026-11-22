@@ -6,23 +6,23 @@
 #include <random>
 #include <vector>
 
-#include "geometry/solid/decompose.h"
-#include "geometry/solid/solid_geometry.h"
+#include "geometry/plane/decompose.h"
+#include "geometry/plane/plane_geometry.h"
 #include "geometry/common/tracer.h"
 #include <vec.h>
 
 using PolyTestVec2 = Vec<2, double>;
-using PolyTestSolidGeometry2 = SolidGeometry<PolyTestVec2>;
+using PolyTestPlaneGeometry2 = PlaneGeometry<PolyTestVec2>;
 
 inline bool polytest_near(double a, double b, double tol = 1e-9) {
     return std::abs(a - b) < tol;
 }
 
 // Single closed ring: one line part for GJK plus a boundary ring for point-in-solid.
-inline PolyTestSolidGeometry2 polygon_from_quad(
+inline PolyTestPlaneGeometry2 polygon_from_quad(
     std::initializer_list<std::initializer_list<double>> pts4
 ) {
-    PolyTestSolidGeometry2 poly;
+    PolyTestPlaneGeometry2 poly;
     std::vector<PolyTestVec2> ring;
     ring.reserve(5);
     for (const auto& p : pts4) {
@@ -42,10 +42,10 @@ inline PolyTestSolidGeometry2 polygon_from_quad(
 }
 
 // Concave or arbitrary closed ring: boundary ring + convex decomposition.
-inline PolyTestSolidGeometry2 polygon_from_ring(
+inline PolyTestPlaneGeometry2 polygon_from_ring(
     std::initializer_list<std::initializer_list<double>> pts
 ) {
-    PolyTestSolidGeometry2 poly;
+    PolyTestPlaneGeometry2 poly;
     std::vector<PolyTestVec2> ring;
     ring.reserve(pts.size() + 1);
     for (const auto& p : pts) {
@@ -69,7 +69,7 @@ inline PolyTestSolidGeometry2 polygon_from_ring(
     return poly;
 }
 
-inline PolyTestSolidGeometry2 make_box(double cx, double cy, double half_w, double half_h) {
+inline PolyTestPlaneGeometry2 make_box(double cx, double cy, double half_w, double half_h) {
     return polygon_from_quad({
         {cx - half_w, cy - half_h},
         {cx + half_w, cy - half_h},
@@ -78,8 +78,8 @@ inline PolyTestSolidGeometry2 make_box(double cx, double cy, double half_w, doub
     });
 }
 
-inline PolyTestSolidGeometry2 polygon_c_shape_three_parts() {
-    PolyTestSolidGeometry2 poly;
+inline PolyTestPlaneGeometry2 polygon_c_shape_three_parts() {
+    PolyTestPlaneGeometry2 poly;
     std::vector<PolyTestVec2> bottom{
         PolyTestVec2{{0.0, 0.0}},
         PolyTestVec2{{10.0, 0.0}},
@@ -112,14 +112,14 @@ inline PolyTestSolidGeometry2 polygon_c_shape_three_parts() {
     return poly;
 }
 
-inline PolyTestSolidGeometry2 make_donut(
+inline PolyTestPlaneGeometry2 make_donut(
     const std::vector<PolyTestVec2>& outer,
     const std::vector<PolyTestVec2>& hole
 ) {
     return decompose_complex_polygon<PolyTestVec2>({outer}, {hole});
 }
 
-inline PolyTestSolidGeometry2 polygon_outer_with_square_hole(
+inline PolyTestPlaneGeometry2 polygon_outer_with_square_hole(
     double ox0, double oy0, double ox1, double oy1,
     double hx0, double hy0, double hx1, double hy1
 ) {
@@ -138,7 +138,7 @@ inline PolyTestSolidGeometry2 polygon_outer_with_square_hole(
     return make_donut(outer, hole);
 }
 
-inline PolyTestSolidGeometry2 polygon_donut_with_square_hole() {
+inline PolyTestPlaneGeometry2 polygon_donut_with_square_hole() {
     std::vector<PolyTestVec2> outer{
         PolyTestVec2{{20.0, 0.0}},
         PolyTestVec2{{30.0, 0.0}},

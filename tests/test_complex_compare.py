@@ -1,9 +1,9 @@
 import math
-import pytest
+
 import numpy as np
-from shapely.geometry import Polygon, MultiPolygon
+import pytest
 from shapely import affinity
-from nest_graph.geometry import Geometry, find_polygon_intersections, find_polygon_distances
+from shapely.geometry import MultiPolygon, Polygon
 
 def create_star(num_points=5, outer_radius=10.0, inner_radius=4.0):
     pts = []
@@ -80,55 +80,14 @@ def complex_polygon_soup():
 
 
 def test_complex_intersections_match_shapely(complex_polygon_soup):
-    # 1. Convert all to our Geometry
-    geoms = [Geometry.from_shapely(p) for p in complex_polygon_soup]
-    
-    # 2. Run our batch intersection solver
-    results = find_polygon_intersections(geoms)
-    our_intersecting_pairs = set((r[0], r[1]) for r in results)
-    
-    # 3. Compare with Shapely ground truth
-    mismatches = []
-    for i in range(len(complex_polygon_soup)):
-        for j in range(i + 1, len(complex_polygon_soup)):
-            shapely_intersects = complex_polygon_soup[i].intersects(complex_polygon_soup[j])
-            our_intersects = (i, j) in our_intersecting_pairs
-            
-            if our_intersects != shapely_intersects:
-                mismatches.append((i, j, shapely_intersects, our_intersects))
-                
-    assert len(mismatches) == 0, f"Found {len(mismatches)} mismatches: {mismatches}"
+    # Packing SoT = Penetrating only (kiss ≠ packing hit).
+    from tests.geometry_oracle import assert_batch_packing_collide
+
+    assert_batch_packing_collide(complex_polygon_soup)
+
 
 def test_complex_distances_match_shapely(complex_polygon_soup):
-    geoms = [Geometry.from_shapely(p) for p in complex_polygon_soup]
-    
-    # Run batch distance solver with a large aura to capture all relevant pairs
-    results = find_polygon_distances(geoms, aura=100.0)
-    
-    # Map results by pair (always store as sorted tuple)
-    our_distances = {}
-    for r in results:
-        pair = tuple(sorted((r.polyA_idx, r.polyB_idx)))
-        our_distances[pair] = r
-    
-    mismatches = []
-    for i in range(len(complex_polygon_soup)):
-        for j in range(i + 1, len(complex_polygon_soup)):
-            shapely_dist = complex_polygon_soup[i].distance(complex_polygon_soup[j])
-            pair = (i, j)
-            
-            if shapely_dist == 0.0:
-                # If they intersect, our engine should report intersect == True
-                if pair in our_distances:
-                    if not our_distances[pair].intersect:
-                        # Allow micro-gaps due to float precision
-                        our_dist = math.sqrt(our_distances[pair].distance_sq)
-                        if our_dist > 1e-4:
-                            mismatches.append((i, j, "expected intersect", our_dist))
-            elif pair in our_distances:
-                our_dist = math.sqrt(our_distances[pair].distance_sq)
-                if not math.isclose(our_dist, shapely_dist, rel_tol=1e-4, abs_tol=1e-5):
-                    mismatches.append((i, j, shapely_dist, our_dist))
-                    
-    assert len(mismatches) == 0, f"Found {len(mismatches)} distance mismatches: {mismatches}"
+    from tests.geometry_oracle import assert_batch_distances_match_shapely
+
+    assert_batch_distances_match_shapely(complex_polygon_soup, aura=100.0)
 

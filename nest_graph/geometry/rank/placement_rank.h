@@ -12,7 +12,7 @@
 #include "bindings/geometry_factory.h"
 #include "common/geometry_common.h"
 #include "distance/static_collision_scene.h"
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 enum class PlacementRankMode : int {
     Clearance = 0,
@@ -87,9 +87,9 @@ inline void fill_rank_scales(PlacementRankConfig &cfg) {
 }
 
 template <class VecType>
-inline double solid_standoff_distance(
-    const SolidGeometry<VecType> &part,
-    const SolidGeometry<VecType> &ring
+inline double plane_standoff_distance(
+    const PlaneGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &ring
 ) {
     const auto pair = standoff_distance_pair(part, ring);
     if (pair.core.intersect) {
@@ -102,9 +102,9 @@ inline double solid_standoff_distance(
 }
 
 template <class VecType>
-inline double solid_min_distance(
-    const SolidGeometry<VecType> &a,
-    const SolidGeometry<VecType> &b
+inline double plane_min_distance(
+    const PlaneGeometry<VecType> &a,
+    const PlaneGeometry<VecType> &b
 ) {
     const auto pair = min_distance_pair(a, b);
     if (pair.core.intersect) {
@@ -118,7 +118,7 @@ inline double solid_min_distance(
 
 template <class VecType>
 inline void nearest_pack_distance(
-    const SolidGeometry<VecType> &placed,
+    const PlaneGeometry<VecType> &placed,
     const StaticCollisionScene<VecType> &scene,
     bool has_packed,
     double &out_clearance,
@@ -235,16 +235,16 @@ inline PlacementRankResult assemble_placement_rank(
 
 template <class VecType>
 inline PlacementRankResult score_placed_contact_hybrid(
-    const SolidGeometry<VecType> &placed,
-    const SolidGeometry<VecType> *board_ring,
+    const PlaneGeometry<VecType> &placed,
+    const PlaneGeometry<VecType> *board_ring,
     const StaticCollisionScene<VecType> &scene,
     bool has_packed,
-    const SolidGeometry<VecType> *focal,
+    const PlaneGeometry<VecType> *focal,
     const PlacementRankConfig &cfg
 ) {
     double d_board = 0.0;
     if (board_ring != nullptr) {
-        d_board = solid_standoff_distance(placed, *board_ring);
+        d_board = plane_standoff_distance(placed, *board_ring);
     }
     double clearance = 0.0;
     double d_pack = 0.0;
@@ -255,7 +255,7 @@ inline PlacementRankResult score_placed_contact_hybrid(
     double d_focal = 0.0;
     if (focal != nullptr) {
         has_focal = true;
-        d_focal = solid_min_distance(placed, *focal);
+        d_focal = plane_min_distance(placed, *focal);
     }
     return assemble_placement_rank(
         d_board, d_pack, clearance, penetrating, has_packed, has_focal, d_focal,
@@ -264,10 +264,10 @@ inline PlacementRankResult score_placed_contact_hybrid(
 
 template <class VecType>
 inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
-    const std::vector<SolidGeometry<VecType>> &placed,
-    const SolidGeometry<VecType> *board_ring,
-    std::vector<SolidGeometry<VecType>> packed_obstacles,
-    const SolidGeometry<VecType> *focal,
+    const std::vector<PlaneGeometry<VecType>> &placed,
+    const PlaneGeometry<VecType> *board_ring,
+    std::vector<PlaneGeometry<VecType>> packed_obstacles,
+    const PlaneGeometry<VecType> *focal,
     PlacementRankConfig cfg
 ) {
     fill_rank_scales(cfg);
@@ -288,10 +288,10 @@ inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
 // Sync-query bind path: score placed solids without deep-copying into an owned vector.
 template <class VecType>
 inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
-    const std::vector<const SolidGeometry<VecType> *> &placed,
-    const SolidGeometry<VecType> *board_ring,
-    std::vector<SolidGeometry<VecType>> packed_obstacles,
-    const SolidGeometry<VecType> *focal,
+    const std::vector<const PlaneGeometry<VecType> *> &placed,
+    const PlaneGeometry<VecType> *board_ring,
+    std::vector<PlaneGeometry<VecType>> packed_obstacles,
+    const PlaneGeometry<VecType> *focal,
     PlacementRankConfig cfg
 ) {
     fill_rank_scales(cfg);
@@ -314,11 +314,11 @@ inline std::vector<PlacementRankResult> batch_score_placed_contact_hybrid(
 
 template <class VecType>
 inline std::vector<PlacementRankResult> batch_rank_local_placements(
-    const SolidGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &part,
     const std::vector<std::tuple<double, double, double>> &transforms,
-    const SolidGeometry<VecType> *board_ring,
-    std::vector<SolidGeometry<VecType>> obstacles,
-    const SolidGeometry<VecType> *focal,
+    const PlaneGeometry<VecType> *board_ring,
+    std::vector<PlaneGeometry<VecType>> obstacles,
+    const PlaneGeometry<VecType> *focal,
     PlacementRankConfig cfg
 ) {
     fill_rank_scales(cfg);
@@ -328,9 +328,9 @@ inline std::vector<PlacementRankResult> batch_rank_local_placements(
         scene.build(std::move(obstacles), static_cast<typename VecType::Scalar>(0.5));
     }
 
-    std::unordered_map<long long, SolidGeometry<VecType>> rotated_by_angle_key;
+    std::unordered_map<long long, PlaneGeometry<VecType>> rotated_by_angle_key;
     auto angle_key = [](double angle) -> long long {
-        return static_cast<long long>(std::llround(angle * 1e6));
+        return angle_cache_key_bits(angle);
     };
 
     std::vector<PlacementRankResult> out;
@@ -339,11 +339,11 @@ inline std::vector<PlacementRankResult> batch_rank_local_placements(
         const long long key = angle_key(angle);
         auto it = rotated_by_angle_key.find(key);
         if (it == rotated_by_angle_key.end()) {
-            SolidGeometry<VecType> rotated =
+            PlaneGeometry<VecType> rotated =
                 part.rotate(static_cast<typename VecType::Scalar>(angle));
             it = rotated_by_angle_key.emplace(key, std::move(rotated)).first;
         }
-        SolidGeometry<VecType> placed = it->second;
+        PlaneGeometry<VecType> placed = it->second;
         placed = placed.translate(
             VecType({static_cast<typename VecType::Scalar>(x),
                      static_cast<typename VecType::Scalar>(y)}));

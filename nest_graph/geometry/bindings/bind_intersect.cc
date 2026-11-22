@@ -11,12 +11,12 @@ namespace nb = nanobind;
 
 void bind_intersect_api(nb::module_ &m) {
     // By-value holders keep solids alive for the call; engines take solid ptrs
-    // (no second owned SolidGeometry vector). Do not take const& — nanobind
-    // conversion temporaries can dangle into solid_ptrs_from_holders.
+    // (no second owned PlaneGeometry vector). Do not take const& — nanobind
+    // conversion temporaries can dangle into plane_ptrs_from_holders.
     m.def(
         "find_polygon_intersections",
         [](std::vector<GeometryHolder> polygons) {
-            return find_polygon_intersections<Vec2d>(solid_ptrs_from_holders(polygons));
+            return find_polygon_intersections<Vec2d>(plane_ptrs_from_holders(polygons));
         },
         nb::arg("polygons"));
 
@@ -26,7 +26,7 @@ void bind_intersect_api(nb::module_ &m) {
         [](std::vector<GeometryHolder> polygons) {
             DebugTracer tracer;
             auto hits = find_polygon_intersections<Vec2d>(
-                solid_ptrs_from_holders(polygons), &tracer);
+                plane_ptrs_from_holders(polygons), &tracer);
             return nb::make_tuple(
                 std::move(hits),
                 tracer.stat_sweep_pairs,
@@ -40,7 +40,7 @@ void bind_intersect_api(nb::module_ &m) {
         [](std::vector<GeometryHolder> polygons,
            const std::vector<int> &active_indices) {
             return find_polygon_intersections<Vec2d>(
-                solid_ptrs_from_holders(polygons), active_indices);
+                plane_ptrs_from_holders(polygons), active_indices);
         },
         nb::arg("polygons"),
         nb::arg("active_indices"));
@@ -50,7 +50,7 @@ void bind_intersect_api(nb::module_ &m) {
         [](std::vector<GeometryHolder> set_a,
            std::vector<GeometryHolder> set_b) {
             return find_polygon_intersections<Vec2d>(
-                solid_ptrs_from_holders(set_a), solid_ptrs_from_holders(set_b));
+                plane_ptrs_from_holders(set_a), plane_ptrs_from_holders(set_b));
         },
         nb::arg("set_a"),
         nb::arg("set_b"));

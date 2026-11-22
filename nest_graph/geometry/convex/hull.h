@@ -6,7 +6,7 @@
 #include <limits>
 #include <vector>
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 // Andrew's monotone chain. Returns CCW hull verts without a closing duplicate.
 // Collinear middle points on an edge are dropped.
@@ -79,19 +79,12 @@ inline typename VecType::Scalar convex_hull_area_of_points(
     if (hull.size() < 3) {
         return static_cast<Scalar>(0);
     }
-    Scalar area = static_cast<Scalar>(0);
-    const int m = static_cast<int>(hull.size());
-    for (int i = 0; i < m; ++i) {
-        const auto &p1 = hull[static_cast<std::size_t>(i)];
-        const auto &p2 = hull[static_cast<std::size_t>((i + 1) % m)];
-        area += p1[0] * p2[1] - p1[1] * p2[0];
-    }
-    return std::abs(area) * static_cast<Scalar>(0.5);
+    return ring_shoelace_abs_area(hull);
 }
 
 template <class VecType>
 inline void append_outer_ring_points(
-    const SolidGeometry<VecType> &g,
+    const PlaneGeometry<VecType> &g,
     std::vector<VecType> &out
 ) {
     bool any_ring = false;
@@ -108,8 +101,8 @@ inline void append_outer_ring_points(
 }
 
 template <class VecType>
-inline typename VecType::Scalar solid_convex_hull_area(
-    const SolidGeometry<VecType> &g
+inline typename VecType::Scalar plane_convex_hull_area(
+    const PlaneGeometry<VecType> &g
 ) {
     std::vector<VecType> pts;
     append_outer_ring_points(g, pts);
@@ -120,8 +113,8 @@ inline typename VecType::Scalar solid_convex_hull_area(
 }
 
 template <class VecType>
-inline typename VecType::Scalar solids_convex_hull_area(
-    const SolidGeometry<VecType> *const *solids,
+inline typename VecType::Scalar planes_convex_hull_area(
+    const PlaneGeometry<VecType> *const *solids,
     std::size_t n
 ) {
     using Scalar = typename VecType::Scalar;
@@ -141,13 +134,13 @@ inline typename VecType::Scalar solids_convex_hull_area(
 }
 
 template <class VecType>
-inline typename VecType::Scalar solids_convex_hull_area(
-    const std::vector<SolidGeometry<VecType>> &solids
+inline typename VecType::Scalar planes_convex_hull_area(
+    const std::vector<PlaneGeometry<VecType>> &solids
 ) {
-    std::vector<const SolidGeometry<VecType> *> ptrs;
+    std::vector<const PlaneGeometry<VecType> *> ptrs;
     ptrs.reserve(solids.size());
     for (const auto &s : solids) {
         ptrs.push_back(&s);
     }
-    return solids_convex_hull_area(ptrs.data(), ptrs.size());
+    return planes_convex_hull_area(ptrs.data(), ptrs.size());
 }

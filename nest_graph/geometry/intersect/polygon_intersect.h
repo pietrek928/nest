@@ -4,43 +4,14 @@
 #include <cmath>
 #include <utility>
 
-#include "solid/solid_geometry.h"
-#include "solid/containment.h"
+#include "plane/plane_geometry.h"
+#include "plane/containment.h"
 #include "common/geometry_common.h"
 #include "sweep/sweep_engine.h"
 #include "convex/intersect.h"
 
-// -------------------------------------------------------------------------
-// NARROW PHASE ROUTERS
-// -------------------------------------------------------------------------
-
-template <class VecType>
-inline bool narrow_phase_intersect(
-    const VecType* lsA, int nA,
-    const VecType* lsB, int nB,
-    int GRADIENT_THRESHOLD = 24
-) {
-    const VecType* p1 = (nA <= nB) ? lsA : lsB;
-    const int s1 = (nA <= nB) ? nA : nB;
-    const VecType* p2 = (nA <= nB) ? lsB : lsA;
-    const int s2 = (nA <= nB) ? nB : nA;
-
-    if (s1 + s2 > GRADIENT_THRESHOLD) {
-        return convex_linestrings_intersect_gjk_gradient<VecType>(p1, s1, p2, s2).intersect;
-    }
-    return convex_linestrings_intersect_gjk<VecType>(p1, s1, p2, s2).intersect;
-}
-
-// narrow_phase_contain: see containment.h (witness; requires disjoint boundaries).
-
-template <class VecType, class Tracer = DefaultTracer>
-inline bool check_part_vs_part(
-    const SolidGeometry<VecType>& polyA, int a_idx,
-    const SolidGeometry<VecType>& polyB, int b_idx,
-    Tracer* tracer = nullptr
-) {
-    return check_part_vs_part_intersect<VecType, Tracer>(polyA, a_idx, polyB, b_idx, tracer);
-}
+// Narrow-phase packing SoT: evaluate_narrow_phase / check_part_vs_part_intersect
+// in sweep/sweep_engine.h (Penetrating only). Witness contain: containment.h.
 
 // -------------------------------------------------------------------------
 // MAIN ENGINE ENTRY POINTS
@@ -48,7 +19,7 @@ inline bool check_part_vs_part(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     Tracer* tracer = nullptr
 ) {
     if (polygons.size() < 2) return {};
@@ -72,7 +43,7 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<SolidGeometry<VecType>>& polygons,
+    const std::vector<PlaneGeometry<VecType>>& polygons,
     const std::vector<int>& active_indices,
     Tracer* tracer = nullptr
 ) {
@@ -104,8 +75,8 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<SolidGeometry<VecType>>& setA,
-    const std::vector<SolidGeometry<VecType>>& setB,
+    const std::vector<PlaneGeometry<VecType>>& setA,
+    const std::vector<PlaneGeometry<VecType>>& setB,
     Tracer* tracer = nullptr
 ) {
     if (setA.empty() || setB.empty()) return {};
@@ -135,7 +106,7 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     Tracer* tracer = nullptr
 ) {
     if (polygons.size() < 2) return {};
@@ -162,7 +133,7 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<const SolidGeometry<VecType>*>& polygons,
+    const std::vector<const PlaneGeometry<VecType>*>& polygons,
     const std::vector<int>& active_indices,
     Tracer* tracer = nullptr
 ) {
@@ -197,8 +168,8 @@ std::vector<std::pair<int, int>> find_polygon_intersections(
 
 template <class VecType, class Tracer = DefaultTracer>
 std::vector<std::pair<int, int>> find_polygon_intersections(
-    const std::vector<const SolidGeometry<VecType>*>& setA,
-    const std::vector<const SolidGeometry<VecType>*>& setB,
+    const std::vector<const PlaneGeometry<VecType>*>& setA,
+    const std::vector<const PlaneGeometry<VecType>*>& setB,
     Tracer* tracer = nullptr
 ) {
     if (setA.empty() || setB.empty()) return {};

@@ -1,14 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "geometry/solid/decompose.h"
-#include "geometry/solid/point_in_solid.h"
-#include "geometry/solid/containment.h"
+#include "geometry/plane/decompose.h"
+#include "geometry/plane/point_in_plane.h"
+#include "geometry/plane/containment.h"
 #include "geometry/distance/polygon_distance.h"
 #include "geometry/intersect/polygon_intersect.h"
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 TEST_CASE("point in solid: annulus vs hole", "[holes][point_in_solid]") {
     std::vector<Vec2> outer{
@@ -23,10 +23,10 @@ TEST_CASE("point in solid: annulus vs hole", "[holes][point_in_solid]") {
         Vec2{{6.0, 6.0}},
         Vec2{{4.0, 6.0}},
     };
-    SolidGeometry2 donut = make_donut(outer, hole);
+    PlaneGeometry2 donut = make_donut(outer, hole);
 
-    REQUIRE(is_point_inside_solid_space(Vec2{{2.0, 2.0}}, donut));
-    REQUIRE_FALSE(is_point_inside_solid_space(Vec2{{5.0, 5.0}}, donut));
+    REQUIRE(is_point_inside_plane_space(Vec2{{2.0, 2.0}}, donut));
+    REQUIRE_FALSE(is_point_inside_plane_space(Vec2{{5.0, 5.0}}, donut));
 }
 
 TEST_CASE("intersection: probe inside hole is disjoint", "[holes][poly_intersect]") {
@@ -42,7 +42,7 @@ TEST_CASE("intersection: probe inside hole is disjoint", "[holes][poly_intersect
 
 TEST_CASE("point in solid: thin slab does not contain distant point", "[holes][point_in_solid]") {
     auto wall = polygon_from_quad({{10, 0}, {11, 0}, {11, 10}, {10, 10}});
-    REQUIRE_FALSE(is_point_inside_solid_space(Vec2{{5.0, 5.0}}, wall));
+    REQUIRE_FALSE(is_point_inside_plane_space(Vec2{{5.0, 5.0}}, wall));
     REQUIRE_FALSE(try_add_containment_collision(wall, polygon_from_quad({{5, 5}, {6, 5}, {6, 6}, {5, 6}})));
 }
 

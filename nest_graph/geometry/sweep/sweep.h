@@ -3,7 +3,7 @@
 #include <cmath>
 #include <vector>
 
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 
 enum class SweepMode {
@@ -21,12 +21,12 @@ struct PartSweepElement {
     typename VecType::Scalar min_proj;
     typename VecType::Scalar max_proj;
 
-    const SolidGeometry<VecType>* poly_ptr; // NEW: Decouples element from its source vector
+    const PlaneGeometry<VecType>* poly_ptr; // NEW: Decouples element from its source vector
     const Circle<VecType>* bounds;
 };
 
 template<class VecType>
-inline VecType compute_optimal_sweep_axis(const std::vector<SolidGeometry<VecType>>& polygons) {
+inline VecType compute_optimal_sweep_axis(const std::vector<PlaneGeometry<VecType>>& polygons) {
     using Scalar = typename VecType::Scalar;
 
     VecType optimal_axis{}; // Zero-initializes all N dimensions safely
@@ -69,7 +69,7 @@ inline VecType compute_optimal_sweep_axis(const std::vector<SolidGeometry<VecTyp
 
 template<class VecType>
 inline VecType compute_optimal_sweep_axis(
-    const std::vector<const SolidGeometry<VecType>*>& polygons
+    const std::vector<const PlaneGeometry<VecType>*>& polygons
 ) {
     using Scalar = typename VecType::Scalar;
     VecType optimal_axis{};
@@ -104,10 +104,10 @@ inline VecType compute_optimal_sweep_axis(
 
 template<class VecType>
 inline VecType compute_optimal_sweep_axis(
-    const std::vector<SolidGeometry<VecType>>& set_a,
-    const std::vector<SolidGeometry<VecType>>& set_b
+    const std::vector<PlaneGeometry<VecType>>& set_a,
+    const std::vector<PlaneGeometry<VecType>>& set_b
 ) {
-    std::vector<SolidGeometry<VecType>> combined;
+    std::vector<PlaneGeometry<VecType>> combined;
     combined.reserve(set_a.size() + set_b.size());
     combined.insert(combined.end(), set_a.begin(), set_a.end());
     combined.insert(combined.end(), set_b.begin(), set_b.end());
@@ -116,10 +116,10 @@ inline VecType compute_optimal_sweep_axis(
 
 template<class VecType>
 inline VecType compute_optimal_sweep_axis(
-    const std::vector<const SolidGeometry<VecType>*>& set_a,
-    const std::vector<const SolidGeometry<VecType>*>& set_b
+    const std::vector<const PlaneGeometry<VecType>*>& set_a,
+    const std::vector<const PlaneGeometry<VecType>*>& set_b
 ) {
-    std::vector<const SolidGeometry<VecType> *> combined;
+    std::vector<const PlaneGeometry<VecType> *> combined;
     combined.reserve(set_a.size() + set_b.size());
     combined.insert(combined.end(), set_a.begin(), set_a.end());
     combined.insert(combined.end(), set_b.begin(), set_b.end());

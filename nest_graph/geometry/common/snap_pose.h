@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "../bindings/geometry_factory.h"
-#include "solid/containment.h"
+#include "plane/containment.h"
 
 // Snap rotated part so nearest outline point sits at min_dist along inward.
 // Matches ProposeGeometry Python `_snap_coords_along_exterior_geom` (24-step loop).
@@ -17,13 +17,13 @@ inline std::optional<std::tuple<
     typename VecType::Scalar,
     typename VecType::Scalar>>
 snap_pose_to_ring(
-    const SolidGeometry<VecType> &part,
-    const SolidGeometry<VecType> &boundary_ring,
+    const PlaneGeometry<VecType> &part,
+    const PlaneGeometry<VecType> &boundary_ring,
     const VecType &contact,
     const VecType &inward,
     typename VecType::Scalar angle,
     typename VecType::Scalar min_dist,
-    const SolidGeometry<VecType> *board = nullptr,
+    const PlaneGeometry<VecType> *board = nullptr,
     std::optional<typename VecType::Scalar> standoff_pad = std::nullopt,
     bool dock_outer_extreme = false
 ) {
@@ -32,7 +32,7 @@ snap_pose_to_ring(
     constexpr Scalar kGapTol = static_cast<Scalar>(1e-6);
     constexpr Scalar kInLenTol = static_cast<Scalar>(1e-9);
 
-    auto aabb_extent = [](const SolidGeometry<VecType> &g, Scalar &minx, Scalar &miny,
+    auto aabb_extent = [](const PlaneGeometry<VecType> &g, Scalar &minx, Scalar &miny,
                           Scalar &maxx, Scalar &maxy) -> bool {
         const auto &pts = g.line_points;
         if (pts.empty()) {
@@ -61,8 +61,8 @@ snap_pose_to_ring(
         return true;
     };
 
-    SolidGeometry<VecType> rotated = part.rotate(angle);
-    const VecType rcx_vec = solid_centroid(rotated);
+    PlaneGeometry<VecType> rotated = part.rotate(angle);
+    const VecType rcx_vec = plane_centroid(rotated);
     const Scalar rcx = rcx_vec[0];
     const Scalar rcy = rcx_vec[1];
 
@@ -112,7 +112,7 @@ snap_pose_to_ring(
     }
     const Scalar target_x = contact[0] + in_x * (min_dist + pad);
     const Scalar target_y = contact[1] + in_y * (min_dist + pad);
-    SolidGeometry<VecType> placed =
+    PlaneGeometry<VecType> placed =
         rotated.translate(VecType({target_x - p_part_x, target_y - p_part_y}));
 
     Scalar minx{}, miny{}, maxx{}, maxy{};
@@ -123,7 +123,7 @@ snap_pose_to_ring(
         std::max(maxx - minx, maxy - miny) * static_cast<Scalar>(2)
         + min_dist * static_cast<Scalar>(4);
 
-    std::vector<SolidGeometry<VecType>> ring_obs = {boundary_ring};
+    std::vector<PlaneGeometry<VecType>> ring_obs = {boundary_ring};
     for (int step_i = 0; step_i < kAxisPushSteps; ++step_i) {
         const auto gap_pair = standoff_distance_pair(placed, boundary_ring);
         Scalar gap = static_cast<Scalar>(0);
@@ -132,7 +132,7 @@ snap_pose_to_ring(
                 std::sqrt(static_cast<double>(gap_pair.core.distance_sq)));
         }
         const bool inside =
-            board == nullptr || solid_footprint_inside(placed, *board);
+            board == nullptr || plane_footprint_inside(placed, *board);
         if (gap >= min_dist - kGapTol && inside) {
             break;
         }
@@ -180,10 +180,10 @@ snap_pose_to_ring(
             }
         }
     }
-    if (board != nullptr && !solid_footprint_inside(placed, *board)) {
+    if (board != nullptr && !plane_footprint_inside(placed, *board)) {
         return std::nullopt;
     }
 
-    const VecType pc = solid_centroid(placed);
+    const VecType pc = plane_centroid(placed);
     return std::make_tuple(pc[0] - rcx, pc[1] - rcy, angle);
 }

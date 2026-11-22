@@ -5,17 +5,17 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "geometry/common/snap_pose.h"
-#include "geometry/solid/containment.h"
+#include "geometry/plane/containment.h"
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 TEST_CASE("snap_pose_to_ring docks rect to board edge", "[snap]") {
     auto board = polygon_from_quad({{0, 0}, {10, 0}, {10, 10}, {0, 10}});
     auto part = polygon_from_quad({{0, 0}, {1, 0}, {1, 0.5}, {0, 0.5}});
     // Open ring along bottom edge of board (outline-style).
-    SolidGeometry2 ring;
+    PlaneGeometry2 ring;
     {
         std::vector<Vec2> pts = {
             Vec2{{0, 0}}, Vec2{{10, 0}}, Vec2{{10, 10}}, Vec2{{0, 10}}, Vec2{{0, 0}},
@@ -43,7 +43,7 @@ TEST_CASE("snap_pose_to_ring docks rect to board edge", "[snap]") {
         : std::sqrt(static_cast<double>(gap_pair.core.distance_sq));
     REQUIRE(gap + 1e-5 >= min_dist);
     REQUIRE(std::abs(gap - min_dist) <= 0.05 * min_dist + 1e-5);
-    REQUIRE(solid_footprint_inside(placed, board));
+    REQUIRE(plane_footprint_inside(placed, board));
 }
 
 TEST_CASE("snap_pose_to_ring pad0 docks left and top edges", "[snap]") {
@@ -70,7 +70,7 @@ TEST_CASE("snap_pose_to_ring pad0 docks left and top edges", "[snap]") {
             ? 0.0
             : std::sqrt(static_cast<double>(gap_pair.core.distance_sq));
         REQUIRE(std::abs(gap - min_dist) <= 0.05 * min_dist + 1e-5);
-        REQUIRE(solid_footprint_inside(placed, board));
+        REQUIRE(plane_footprint_inside(placed, board));
     }
 }
 

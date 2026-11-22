@@ -65,9 +65,9 @@ void bind_rank_api(nb::module_ &m) {
     m.def(
         "convex_hull_area_of",
         [](std::vector<GeometryHolder> geoms) {
-            const auto ptrs = solid_ptrs_from_holders(geoms);
+            const auto ptrs = plane_ptrs_from_holders(geoms);
             return static_cast<double>(
-                solids_convex_hull_area(ptrs.data(), ptrs.size()));
+                planes_convex_hull_area(ptrs.data(), ptrs.size()));
         },
         nb::arg("geoms"));
 
@@ -79,18 +79,18 @@ void bind_rank_api(nb::module_ &m) {
            std::vector<GeometryHolder> obstacles,
            nb::object focal,
            const PlacementRankConfig &config) {
-            const SolidGeometry2d *focal_ptr = nullptr;
+            const PlaneGeometry2d *focal_ptr = nullptr;
             std::optional<GeometryHolder> focal_holder;
             if (!focal.is_none()) {
                 focal_holder = nb::cast<GeometryHolder>(focal);
-                focal_ptr = &focal_holder->solid;
+                focal_ptr = &focal_holder->plane;
             }
             // Packed/obstacles: move-into-Scene inside batch_rank (D2).
             return batch_rank_local_placements<Vec2d>(
-                part.solid,
+                part.plane,
                 transforms,
-                &board_ring.solid,
-                solids_from_holders(std::move(obstacles)),
+                &board_ring.plane,
+                planes_from_holders(std::move(obstacles)),
                 focal_ptr,
                 config);
         },
@@ -108,17 +108,17 @@ void bind_rank_api(nb::module_ &m) {
            std::vector<GeometryHolder> packed,
            nb::object focal,
            const PlacementRankConfig &config) {
-            const SolidGeometry2d *focal_ptr = nullptr;
+            const PlaneGeometry2d *focal_ptr = nullptr;
             std::optional<GeometryHolder> focal_holder;
             if (!focal.is_none()) {
                 focal_holder = nb::cast<GeometryHolder>(focal);
-                focal_ptr = &focal_holder->solid;
+                focal_ptr = &focal_holder->plane;
             }
             // Placed: ptrs into holders (no second deep-copy). Packed: move-into-Scene.
             return batch_score_placed_contact_hybrid<Vec2d>(
-                solid_ptrs_from_holders(placed),
-                &board_ring.solid,
-                solids_from_holders(std::move(packed)),
+                plane_ptrs_from_holders(placed),
+                &board_ring.plane,
+                planes_from_holders(std::move(packed)),
                 focal_ptr,
                 config);
         },

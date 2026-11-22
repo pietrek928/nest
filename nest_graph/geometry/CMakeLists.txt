@@ -50,7 +50,7 @@ if(NEST_GRAPH_BUILD_TESTS)
     tests/test_circle.cc
     tests/test_decompose.cc
     tests/test_highly_curved_linestrings.cc
-    tests/test_point_in_solid_bug.cc
+    tests/test_point_in_plane_bug.cc
     tests/test_holes.cc
     tests/test_transform.cc
     tests/test_geometry_api.cc

@@ -10,7 +10,7 @@
 
 #include "convex/hull.h"
 #include "distance/polygon_distance.h"
-#include "solid/solid_geometry.h"
+#include "plane/plane_geometry.h"
 
 #include "contact_edge.h"
 
@@ -22,16 +22,16 @@
  */
 template <class VecType>
 inline float pair_compactness(
-    const SolidGeometry<VecType> &a,
-    const SolidGeometry<VecType> &b
+    const PlaneGeometry<VecType> &a,
+    const PlaneGeometry<VecType> &b
 ) {
     using Scalar = typename VecType::Scalar;
     const Scalar area_sum = std::abs(a.area()) + std::abs(b.area());
     if (area_sum <= static_cast<Scalar>(0)) {
         return 0.f;
     }
-    std::vector<SolidGeometry<VecType>> pair{a, b};
-    const Scalar hull = solids_convex_hull_area(pair);
+    std::vector<PlaneGeometry<VecType>> pair{a, b};
+    const Scalar hull = planes_convex_hull_area(pair);
     if (hull <= static_cast<Scalar>(1e-12)) {
         return 0.f;
     }
@@ -40,7 +40,7 @@ inline float pair_compactness(
 
 template <class VecType>
 inline std::vector<ContactEdge> build_contact_relations(
-    const std::vector<SolidGeometry<VecType>> &geoms,
+    const std::vector<PlaneGeometry<VecType>> &geoms,
     const std::vector<Se2> &poses,
     const std::vector<int32_t> &gids,
     typename VecType::Scalar gap

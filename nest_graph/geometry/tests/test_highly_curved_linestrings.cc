@@ -1,11 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <random>
 #include "geometry/intersect/polygon_intersect.h"
-#include "geometry/solid/decompose.h"
+#include "geometry/plane/decompose.h"
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 TEST_CASE("highly curved linestrings decomposition and intersection", "[bug][decomposition]") {
     // Shapely reference (scripts/generate_test_refs.py):
@@ -27,7 +27,7 @@ TEST_CASE("highly curved linestrings decomposition and intersection", "[bug][dec
         Vec2{{6.0, 0.0}}
     };
     
-    SolidGeometry2 spiral_mesh;
+    PlaneGeometry2 spiral_mesh;
     std::mt19937 gen(42);
     process_boundary_to_convex_segments<Vec2>(spiral_ring, spiral_mesh, gen);
     spiral_mesh.finalize(gen);
@@ -45,7 +45,7 @@ TEST_CASE("highly curved linestrings decomposition and intersection", "[bug][dec
         Vec2{{5.0, 1.0}}
     };
     
-    SolidGeometry2 box_mesh;
+    PlaneGeometry2 box_mesh;
     process_boundary_to_convex_segments<Vec2>(box_ring, box_mesh, gen);
     box_mesh.finalize(gen);
     

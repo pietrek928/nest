@@ -4,10 +4,12 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "geometry/common/geometry_common.h"
 #include "geometry/convex/distance.h"
 #include "geometry/convex/intersect.h"
 #include "geometry/convex/penetration.h"
 #include "geometry/intersect/polygon_intersect.h"
+#include "geometry/sweep/sweep_engine.h"
 #include <vec.h>
 
 using Vec2 = Vec<2, double>;
@@ -205,10 +207,10 @@ TEST_CASE("extra: near-parallel thin rectangles", "[gjk]") {
     REQUIRE(approx_dist(polyA, polyB) == Catch::Approx(1.5).margin(1e-5));
 }
 
-TEST_CASE("extra: narrow_phase matches GJK for small n", "[gjk]") {
+TEST_CASE("extra: evaluate_narrow_phase matches GJK for small n", "[gjk]") {
     auto polyA = make_poly({{0, 0}, {2, 0}, {2, 2}, {0, 2}});
     auto polyB = make_poly({{3, 0}, {5, 0}, {5, 2}, {3, 2}});
-    bool np = narrow_phase_intersect<Vec2>(
+    auto cr = evaluate_narrow_phase<Vec2>(
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     );
@@ -216,7 +218,7 @@ TEST_CASE("extra: narrow_phase matches GJK for small n", "[gjk]") {
         polyA.data(), static_cast<int>(polyA.size()),
         polyB.data(), static_cast<int>(polyB.size())
     ).intersect;
-    REQUIRE(np == gjk);
+    REQUIRE((cr.state != ContactState::Disjoint) == gjk);
 }
 
 TEST_CASE("stress: highly tessellated circle vs needle", "[gjk][stress]") {

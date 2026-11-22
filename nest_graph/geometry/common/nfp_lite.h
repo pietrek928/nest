@@ -17,12 +17,12 @@ inline std::tuple<
     typename VecType::Scalar,
     bool>
 nfp_lite_relative(
-    const SolidGeometry<VecType> &follow,
+    const PlaneGeometry<VecType> &follow,
     typename VecType::Scalar pose_x,
     typename VecType::Scalar pose_y,
     typename VecType::Scalar pose_theta,
-    const SolidGeometry<VecType> &anchor,
-    const std::vector<SolidGeometry<VecType>> &other_obstacles,
+    const PlaneGeometry<VecType> &anchor,
+    const std::vector<PlaneGeometry<VecType>> &other_obstacles,
     typename VecType::Scalar min_dist,
     typename VecType::Scalar max_t
 ) {
@@ -34,7 +34,7 @@ nfp_lite_relative(
     const Scalar orig_th = pose_theta;
     bool kept_original = true;
 
-    const VecType ac = solid_centroid(anchor);
+    const VecType ac = plane_centroid(anchor);
     const Scalar ax = ac[0];
     const Scalar ay = ac[1];
     const Scalar dx = ax - pose_x;
@@ -47,7 +47,7 @@ nfp_lite_relative(
     const Scalar ux = dx / dist0;
     const Scalar uy = dy / dist0;
 
-    std::vector<SolidGeometry<VecType>> obs;
+    std::vector<PlaneGeometry<VecType>> obs;
     obs.reserve(other_obstacles.size() + 1);
     obs.push_back(anchor);
     obs.insert(obs.end(), other_obstacles.begin(), other_obstacles.end());
@@ -58,17 +58,17 @@ nfp_lite_relative(
     const Scalar margin_sq = clearance * clearance;
     const Scalar distance_margin = clearance;
 
-    auto pose_ok = [&](const SolidGeometry<VecType> &placed) -> bool {
+    auto pose_ok = [&](const PlaneGeometry<VecType> &placed) -> bool {
         if (scene.obstacles.empty()) {
             return true;
         }
         return !scene.query_any_violation(placed, margin_sq, distance_margin);
     };
 
-    SolidGeometry<VecType> placed0 =
+    PlaneGeometry<VecType> placed0 =
         follow.rotate(pose_theta).translate(VecType({pose_x, pose_y}));
     const VecType slide({ux, uy});
-    const auto cast = cast_slide(placed0, scene.obstacles, slide, max_t);
+    const auto cast = scene.cast_closest(placed0, slide, max_t);
     if (cast.intersects_path) {
         const Scalar t_hit = cast.t_entry;
         if (std::isfinite(static_cast<double>(t_hit))
@@ -83,7 +83,7 @@ nfp_lite_relative(
                 std::sqrt(static_cast<double>(
                     (ax - fx2) * (ax - fx2) + (ay - fy2) * (ay - fy2))));
             if (d2 <= dist0 + kEps) {
-                SolidGeometry<VecType> cast_placed =
+                PlaneGeometry<VecType> cast_placed =
                     follow.rotate(pose_theta).translate(VecType({fx2, fy2}));
                 if (pose_ok(cast_placed)) {
                     pose_x = fx2;
@@ -107,7 +107,7 @@ nfp_lite_relative(
         pose_y,
         pose_theta,
         scene,
-        static_cast<const SolidGeometry<VecType> *>(nullptr),
+        static_cast<const PlaneGeometry<VecType> *>(nullptr),
         dirs,
         2,
         polish_max,
@@ -134,10 +134,10 @@ nfp_lite_relative(
 
 template <class VecType>
 inline Se2 nfp_lite_pair_relative(
-    const SolidGeometry<VecType> &follow,
+    const PlaneGeometry<VecType> &follow,
     Se2 t_a,
     Se2 t_b,
-    const SolidGeometry<VecType> &anchor,
+    const PlaneGeometry<VecType> &anchor,
     typename VecType::Scalar min_dist
 ) {
     using Scalar = typename VecType::Scalar;
@@ -147,7 +147,7 @@ inline Se2 nfp_lite_pair_relative(
         static_cast<Scalar>(t_b.y),
         static_cast<Scalar>(t_b.a),
         anchor,
-        std::vector<SolidGeometry<VecType>>{},
+        std::vector<PlaneGeometry<VecType>>{},
         min_dist,
         static_cast<Scalar>(10));
     const Se2 t_b2{

@@ -10,7 +10,7 @@
 #include "tests/geometry_test_helpers.h"
 
 using Vec2 = PolyTestVec2;
-using SolidGeometry2 = PolyTestSolidGeometry2;
+using PlaneGeometry2 = PolyTestPlaneGeometry2;
 
 TEST_CASE("distance sweep: swallowed containment mid-list", "[distance][containment][gap]") {
     // Three pairs: A/B far, C fully inside D, E/F touching gap.
@@ -20,7 +20,7 @@ TEST_CASE("distance sweep: swallowed containment mid-list", "[distance][containm
     auto left = polygon_from_quad({{-20, 0}, {-18, 0}, {-18, 2}, {-20, 2}});
     auto right = polygon_from_quad({{20, 0}, {22, 0}, {22, 2}, {20, 2}});
 
-    std::vector<SolidGeometry2> polys = {left, right, outer, inner};
+    std::vector<PlaneGeometry2> polys = {left, right, outer, inner};
     auto results = find_polygon_distances<Vec2>(polys, 0.5, 0.0);
 
     const ComplexDistanceResult<Vec2>* swallowed = nullptr;
@@ -90,7 +90,7 @@ TEST_CASE("cast skips subtractive hole parts but still docks to shell", "[cast][
     }
     REQUIRE(has_subtractive);
 
-    std::vector<SolidGeometry2> polys = {probe, shell};
+    std::vector<PlaneGeometry2> polys = {probe, shell};
     // Cast downward toward the hole / shell material.
     auto hit = find_closest_polygon_cast<Vec2>(0, polys, Vec2{{0.0, -1.0}}, 10.0);
     REQUIRE(hit.intersects_path);
