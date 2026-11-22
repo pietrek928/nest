@@ -7,14 +7,16 @@
 #include <nanobind/nanobind.h>
 namespace nb = nanobind;
 
+#include <vec.h>
+
 #include "geometry_factory.h"
 #include "guide/guide.h"
 #include "guide/polygon_cast.h"
-#include "python_converters.h"
 #include "plane/plane_geometry.h"
 #include "distance/polygon_distance.h"
 #include "distance/static_collision_scene.h"
 
+using Vec2d = Vec<2, double>;
 using PlaneGeometry2d = PlaneGeometry<Vec2d>;
 using DistanceResult2d = ComplexDistanceResult<Vec2d>;
 using CastResult2d = ComplexCastResult<Vec2d>;
@@ -33,8 +35,9 @@ struct GeometryHolder {
     explicit GeometryHolder(std::uint32_t seed)
         : rng(seed != 0 ? std::mt19937(seed) : std::mt19937(std::random_device{}())) {}
 
+    // Mesh-move / apply_transform path: do not reseed random_device per pose.
     explicit GeometryHolder(PlaneGeometry2d mesh)
-        : plane(std::move(mesh)), rng(std::random_device{}()) {}
+        : plane(std::move(mesh)), rng() {}
 };
 
 struct StaticCollisionSceneHolder {

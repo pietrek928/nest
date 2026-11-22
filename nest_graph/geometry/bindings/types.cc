@@ -1,11 +1,15 @@
 #include "types.h"
 
 #include <cmath>
+#include <sstream>
 
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
 #include "python_converters.h"
+#include "plane/decompose.h"
+#include "plane/point_in_plane.h"
+#include "shapely.h"
 
 nb::tuple circle_bounds_tuple(const GeometryHolder &g) {
     const auto &c = g.plane.get_bounding_circle();
@@ -125,12 +129,6 @@ GeometryHolder geometry_from_point_xy(double x, double y) {
     holder.plane.finalize(holder.rng);
     return holder;
 }
-
-#include <sstream>
-
-#include "plane/decompose.h"
-#include "plane/point_in_plane.h"
-#include "shapely.h"
 
 GeometryHolder geometry_holder_from_shapely(nb::handle geom) {
     const std::string gtype = geom_type_string(geom);

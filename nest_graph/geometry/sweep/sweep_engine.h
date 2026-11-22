@@ -701,10 +701,10 @@ inline bool execute_distance_sweep_any_violation(
             const int nB = polyB->get_part_size(static_cast<size_t>(partB));
             const bool circles_may_overlap = center_dist_sq <= r_sum * r_sum;
 
-            if (margin_sq <= static_cast<Scalar>(0)) {
-                if (!circles_may_overlap) {
-                    continue;
-                }
+            // Packing Penetrating first when circles overlap (same as
+            // evaluate_distance_candidate). Distance-only GJK is not a
+            // penetration oracle — Scene clearance must not miss overlaps.
+            if (circles_may_overlap) {
                 if constexpr (!std::is_same_v<Tracer, NullTracer>) {
                     if (tracer) {
                         tracer->count_gjk_eval();
@@ -715,11 +715,14 @@ inline bool execute_distance_sweep_any_violation(
                 if (cr.state == ContactState::Penetrating) {
                     return true;
                 }
+                if (margin_sq <= static_cast<Scalar>(0)) {
+                    continue;
+                }
+            } else if (margin_sq <= static_cast<Scalar>(0)) {
                 continue;
             }
 
-            // Scene margin: distance-only narrow phase (G6). Use convex GJK
-            // directly (narrow_phase_distance lives above this header).
+            // Scene margin (G6): separated or Touch — distance vs margin_sq.
             if constexpr (!std::is_same_v<Tracer, NullTracer>) {
                 if (tracer) {
                     tracer->count_gjk_eval();

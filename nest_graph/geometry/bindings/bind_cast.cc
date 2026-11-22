@@ -15,8 +15,8 @@ namespace nb = nanobind;
 #include "common/nfp_lite.h"
 #include "common/polish_se2.h"
 #include "common/snap_pose.h"
-#include "geometry_factory.h"
 #include "se2.h"
+#include "python_converters.h"
 #include "types.h"
 
 void bind_cast_types(nb::module_ &m) {

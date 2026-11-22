@@ -6,7 +6,6 @@ namespace nb = nanobind;
 #include <nanobind/stl/vector.h>
 
 #include "bind_internal.h"
-#include "distance/polygon_distance.h"
 #include "geometry_factory.h"
 #include "types.h"
 

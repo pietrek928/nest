@@ -54,6 +54,42 @@ TEST_CASE("StaticCollisionScene: margin prune with default aura", "[distance][va
     REQUIRE_FALSE(scene.is_valid_placement(tight, 0.5 * 0.5));
 }
 
+TEST_CASE(
+    "StaticCollisionScene: multi-part obstacle margin catches Penetrating",
+    "[distance][validity][gap]"
+) {
+    // Many additive convex pieces under one PlaneGeometry (pack-union style).
+    // Distance-only GJK can miss overlaps; Scene clearance must still violate.
+    PlaneGeometry2 multi;
+    std::mt19937 gen(7);
+    auto add_quad = [&](double x0, double y0, double x1, double y1) {
+        std::vector<Vec2> ring = {
+            Vec2{{x0, y0}}, Vec2{{x1, y0}}, Vec2{{x1, y1}}, Vec2{{x0, y1}},
+        };
+        multi.add_boundary_ring(ring);
+        ring.push_back(ring.front());
+        multi.append_line_poly(ring.data(), static_cast<int>(ring.size()), gen);
+    };
+    for (int i = 0; i < 20; ++i) {
+        const double x = 0.05 + 0.2 * (i % 5);
+        const double y = 0.05 + 0.2 * (i / 5);
+        add_quad(x, y, x + 0.08, y + 0.08);
+    }
+    // Overlap target near (0.55, 0.55).
+    add_quad(0.50, 0.50, 0.60, 0.60);
+    multi.finalize(gen);
+
+    auto probe = polygon_from_quad({{0.52, 0.52}, {0.58, 0.52}, {0.58, 0.58}, {0.52, 0.58}});
+    StaticCollisionScene<Vec2> scene;
+    scene.build({multi}, 0.5);
+
+    REQUIRE(scene.query_any_violation(probe, 0.0, 0.0));
+    const double md = 0.001;
+    const double margin = md + std::max(1e-6, md * 0.05);
+    REQUIRE(scene.query_any_violation(probe, margin * margin, margin));
+    REQUIRE_FALSE(scene.is_valid_placement(probe, margin * margin));
+}
+
 TEST_CASE("StaticCollisionScene: query_elements scratch reuse parity", "[distance][validity]") {
     auto obstacle = polygon_from_quad({{0, 0}, {4, 0}, {4, 4}, {0, 4}});
     auto part = polygon_from_quad({{0, 0}, {1, 0}, {1, 1}, {0, 1}});

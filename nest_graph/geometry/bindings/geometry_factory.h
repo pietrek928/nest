@@ -269,44 +269,64 @@ inline PairDistanceResult<VecType> min_distance_pair(
         if (a.line_parts[i].is_subtractive) {
             continue;
         }
+        const bool filled_a = a.line_parts[i].role == ChainRole::FilledConvex;
         const auto &ca = a.line_parts[i].bounding_circle;
         for (size_t j = 0; j < b.line_parts.size(); ++j) {
             if (b.line_parts[j].is_subtractive) {
                 continue;
             }
-            const auto &cb = b.line_parts[j].bounding_circle;
-            const VecType d = ca.center() - cb.center();
-            const Scalar center_dist_sq = d.dp(d);
-            const Scalar r_sum =
-                std::sqrt(static_cast<double>(ca.square_radius())) +
-                std::sqrt(static_cast<double>(cb.square_radius()));
+            const bool filled_b = b.line_parts[j].role == ChainRole::FilledConvex;
+            if (filled_a && filled_b) {
+                // Match planes_packing_collide: GJK only on FilledConvex pairs.
+                const auto &cb = b.line_parts[j].bounding_circle;
+                const VecType d = ca.center() - cb.center();
+                const Scalar center_dist_sq = d.dp(d);
+                const Scalar r_sum =
+                    std::sqrt(static_cast<double>(ca.square_radius())) +
+                    std::sqrt(static_cast<double>(cb.square_radius()));
 
-            DistanceCandidate<VecType> cand{};
-            cand.pair_id = {0, 1};
-            cand.partA_idx = static_cast<int>(i);
-            cand.partB_idx = static_cast<int>(j);
-            cand.polyA = &a;
-            cand.polyB = &b;
-            cand.center_dist_sq = center_dist_sq;
-            cand.r_sum = static_cast<Scalar>(r_sum);
+                DistanceCandidate<VecType> cand{};
+                cand.pair_id = {0, 1};
+                cand.partA_idx = static_cast<int>(i);
+                cand.partB_idx = static_cast<int>(j);
+                cand.polyA = &a;
+                cand.polyB = &b;
+                cand.center_dist_sq = center_dist_sq;
+                cand.r_sum = static_cast<Scalar>(r_sum);
 
-            auto eval = evaluate_distance_candidate<VecType>(cand);
-            if (eval.intersect) {
-                out.core = eval;
-                out.core.polyA_idx = 0;
-                out.core.polyB_idx = 1;
-                auto pts = closest_points_between_parts(
-                    a, eval.partA_idx, b, eval.partB_idx);
-                out.closest_a = pts.first;
-                out.closest_b = pts.second;
-                return out;
+                auto eval = evaluate_distance_candidate<VecType>(cand);
+                if (eval.intersect) {
+                    out.core = eval;
+                    out.core.polyA_idx = 0;
+                    out.core.polyB_idx = 1;
+                    auto pts = closest_points_between_parts(
+                        a, eval.partA_idx, b, eval.partB_idx);
+                    out.closest_a = pts.first;
+                    out.closest_b = pts.second;
+                    return out;
+                }
+                if (eval.distance_sq < out.core.distance_sq) {
+                    out.core = eval;
+                    out.core.polyA_idx = 0;
+                    out.core.polyB_idx = 1;
+                    auto pts = closest_points_between_parts(
+                        a, eval.partA_idx, b, eval.partB_idx);
+                    out.closest_a = pts.first;
+                    out.closest_b = pts.second;
+                }
+                continue;
             }
-            if (eval.distance_sq < out.core.distance_sq) {
-                out.core = eval;
-                out.core.polyA_idx = 0;
-                out.core.polyB_idx = 1;
-                auto pts = closest_points_between_parts(
-                    a, eval.partA_idx, b, eval.partB_idx);
+            // Stroke/Point: segment/point distance — do not GJK as a filled hull.
+            auto pts = closest_points_between_parts(
+                a, static_cast<int>(i), b, static_cast<int>(j));
+            const VecType d = pts.first - pts.second;
+            const Scalar dsq = d.dp(d);
+            if (dsq < out.core.distance_sq) {
+                out.core.distance_sq = dsq;
+                out.core.intersect = false;
+                out.core.penetration_sq = static_cast<Scalar>(0);
+                out.core.partA_idx = static_cast<int>(i);
+                out.core.partB_idx = static_cast<int>(j);
                 out.closest_a = pts.first;
                 out.closest_b = pts.second;
             }
